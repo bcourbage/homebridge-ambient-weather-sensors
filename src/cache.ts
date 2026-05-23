@@ -54,14 +54,16 @@ export class Cache {
   }
 
   isValid() {
-    fs.access(this.CacheFile, fs.constants.F_OK | fs.constants.W_OK, (err) => {
-      if (!err) {
-        const cache = this.read();
-        const now = Date.now();
-        this.valid = now - cache.cache_time < cache.ttl;
-      }
-    });
+    this.valid = false;
 
+    try {
+      fs.accessSync(this.CacheFile, fs.constants.F_OK | fs.constants.W_OK);
+    } catch {
+      return false;
+    }
+
+    const cache = this.read();
+    this.valid = Date.now() - cache.cache_time < cache.ttl;
     return this.valid;
   }
 }
