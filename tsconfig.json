@@ -13,6 +13,8 @@
     "rootDir": "./src",
     "strict": true,
     "esModuleInterop": true,
+    "skipLibCheck": true,
+    "useDefineForClassFields": false,
     "noImplicitAny": false
   },
   "include": [

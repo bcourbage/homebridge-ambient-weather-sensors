@@ -107,7 +107,7 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
     try {
       const url = `https://rt.ambientweather.net/v1/devices?applicationKey=${this.config.applicationKey}&apiKey=${this.config.apiKey}`;
       const response = await fetch(url);
-      let data = null;
+      let data: unknown = null;
 
       // request is being throttled
       if (response.status === 429) {
