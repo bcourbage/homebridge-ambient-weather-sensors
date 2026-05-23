@@ -20,6 +20,10 @@
 ## Plugin Information
 This plugin allows you to pull sensor data from your Ambient Weather weather station via its REST API and add those accessories to homebridge.
 
+## Compatibility
+- Homebridge `1.8+` and Homebridge `2.x`
+- Node.js `22.12+` or `24.x`
+
 ## Features
 - Supports parsing sensors attached to multiple weather stations
 - Polling is static at `2 minutes` to reduce strain on the Ambient Weather API
@@ -35,6 +39,8 @@ This plugin allows you to pull sensor data from your Ambient Weather weather sta
 - Wind Direction
 
 ## Setup
+An ambientweather.net account is required (no paid subscription is needed) so that you can generate the two keys this plugin uses.
+
 You will need two keys to configre this plugin and they can both be generate on the [Ambient Weather Account Page](https://ambientweather.net/account). This part has been a point of confusion for many users.
 
 creating the API key is straight forward. click the `Create API Key` button and give it a name if you would like.
