@@ -188,6 +188,9 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
             // the accessory already exists
             this.log.info('Restoring existing accessory from cache:', existingAccessory.displayName);
 
+            existingAccessory.context.device = device;
+            this.api.updatePlatformAccessories([existingAccessory]);
+
             if (existingAccessory.context.device.type === 'Temperature') {
               new TemperatureAccessory(this, existingAccessory);
             } else if (existingAccessory.context.device.type === 'Humidity') {
