@@ -67,7 +67,7 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
             Devices.push({
               macAddress: obj.macAddress,
               uniqueId: `${obj.macAddress}-${device[0]}`,
-              displayName: `${obj.macAddress}-${device[0]}`,
+              displayName: `${obj.macAddress.replaceAll(':', '')}-${device[0]}`,
               type: this.determineSensorType(device[0]),
               value: device[1] as number,
             });
