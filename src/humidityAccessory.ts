@@ -1,6 +1,6 @@
 import { PlatformAccessory, Service } from 'homebridge';
-import { AmbientWeatherSensorsPlatform } from './platform';
-import { DEVICE } from './types';
+import { AmbientWeatherSensorsPlatform } from './platform.js';
+import { DEVICE } from './types.js';
 
 
 export class HumidityAccessory {

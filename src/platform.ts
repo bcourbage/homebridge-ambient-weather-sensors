@@ -1,13 +1,11 @@
 import { API, Characteristic, DynamicPlatformPlugin, Logger, PlatformAccessory, PlatformConfig, Service } from 'homebridge';
 
-import { Cache } from './cache';
-import { HumidityAccessory } from './humidityAccessory';
-import { PLATFORM_NAME, PLUGIN_NAME } from './settings';
-import { SolarRadiationAccessory } from './solarRadiationAccessory';
-import { TemperatureAccessory } from './temperatureAccessory';
-import { DEVICE } from './types';
-
-import fetch from 'node-fetch';
+import { Cache } from './cache.js';
+import { HumidityAccessory } from './humidityAccessory.js';
+import { PLATFORM_NAME, PLUGIN_NAME } from './settings.js';
+import { SolarRadiationAccessory } from './solarRadiationAccessory.js';
+import { TemperatureAccessory } from './temperatureAccessory.js';
+import { DEVICE } from './types.js';
 
 export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
   public readonly Service: typeof Service = this.api.hap.Service;
