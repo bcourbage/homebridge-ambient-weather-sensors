@@ -1,6 +1,5 @@
 import { API, Characteristic, DynamicPlatformPlugin, Logger, PlatformAccessory, PlatformConfig, Service } from 'homebridge';
 
-import { Cache } from './cache.js';
 import { HumidityAccessory } from './humidityAccessory.js';
 import { friendlySensorName } from './sensorNames.js';
 import { PLATFORM_NAME, PLUGIN_NAME } from './settings.js';
@@ -45,9 +44,6 @@ export interface SensorAccessory {
 export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
   public readonly Service: typeof Service = this.api.hap.Service;
   public readonly Characteristic: typeof Characteristic = this.api.hap.Characteristic;
-  private readonly CacheFile: string = `${this.api.user.storagePath()}/${this.config.platform}-${this.config.apiKey}.json`;
-
-  private readonly Cache = new Cache(this.CacheFile, 2 * 60 * 1000, this.log);
 
   // this is used to track restored cached accessories
   public readonly accessories: PlatformAccessory[] = [];
@@ -167,29 +163,8 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
     this.log.debug('Fetching sensors from Ambient Weather API');
 
     try {
-      // validate cache
-      if (this.Cache.isValid()) {
-        // read cache
-        const cache = this.Cache.read();
-
-        this.log.debug('USING DISK CACHE FOR DATA');
-
-        return this.parseDevices(cache.data);
-      }
-    } catch(error) {
-      let message;
-      if (error instanceof Error) {
-        message = error.message;
-      } else {
-        message = String(error);
-      }
-      this.log.error('ERROR:', message);
-    }
-
-    try {
       const url = `https://rt.ambientweather.net/v1/devices?applicationKey=${this.config.applicationKey}&apiKey=${this.config.apiKey}`;
       const response = await fetch(url);
-      let data: unknown = null;
 
       // request is being throttled
       if (response.status === 429) {
@@ -199,23 +174,15 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
       }
 
       // response is not JSON
-      if (response.headers.get('content-type')?.includes('application/json')) {
-        data = await response.json();
-        this.Cache.write(data);
-      } else {
+      if (!response.headers.get('content-type')?.includes('application/json')) {
         throw new Error(`API response from AWN is not JSON.
           This happens ocasionally due to the fragility of the AWN API and is usually resolved by retrying the request in a few minutes.`);
       }
 
-
+      const data: unknown = await response.json();
       return this.parseDevices(data);
     } catch(error) {
-      let message;
-      if (error instanceof Error) {
-        message = error.message;
-      } else {
-        message = String(error);
-      }
+      const message = error instanceof Error ? error.message : String(error);
       this.log.error('ERROR:', message);
     }
   }
