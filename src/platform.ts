@@ -96,9 +96,35 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
   }
 
   /**
+   * Extract a city + state label from AWN's `info.coords.address_components`
+   * block (Google-style geocoding output). Mirrors the locality + state
+   * pair that ambientweather.net itself uses for station headers (e.g.
+   * "San Rafael, CA"). Returns an empty string if either piece is
+   * missing.
+   *
+   * Falls back to `info.location` (the user-set free-text label) only
+   * when the coords block isn't present, since `info.location` often
+   * carries something redundant with `info.name` (a building label).
+   */
+  extractCityState(info?: { location?: string; coords?: { address_components?: Array<{ short_name?: string; long_name?: string; types?: string[] }> } }): string {
+    const components = info?.coords?.address_components;
+    if (Array.isArray(components)) {
+      const findByType = (type: string) =>
+        components.find((c) => Array.isArray(c?.types) && c.types.includes(type));
+      const city = findByType('locality')?.long_name ?? '';
+      const state = findByType('administrative_area_level_1')?.short_name ?? '';
+      const cityState = [city, state].filter(Boolean).join(' ');
+      if (cityState) {
+        return cityState;
+      }
+    }
+    return info?.location ?? '';
+  }
+
+  /**
    * Compose a HAP-clean accessory displayName from station + sensor
-   * metadata. Mirrors the way ambientweather.net joins `info.name` and
-   * `info.location` (e.g. "Fairhills WS-2000, San Rafael, CA"), but with
+   * metadata. Mirrors the way ambientweather.net renders station
+   * headers (e.g. "Fairhills WS-2000, San Rafael, CA"), but with
    * commas/punctuation stripped to satisfy HAP 2.x's Name validator and
    * with a friendly sensor label appended.
    *
@@ -106,9 +132,9 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
    * the location portion if the composed name would exceed HAP's 64-char
    * limit on the `Name` characteristic.
    */
-  composeDisplayName(obj: { macAddress: string; info?: { name?: string; location?: string } }, sensorKey: string): string {
+  composeDisplayName(obj: { macAddress: string; info?: { name?: string; location?: string; coords?: { address_components?: Array<{ short_name?: string; long_name?: string; types?: string[] }> } } }, sensorKey: string): string {
     const stationName = hapClean(obj.info?.name ?? '');
-    const stationLocation = hapClean(obj.info?.location ?? '');
+    const stationLocation = hapClean(this.extractCityState(obj.info));
     const macFallback = obj.macAddress.replaceAll(':', '');
     const sensorLabel = friendlySensorName(sensorKey);
 
@@ -236,6 +262,17 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
 
           if (existingAccessory) {
             this.log.info('Restoring existing accessory from cache:', existingAccessory.displayName);
+            // Update the HAP-level displayName (the AccessoryInformation
+            // Name backing field) so the cache file picks up the new
+            // station-derived name and the Home app shows it on the
+            // accessory tile. context.device alone is just our private
+            // bookkeeping; without this assignment, the underlying HAP
+            // Accessory keeps the original displayName it had when it
+            // was first registered.
+            if (existingAccessory.displayName !== device.displayName) {
+              this.log.info(`Renaming accessory: "${existingAccessory.displayName}" -> "${device.displayName}"`);
+              existingAccessory.displayName = device.displayName;
+            }
             existingAccessory.context.device = device;
             this.api.updatePlatformAccessories([existingAccessory]);
             accessory = existingAccessory;
