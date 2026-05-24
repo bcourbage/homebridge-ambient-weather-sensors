@@ -96,59 +96,28 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
   }
 
   /**
-   * Extract a city + state label from AWN's `info.coords.address_components`
-   * block (Google-style geocoding output). Mirrors the locality + state
-   * pair that ambientweather.net itself uses for station headers (e.g.
-   * "San Rafael, CA"). Returns an empty string if either piece is
-   * missing.
-   *
-   * Falls back to `info.location` (the user-set free-text label) only
-   * when the coords block isn't present, since `info.location` often
-   * carries something redundant with `info.name` (a building label).
-   */
-  extractCityState(info?: { location?: string; coords?: { address_components?: Array<{ short_name?: string; long_name?: string; types?: string[] }> } }): string {
-    const components = info?.coords?.address_components;
-    if (Array.isArray(components)) {
-      const findByType = (type: string) =>
-        components.find((c) => Array.isArray(c?.types) && c.types.includes(type));
-      const city = findByType('locality')?.long_name ?? '';
-      const state = findByType('administrative_area_level_1')?.short_name ?? '';
-      const cityState = [city, state].filter(Boolean).join(' ');
-      if (cityState) {
-        return cityState;
-      }
-    }
-    return info?.location ?? '';
-  }
-
-  /**
    * Compose a HAP-clean accessory displayName from station + sensor
-   * metadata. Mirrors the way ambientweather.net renders station
-   * headers (e.g. "Fairhills WS-2000, San Rafael, CA"), but with
-   * commas/punctuation stripped to satisfy HAP 2.x's Name validator and
-   * with a friendly sensor label appended.
+   * metadata. Form: `${station_name} ${sensor_label}` when the user has
+   * set a station name on ambientweather.net (e.g.
+   * "Fairhills WS 2000 Indoor Temperature"), otherwise
+   * `${mac_no_colons} ${sensor_label}` as a last-resort disambiguator.
    *
-   * Falls back to the MAC address when `info.name` is missing, and drops
-   * the location portion if the composed name would exceed HAP's 64-char
-   * limit on the `Name` characteristic.
+   * City/state are intentionally NOT included even though the API
+   * supplies them: HomeKit's room/home hierarchy already gives users a
+   * place to express location, and dragging the geocoded address into
+   * every accessory name produces redundant noise on the device tile.
+   *
+   * Truncates from the right to HAP 2.x's 64-character `Name` limit.
    */
-  composeDisplayName(obj: { macAddress: string; info?: { name?: string; location?: string; coords?: { address_components?: Array<{ short_name?: string; long_name?: string; types?: string[] }> } } }, sensorKey: string): string {
+  composeDisplayName(obj: { macAddress: string; info?: { name?: string } }, sensorKey: string): string {
     const stationName = hapClean(obj.info?.name ?? '');
-    const stationLocation = hapClean(this.extractCityState(obj.info));
     const macFallback = obj.macAddress.replaceAll(':', '');
     const sensorLabel = friendlySensorName(sensorKey);
 
     const baseName = stationName || macFallback;
-    const composed = hapClean(stationLocation ? `${baseName} ${stationLocation} ${sensorLabel}` : `${baseName} ${sensorLabel}`);
+    const composed = hapClean(`${baseName} ${sensorLabel}`);
 
-    if (composed.length <= HAP_NAME_MAX) {
-      return composed;
-    }
-
-    // Composed name too long — drop the location portion, keep
-    // station-name + sensor-label so accessories remain identifiable.
-    const trimmed = hapClean(`${baseName} ${sensorLabel}`);
-    return trimmed.length <= HAP_NAME_MAX ? trimmed : trimmed.slice(0, HAP_NAME_MAX).trim();
+    return composed.length <= HAP_NAME_MAX ? composed : composed.slice(0, HAP_NAME_MAX).trim();
   }
 
   parseDevices(json) {
