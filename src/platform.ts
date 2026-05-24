@@ -213,21 +213,38 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
     }
   }
 
-  deregisterAccessories(Devices: DEVICE[]){
-    const currentDevices = Devices.map((device) => {
-      return device.displayName;
+  /**
+   * Unregister any cached accessories whose underlying sensor is no
+   * longer present in the API response (or has been excluded via
+   * `excludeSensors` / a per-type toggle being turned off). Matching is
+   * by `context.device.uniqueId` — the stable `${mac}-${sensorKey}`
+   * identifier — rather than by `displayName`. Matching by displayName
+   * caused a regression where any change to the naming convention (e.g.
+   * the colon-strip in HB2 compat, or the station-name rollout in this
+   * branch) made every cached accessory look like an orphan and got
+   * them all unregistered from HAP on the first restart after the
+   * rename. uniqueId is stable across renames and is what the for-loop
+   * downstream uses for UUID generation, so they're the same identity
+   * notion.
+   */
+  deregisterAccessories(Devices: DEVICE[]) {
+    const currentUniqueIds = new Set(Devices.map((d) => d.uniqueId));
+
+    const orphans = this.accessories.filter((accessory) => {
+      const uniqueId = accessory.context?.device?.uniqueId;
+      return !uniqueId || !currentUniqueIds.has(uniqueId);
     });
 
-    const cacheMatch = this.accessories.filter( (accessory) => {
-      return !currentDevices.includes(accessory.displayName);
-    });
-
-    cacheMatch.map( (accessory) => {
-      this.log.info(`De-registering accessory [${accessory.displayName}]. It was either not found in the API response,
-      or the sensor type has been disabled in the plugin configuration`);
-
-      // remove platform accessories when no longer present
+    orphans.forEach((accessory) => {
+      this.log.info(`De-registering accessory [${accessory.displayName}]. It was either not found in the API response, `
+        + 'or the sensor type has been disabled in the plugin configuration');
       this.api.unregisterPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [accessory]);
+      // Keep this.accessories in sync with HAP so the for-loop downstream
+      // doesn't try to "restore" something we just unregistered.
+      const idx = this.accessories.indexOf(accessory);
+      if (idx >= 0) {
+        this.accessories.splice(idx, 1);
+      }
     });
   }
 
