@@ -1,10 +1,9 @@
 import { PlatformAccessory, Service } from 'homebridge';
 
-import { AmbientWeatherSensorsPlatform } from './platform.js';
-import { DEVICE } from './types.js';
+import { AmbientWeatherSensorsPlatform, SensorAccessory } from './platform.js';
 
 
-export class TemperatureAccessory {
+export class TemperatureAccessory implements SensorAccessory {
   private service: Service;
 
   constructor(
@@ -16,7 +15,7 @@ export class TemperatureAccessory {
     this.accessory.getService(this.platform.Service.AccessoryInformation)!
       .setCharacteristic(this.platform.Characteristic.Manufacturer, 'Ambient Weather')
       .setCharacteristic(this.platform.Characteristic.Model, 'Temperature Sensor')
-      .setCharacteristic(this.platform.Characteristic.SerialNumber, accessory.context.device.displayName);
+      .setCharacteristic(this.platform.Characteristic.SerialNumber, accessory.context.device.uniqueId);
 
     // get the TemperatureSensor service if it exists, otherwise create a new TemperatureSensor service
     this.service = this.accessory.getService(this.platform.Service.TemperatureSensor)
@@ -25,38 +24,25 @@ export class TemperatureAccessory {
     // set the service name, this is what is displayed as the default name on the Home app
     this.service.setCharacteristic(this.platform.Characteristic.Name, accessory.context.device.displayName);
 
-    this.updateData();
-    setInterval(this.updateData.bind(this), 2 * 60 * 1000);
+    // Seed the characteristic with whatever value is cached on the accessory
+    // so HomeKit has something sensible to display until the first poll tick.
+    if (typeof accessory.context.device.value === 'number') {
+      this.setValue(accessory.context.device.value);
+    }
   }
 
-  fahrenheitToCelsius(temperature) {
-    return (temperature - 32) * 5/9;
+  private fahrenheitToCelsius(temperature: number): number {
+    return (temperature - 32) * 5 / 9;
   }
 
   /**
-   * Handle requests to get the current value of the "Current Temperature" characteristic
+   * Push a fresh raw AWN reading (in °F) into the HomeKit characteristic
+   * after converting to °C. Called by the platform's poll tick — wrappers
+   * no longer poll on their own.
    */
-  async handleCurrentTemperatureGet() {
-    this.platform.log.debug('Triggered GET CurrentTemperature');
-
-    const currentValue = this.accessory.context.device.value;
-    this.platform.log.debug(`CurrentTemperature: ${currentValue}`);
-    return this.fahrenheitToCelsius(currentValue);
-  }
-
-  private async updateData(): Promise<void> {
-    this.platform.log.debug('Updating CurrentTemperature Data');
-    try {
-      const Devices = await this.platform.fetchDevices();
-      const sensor = Devices.filter( (o: DEVICE) => {
-        return o.uniqueId === this.accessory.context.device.uniqueId;
-      });
-      const value = sensor[0].value;
-      this.platform.log.debug(`SET CurrentTemperature: ${value}`);
-      this.service.setCharacteristic(this.platform.Characteristic.CurrentTemperature, this.fahrenheitToCelsius(value));
-    } catch (error) {
-      // throw new Error('Error updating Current Temperature Data. This likely means the AWN API is down or didn\'t return valid JSON.');
-      this.platform.log.warn('Updating Current Temperature Data Failed. This likely means the AWN API is down or didnt return valid JSON.');
-    }
+  setValue(rawValue: number): void {
+    const celsius = this.fahrenheitToCelsius(rawValue);
+    this.platform.log.debug(`SET CurrentTemperature: ${rawValue}°F → ${celsius.toFixed(2)}°C`);
+    this.service.updateCharacteristic(this.platform.Characteristic.CurrentTemperature, celsius);
   }
 }

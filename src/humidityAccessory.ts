@@ -1,9 +1,9 @@
 import { PlatformAccessory, Service } from 'homebridge';
-import { AmbientWeatherSensorsPlatform } from './platform.js';
-import { DEVICE } from './types.js';
+
+import { AmbientWeatherSensorsPlatform, SensorAccessory } from './platform.js';
 
 
-export class HumidityAccessory {
+export class HumidityAccessory implements SensorAccessory {
   private service: Service;
 
   constructor(
@@ -15,7 +15,7 @@ export class HumidityAccessory {
     this.accessory.getService(this.platform.Service.AccessoryInformation)!
       .setCharacteristic(this.platform.Characteristic.Manufacturer, 'Ambient Weather')
       .setCharacteristic(this.platform.Characteristic.Model, 'Humidity Sensor')
-      .setCharacteristic(this.platform.Characteristic.SerialNumber, accessory.context.device.displayName);
+      .setCharacteristic(this.platform.Characteristic.SerialNumber, accessory.context.device.uniqueId);
 
     // get the HumiditySensor service if it exists, otherwise create a new HumiditySensor service
     // you can create multiple services for each accessory
@@ -25,38 +25,17 @@ export class HumidityAccessory {
     // set the service name, this is what is displayed as the default name on the Home app
     this.service.setCharacteristic(this.platform.Characteristic.Name, accessory.context.device.displayName);
 
-    this.updateData();
-    setInterval(this.updateData.bind(this), 2 * 60 * 1000);
+    if (typeof accessory.context.device.value === 'number') {
+      this.setValue(accessory.context.device.value);
+    }
   }
 
   /**
-   * Handle requests to get the current value of the "Current Temperature" characteristic
+   * Push a fresh raw AWN humidity reading (0-100 %) into the HomeKit
+   * characteristic. Called by the platform's poll tick.
    */
-  handleCurrentRelativeHumidityGet() {
-    this.platform.log.debug('Triggered GET CurrentRelativeHumidity');
-
-    // set this to a valid value for CurrentRelativeHumidity
-    const currentValue = this.accessory.context.device.value;
-    this.platform.log.debug(`CurrentHumidity: ${currentValue}`);
-    return currentValue;
-  }
-
-  private async updateData(): Promise<void> {
-    this.platform.log.debug('Updating CurrentHumidity Data');
-
-    try {
-      const Devices = await this.platform.fetchDevices();
-
-      const sensor = Devices.filter( (o: DEVICE) => {
-        return o.uniqueId === this.accessory.context.device.uniqueId;
-      });
-
-      const value = sensor[0].value;
-      this.platform.log.debug(`SET CurrentHumidity: ${value}`);
-      this.service.setCharacteristic(this.platform.Characteristic.CurrentRelativeHumidity, value);
-    } catch (error) {
-      // throw new Error('Error updating Current Humidity Data. This likely means the AWN API is down or didn\'t return valid JSON.');
-      this.platform.log.warn('Updating Current Humidity Data Failed. This likely means the AWN API is down or didnt return valid JSON.');
-    }
+  setValue(rawValue: number): void {
+    this.platform.log.debug(`SET CurrentRelativeHumidity: ${rawValue}%`);
+    this.service.updateCharacteristic(this.platform.Characteristic.CurrentRelativeHumidity, rawValue);
   }
 }

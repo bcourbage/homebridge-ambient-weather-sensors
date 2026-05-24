@@ -1,9 +1,9 @@
 import { PlatformAccessory, Service } from 'homebridge';
-import { AmbientWeatherSensorsPlatform } from './platform.js';
-import { DEVICE } from './types.js';
+
+import { AmbientWeatherSensorsPlatform, SensorAccessory } from './platform.js';
 
 
-export class SolarRadiationAccessory {
+export class SolarRadiationAccessory implements SensorAccessory {
   private service: Service;
 
   constructor(
@@ -15,7 +15,7 @@ export class SolarRadiationAccessory {
     this.accessory.getService(this.platform.Service.AccessoryInformation)!
       .setCharacteristic(this.platform.Characteristic.Manufacturer, 'Ambient Weather')
       .setCharacteristic(this.platform.Characteristic.Model, 'Solar Radiation Sensor')
-      .setCharacteristic(this.platform.Characteristic.SerialNumber, accessory.context.device.displayName)
+      .setCharacteristic(this.platform.Characteristic.SerialNumber, accessory.context.device.uniqueId)
       .setCharacteristic(this.platform.Characteristic.ProductData, 'Conversion to lux with (W/m2 / 0.0079)');
 
     // get the LightSensor service if it exists, otherwise create a new LightSensor service
@@ -34,41 +34,21 @@ export class SolarRadiationAccessory {
       maxValue: 200000,
     });
 
-    this.updateData();
-    setInterval(this.updateData.bind(this), 2 * 60 * 1000);
+    if (typeof accessory.context.device.value === 'number') {
+      this.setValue(accessory.context.device.value);
+    }
   }
 
   /**
-   * Handle requests to get the current value of the "Current Temperature" characteristic
+   * Push a fresh raw AWN solar-radiation reading (W/m²) into the HomeKit
+   * LightSensor characteristic after converting to lux. Called by the
+   * platform's poll tick.
    */
-  handleCurrentSolarRadiationGet() {
-    this.platform.log.debug('Triggered GET CurrentSolarRadiation');
-
-    // set this to a valid value for CurrentSolarRadiation
-    const currentValue = this.accessory.context.device.value;
-    this.platform.log.debug(`CurrentSolarRadiation: ${currentValue}`);
-    return currentValue;
-  }
-
-  private async updateData(): Promise<void> {
-    this.platform.log.debug('Updating Solar Radiation Data');
-
-    try {
-      const sensors = await this.platform.fetchDevices();
-
-      const sensor = sensors.filter( (o: DEVICE) => {
-        return o.uniqueId === this.accessory.context.device.uniqueId;
-      });
-
-      // to convert W/m2 to Lux we must devide by 0.0079
-      const value = Math.round(sensor[0].value / 0.0079);
-
-      this.platform.log.debug(`SET CurrentSolarRadiation: ${value}`);
-      this.service.setCharacteristic(this.platform.Characteristic.CurrentAmbientLightLevel, value)
-        .setCharacteristic(this.platform.Characteristic.ProductData, `${sensor[0].value} W/m2`);
-    } catch (error) {
-      // throw new Error('Error updating Solar Radiation Data. This likely means the AWN API is down or didn\'t return valid JSON.');
-      this.platform.log.warn('Updating Solar Radiation Data Failed. This likely means the AWN API is down or didnt return valid JSON.');
-    }
+  setValue(rawValue: number): void {
+    // to convert W/m² to lux we divide by 0.0079
+    const lux = Math.round(rawValue / 0.0079);
+    this.platform.log.debug(`SET CurrentAmbientLightLevel: ${rawValue} W/m² → ${lux} lx`);
+    this.service.updateCharacteristic(this.platform.Characteristic.CurrentAmbientLightLevel, lux)
+      .updateCharacteristic(this.platform.Characteristic.ProductData, `${rawValue} W/m2`);
   }
 }

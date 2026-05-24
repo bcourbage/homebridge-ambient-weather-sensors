@@ -26,6 +26,22 @@ function hapClean(input: string): string {
 // HAP 2.x enforces a 64-character limit on the `Name` characteristic.
 const HAP_NAME_MAX = 64;
 
+// Polling cadence for the AWN REST API. AWN's documented rate limit is
+// 1 req/sec per apiKey, so any cadence above that is safe; 2 minutes
+// matches the previous behavior and avoids surprising users.
+const POLL_INTERVAL_MS = 2 * 60 * 1000;
+
+/**
+ * Common shape for the per-accessory wrapper instances the platform
+ * tracks. Each wrapper exposes a single push-style `setValue` entry
+ * point that the platform's poll tick uses to deliver the freshly
+ * fetched value, performing whatever unit conversion is appropriate for
+ * the underlying HomeKit characteristic.
+ */
+export interface SensorAccessory {
+  setValue(rawValue: number): void;
+}
+
 export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
   public readonly Service: typeof Service = this.api.hap.Service;
   public readonly Characteristic: typeof Characteristic = this.api.hap.Characteristic;
@@ -35,6 +51,14 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
 
   // this is used to track restored cached accessories
   public readonly accessories: PlatformAccessory[] = [];
+
+  // Per-uniqueId wrapper instances created in discoverDevices() and
+  // looked up by the poll tick to fan out fresh API values without each
+  // wrapper having to call fetchDevices() on its own timer.
+  private readonly wrappers: Map<string, SensorAccessory> = new Map();
+
+  // Handle for the platform-level poll timer so we never start two.
+  private pollTimer: ReturnType<typeof setInterval> | undefined;
 
   constructor(
     public readonly log: Logger,
@@ -241,45 +265,34 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
 
           const uuid = this.api.hap.uuid.generate(device.uniqueId);
           const existingAccessory = this.accessories.find(accessory => accessory.UUID === uuid);
+          let accessory: PlatformAccessory;
 
           if (existingAccessory) {
-            // the accessory already exists
             this.log.info('Restoring existing accessory from cache:', existingAccessory.displayName);
-
             existingAccessory.context.device = device;
             this.api.updatePlatformAccessories([existingAccessory]);
-
-            if (existingAccessory.context.device.type === 'Temperature') {
-              new TemperatureAccessory(this, existingAccessory);
-            } else if (existingAccessory.context.device.type === 'Humidity') {
-              new HumidityAccessory(this, existingAccessory);
-            } else if (existingAccessory.context.device.type === 'Solar Radiation') {
-              new SolarRadiationAccessory(this, existingAccessory);
-            }
+            accessory = existingAccessory;
           } else {
-            // the accessory does not yet exist, so we need to create it
             this.log.info('Adding new accessory:', device.displayName);
-
-            // create a new accessory
-            const accessory = new this.api.platformAccessory(device.displayName, uuid);
-
-            // store a copy of the device object in the `accessory.context`
-            // the `context` property can be used to store any data about the accessory you may need
+            accessory = new this.api.platformAccessory(device.displayName, uuid);
             accessory.context.device = device;
+          }
 
-            if (accessory.context.device.type === 'Temperature') {
-              new TemperatureAccessory(this, accessory);
-            } else if (accessory.context.device.type === 'Humidity') {
-              new HumidityAccessory(this, accessory);
-            } else if (accessory.context.device.type === 'Solar Radiation') {
-              new SolarRadiationAccessory(this, accessory);
-            }
+          const wrapper = this.createSensorWrapper(accessory);
+          if (wrapper) {
+            this.wrappers.set(device.uniqueId, wrapper);
+          }
 
-            // link the accessory to your platform
+          if (!existingAccessory) {
             this.api.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [accessory]);
           }
         }
       }
+
+      // Now that all wrappers are registered, take over the polling that
+      // each wrapper used to do for itself. One platform-level timer fans
+      // out into wrapper.setValue() calls per poll tick.
+      this.startPolling();
     } catch(error) {
       let message;
       if (error instanceof Error) {
@@ -288,6 +301,62 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
         message = String(error);
       }
       this.log.error('ERROR:', message);
+    }
+  }
+
+  /**
+   * Construct the right sensor-type wrapper for an accessory based on
+   * the cached context.device.type. Returns the wrapper so the platform
+   * can index it by uniqueId for the poll-and-distribute loop.
+   */
+  private createSensorWrapper(accessory: PlatformAccessory): SensorAccessory | undefined {
+    switch (accessory.context.device.type) {
+      case 'Temperature':
+        return new TemperatureAccessory(this, accessory);
+      case 'Humidity':
+        return new HumidityAccessory(this, accessory);
+      case 'Solar Radiation':
+        return new SolarRadiationAccessory(this, accessory);
+      default:
+        return undefined;
+    }
+  }
+
+  /**
+   * Start the platform-level poll timer. One timer covers every
+   * accessory: on each tick we fetch the full devices payload from AWN
+   * once and fan the values out to wrappers via setValue(). Previously
+   * every wrapper owned its own setInterval, which meant N accessories
+   * triggered N parallel fetches per cycle — racing AWN's 1 req/s
+   * rate limit and getting "saved" only by the disk cache.
+   */
+  private startPolling(): void {
+    if (this.pollTimer) {
+      return;
+    }
+    this.pollTimer = setInterval(() => {
+      this.pollAndDistribute().catch((error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        this.log.warn('Poll tick failed:', message);
+      });
+    }, POLL_INTERVAL_MS);
+  }
+
+  /**
+   * Fetch fresh values once and push each one into the matching wrapper.
+   * Wrappers not present in the response are simply left untouched on
+   * this tick — HomeKit will keep showing the last known value.
+   */
+  private async pollAndDistribute(): Promise<void> {
+    const Devices = await this.fetchDevices();
+    if (!Devices) {
+      return;
+    }
+    for (const device of Devices) {
+      const wrapper = this.wrappers.get(device.uniqueId);
+      if (wrapper) {
+        wrapper.setValue(device.value);
+      }
     }
   }
 }
