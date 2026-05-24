@@ -2,10 +2,29 @@ import { API, Characteristic, DynamicPlatformPlugin, Logger, PlatformAccessory, 
 
 import { Cache } from './cache.js';
 import { HumidityAccessory } from './humidityAccessory.js';
+import { friendlySensorName } from './sensorNames.js';
 import { PLATFORM_NAME, PLUGIN_NAME } from './settings.js';
 import { SolarRadiationAccessory } from './solarRadiationAccessory.js';
 import { TemperatureAccessory } from './temperatureAccessory.js';
 import { DEVICE } from './types.js';
+
+/**
+ * Sanitize a string for use in a HAP `Name` characteristic, per Apple's
+ * documented rule (alphanumeric, space, and apostrophe only; must start
+ * and end with an alphanumeric). HAP 2.x emits warnings for any value
+ * that doesn't comply.
+ */
+function hapClean(input: string): string {
+  return input
+    .replace(/[^A-Za-z0-9 ']/g, ' ')
+    .replace(/\s+/g, ' ')
+    .replace(/^[^A-Za-z0-9]+/, '')
+    .replace(/[^A-Za-z0-9]+$/, '')
+    .trim();
+}
+
+// HAP 2.x enforces a 64-character limit on the `Name` characteristic.
+const HAP_NAME_MAX = 64;
 
 export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
   public readonly Service: typeof Service = this.api.hap.Service;
@@ -56,19 +75,50 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
     }
   }
 
+  /**
+   * Compose a HAP-clean accessory displayName from station + sensor
+   * metadata. Mirrors the way ambientweather.net joins `info.name` and
+   * `info.location` (e.g. "Fairhills WS-2000, San Rafael, CA"), but with
+   * commas/punctuation stripped to satisfy HAP 2.x's Name validator and
+   * with a friendly sensor label appended.
+   *
+   * Falls back to the MAC address when `info.name` is missing, and drops
+   * the location portion if the composed name would exceed HAP's 64-char
+   * limit on the `Name` characteristic.
+   */
+  composeDisplayName(obj: { macAddress: string; info?: { name?: string; location?: string } }, sensorKey: string): string {
+    const stationName = hapClean(obj.info?.name ?? '');
+    const stationLocation = hapClean(obj.info?.location ?? '');
+    const macFallback = obj.macAddress.replaceAll(':', '');
+    const sensorLabel = friendlySensorName(sensorKey);
+
+    const baseName = stationName || macFallback;
+    const composed = hapClean(stationLocation ? `${baseName} ${stationLocation} ${sensorLabel}` : `${baseName} ${sensorLabel}`);
+
+    if (composed.length <= HAP_NAME_MAX) {
+      return composed;
+    }
+
+    // Composed name too long — drop the location portion, keep
+    // station-name + sensor-label so accessories remain identifiable.
+    const trimmed = hapClean(`${baseName} ${sensorLabel}`);
+    return trimmed.length <= HAP_NAME_MAX ? trimmed : trimmed.slice(0, HAP_NAME_MAX).trim();
+  }
+
   parseDevices(json) {
     const Devices:DEVICE[] = [];
 
     if (Array.isArray(json)) {
       json.forEach( (obj) => {
         Object.entries(obj.lastData).forEach( (device) => {
-          const type = this.determineSensorType(device[0]);
+          const sensorKey = device[0];
+          const type = this.determineSensorType(sensorKey);
           if (type !== 'NOT_SUPPORTED') {
             Devices.push({
               macAddress: obj.macAddress,
-              uniqueId: `${obj.macAddress}-${device[0]}`,
-              displayName: `${obj.macAddress.replaceAll(':', '')}-${device[0]}`,
-              type: this.determineSensorType(device[0]),
+              uniqueId: `${obj.macAddress}-${sensorKey}`,
+              displayName: this.composeDisplayName(obj, sensorKey),
+              type,
               value: device[1] as number,
             });
           }
