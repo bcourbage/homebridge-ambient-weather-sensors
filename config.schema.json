@@ -42,6 +42,16 @@
         "type": "boolean",
         "required": false,
         "default": false
+      },
+      "excludeSensors": {
+        "title": "Exclude Sensors",
+        "type": "array",
+        "required": false,
+        "description": "Hide specific sensors by uniqueId (formatted as MAC-sensorkey, e.g. \"84:F3:EB:66:D2:67-tempinf\"). The per-type toggles above still apply; this list further removes individual sensors. Useful when you have multiple stations or duplicate probes and want to hide some.",
+        "items": {
+          "type": "string",
+          "placeholder": "84:F3:EB:66:D2:67-tempinf"
+        }
       }
     }
   }

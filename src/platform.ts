@@ -107,21 +107,29 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
 
   parseDevices(json) {
     const Devices:DEVICE[] = [];
+    const excludeList: string[] = Array.isArray(this.config.excludeSensors) ? this.config.excludeSensors : [];
+    const exclude = new Set(excludeList);
 
     if (Array.isArray(json)) {
       json.forEach( (obj) => {
         Object.entries(obj.lastData).forEach( (device) => {
           const sensorKey = device[0];
           const type = this.determineSensorType(sensorKey);
-          if (type !== 'NOT_SUPPORTED') {
-            Devices.push({
-              macAddress: obj.macAddress,
-              uniqueId: `${obj.macAddress}-${sensorKey}`,
-              displayName: this.composeDisplayName(obj, sensorKey),
-              type,
-              value: device[1] as number,
-            });
+          if (type === 'NOT_SUPPORTED') {
+            return;
           }
+          const uniqueId = `${obj.macAddress}-${sensorKey}`;
+          if (exclude.has(uniqueId)) {
+            this.log.debug(`Excluding sensor ${uniqueId} (matched excludeSensors config)`);
+            return;
+          }
+          Devices.push({
+            macAddress: obj.macAddress,
+            uniqueId,
+            displayName: this.composeDisplayName(obj, sensorKey),
+            type,
+            value: device[1] as number,
+          });
         });
       });
     }
