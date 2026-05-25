@@ -39,7 +39,9 @@ Realtime is currently opt-in. The default will switch to realtime in a future re
 ## Current Supported Sensor Types
 - Temperature
 - Humidity
-- Solar Radiation (As Lux)
+- Solar Radiation (as lux)
+- CO2 (AWN's `co2_in_aqin` and standalone `co2` fields)
+- Particulate matter — PM2.5 and PM10 (AWN's AQIN-family `pm25_in_aqin`, `pm10_in_aqin`, and the outdoor `pm25` field). Reported with both the raw density and an EPA-bucket-derived HomeKit AirQuality rating.
 
 ## Future Supported Sensor Types
 - Air Pressure

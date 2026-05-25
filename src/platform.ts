@@ -1,5 +1,7 @@
 import { API, Characteristic, DynamicPlatformPlugin, Logger, PlatformAccessory, PlatformConfig, Service } from 'homebridge';
 
+import { AirQualityAccessory } from './airQualityAccessory.js';
+import { Co2Accessory } from './co2Accessory.js';
 import { HumidityAccessory } from './humidityAccessory.js';
 import { RealtimeSource } from './realtimeSource.js';
 import { friendlySensorName } from './sensorNames.js';
@@ -94,12 +96,23 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
   }
 
   determineSensorType(sensor: string) {
+    // The temp/humid/solar matchers use String.includes which is broad
+    // enough to catch numbered variants (temp1f, humidity10, etc.) but
+    // also indiscriminately. The newer matchers below use stricter
+    // regexes to avoid catching battery-status keys like `batt_co2` or
+    // AQIN's own internal temperature key `pm_in_temp_aqin`.
     if (sensor.includes('temp') && this.config.temperatureSensors) {
       return 'Temperature';
     } else if (sensor.includes('humid') && this.config.humiditySensors) {
       return 'Humidity';
     } else if (sensor.includes('solar') && this.config.solarRadiationSensors) {
       return 'Solar Radiation';
+    } else if (/^co2($|_)/.test(sensor) && this.config.co2Sensors) {
+      return 'CO2';
+    } else if (/^pm25($|_)/.test(sensor) && this.config.airQualitySensors) {
+      return 'PM2.5';
+    } else if (/^pm10($|_)/.test(sensor) && this.config.airQualitySensors) {
+      return 'PM10';
       // } else if (sensor.includes('baromabs') && this.config.barometricSensors) {
       //   return 'Barometric Pressure';
       // } else if (sensor.includes('windspeed') && this.config.windSensors) {
@@ -334,6 +347,11 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
         return new HumidityAccessory(this, accessory);
       case 'Solar Radiation':
         return new SolarRadiationAccessory(this, accessory);
+      case 'CO2':
+        return new Co2Accessory(this, accessory);
+      case 'PM2.5':
+      case 'PM10':
+        return new AirQualityAccessory(this, accessory);
       default:
         return undefined;
     }

@@ -51,6 +51,20 @@
         "required": false,
         "default": false
       },
+      "co2Sensors": {
+        "title": "CO2 Sensors",
+        "type": "boolean",
+        "required": false,
+        "default": false,
+        "description": "Expose CO2 readings from AWN's AQIN family (co2_in_aqin) and any standalone CO2 sensor."
+      },
+      "airQualitySensors": {
+        "title": "Air Quality Sensors (PM2.5 / PM10)",
+        "type": "boolean",
+        "required": false,
+        "default": false,
+        "description": "Expose particulate readings (pm25, pm25_in_aqin, pm10_in_aqin) as HomeKit AirQualitySensor accessories with the corresponding density characteristic and an EPA-bucket-derived AirQuality enum."
+      },
       "dataSource": {
         "title": "Data Source",
         "type": "string",
