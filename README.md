@@ -26,7 +26,15 @@ This plugin allows you to pull sensor data from your Ambient Weather weather sta
 
 ## Features
 - Supports parsing sensors attached to multiple weather stations
-- Polling is static at `2 minutes` to reduce strain on the Ambient Weather API
+- Two data sources: REST polling (default, 2 minute cadence) or websocket realtime updates (opt-in)
+
+## Data Source
+The plugin can read sensor values one of two ways. Pick whichever fits your setup; both feed the same HomeKit accessories.
+
+- **Polling** *(default)* — fetches the AWN REST endpoint every 2 minutes. Predictable cadence, minimal moving parts, easy to reason about. Updates lag the real reading by up to 2 minutes.
+- **Realtime** *(opt-in via `dataSource: "realtime"`)* — opens a websocket to `rt2.ambientweather.net` and receives values as the station reports them (~30 second cadence indoors). Lower latency but more moving parts (a persistent connection with automatic reconnect).
+
+Realtime is currently opt-in. The default will switch to realtime in a future release once it has been broadly validated.
 
 ## Current Supported Sensor Types
 - Temperature

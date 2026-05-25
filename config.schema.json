@@ -51,6 +51,16 @@
         "required": false,
         "default": false
       },
+      "dataSource": {
+        "title": "Data Source",
+        "type": "string",
+        "default": "polling",
+        "oneOf": [
+          { "title": "Polling — REST API every 2 minutes (default)", "enum": ["polling"] },
+          { "title": "Realtime — websocket subscription (opt-in)", "enum": ["realtime"] }
+        ],
+        "description": "Polling fetches the AWN REST endpoint every 2 minutes. Realtime opens a websocket to rt2.ambientweather.net and receives updates as the station reports them (typically ~30s indoors). Realtime is opt-in for now; the default will switch to realtime in a future release once it has been broadly validated."
+      },
       "excludeSensors": {
         "title": "Exclude Sensors",
         "type": "array",

@@ -1,6 +1,7 @@
 import { API, Characteristic, DynamicPlatformPlugin, Logger, PlatformAccessory, PlatformConfig, Service } from 'homebridge';
 
 import { HumidityAccessory } from './humidityAccessory.js';
+import { RealtimeSource } from './realtimeSource.js';
 import { friendlySensorName } from './sensorNames.js';
 import { PLATFORM_NAME, PLUGIN_NAME } from './settings.js';
 import { SolarRadiationAccessory } from './solarRadiationAccessory.js';
@@ -56,6 +57,10 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
   // Handle for the platform-level poll timer so we never start two.
   private pollTimer: ReturnType<typeof setInterval> | undefined;
 
+  // Realtime websocket source — instantiated lazily only if the user
+  // opted into `dataSource: "realtime"` via config.
+  private realtimeSource: RealtimeSource | undefined;
+
   constructor(
     public readonly log: Logger,
     public readonly config: PlatformConfig,
@@ -68,6 +73,17 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
       log.debug('Executed didFinishLaunching callback');
       // run the method to discover / register your devices as accessories
       this.discoverDevices();
+    });
+
+    // Clean shutdown — stop the realtime websocket so its reconnect
+    // backoff doesn't fire after Homebridge has begun tearing down.
+    this.api.on('shutdown', () => {
+      log.debug('Executed shutdown callback');
+      this.realtimeSource?.stop();
+      if (this.pollTimer) {
+        clearInterval(this.pollTimer);
+        this.pollTimer = undefined;
+      }
     });
   }
 
@@ -279,10 +295,21 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
         }
       }
 
-      // Now that all wrappers are registered, take over the polling that
-      // each wrapper used to do for itself. One platform-level timer fans
-      // out into wrapper.setValue() calls per poll tick.
-      this.startPolling();
+      // Now that all wrappers are registered, choose how to keep them
+      // updated. Two data-source options:
+      //
+      //   "polling"  (default) — one platform-level setInterval, REST
+      //                          fetch every 2 minutes.
+      //   "realtime"           — opt-in; subscribe to AWN's socket.io
+      //                          endpoint and push updates as they
+      //                          arrive (~30s cadence indoors).
+      const dataSource = this.config.dataSource === 'realtime' ? 'realtime' : 'polling';
+      this.log.info(`Data source: ${dataSource}`);
+      if (dataSource === 'realtime') {
+        this.startRealtime();
+      } else {
+        this.startPolling();
+      }
     } catch(error) {
       let message;
       if (error instanceof Error) {
@@ -333,6 +360,30 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
   }
 
   /**
+   * Open a long-lived websocket subscription to AWN's realtime endpoint.
+   * Sensor updates arrive as they happen (typically ~30s cadence
+   * indoors), feed through the same `distribute` fanout the poll path
+   * uses, and end up calling setValue() on the matching wrapper.
+   */
+  private startRealtime(): void {
+    if (this.realtimeSource) {
+      return;
+    }
+    if (!this.config.apiKey || !this.config.applicationKey) {
+      this.log.error('Realtime data source requested but apiKey/applicationKey is not configured; falling back to polling.');
+      this.startPolling();
+      return;
+    }
+    this.realtimeSource = new RealtimeSource({
+      apiKey: this.config.apiKey,
+      applicationKey: this.config.applicationKey,
+      log: this.log,
+      onUpdates: (updates) => this.distribute(updates),
+    });
+    this.realtimeSource.start();
+  }
+
+  /**
    * Fetch fresh values once and push each one into the matching wrapper.
    * Wrappers not present in the response are simply left untouched on
    * this tick — HomeKit will keep showing the last known value.
@@ -342,10 +393,20 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
     if (!Devices) {
       return;
     }
-    for (const device of Devices) {
-      const wrapper = this.wrappers.get(device.uniqueId);
+    this.distribute(Devices);
+  }
+
+  /**
+   * Common fanout used by both the polling and realtime data sources.
+   * Looks up each update's wrapper by uniqueId; values for sensors we
+   * never registered (unknown sensor types, excluded by config, etc.)
+   * are silently ignored.
+   */
+  private distribute(updates: Array<{ uniqueId: string; value: number }>): void {
+    for (const update of updates) {
+      const wrapper = this.wrappers.get(update.uniqueId);
       if (wrapper) {
-        wrapper.setValue(device.value);
+        wrapper.setValue(update.value);
       }
     }
   }
