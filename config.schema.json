@@ -16,18 +16,22 @@
       "apiKey": {
         "title": "API Key",
         "type": "string",
-        "format": "password",
         "required": true,
         "placeholder": "api key from ambient weather account",
-        "description": "Stored in plain text in Homebridge's config.json. Treat the file with the same care as any password-bearing config."
+        "description": "Stored in plain text in Homebridge's config.json. Treat the file with the same care as any password-bearing config.",
+        "x-schema-form": {
+          "type": "password"
+        }
       },
       "applicationKey": {
         "title": "Application Key",
         "type": "string",
-        "format": "password",
         "required": true,
         "placeholder": "application key from ambient weather account",
-        "description": "Stored in plain text in Homebridge's config.json. Treat the file with the same care as any password-bearing config."
+        "description": "Stored in plain text in Homebridge's config.json. Treat the file with the same care as any password-bearing config.",
+        "x-schema-form": {
+          "type": "password"
+        }
       },
       "temperatureSensors": {
         "title": "Temperature Sensors",
