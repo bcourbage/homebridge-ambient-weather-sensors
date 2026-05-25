@@ -45,9 +45,12 @@ export interface RealtimeOptions {
 const INITIAL_BACKOFF_MS = 1_000;
 const MAX_BACKOFF_MS = 60_000;
 
-// How often to log a heartbeat summarizing realtime activity. Long
-// enough to keep the log readable, short enough that a silently-dead
-// subscription is noticed within an hour at most.
+// How often the realtime source checks whether the subscription is
+// still delivering data. The healthy case logs at debug level (silent
+// during normal operation); a heartbeat that observed zero updates is
+// surfaced at warn level since it points at a real anomaly (socket
+// alive but no data flowing). 5 minutes is short enough that a stalled
+// subscription is visible within a few cycles without spamming the log.
 const HEARTBEAT_INTERVAL_MS = 5 * 60_000;
 
 export class RealtimeSource {
@@ -92,8 +95,18 @@ export class RealtimeSource {
     }
     this.heartbeatTimer = setInterval(() => {
       const minutes = Math.round(HEARTBEAT_INTERVAL_MS / 60_000);
-      this.opts.log.info(`Realtime: ${this.updatesSinceHeartbeat} updates received in the last ${minutes} minutes`);
+      const count = this.updatesSinceHeartbeat;
       this.updatesSinceHeartbeat = 0;
+      if (count === 0) {
+        // No data over a full heartbeat window — the socket is probably
+        // still connected (otherwise our disconnect handler would have
+        // fired) but AWN has stopped pushing updates. Surface at warn so
+        // it shows up at default log verbosity; healthy heartbeats stay
+        // at debug so they don't clutter the log.
+        this.opts.log.warn(`Realtime: 0 updates received in the last ${minutes} minutes; subscription may be stalled`);
+      } else {
+        this.opts.log.debug(`Realtime: ${count} updates received in the last ${minutes} minutes`);
+      }
     }, HEARTBEAT_INTERVAL_MS);
   }
 
