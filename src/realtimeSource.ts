@@ -45,17 +45,28 @@ export interface RealtimeOptions {
 const INITIAL_BACKOFF_MS = 1_000;
 const MAX_BACKOFF_MS = 60_000;
 
+// How often to log a heartbeat summarizing realtime activity. Long
+// enough to keep the log readable, short enough that a silently-dead
+// subscription is noticed within an hour at most.
+const HEARTBEAT_INTERVAL_MS = 5 * 60_000;
+
 export class RealtimeSource {
   private socket: Socket | undefined;
   private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+  private heartbeatTimer: ReturnType<typeof setInterval> | undefined;
   private currentBackoff = INITIAL_BACKOFF_MS;
   private stopped = false;
+  // Counter of data events received since the last heartbeat log so the
+  // user can see at a glance whether the subscription is actually
+  // delivering updates.
+  private updatesSinceHeartbeat = 0;
 
   constructor(private readonly opts: RealtimeOptions) {}
 
   start(): void {
     this.stopped = false;
     this.connect();
+    this.startHeartbeat();
   }
 
   stop(): void {
@@ -64,11 +75,26 @@ export class RealtimeSource {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = undefined;
     }
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = undefined;
+    }
     if (this.socket) {
       this.socket.removeAllListeners();
       this.socket.disconnect();
       this.socket = undefined;
     }
+  }
+
+  private startHeartbeat(): void {
+    if (this.heartbeatTimer) {
+      return;
+    }
+    this.heartbeatTimer = setInterval(() => {
+      const minutes = Math.round(HEARTBEAT_INTERVAL_MS / 60_000);
+      this.opts.log.info(`Realtime: ${this.updatesSinceHeartbeat} updates received in the last ${minutes} minutes`);
+      this.updatesSinceHeartbeat = 0;
+    }, HEARTBEAT_INTERVAL_MS);
   }
 
   private connect(): void {
@@ -94,12 +120,13 @@ export class RealtimeSource {
     });
 
     this.socket.on('subscribed', (payload: unknown) => {
-      this.opts.log.debug('Realtime: subscribed; processing initial state');
+      this.opts.log.info('Realtime: subscription confirmed by AWN');
       this.handleDevicePayload(payload);
     });
 
     this.socket.on('data', (payload: unknown) => {
       this.opts.log.debug('Realtime: data event received');
+      this.updatesSinceHeartbeat += 1;
       this.handleDevicePayload(payload);
     });
 
