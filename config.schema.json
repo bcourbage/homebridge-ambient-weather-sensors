@@ -79,10 +79,10 @@
         "title": "Exclude Sensors",
         "type": "array",
         "required": false,
-        "description": "Hide specific sensors by uniqueId (formatted as MAC-sensorkey, e.g. \"84:F3:EB:66:D2:67-tempinf\"). The per-type toggles above still apply; this list further removes individual sensors. Useful when you have multiple stations or duplicate probes and want to hide some.",
+        "description": "Hide specific sensors by uniqueId, in the format MAC-sensorkey (e.g. 84:F3:EB:66:D2:67-tempinf). Find the exact uniqueId for each sensor in the Homebridge log on first start after enabling the per-type toggles above — each accessory is logged as `Loading accessory from cache: <name>`. The per-type toggles still apply; this list further removes individual sensors.",
         "items": {
           "type": "string",
-          "placeholder": "84:F3:EB:66:D2:67-tempinf"
+          "placeholder": "e.g. 84:F3:EB:66:D2:67-tempinf"
         }
       }
     }
