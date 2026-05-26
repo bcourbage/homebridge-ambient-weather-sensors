@@ -28,7 +28,7 @@
   "scripts": {
     "lint": "eslint src/**.ts --max-warnings=0",
     "watch": "npm run build && npm link && nodemon",
-    "build": "node -e \"require('fs').rmSync('./dist',{recursive:true,force:true})\" && tsc",
+    "build": "node -e \"require('fs').rmSync('./dist',{recursive:true,force:true})\" && node ./node_modules/typescript/bin/tsc",
     "prepare": "npm run build",
     "prepublishOnly": "npm run lint && npm run build"
   },
