@@ -28,6 +28,36 @@ function hapClean(input: string): string {
 // HAP 2.x enforces a 64-character limit on the `Name` characteristic.
 const HAP_NAME_MAX = 64;
 
+/**
+ * Normalize a string the user might have typed in their config for
+ * matching against sensor identifiers. Trims whitespace and lowercases.
+ * Empty / non-string values normalize to the empty string, which the
+ * caller is expected to filter out.
+ */
+function normalizeMatchKey(s: unknown): string {
+  return typeof s === 'string' ? s.trim().toLowerCase() : '';
+}
+
+/**
+ * Build a Set of normalized matchers from a config-supplied array. Used
+ * for both `excludeSensors` and `includeOnly`; the same matching rules
+ * apply to both (case-insensitive, whitespace-trimmed, non-string and
+ * blank entries dropped).
+ */
+function toMatcherSet(raw: unknown): Set<string> {
+  const out = new Set<string>();
+  if (!Array.isArray(raw)) {
+    return out;
+  }
+  for (const entry of raw) {
+    const k = normalizeMatchKey(entry);
+    if (k.length > 0) {
+      out.add(k);
+    }
+  }
+  return out;
+}
+
 // Polling cadence for the AWN REST API. AWN's documented rate limit is
 // 1 req/sec per apiKey, so any cadence above that is safe; 2 minutes
 // matches the previous behavior and avoids surprising users.
@@ -151,8 +181,15 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
 
   parseDevices(json) {
     const Devices:DEVICE[] = [];
-    const excludeList: string[] = Array.isArray(this.config.excludeSensors) ? this.config.excludeSensors : [];
-    const exclude = new Set(excludeList);
+
+    // Build matcher sets once per call. Matching is intentionally
+    // forgiving — case-insensitive and whitespace-trimmed — so that a
+    // user typing "Indoor Temperature" or "indoor temperature " (with
+    // a stray space from copy-paste) both work. Empty entries are
+    // dropped so an accidentally-blank line in the config doesn't
+    // accidentally match every sensor.
+    const includeMatchers = toMatcherSet(this.config.includeOnly);
+    const excludeMatchers = toMatcherSet(this.config.excludeSensors);
 
     if (Array.isArray(json)) {
       json.forEach( (obj) => {
@@ -162,15 +199,36 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
           if (type === 'NOT_SUPPORTED') {
             return;
           }
+
           const uniqueId = `${obj.macAddress}-${sensorKey}`;
-          if (exclude.has(uniqueId)) {
-            this.log.debug(`Excluding sensor ${uniqueId} (matched excludeSensors config)`);
+          const displayName = this.composeDisplayName(obj, sensorKey);
+
+          // Candidates a user might use to identify this sensor in
+          // their config. Ordered from most-specific to least so the
+          // log messages can pick whichever they hit first if we
+          // wanted that — currently we just check any-match.
+          const matchCandidates: string[] = [
+            uniqueId,                          // 84:F3:EB:66:D2:67-tempinf
+            displayName,                       // Fairhills WS 2000 Indoor Temperature
+            sensorKey,                         // tempinf
+            friendlySensorName(sensorKey),     // Indoor Temperature
+            obj.macAddress,                    // 84:F3:EB:66:D2:67
+            obj.info?.name ?? '',              // Fairhills WS-2000 (as user typed in AWN, before hapClean)
+          ].map(normalizeMatchKey).filter((s) => s.length > 0);
+
+          if (includeMatchers.size > 0 && !matchCandidates.some((c) => includeMatchers.has(c))) {
+            this.log.debug(`Excluding ${uniqueId} (not in includeOnly allowlist)`);
             return;
           }
+          if (excludeMatchers.size > 0 && matchCandidates.some((c) => excludeMatchers.has(c))) {
+            this.log.debug(`Excluding ${uniqueId} (matched excludeSensors)`);
+            return;
+          }
+
           Devices.push({
             macAddress: obj.macAddress,
             uniqueId,
-            displayName: this.composeDisplayName(obj, sensorKey),
+            displayName,
             type,
             value: device[1] as number,
           });

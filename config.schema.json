@@ -76,14 +76,30 @@
         "description": "Polling fetches the AWN REST endpoint every 2 minutes. Realtime opens a websocket to rt2.ambientweather.net and receives updates as the station reports them (typically ~30s indoors). Realtime is opt-in for now; the default will switch to realtime in a future release once it has been broadly validated."
       },
       "excludeSensors": {
-        "title": "Exclude Sensors",
+        "title": "Exclude Sensors (blacklist)",
         "type": "array",
         "required": false,
-        "description": "Hide specific sensors by uniqueId, in the format MAC-sensorkey (e.g. 84:F3:EB:66:D2:67-tempinf). Find the exact uniqueId for each sensor in the Homebridge log on first start after enabling the per-type toggles above — each accessory is logged as `Loading accessory from cache: <name>`. The per-type toggles still apply; this list further removes individual sensors.",
+        "description": "Hide specific sensors. Matching is case-insensitive and whitespace is trimmed, so typos like trailing spaces from copy-paste still work. Each entry can be a sensor's friendly name (\"Indoor Temperature\"), a station name to hide everything from that station (\"Fairhills WS-2000\"), a raw AWN field (\"tempinf\"), a MAC address, or the full uniqueId (\"84:F3:EB:66:D2:67-tempinf\"). The per-type toggles above still apply on top of this list.",
         "items": {
           "type": "string",
-          "placeholder": "e.g. 84:F3:EB:66:D2:67-tempinf"
-        }
+          "placeholder": "e.g. Indoor Temperature"
+        },
+        "examples": [
+          ["Indoor Temperature", "tempinf", "Fairhills WS-2000"]
+        ]
+      },
+      "includeOnly": {
+        "title": "Include Only These Sensors (allowlist)",
+        "type": "array",
+        "required": false,
+        "description": "If set, ONLY sensors matching one of these entries are exposed; everything else is hidden. Same matching rules as Exclude Sensors above (case-insensitive, whitespace-trimmed, accepts friendly names / station names / raw AWN fields / MAC / uniqueId). Useful when you have multiple stations and only want HomeKit to see specific ones. Both filters apply: a sensor must match an allowlist entry AND not match a blacklist entry to be exposed.",
+        "items": {
+          "type": "string",
+          "placeholder": "e.g. Fairhills WS-2000"
+        },
+        "examples": [
+          ["Fairhills WS-2000", "Outdoor Temperature"]
+        ]
       }
     }
   }
