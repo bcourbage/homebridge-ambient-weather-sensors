@@ -6,8 +6,7 @@ export class SolarRadiationAccessory {
         this.accessory.getService(this.platform.Service.AccessoryInformation)
             .setCharacteristic(this.platform.Characteristic.Manufacturer, 'Ambient Weather')
             .setCharacteristic(this.platform.Characteristic.Model, 'Solar Radiation Sensor')
-            .setCharacteristic(this.platform.Characteristic.SerialNumber, accessory.context.device.uniqueId)
-            .setCharacteristic(this.platform.Characteristic.ProductData, 'Conversion to lux with (W/m2 / 0.0079)');
+            .setCharacteristic(this.platform.Characteristic.SerialNumber, accessory.context.device.uniqueId);
         // get the LightSensor service if it exists, otherwise create a new LightSensor service
         // you can create multiple services for each accessory
         this.service = this.accessory.getService(this.platform.Service.LightSensor)
@@ -28,13 +27,18 @@ export class SolarRadiationAccessory {
      * Push a fresh raw AWN solar-radiation reading (W/m²) into the HomeKit
      * LightSensor characteristic after converting to lux. Called by the
      * platform's poll tick.
+     *
+     * AWN reports solar radiation in W/m²; HomeKit's LightSensor accepts
+     * lux. The standard conversion factor of 1 W/m² ≈ 127 lux assumes
+     * sunlight's spectral distribution (the AWN sensor's design point).
+     * Documented in the README so users can do the reverse math from the
+     * HomeKit reading if they want W/m² back.
      */
     setValue(rawValue) {
         // to convert W/m² to lux we divide by 0.0079
         const lux = Math.round(rawValue / 0.0079);
         this.platform.log.debug(`SET CurrentAmbientLightLevel: ${rawValue} W/m² → ${lux} lx`);
-        this.service.updateCharacteristic(this.platform.Characteristic.CurrentAmbientLightLevel, lux)
-            .updateCharacteristic(this.platform.Characteristic.ProductData, `${rawValue} W/m2`);
+        this.service.updateCharacteristic(this.platform.Characteristic.CurrentAmbientLightLevel, lux);
     }
 }
 //# sourceMappingURL=solarRadiationAccessory.js.map

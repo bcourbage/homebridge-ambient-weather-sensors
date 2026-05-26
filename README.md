@@ -39,9 +39,19 @@ Realtime is currently opt-in. The default will switch to realtime in a future re
 ## Current Supported Sensor Types
 - Temperature
 - Humidity
-- Solar Radiation (as lux)
+- Solar Radiation (as lux — see conversion note below)
 - CO2 (AWN's `co2_in_aqin` and standalone `co2` fields)
 - Particulate matter — PM2.5 and PM10 (AWN's AQIN-family `pm25_in_aqin`, `pm10_in_aqin`, and the outdoor `pm25` field). Reported with both the raw density and an EPA-bucket-derived HomeKit AirQuality rating.
+
+### Solar Radiation: W/m² ↔ lux
+
+AWN reports solar radiation in **W/m²** (watts per square meter), but HomeKit's `LightSensor` characteristic accepts only **lux**. The plugin converts using the standard approximation:
+
+```
+lux ≈ W/m² ÷ 0.0079        (equivalently, lux ≈ W/m² × 127)
+```
+
+This factor assumes sunlight's spectral distribution, which matches the AWN sensor's design point. If you want the raw W/m² back from a HomeKit reading, just multiply the displayed lux value by `0.0079`.
 
 ## Future Supported Sensor Types
 - Air Pressure
