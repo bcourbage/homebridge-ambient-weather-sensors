@@ -1,0 +1,59 @@
+name: Release to npm
+
+# Triggers on a pushed semver tag like v1.4.3. Local workflow:
+#
+#   1. Land your changes on main (or whatever branch you release from)
+#   2. Bump the "version" field in package.json + commit + push
+#   3. git tag v$NEW_VERSION
+#   4. git push --tags
+#
+# That tag push fires this workflow, which builds the package and runs
+# `npm publish --access public --provenance`. The npm tarball ships
+# pre-built dist/, so the runner has to install dev deps + build first.
+#
+# Requires a repo secret named NPM_TOKEN — a granular access token on
+# npmjs.com with publish permission on the @bcourbage scope and the
+# "bypass two-factor authentication" flag set (CI can't answer 2FA
+# prompts). Generate at https://www.npmjs.com/settings/<you>/tokens.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  # Required so the publish step can mint an npm provenance attestation
+  # (the small "Provenance" badge that shows up on npmjs.com next to
+  # published versions, linking back to the exact CI run that built them).
+  id-token: write
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install dependencies
+        # We don't commit package-lock.json (build dist is committed
+        # instead, and runtime deps are small), so `npm ci` would fail
+        # for lack of a lock file. `npm install` resolves fresh from
+        # package.json semver ranges; acceptable for this project's
+        # tiny dependency surface.
+        run: npm install
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
+
+      - name: Publish to npm
+        run: npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
