@@ -1,10 +1,14 @@
 {
   "private": false,
-  "displayName": "Homebridge Ambient Weather Sensors",
-  "name": "homebridge-ambient-weather-sensors",
-  "version": "1.3.3",
-  "description": "Utilizes the ambient weather API to retrie sensor information.",
+  "displayName": "Homebridge Ambient Weather Sensors (bcourbage fork)",
+  "name": "@bcourbage/homebridge-ambient-weather-sensors",
+  "version": "1.4.0",
+  "description": "Homebridge plugin for Ambient Weather sensors via the AWN REST/websocket API. Soft fork of peledies/homebridge-ambient-weather-sensors with Homebridge 2.x / Node 22+ compatibility, multi-station support, websocket realtime, CO2/PM coverage, and other UX improvements while upstream PRs remain unmerged.",
   "license": "Apache-2.0",
+  "author": "Bruno Courbage (https://github.com/bcourbage)",
+  "contributors": [
+    "Deac Karns (https://github.com/peledies)"
+  ],
   "funding": [
     {
       "type": "paypal",
@@ -13,10 +17,10 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/peledies/homebridge-ambient-weather-sensors"
+    "url": "https://github.com/bcourbage/homebridge-ambient-weather-sensors"
   },
   "bugs": {
-    "url": "https://github.com/peledies/homebridge-ambient-weather-sensors/issues"
+    "url": "https://github.com/bcourbage/homebridge-ambient-weather-sensors/issues"
   },
   "engines": {
     "node": "^22.12.0 || ^24.0.0",

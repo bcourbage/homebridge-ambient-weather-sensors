@@ -1,4 +1,12 @@
-# Homebridge Ambient Weather Sensor Plugin
+# Homebridge Ambient Weather Sensor Plugin (bcourbage fork)
+
+> **This is a soft fork** of [peledies/homebridge-ambient-weather-sensors](https://github.com/peledies/homebridge-ambient-weather-sensors) maintained at [@bcourbage/homebridge-ambient-weather-sensors](https://www.npmjs.com/package/@bcourbage/homebridge-ambient-weather-sensors). The original work, design, and most of the code are by [Deac Karns](https://github.com/peledies). This fork adds **Homebridge 2.x / HAP 2.x compatibility** (closes upstream [#18](https://github.com/peledies/homebridge-ambient-weather-sensors/issues/18), [#19](https://github.com/peledies/homebridge-ambient-weather-sensors/issues/19)), plus multi-station naming, opt-in websocket realtime updates, CO2 / PM2.5 / PM10 sensor coverage, password-masked API key fields, and a polling refactor that consolidates per-accessory timers into one. Pull requests against upstream ([#21](https://github.com/peledies/homebridge-ambient-weather-sensors/pull/21), [#22](https://github.com/peledies/homebridge-ambient-weather-sensors/pull/22)) remain open; this fork exists so users on Homebridge 2 can use the plugin in the meantime.
+>
+> Install via the Homebridge UI plugin search, or:
+>
+> ```sh
+> npm install -g @bcourbage/homebridge-ambient-weather-sensors
+> ```
 
 <SPAN ALIGN="CENTER" STYLE="text-align:center">
 <DIV ALIGN="CENTER" STYLE="text-align:center">
