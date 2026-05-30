@@ -1,0 +1,25 @@
+homebridge-ambient-weather-sensors
+Copyright (c) Deac Karns and contributors
+
+This product includes software originally developed at
+https://github.com/peledies/homebridge-ambient-weather-sensors
+
+This is a soft fork distributed at
+https://github.com/bcourbage/homebridge-ambient-weather-sensors
+and on npm as @bcourbage/homebridge-ambient-weather-sensors,
+maintained by Bruno Courbage <bruno@courbage.net>.
+
+The fork adds Homebridge 2.x / HAP 2.x compatibility, multi-station
+naming, an opt-in websocket data source, CO2 / PM2.5 / PM10 sensor
+coverage, and several UX / correctness fixes, while upstream pull
+requests #21 and #22 remain unmerged. Once upstream merges the
+compatibility work, this fork can be deprecated.
+
+The original work, design, and the vast majority of the code remain
+the contribution of Deac Karns (https://github.com/peledies). The
+project is distributed under the Apache License 2.0 — see the LICENSE
+file in this repository for the full text.
+
+Donations / thanks for the original author's work should be directed
+to https://paypal.me/deackarns (preserved in package.json's `funding`
+field unchanged from upstream).

@@ -15,10 +15,9 @@
 
 ## Complete HomeKit support for the Ambient Weather weather station ecosystem using [Homebridge](https://homebridge.io).
 
-[![verified-by-homebridge](https://img.shields.io/badge/homebridge-verified-blueviolet?color=%23491F59&style=for-the-badge&logoColor=%23FFFFFF&logo=homebridge)](https://github.com/homebridge/homebridge/wiki/Verified-Plugins)
-![npm](https://img.shields.io/npm/dt/homebridge-ambient-weather-sensors?style=for-the-badge)
-![NPM](https://img.shields.io/npm/l/homebridge-ambient-weather-sensors?style=for-the-badge)
-![GitHub release (with filter)](https://img.shields.io/github/v/release/peledies/homebridge-ambient-weather-sensors?style=for-the-badge&label=Latest)
+![npm version](https://img.shields.io/npm/v/@bcourbage/homebridge-ambient-weather-sensors?style=for-the-badge&label=npm)
+![npm downloads](https://img.shields.io/npm/dt/@bcourbage/homebridge-ambient-weather-sensors?style=for-the-badge)
+![license](https://img.shields.io/npm/l/@bcourbage/homebridge-ambient-weather-sensors?style=for-the-badge)
 ![Discord](https://img.shields.io/discord/432663330281226270?style=for-the-badge&label=Discord)
 
 </DIV>
@@ -80,3 +79,27 @@ Creating the Application key involves clicking the following link at the bottom 
 A textbox will come up and you can either leave that blank or put a note in there (It doesn't appear to matter or get displayed anywhere) if you like and click `Create Application Key`.
 
 These keys will get used when you setup the plugin in Homebridge.
+
+## Credits and Acknowledgments
+
+The original work, design, and the vast majority of the code in this plugin are by **[Deac Karns (@peledies)](https://github.com/peledies)**, who created and maintained [homebridge-ambient-weather-sensors](https://github.com/peledies/homebridge-ambient-weather-sensors). The decision to use Ambient Weather's official REST API rather than scraping or BLE bridging is what made this plugin viable in the first place, and it's still the cleanest path to AWN data on HomeKit.
+
+This fork exists only because upstream activity has been quiet (last commit February 2025; pull requests [#21](https://github.com/peledies/homebridge-ambient-weather-sensors/pull/21) and [#22](https://github.com/peledies/homebridge-ambient-weather-sensors/pull/22) sat unmerged) and the plugin stopped working under Homebridge 2.0. Once upstream resumes activity and merges the compatibility PRs, this fork can be sunset — please consider it a temporary bridge, not a competitor.
+
+**If you find this plugin useful**, the appropriate place to donate or thank the author is Deac's PayPal link, preserved unchanged in `package.json`'s `funding` field: [paypal.me/deackarns](https://paypal.me/deackarns).
+
+### Changes in this fork beyond upstream v1.3.2
+
+- Homebridge 2.x / HAP 2.x compatibility (engines bump to Node 22+, ESM migration, HAP v2 stricter `Name` validation)
+- Multi-station accessory naming using AWN's `info.name` (instead of bare MAC + sensor key)
+- Polling refactor: one platform-level timer instead of N per-accessory timers (eliminates parallel-fetch race against AWN's 1 req/s rate limit; disk cache no longer needed)
+- Per-sensor exclusion list (`excludeSensors`) and complementary allowlist (`includeOnly`) with case-insensitive, multi-form matching
+- Opt-in websocket realtime data source via AWN's `rt2.ambientweather.net` socket.io endpoint
+- CO2 (AQIN) sensor support as HomeKit `CarbonDioxideSensor`
+- PM2.5 / PM10 (AQIN) support as HomeKit `AirQualitySensor` with EPA-bucket-derived AirQuality enum
+- API/application keys masked as password fields in homebridge-config-ui-x
+- Independent latent bug fixes (`Cache.isValid()` async-in-sync, ProductData characteristic on the wrong service, etc.)
+
+### License
+
+Apache License 2.0 — preserved unchanged from upstream. See [LICENSE](./LICENSE) and [NOTICE](./NOTICE).
