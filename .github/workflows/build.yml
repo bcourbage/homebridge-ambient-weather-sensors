@@ -1,6 +1,15 @@
 name: Build and Lint
 
-on: [push, pull_request]
+on:
+  push:
+    # Run on pushes to branches only. Tag pushes are excluded because
+    # release.yml fires on `v*` tags and already runs lint + build
+    # before publishing — duplicating that here is wasted CI minutes.
+    branches:
+      - '**'
+    tags-ignore:
+      - '**'
+  pull_request:
 
 jobs:
   build:
@@ -9,14 +18,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # the Node.js versions to build on
-        node-version: [18.x, 20.x]
+        # Match engines.node in package.json (^22.12.0 || ^24.0.0).
+        # Homebridge 2 itself requires Node 22+, so older versions would
+        # fail at `npm install` anyway.
+        node-version: [22.x, 24.x]
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
-      - name: Use Node.js ${{ matrix.node-version }} 
-        uses: actions/setup-node@v3
+      - name: Use Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
 
