@@ -6,6 +6,7 @@
   "footerDisplay": "[Ambient Weather Dashboard](https://ambientweather.net/dashboard)",
   "schema": {
     "type": "object",
+    "required": ["apiKey", "applicationKey"],
     "properties": {
       "name": {
         "title": "Name",
@@ -16,7 +17,6 @@
       "apiKey": {
         "title": "API Key",
         "type": "string",
-        "required": true,
         "placeholder": "api key from ambient weather account",
         "description": "Stored in plain text in Homebridge's config.json. Treat the file with the same care as any password-bearing config.",
         "x-schema-form": {
@@ -26,7 +26,6 @@
       "applicationKey": {
         "title": "Application Key",
         "type": "string",
-        "required": true,
         "placeholder": "application key from ambient weather account",
         "description": "Stored in plain text in Homebridge's config.json. Treat the file with the same care as any password-bearing config.",
         "x-schema-form": {
@@ -36,32 +35,27 @@
       "temperatureSensors": {
         "title": "Temperature Sensors",
         "type": "boolean",
-        "required": false,
         "default": false
       },
       "humiditySensors": {
         "title": "Humidity Sensors",
         "type": "boolean",
-        "required": false,
         "default": false
       },
       "solarRadiationSensors": {
         "title": "Solar Radiation Sensors",
         "type": "boolean",
-        "required": false,
         "default": false
       },
       "co2Sensors": {
         "title": "CO2 Sensors",
         "type": "boolean",
-        "required": false,
         "default": false,
         "description": "Expose CO2 readings from AWN's AQIN family (co2_in_aqin) and any standalone CO2 sensor."
       },
       "airQualitySensors": {
         "title": "Air Quality Sensors (PM2.5 / PM10)",
         "type": "boolean",
-        "required": false,
         "default": false,
         "description": "Expose particulate readings (pm25, pm25_in_aqin, pm10_in_aqin) as HomeKit AirQualitySensor accessories with the corresponding density characteristic and an EPA-bucket-derived AirQuality enum."
       },
@@ -78,27 +72,25 @@
       "excludeSensors": {
         "title": "Exclude Sensors (blacklist)",
         "type": "array",
-        "required": false,
-        "description": "Hide specific sensors. Matching is case-insensitive and whitespace is trimmed, so typos like trailing spaces from copy-paste still work. Each entry can be a sensor's friendly name (\"Indoor Temperature\"), a station name to hide everything from that station (\"Fairhills WS-2000\"), a raw AWN field (\"tempinf\"), a MAC address, or the full uniqueId (\"84:F3:EB:66:D2:67-tempinf\"). The per-type toggles above still apply on top of this list.",
+        "description": "Hide specific sensors. Matching is case-insensitive and whitespace is trimmed, so typos like trailing spaces from copy-paste still work. Each entry can be a sensor's friendly name (\"Indoor Temperature\"), a station name to hide everything from that station (\"Backyard Station\"), a raw AWN field (\"tempinf\"), a MAC address, or the full uniqueId (\"AA:BB:CC:DD:EE:FF-tempinf\"). The per-type toggles above still apply on top of this list.",
         "items": {
           "type": "string",
           "placeholder": "e.g. Indoor Temperature"
         },
         "examples": [
-          ["Indoor Temperature", "tempinf", "Fairhills WS-2000"]
+          ["Indoor Temperature", "tempinf", "Backyard Station"]
         ]
       },
       "includeOnly": {
         "title": "Include Only These Sensors (allowlist)",
         "type": "array",
-        "required": false,
         "description": "If set, ONLY sensors matching one of these entries are exposed; everything else is hidden. Same matching rules as Exclude Sensors above (case-insensitive, whitespace-trimmed, accepts friendly names / station names / raw AWN fields / MAC / uniqueId). Useful when you have multiple stations and only want HomeKit to see specific ones. Both filters apply: a sensor must match an allowlist entry AND not match a blacklist entry to be exposed.",
         "items": {
           "type": "string",
-          "placeholder": "e.g. Fairhills WS-2000"
+          "placeholder": "e.g. Backyard Station"
         },
         "examples": [
-          ["Fairhills WS-2000", "Outdoor Temperature"]
+          ["Backyard Station", "Outdoor Temperature"]
         ]
       }
     }

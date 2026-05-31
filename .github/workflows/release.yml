@@ -26,7 +26,12 @@ permissions:
   # (the small "Provenance" badge that shows up on npmjs.com next to
   # published versions, linking back to the exact CI run that built them).
   id-token: write
-  contents: read
+  # `contents: write` is needed for the GitHub Release creation step
+  # below — `gh release create` writes to the repo's Releases endpoint.
+  # The homebridge-config-ui-x update dialog fetches release notes from
+  # the GitHub Releases API, so without this the "What's new" pane is
+  # blank after an upgrade.
+  contents: write
 
 jobs:
   publish:
@@ -57,3 +62,31 @@ jobs:
         run: npm publish --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Extract this version's section from CHANGELOG.md
+        # Pulls the body of the FIRST `## [x.y.z] — date` heading in
+        # CHANGELOG.md and writes it to release-notes.md. Stops at the
+        # next `## ` heading or at the link-reference footer (`[1.4.2]:
+        # https://...`). If CHANGELOG.md is missing or has no matching
+        # heading, falls back to a one-line note so the release isn't
+        # empty.
+        run: |
+          set -euo pipefail
+          if [ -f CHANGELOG.md ]; then
+            awk '
+              /^## \[/ { if (found) exit; found = 1; next }
+              found && /^\[[^]]+\]: / { exit }
+              found { print }
+            ' CHANGELOG.md > release-notes.md
+          fi
+          if [ ! -s release-notes.md ]; then
+            echo "See CHANGELOG.md and the commit log for changes in this release." > release-notes.md
+          fi
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "${GITHUB_REF_NAME}" \
+            --notes-file release-notes.md

@@ -158,7 +158,7 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
    * Compose a HAP-clean accessory displayName from station + sensor
    * metadata. Form: `${station_name} ${sensor_label}` when the user has
    * set a station name on ambientweather.net (e.g.
-   * "Fairhills WS 2000 Indoor Temperature"), otherwise
+   * "Backyard Station Indoor Temperature"), otherwise
    * `${mac_no_colons} ${sensor_label}` as a last-resort disambiguator.
    *
    * City/state are intentionally NOT included even though the API
@@ -208,12 +208,12 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
           // log messages can pick whichever they hit first if we
           // wanted that — currently we just check any-match.
           const matchCandidates: string[] = [
-            uniqueId,                          // 84:F3:EB:66:D2:67-tempinf
-            displayName,                       // Fairhills WS 2000 Indoor Temperature
+            uniqueId,                          // AA:BB:CC:DD:EE:FF-tempinf
+            displayName,                       // Backyard Station Indoor Temperature
             sensorKey,                         // tempinf
             friendlySensorName(sensorKey),     // Indoor Temperature
-            obj.macAddress,                    // 84:F3:EB:66:D2:67
-            obj.info?.name ?? '',              // Fairhills WS-2000 (as user typed in AWN, before hapClean)
+            obj.macAddress,                    // AA:BB:CC:DD:EE:FF
+            obj.info?.name ?? '',              // Backyard Station (as user typed in AWN, before hapClean)
           ].map(normalizeMatchKey).filter((s) => s.length > 0);
 
           if (includeMatchers.size > 0 && !matchCandidates.some((c) => includeMatchers.has(c))) {
