@@ -43,12 +43,17 @@ The plugin can read sensor values one of two ways. Pick whichever fits your setu
 
 Realtime is currently opt-in. The default will switch to realtime in a future release once it has been broadly validated.
 
-## Current Supported Sensor Types
-- Temperature
-- Humidity
-- Solar Radiation (as lux — see conversion note below)
-- CO2 (AWN's `co2_in_aqin` and standalone `co2` fields)
-- Particulate matter — PM2.5 and PM10 (AWN's AQIN-family `pm25_in_aqin`, `pm10_in_aqin`, and the outdoor `pm25` field). Reported with both the raw density and an EPA-bucket-derived HomeKit AirQuality rating.
+## Supported Sensor Types
+
+### Natively-supported by Apple Home
+
+These map cleanly to native HomeKit accessory services. They render in Apple's Home app, Eve, and every other HomeKit client without any caveat.
+
+- **Temperature** — outdoor, indoor, and per-probe (`tempf`, `tempinf`, `temp{1..N}f`). As of v1.5.0 the matcher also covers AWN's pre-calculated **feels-like** (heat index / wind chill) and **dew point** fields (`feelsLike`, `feelsLike{N}`, `feelsLikein`, `dewPoint`, `dewPoint{N}`, `dewPointin`).
+- **Humidity** — outdoor, indoor, and per-probe.
+- **Solar Radiation** — exposed as lux on a `LightSensor`. See the conversion note below.
+- **CO2** — AWN's `co2_in_aqin` (AQIN module) and the standalone `co2` field.
+- **Particulate Matter** — PM2.5 and PM10 (AWN's `pm25_in_aqin`, `pm10_in_aqin`, and the outdoor `pm25` field). Reported with both raw density and an EPA-bucket-derived HomeKit AirQuality rating.
 
 ### Solar Radiation: W/m² ↔ lux
 
@@ -60,10 +65,38 @@ lux ≈ W/m² ÷ 0.0079        (equivalently, lux ≈ W/m² × 127)
 
 This factor assumes sunlight's spectral distribution, which matches the AWN sensor's design point. If you want the raw W/m² back from a HomeKit reading, just multiply the displayed lux value by `0.0079`.
 
-## Future Supported Sensor Types
-- Air Pressure
-- Wind Speed
-- Wind Direction
+### Extended Sensors (v1.5.0+)
+
+Apple Home does not natively understand wind, rain, barometric pressure, UV, or lightning — there are no HAP services for those types. v1.5.0 adds them anyway using the same pattern as the verified [homebridge-ecowitt-weather-sensors](https://github.com/rhockenbury/homebridge-ecowitt-weather-sensors) plugin: each datapoint is exposed as a `MotionSensor` accessory with three additional custom characteristics:
+
+- **Value** — the live numeric reading with units (e.g. `"14 mph"`, `"0.12 in/hr"`, `"315° (NW)"`)
+- **Intensity** — qualitative bucket (Beaufort for wind, EPA scale for UV, NWS descriptors for rain)
+- **Last Updated** — ISO-8601 timestamp of the most recent reading
+
+| Sensor | AWN field(s) |
+|---|---|
+| Wind speed, gust, max-daily gust | `windspeedmph`, `windgustmph`, `maxdailygust` |
+| Wind direction (instantaneous + 10-minute average) | `winddir`, `winddir_avg10m` |
+| Rain rate | `hourlyrainin` |
+| Rain accumulation (event, daily, weekly, monthly, yearly) | `eventrainin`, `dailyrainin`, `weeklyrainin`, `monthlyrainin`, `yearlyrainin` |
+| Time since last rain | `lastRain` |
+| Barometric pressure (sea-level corrected + raw at station) | `baromrelin`, `baromabsin` |
+| UV index | `uv` |
+| Lightning strike count (today, this hour) | `lightning_day`, `lightning_hour` |
+| Lightning distance and time-since-last (requires WH57) | `lightning_distance`, `lightning_time` |
+
+**How this looks in HomeKit:**
+
+- **Apple Home**: each extended sensor appears as a Motion Sensor tile labeled by sensor name (e.g. "Wind Speed"). The motion state toggles on/off based on a configurable threshold — so you can write a stock Home automation like *"When Wind Speed motion detected, close the awning"*. The live numeric value is not directly visible in Apple Home.
+- **Eve / Controller for HomeKit**: each tile shows the live Value, Intensity bucket, and Last Updated timestamp on the same accessory.
+
+**Optional embed-value mode:** if you want the live numeric value visible in Apple Home tiles too, switch the display mode in plugin settings. The tile name updates on every reading (e.g. *"Wind Speed 14 mph"*). Values are rounded to whole numbers to stay compatible with Apple Home's naming rules. Trade-offs are documented next to the setting.
+
+**All extended sensors are off by default.** Enable the master "Extended Sensors" toggle in the plugin settings, then pick which sub-categories you want. Threshold values and display units are configurable.
+
+**Why MotionSensor?** It's the only HAP service whose state (`MotionDetected`) is both native to Apple Home AND triggerable by an external value, which makes it work as a universal "this number crossed a threshold" sensor. Picking it puts you in good company — every comparable plugin (homebridge-ecowitt-weather-sensors, homebridge-weather-plus, homebridge-mqttthing's weather station) settled on the same idea.
+
+**Lightning sensor caveat:** the lightning fields are only populated by AWN if your station has a WH57-compatible sensor connected. Without one, enabling the Lightning toggle does nothing (the fields are absent from the AWN payload and the plugin silently skips them).
 
 ## Setup
 An ambientweather.net account is required (no paid subscription is needed) so that you can generate the two keys this plugin uses.
@@ -99,6 +132,7 @@ This fork exists only because upstream activity has been quiet (last commit Febr
 - PM2.5 / PM10 (AQIN) support as HomeKit `AirQualitySensor` with EPA-bucket-derived AirQuality enum
 - API/application keys masked as password fields in homebridge-config-ui-x
 - Independent latent bug fixes (`Cache.isValid()` async-in-sync, ProductData characteristic on the wrong service, etc.)
+- **v1.5.0** — Extended sensors (wind, rain, barometric pressure, UV, lightning) exposed as `MotionSensor` accessories with custom Value/Intensity/Last-Updated characteristics; threshold-driven Apple Home automations; optional embed-value tile mode; per-unit selection; bonus native sensors (feels-like and dew point per probe)
 
 ### License
 

@@ -59,6 +59,160 @@
         "default": false,
         "description": "Expose particulate readings (pm25, pm25_in_aqin, pm10_in_aqin) as HomeKit AirQualitySensor accessories with the corresponding density characteristic and an EPA-bucket-derived AirQuality enum."
       },
+      "extendedSensors": {
+        "title": "Enable Extended Sensors",
+        "type": "boolean",
+        "default": false,
+        "description": "Adds wind, rain, barometric pressure, UV index, and lightning sensors to HomeKit. These data types aren't natively supported by Apple's Home app, so live numeric values are only visible in the Eve or Controller for HomeKit apps. In Apple Home, each sensor appears as a Motion tile that triggers above your chosen threshold — useful for automations like 'close awning when wind speed exceeds 25 mph'. Default off; leave disabled if you only want the natively-supported sensor types above."
+      },
+      "windSensors": {
+        "title": "Wind sensors (speed, gust, direction)",
+        "type": "boolean",
+        "default": false,
+        "condition": {
+          "functionBody": "return model.extendedSensors === true;"
+        }
+      },
+      "rainSensors": {
+        "title": "Rain sensors (rate, daily, event totals)",
+        "type": "boolean",
+        "default": false,
+        "condition": {
+          "functionBody": "return model.extendedSensors === true;"
+        }
+      },
+      "pressureSensors": {
+        "title": "Barometric pressure (relative + absolute)",
+        "type": "boolean",
+        "default": false,
+        "condition": {
+          "functionBody": "return model.extendedSensors === true;"
+        }
+      },
+      "uvSensors": {
+        "title": "UV index",
+        "type": "boolean",
+        "default": false,
+        "condition": {
+          "functionBody": "return model.extendedSensors === true;"
+        }
+      },
+      "lightningSensors": {
+        "title": "Lightning sensors (count, distance, time-since-last)",
+        "type": "boolean",
+        "default": false,
+        "description": "Only available if your station has a WH57-compatible lightning sensor reporting lightning_day / lightning_distance / lightning_time on the AWN API.",
+        "condition": {
+          "functionBody": "return model.extendedSensors === true;"
+        }
+      },
+      "extendedDisplayMode": {
+        "title": "How should Apple Home display extended sensors?",
+        "type": "string",
+        "default": "static",
+        "oneOf": [
+          { "title": "Show generic names (recommended)", "enum": ["static"] },
+          { "title": "Show live value in the tile name", "enum": ["embed"] }
+        ],
+        "description": "Static mode (recommended): tiles show 'Wind Speed' with an on/off motion indicator. The live number is visible in Eve or Controller for HomeKit. Tile names stay stable.\n\nEmbed mode: tiles update to 'Wind Speed 14 mph' as readings change. Values are rounded to whole numbers so the tile name stays compatible with Apple Home's naming rules. The tile name updates on every reading (~30s in realtime, every 2 minutes in polling). If you manually rename a tile in Apple Home, the plugin will overwrite your custom name on the next reading. Some Homebridge log lines may mention the name change — these are informational and safe to ignore.",
+        "condition": {
+          "functionBody": "return model.extendedSensors === true;"
+        }
+      },
+      "thresholds": {
+        "type": "object",
+        "title": "Motion thresholds for extended sensors",
+        "description": "Set the value at which each extended sensor's MotionDetected boolean flips to true. Used by Apple Home automations (e.g. 'when Wind Speed motion detected → close awning'). All values are in AWN's native units regardless of your display-unit choice below.",
+        "condition": {
+          "functionBody": "return model.extendedSensors === true;"
+        },
+        "properties": {
+          "windSpeedMph": {
+            "title": "Wind speed threshold (mph)",
+            "type": "number",
+            "default": 25,
+            "description": "Trigger when sustained wind speed equals or exceeds this. 25 mph ≈ Beaufort 6 (Strong breeze)."
+          },
+          "windGustMph": {
+            "title": "Wind gust threshold (mph)",
+            "type": "number",
+            "default": 35,
+            "description": "Trigger when an instantaneous gust equals or exceeds this. Applies to both 'Wind Gust' and 'Max Daily Gust' sensors."
+          },
+          "rainRateInHr": {
+            "title": "Rain rate threshold (in/hr)",
+            "type": "number",
+            "default": 0.01,
+            "description": "Trigger when current rain rate equals or exceeds this. 0.01 in/hr is effectively 'any measurable rain'."
+          },
+          "uv": {
+            "title": "UV index threshold",
+            "type": "number",
+            "default": 3,
+            "description": "Trigger when UV index equals or exceeds this. 3 = EPA 'Moderate' (sun protection recommended)."
+          },
+          "lightningDistanceMi": {
+            "title": "Lightning distance threshold (miles, inverted)",
+            "type": "number",
+            "default": 10,
+            "description": "Trigger when the last strike is CLOSER than this distance. 10 mi ≈ 16 km, the conventional 'too close for outdoor activity' boundary."
+          },
+          "pressureInHg": {
+            "title": "Low-pressure threshold (inHg, inverted)",
+            "type": "number",
+            "default": 29.5,
+            "description": "Trigger when barometric pressure drops BELOW this value. 29.5 inHg ≈ 999 hPa, the conventional 'low pressure system' boundary."
+          }
+        }
+      },
+      "units": {
+        "type": "object",
+        "title": "Display units for extended sensors",
+        "description": "AWN reports US/imperial units regardless of station location. Choose a different unit here to convert at display time. Thresholds above stay in AWN's native units regardless of your choice here.",
+        "condition": {
+          "functionBody": "return model.extendedSensors === true;"
+        },
+        "properties": {
+          "windSpeed": {
+            "title": "Wind speed",
+            "type": "string",
+            "default": "mph",
+            "oneOf": [
+              { "title": "mph (miles per hour)", "enum": ["mph"] },
+              { "title": "kph (kilometers per hour)", "enum": ["kph"] },
+              { "title": "m/s (meters per second)", "enum": ["mps"] },
+              { "title": "kts (knots)", "enum": ["kts"] }
+            ]
+          },
+          "rain": {
+            "title": "Rain",
+            "type": "string",
+            "default": "in",
+            "oneOf": [
+              { "title": "in (inches)", "enum": ["in"] },
+              { "title": "mm (millimeters)", "enum": ["mm"] }
+            ]
+          },
+          "pressure": {
+            "title": "Barometric pressure",
+            "type": "string",
+            "default": "inHg",
+            "oneOf": [
+              { "title": "inHg (inches of mercury)", "enum": ["inHg"] },
+              { "title": "hPa (hectopascals, same as millibars)", "enum": ["hPa"] }
+            ]
+          },
+          "distance": {
+            "title": "Lightning distance",
+            "type": "string",
+            "default": "mi",
+            "oneOf": [
+              { "title": "mi (miles)", "enum": ["mi"] },
+              { "title": "km (kilometers)", "enum": ["km"] }
+            ]
+          }
+        }
+      },
       "dataSource": {
         "title": "Data Source",
         "type": "string",

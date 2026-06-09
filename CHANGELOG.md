@@ -9,6 +9,79 @@ entries short and user-facing.
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/
 
+## [1.5.0-beta.0] — 2026-06-09
+
+First beta of v1.5.0. **Not the `latest` npm tag — install with
+`npm install -g @bcourbage/homebridge-ambient-weather-sensors@beta` to
+opt in.** Users on the `latest` tag stay on v1.4.x until v1.5.0 GA.
+
+### Added — Extended Sensors (off by default)
+
+Apple Home doesn't natively support wind, rain, barometric pressure,
+UV, or lightning. v1.5.0 exposes them via the same pattern the
+verified [homebridge-ecowitt-weather-sensors][ecowitt] plugin uses: a
+`MotionSensor` per datapoint with three custom characteristics
+(`Value`, `Intensity`, `Last Updated`). Apple Home users get on/off
+motion tiles driven by configurable thresholds — useful for stock
+Home automations like *"When Wind Speed motion detected, close the
+awning"*. The live numeric value renders in Eve and Controller for
+HomeKit.
+
+- **Wind**: speed, gust, max-daily gust, direction (instantaneous +
+  10-minute average)
+- **Rain**: hourly rate, event/daily/weekly/monthly/yearly totals,
+  time-since-last-rain
+- **Barometric pressure**: relative (sea-level corrected) and
+  absolute (raw at station altitude). Inverted threshold — low
+  pressure triggers the motion event
+- **UV index**: with EPA bucket label (Low / Moderate / High / Very
+  High / Extreme)
+- **Lightning**: today's strike count, this-hour's strike count,
+  distance to last strike (inverted threshold — close strikes
+  trigger), time since last strike. Requires a WH57-compatible
+  sensor on the station
+
+Configuration: master toggle "Enable Extended Sensors" (default off)
+gates per-category sub-toggles (wind, rain, pressure, UV, lightning).
+Display mode is selectable between **static names** (recommended —
+"Wind Speed" tile with motion state, value visible in Eve) and
+**embed live value in tile name** ("Wind Speed 14 mph" updating on
+each reading). Per-sensor thresholds and display units (mph/kph/mps/
+kts, in/mm, inHg/hPa, mi/km) all configurable.
+
+### Added — Native bonus sensors
+
+- **Feels-like** temperature (heat index / wind chill) per probe —
+  AWN pre-calculates `feelsLike`, `feelsLike1..N`, `feelsLikein` and
+  these now expose as standard `TemperatureSensor` accessories
+  alongside the raw temperatures.
+- **Dew point** per probe — same pattern, `dewPoint`,
+  `dewPoint1..N`, `dewPointin` as `TemperatureSensor`.
+
+### Implementation notes
+
+- Custom HAP characteristics use fresh UUIDs owned by this plugin
+  (not Eve's, not Ecowitt's) — third-party HomeKit apps render them
+  via the characteristic display name.
+- `Service#testCharacteristic` guard in the base class makes
+  re-attachment idempotent across child-bridge restarts.
+- Pre-conversion of `lastRain` ISO timestamps to Unix-ms in
+  `parseDevices()` keeps the `SensorAccessory#setValue(raw: number)`
+  interface uniform.
+- Verified-plugin status preserved: extended sensors are off by
+  default, so v1.4.x users see zero behavior change. Existing
+  homebridge/plugins verification checks still pass.
+
+### Want to test?
+
+Issue [#1][issue1] is the live thread for v1.5.0 beta testing. If
+you have a station with sensors this plugin previously skipped
+(particularly lightning), help is welcome — install the beta tag
+and report findings.
+
+[ecowitt]: https://github.com/rhockenbury/homebridge-ecowitt-weather-sensors
+[issue1]: https://github.com/bcourbage/homebridge-ambient-weather-sensors/issues/1
+
 ## [1.4.3] — 2026-05-30
 
 ### Fixed
@@ -108,5 +181,6 @@ upstream pull requests [#21][pr21] (Homebridge 2.x compatibility) and
 [upstream]: https://github.com/peledies/homebridge-ambient-weather-sensors
 [pr21]: https://github.com/peledies/homebridge-ambient-weather-sensors/pull/21
 [pr22]: https://github.com/peledies/homebridge-ambient-weather-sensors/pull/22
+[1.5.0-beta.0]: https://github.com/bcourbage/homebridge-ambient-weather-sensors/releases/tag/v1.5.0-beta.0
 [1.4.3]: https://github.com/bcourbage/homebridge-ambient-weather-sensors/releases/tag/v1.4.3
 [1.4.2]: https://github.com/bcourbage/homebridge-ambient-weather-sensors/releases/tag/v1.4.2
