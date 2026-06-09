@@ -2,6 +2,33 @@ import { API, Characteristic, DynamicPlatformPlugin, Logger, PlatformAccessory, 
 
 import { AirQualityAccessory } from './airQualityAccessory.js';
 import { Co2Accessory } from './co2Accessory.js';
+import {
+  LightningDayAccessory,
+  LightningDistanceAccessory,
+  LightningHourAccessory,
+  LightningLastStrikeAccessory,
+} from './extendedSensors/lightningAccessory.js';
+import {
+  PressureAbsoluteAccessory,
+  PressureRelativeAccessory,
+} from './extendedSensors/pressureAccessory.js';
+import {
+  LastRainAccessory,
+  RainDailyAccessory,
+  RainEventAccessory,
+  RainMonthlyAccessory,
+  RainRateAccessory,
+  RainWeeklyAccessory,
+  RainYearlyAccessory,
+} from './extendedSensors/rainAccessory.js';
+import { UvAccessory } from './extendedSensors/uvAccessory.js';
+import {
+  WindDirection10mAccessory,
+  WindDirectionAccessory,
+  WindGustAccessory,
+  WindMaxDailyGustAccessory,
+  WindSpeedAccessory,
+} from './extendedSensors/windAccessory.js';
 import { HumidityAccessory } from './humidityAccessory.js';
 import { RealtimeSource } from './realtimeSource.js';
 import { friendlySensorName } from './sensorNames.js';
@@ -131,7 +158,19 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
     // also indiscriminately. The newer matchers below use stricter
     // regexes to avoid catching battery-status keys like `batt_co2` or
     // AQIN's own internal temperature key `pm_in_temp_aqin`.
-    if (sensor.includes('temp') && this.config.temperatureSensors) {
+    //
+    // NOTE on the `aqi_pm25*` family: AWN reports `999` as a "no
+    // sensor present" sentinel on the base station's outdoor PM
+    // fields when only the AQIN has working PM hardware. The `pm25`
+    // regex below uses `^pm25($|_)` (anchored start), which
+    // deliberately does NOT match `aqi_pm25_*` keys — those are
+    // pre-computed AQI values, not raw PM concentrations, and they
+    // can carry sentinel values that would mislead HomeKit users.
+    // If a future change loosens the regex, re-check this guard.
+    if (
+      (sensor.includes('temp') || sensor.includes('feelsLike') || sensor.includes('dewPoint'))
+      && this.config.temperatureSensors
+    ) {
       return 'Temperature';
     } else if (sensor.includes('humid') && this.config.humiditySensors) {
       return 'Humidity';
@@ -143,15 +182,85 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
       return 'PM2.5';
     } else if (/^pm10($|_)/.test(sensor) && this.config.airQualitySensors) {
       return 'PM10';
-      // } else if (sensor.includes('baromabs') && this.config.barometricSensors) {
-      //   return 'Barometric Pressure';
-      // } else if (sensor.includes('windspeed') && this.config.windSensors) {
-      //   return 'Wind Speed';
-      // } else if (sensor === 'winddir' && this.config.windSensors) {
-      //   return 'Wind Direction';
-    } else {
+    }
+
+    // Extended sensors (v1.5.0). Gated by the master toggle
+    // `extendedSensors` AND a per-category sub-toggle. Both must be
+    // truthy for the type to be returned — so a user who hasn't opted
+    // in sees no behavior change vs. v1.4.x.
+    if (!this.config.extendedSensors) {
       return 'NOT_SUPPORTED';
     }
+
+    if (this.config.windSensors) {
+      if (sensor === 'windspeedmph') {
+        return 'WindSpeed';
+      }
+      if (sensor === 'windgustmph') {
+        return 'WindGust';
+      }
+      if (sensor === 'maxdailygust') {
+        return 'WindMaxDailyGust';
+      }
+      if (sensor === 'winddir') {
+        return 'WindDirection';
+      }
+      if (sensor === 'winddir_avg10m') {
+        return 'WindDirection10m';
+      }
+    }
+    if (this.config.rainSensors) {
+      if (sensor === 'hourlyrainin') {
+        return 'RainRate';
+      }
+      if (sensor === 'eventrainin') {
+        return 'RainEvent';
+      }
+      if (sensor === 'dailyrainin') {
+        return 'RainDaily';
+      }
+      if (sensor === 'weeklyrainin') {
+        return 'RainWeekly';
+      }
+      if (sensor === 'monthlyrainin') {
+        return 'RainMonthly';
+      }
+      if (sensor === 'yearlyrainin') {
+        return 'RainYearly';
+      }
+      if (sensor === 'lastRain') {
+        return 'LastRain';
+      }
+    }
+    if (this.config.pressureSensors) {
+      if (sensor === 'baromrelin') {
+        return 'PressureRelative';
+      }
+      if (sensor === 'baromabsin') {
+        return 'PressureAbsolute';
+      }
+    }
+    if (this.config.uvSensors) {
+      if (sensor === 'uv') {
+        return 'UV';
+      }
+    }
+    if (this.config.lightningSensors) {
+      if (sensor === 'lightning_day') {
+        return 'LightningDay';
+      }
+      if (sensor === 'lightning_hour') {
+        return 'LightningHour';
+      }
+      if (sensor === 'lightning_distance') {
+        return 'LightningDistance';
+      }
+      if (sensor === 'lightning_time') {
+        return 'LightningLastStrike';
+      }
+    }
+
+    return 'NOT_SUPPORTED';
   }
 
   /**
@@ -225,12 +334,23 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
             return;
           }
 
+          // AWN reports `lastRain` as an ISO-8601 string (e.g.
+          // "2026-04-21T22:19:00.000Z"); the LastRainAccessory expects
+          // a Unix-ms number so its formatter can compute a relative
+          // "time since" string. Convert here so the SensorAccessory
+          // interface stays uniformly numeric.
+          let value: number = device[1] as number;
+          if (sensorKey === 'lastRain' && typeof device[1] === 'string') {
+            const parsed = Date.parse(device[1] as string);
+            value = Number.isFinite(parsed) ? parsed : 0;
+          }
+
           Devices.push({
             macAddress: obj.macAddress,
             uniqueId,
             displayName,
             type,
-            value: device[1] as number,
+            value,
           });
         });
       });
@@ -399,6 +519,7 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
    */
   private createSensorWrapper(accessory: PlatformAccessory): SensorAccessory | undefined {
     switch (accessory.context.device.type) {
+      // Native HomeKit services (v1.x baseline)
       case 'Temperature':
         return new TemperatureAccessory(this, accessory);
       case 'Humidity':
@@ -410,6 +531,47 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
       case 'PM2.5':
       case 'PM10':
         return new AirQualityAccessory(this, accessory);
+
+      // Extended sensors (v1.5.0) — MotionSensor + custom characteristics.
+      case 'WindSpeed':
+        return new WindSpeedAccessory(this, accessory);
+      case 'WindGust':
+        return new WindGustAccessory(this, accessory);
+      case 'WindMaxDailyGust':
+        return new WindMaxDailyGustAccessory(this, accessory);
+      case 'WindDirection':
+        return new WindDirectionAccessory(this, accessory);
+      case 'WindDirection10m':
+        return new WindDirection10mAccessory(this, accessory);
+      case 'RainRate':
+        return new RainRateAccessory(this, accessory);
+      case 'RainEvent':
+        return new RainEventAccessory(this, accessory);
+      case 'RainDaily':
+        return new RainDailyAccessory(this, accessory);
+      case 'RainWeekly':
+        return new RainWeeklyAccessory(this, accessory);
+      case 'RainMonthly':
+        return new RainMonthlyAccessory(this, accessory);
+      case 'RainYearly':
+        return new RainYearlyAccessory(this, accessory);
+      case 'LastRain':
+        return new LastRainAccessory(this, accessory);
+      case 'PressureRelative':
+        return new PressureRelativeAccessory(this, accessory);
+      case 'PressureAbsolute':
+        return new PressureAbsoluteAccessory(this, accessory);
+      case 'UV':
+        return new UvAccessory(this, accessory);
+      case 'LightningDay':
+        return new LightningDayAccessory(this, accessory);
+      case 'LightningHour':
+        return new LightningHourAccessory(this, accessory);
+      case 'LightningDistance':
+        return new LightningDistanceAccessory(this, accessory);
+      case 'LightningLastStrike':
+        return new LightningLastStrikeAccessory(this, accessory);
+
       default:
         return undefined;
     }
