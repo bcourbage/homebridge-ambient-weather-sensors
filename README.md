@@ -24,6 +24,16 @@
 </SPAN>
 
 
+## What's New in v1.5.0
+
+v1.5.0 is the largest release of the bcourbage fork. **Existing users see no behavior change unless they opt in to the new sensors**, except they automatically gain low-battery push notifications on every sensor they already have.
+
+- 🔋 **Low-battery notifications for every probe** — Apple Home's built-in low-battery alerts now fire when AWN reports any sensor's battery as low. No setup needed.
+- 🌡️ **Feels-like + dew-point temperatures** appear as new Temperature accessories (if `Temperature Sensors` was already enabled).
+- 🌬️ **Extended Sensors (opt-in)** — wind, rain, barometric pressure, UV, and lightning, exposed as `MotionSensor` accessories with threshold-driven Apple Home automations. Live numeric values render in Eve / Controller for HomeKit.
+
+👉 **Upgrading from v1.4.x?** See the [upgrade guide](./UPGRADING.md) for what changes, what to enable, and example automations.
+
 ## Plugin Information
 This plugin allows you to pull sensor data from your Ambient Weather weather station via its REST API and add those accessories to homebridge.
 
