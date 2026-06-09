@@ -1,10 +1,12 @@
 import { PlatformAccessory, Service } from 'homebridge';
 
+import { setupBatteryService } from './batteryService.js';
 import { AmbientWeatherSensorsPlatform, SensorAccessory } from './platform.js';
 
 
 export class HumidityAccessory implements SensorAccessory {
   private service: Service;
+  private readonly batterySetter?: (low: boolean) => void;
 
   constructor(
     private readonly platform: AmbientWeatherSensorsPlatform,
@@ -25,9 +27,15 @@ export class HumidityAccessory implements SensorAccessory {
     // set the service name, this is what is displayed as the default name on the Home app
     this.service.setCharacteristic(this.platform.Characteristic.Name, accessory.context.device.displayName);
 
+    this.batterySetter = setupBatteryService(this.platform, this.accessory);
+
     if (typeof accessory.context.device.value === 'number') {
       this.setValue(accessory.context.device.value);
     }
+  }
+
+  setBatteryLow(batteryLow: boolean): void {
+    this.batterySetter?.(batteryLow);
   }
 
   /**

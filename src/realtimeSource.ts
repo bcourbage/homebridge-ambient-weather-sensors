@@ -21,9 +21,19 @@
 import { io, Socket } from 'socket.io-client';
 import type { Logger } from 'homebridge';
 
+import { batteryFieldForSensor, readBatteryLow } from './batteryFields.js';
+
 export interface RealtimeUpdate {
   uniqueId: string;
   value: number;
+  /**
+   * HomeKit-aligned low/normal flag for the sensor's physical probe.
+   * undefined = no battery reported for this probe; true = low;
+   * false = normal. Polarity is already inverted from AWN's
+   * 0=low/1=good convention at the realtime layer so the platform
+   * doesn't need to know.
+   */
+  batteryLow?: boolean;
 }
 
 export type RealtimeUpdateHandler = (updates: RealtimeUpdate[]) => void;
@@ -201,9 +211,17 @@ export class RealtimeSource {
         if (this.opts.isSensorKey && !this.opts.isSensorKey(key)) {
           continue;
         }
+        // Bundle the corresponding probe battery state with each
+        // sensor's update so the wrapper's Battery sub-service stays
+        // synchronized with the value updates. readBatteryLow already
+        // inverts AWN's 0=low/1=good polarity to HomeKit's
+        // true=low/false=normal convention.
+        const batteryField = batteryFieldForSensor(key);
+        const batteryLow = readBatteryLow(lastData as Record<string, unknown>, batteryField);
         updates.push({
           uniqueId: `${macAddress}-${key}`,
           value,
+          batteryLow,
         });
       }
     }

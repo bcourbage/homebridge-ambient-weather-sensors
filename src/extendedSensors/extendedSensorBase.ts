@@ -1,5 +1,6 @@
 import { Characteristic, PlatformAccessory, Service, WithUUID } from 'homebridge';
 
+import { setupBatteryService } from '../batteryService.js';
 import { AmbientWeatherSensorsPlatform, SensorAccessory } from '../platform.js';
 import {
   INTENSITY_CHARACTERISTIC_UUID,
@@ -78,6 +79,7 @@ export abstract class ExtendedSensorBase implements SensorAccessory {
   protected readonly service: Service;
   private readonly customCharacteristics: ReturnType<typeof registerCharacteristics>;
   private lastSetName: string | undefined;
+  private readonly batterySetter?: (low: boolean) => void;
 
   constructor(
     protected readonly platform: AmbientWeatherSensorsPlatform,
@@ -122,12 +124,26 @@ export abstract class ExtendedSensorBase implements SensorAccessory {
       this.ensureCustomCharacteristic(this.customCharacteristics.Intensity);
     }
 
+    // Attach the Battery sub-service driven by the same probe's batt*
+    // field (battout, battin, batt_lightning, etc. — see
+    // batteryFields.ts). Returns undefined and skips the sub-service
+    // when AWN doesn't report a battery for this probe. Wind, rain,
+    // pressure, UV and lightning sensors all live on physical probes
+    // that AWN does report batteries for, so in practice this will
+    // attach a Battery sub-service for every extended sensor on a
+    // typical station.
+    this.batterySetter = setupBatteryService(this.platform, this.accessory);
+
     // Replay any cached value so the tile isn't blank on the first
     // poll after a Homebridge restart. Same idiom the native
     // accessories use.
     if (typeof accessory.context.device.value === 'number') {
       this.setValue(accessory.context.device.value);
     }
+  }
+
+  setBatteryLow(batteryLow: boolean): void {
+    this.batterySetter?.(batteryLow);
   }
 
   /**

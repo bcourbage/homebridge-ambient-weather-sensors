@@ -1,5 +1,6 @@
 import { PlatformAccessory, Service } from 'homebridge';
 
+import { setupBatteryService } from './batteryService.js';
 import { AmbientWeatherSensorsPlatform, SensorAccessory } from './platform.js';
 
 // ppm threshold above which HomeKit's CarbonDioxideDetected boolean
@@ -10,6 +11,7 @@ const CO2_DETECTED_PPM = 1000;
 
 export class Co2Accessory implements SensorAccessory {
   private service: Service;
+  private readonly batterySetter?: (low: boolean) => void;
 
   constructor(
     private readonly platform: AmbientWeatherSensorsPlatform,
@@ -25,9 +27,15 @@ export class Co2Accessory implements SensorAccessory {
 
     this.service.setCharacteristic(this.platform.Characteristic.Name, accessory.context.device.displayName);
 
+    this.batterySetter = setupBatteryService(this.platform, this.accessory);
+
     if (typeof accessory.context.device.value === 'number') {
       this.setValue(accessory.context.device.value);
     }
+  }
+
+  setBatteryLow(batteryLow: boolean): void {
+    this.batterySetter?.(batteryLow);
   }
 
   /**

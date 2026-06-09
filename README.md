@@ -55,6 +55,12 @@ These map cleanly to native HomeKit accessory services. They render in Apple's H
 - **CO2** — AWN's `co2_in_aqin` (AQIN module) and the standalone `co2` field.
 - **Particulate Matter** — PM2.5 and PM10 (AWN's `pm25_in_aqin`, `pm10_in_aqin`, and the outdoor `pm25` field). Reported with both raw density and an EPA-bucket-derived HomeKit AirQuality rating.
 
+### Battery status
+
+Every sensor whose physical probe reports a battery in AWN's payload also exposes a HomeKit `Battery` sub-service. Apple Home (and every third-party HomeKit client) will fire its built-in low-battery push notification when AWN reports a probe as low. Use this to build the automation *"When Outdoor Temperature battery is low, remind me to replace it"* — no Eve dependency, no manual checking the AWN dashboard.
+
+Probes covered: outdoor base (powers wind, rain, solar, UV, outdoor temp/humid), indoor display (indoor temp/humid + pressure), WH31 numbered probes (per-channel), AQIN module (PM, CO2), and the WH57 lightning sensor. Probes that AWN doesn't report a battery for get no Battery sub-service.
+
 ### Solar Radiation: W/m² ↔ lux
 
 AWN reports solar radiation in **W/m²** (watts per square meter), but HomeKit's `LightSensor` characteristic accepts only **lux**. The plugin converts using the standard approximation:

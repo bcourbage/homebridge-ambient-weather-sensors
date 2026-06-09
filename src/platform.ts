@@ -1,6 +1,7 @@
 import { API, Characteristic, DynamicPlatformPlugin, Logger, PlatformAccessory, PlatformConfig, Service } from 'homebridge';
 
 import { AirQualityAccessory } from './airQualityAccessory.js';
+import { batteryFieldForSensor, readBatteryLow } from './batteryFields.js';
 import { Co2Accessory } from './co2Accessory.js';
 import {
   LightningDayAccessory,
@@ -99,6 +100,17 @@ const POLL_INTERVAL_MS = 2 * 60 * 1000;
  */
 export interface SensorAccessory {
   setValue(rawValue: number): void;
+  /**
+   * Optional hook for per-probe battery state. Implementations that
+   * advertise a Battery sub-service should override this to flip
+   * `StatusLowBattery` based on the boolean. Called by the polling
+   * and realtime fanout in addition to `setValue` on each tick.
+   *
+   * Default no-op for accessories that don't expose a battery — the
+   * platform calls this blindly and lets the wrapper decide whether
+   * to act.
+   */
+  setBatteryLow?(batteryLow: boolean): void;
 }
 
 export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
@@ -345,12 +357,22 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
             value = Number.isFinite(parsed) ? parsed : 0;
           }
 
+          // Look up the corresponding battery field for this sensor's
+          // physical probe and capture the HomeKit-aligned
+          // low/normal boolean. undefined means AWN doesn't report
+          // a battery for this probe (or the field is missing on
+          // this particular station) — the wrapper will skip the
+          // Battery sub-service in that case.
+          const batteryField = batteryFieldForSensor(sensorKey);
+          const batteryLow = readBatteryLow(obj.lastData as Record<string, unknown>, batteryField);
+
           Devices.push({
             macAddress: obj.macAddress,
             uniqueId,
             displayName,
             type,
             value,
+            batteryLow,
           });
         });
       });
@@ -640,11 +662,14 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
    * never registered (unknown sensor types, excluded by config, etc.)
    * are silently ignored.
    */
-  private distribute(updates: Array<{ uniqueId: string; value: number }>): void {
+  private distribute(updates: Array<{ uniqueId: string; value: number; batteryLow?: boolean }>): void {
     for (const update of updates) {
       const wrapper = this.wrappers.get(update.uniqueId);
       if (wrapper) {
         wrapper.setValue(update.value);
+        if (update.batteryLow !== undefined && wrapper.setBatteryLow) {
+          wrapper.setBatteryLow(update.batteryLow);
+        }
       }
     }
   }
