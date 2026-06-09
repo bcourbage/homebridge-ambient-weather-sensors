@@ -31,7 +31,7 @@
  * UUIDs are stable across versions. Changing one would invalidate
  * every user's accessory cache for that characteristic. Don't change.
  */
-import { API, Characteristic, Formats, Perms } from 'homebridge';
+import { API, Characteristic, Formats, Perms, WithUUID } from 'homebridge';
 
 /**
  * Stable UUIDs — DO NOT CHANGE without a major version bump and a
@@ -51,10 +51,17 @@ export const LAST_UPDATED_CHARACTERISTIC_UUID = '88D5A140-DF20-4741-AF1B-7800450
  * Characteristic subclass constructors twice for the same UUID would
  * throw. The internal `registered` flag prevents that.
  */
+/**
+ * Each entry is a constructor that produces a Characteristic AND
+ * carries a static `UUID` field — the shape HAP-NodeJS's
+ * `WithUUID<T>` brand requires. Without the static UUID,
+ * `Service#updateCharacteristic(ctor, value)` and the rest of HAP's
+ * "pass a constructor" overloads reject the type.
+ */
 export interface ExtendedCharacteristics {
-  Value: new () => Characteristic;
-  Intensity: new () => Characteristic;
-  LastUpdated: new () => Characteristic;
+  Value: WithUUID<new () => Characteristic>;
+  Intensity: WithUUID<new () => Characteristic>;
+  LastUpdated: WithUUID<new () => Characteristic>;
 }
 
 let cached: ExtendedCharacteristics | undefined;
@@ -84,6 +91,11 @@ export function register(api: API): ExtendedCharacteristics {
    * Eve / homebridge-weather-plus do).
    */
   class Value extends HapCharacteristic {
+    // Static UUID is required for HAP's `WithUUID<...>` type — without
+    // it, Service#updateCharacteristic(ctor, value) and friends won't
+    // accept this constructor as a characteristic identifier.
+    public static readonly UUID = VALUE_CHARACTERISTIC_UUID;
+
     constructor() {
       super('Value', VALUE_CHARACTERISTIC_UUID, {
         format: Formats.STRING,
@@ -106,6 +118,8 @@ export function register(api: API): ExtendedCharacteristics {
    * there's no meaningful bucket for them.
    */
   class Intensity extends HapCharacteristic {
+    public static readonly UUID = INTENSITY_CHARACTERISTIC_UUID;
+
     constructor() {
       super('Intensity', INTENSITY_CHARACTERISTIC_UUID, {
         format: Formats.STRING,
@@ -127,6 +141,8 @@ export function register(api: API): ExtendedCharacteristics {
    * the timestamp still advances so users can tell the data is live.
    */
   class LastUpdated extends HapCharacteristic {
+    public static readonly UUID = LAST_UPDATED_CHARACTERISTIC_UUID;
+
     constructor() {
       super('Last Updated', LAST_UPDATED_CHARACTERISTIC_UUID, {
         format: Formats.STRING,

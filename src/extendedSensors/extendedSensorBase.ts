@@ -1,4 +1,4 @@
-import { Characteristic, PlatformAccessory, Service } from 'homebridge';
+import { Characteristic, PlatformAccessory, Service, WithUUID } from 'homebridge';
 
 import { AmbientWeatherSensorsPlatform, SensorAccessory } from '../platform.js';
 import { register as registerCharacteristics } from './customCharacteristics.js';
@@ -195,9 +195,8 @@ export abstract class ExtendedSensorBase implements SensorAccessory {
    * child-bridge restarts where the service may be restored from
    * cache with our characteristics already attached.
    */
-  private ensureCustomCharacteristic(CharCtor: new () => Characteristic): void {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    if (!this.service.testCharacteristic(CharCtor as any)) {
+  private ensureCustomCharacteristic(CharCtor: WithUUID<new () => Characteristic>): void {
+    if (!this.service.testCharacteristic(CharCtor)) {
       this.service.addCharacteristic(CharCtor);
     }
   }
