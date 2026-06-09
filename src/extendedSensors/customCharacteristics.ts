@@ -52,16 +52,18 @@ export const LAST_UPDATED_CHARACTERISTIC_UUID = '88D5A140-DF20-4741-AF1B-7800450
  * throw. The internal `registered` flag prevents that.
  */
 /**
- * Each entry is a constructor that produces a Characteristic AND
+ * Each entry is the class of a Characteristic subclass that also
  * carries a static `UUID` field — the shape HAP-NodeJS's
- * `WithUUID<T>` brand requires. Without the static UUID,
- * `Service#updateCharacteristic(ctor, value)` and the rest of HAP's
- * "pass a constructor" overloads reject the type.
+ * `WithUUID<T>` brand requires. We use `typeof Characteristic`
+ * (the whole class type, including static members + the instance
+ * prototype chain) rather than `new () => Characteristic` (just
+ * the construct signature) because that's what HAP's overloads
+ * accept — e.g. `Service#updateCharacteristic(ctor, value)`.
  */
 export interface ExtendedCharacteristics {
-  Value: WithUUID<new () => Characteristic>;
-  Intensity: WithUUID<new () => Characteristic>;
-  LastUpdated: WithUUID<new () => Characteristic>;
+  Value: WithUUID<typeof Characteristic>;
+  Intensity: WithUUID<typeof Characteristic>;
+  LastUpdated: WithUUID<typeof Characteristic>;
 }
 
 let cached: ExtendedCharacteristics | undefined;

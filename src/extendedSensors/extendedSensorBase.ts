@@ -195,7 +195,7 @@ export abstract class ExtendedSensorBase implements SensorAccessory {
    * child-bridge restarts where the service may be restored from
    * cache with our characteristics already attached.
    */
-  private ensureCustomCharacteristic(CharCtor: WithUUID<new () => Characteristic>): void {
+  private ensureCustomCharacteristic(CharCtor: WithUUID<typeof Characteristic>): void {
     if (!this.service.testCharacteristic(CharCtor)) {
       this.service.addCharacteristic(CharCtor);
     }
