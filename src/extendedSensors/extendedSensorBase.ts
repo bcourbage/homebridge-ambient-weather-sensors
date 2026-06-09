@@ -1,7 +1,12 @@
 import { Characteristic, PlatformAccessory, Service, WithUUID } from 'homebridge';
 
 import { AmbientWeatherSensorsPlatform, SensorAccessory } from '../platform.js';
-import { register as registerCharacteristics } from './customCharacteristics.js';
+import {
+  INTENSITY_CHARACTERISTIC_UUID,
+  LAST_UPDATED_CHARACTERISTIC_UUID,
+  VALUE_CHARACTERISTIC_UUID,
+  register as registerCharacteristics,
+} from './customCharacteristics.js';
 import { composeStaticName, composeEmbeddedName, isUserRenamed } from './nameComposer.js';
 
 /**
@@ -148,13 +153,23 @@ export abstract class ExtendedSensorBase implements SensorAccessory {
       `raw=${rawValue} threshold=${this.options.threshold} motion=${detected}`,
     );
 
+    // HAP's Service#updateCharacteristic overloads accept either a
+    // characteristic constructor (with the `WithUUID` brand) OR a
+    // string. We use the UUID strings here because the two-overload
+    // type signature for updateCharacteristic is awkwardly different
+    // from testCharacteristic's — `updateCharacteristic` wants
+    // `WithUUID<new () => Characteristic>` while `testCharacteristic`
+    // wants `WithUUID<typeof Characteristic>`, and those forms aren't
+    // bidirectionally assignable in TypeScript. Going through the
+    // UUID string sidesteps both type forms and is just as
+    // unambiguous at runtime.
     this.service
-      .updateCharacteristic(this.customCharacteristics.Value, valueStr)
-      .updateCharacteristic(this.customCharacteristics.LastUpdated, timestamp)
+      .updateCharacteristic(VALUE_CHARACTERISTIC_UUID, valueStr)
+      .updateCharacteristic(LAST_UPDATED_CHARACTERISTIC_UUID, timestamp)
       .updateCharacteristic(this.platform.Characteristic.MotionDetected, detected);
 
     if (intensityStr !== undefined) {
-      this.service.updateCharacteristic(this.customCharacteristics.Intensity, intensityStr);
+      this.service.updateCharacteristic(INTENSITY_CHARACTERISTIC_UUID, intensityStr);
     }
 
     this.maybeUpdateTileName(valueStr);
