@@ -106,7 +106,7 @@ Below the per-category checkboxes is a dropdown: **How should Apple Home display
   - If you rename a tile manually in Apple Home, the plugin detects this and stops overwriting it — your custom name wins from that point on
   - Some Homebridge log lines may mention the name change — informational, safe to ignore
 
-If you're only ever going to use Eve or Controller for HomeKit, stick with "generic names". If you want the value in Apple Home tiles, switch to embed mode.
+If you're only ever going to use Eve or Controller for HomeKit, stick with "Show generic names (recommended)". If you want the value in Apple Home tiles, switch to "Show live value in the tile name".
 
 ### Adjust thresholds (optional)
 
