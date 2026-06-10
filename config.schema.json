@@ -114,10 +114,7 @@
           { "title": "Show generic names (recommended)", "enum": ["static"] },
           { "title": "Show live value in the tile name", "enum": ["embed"] }
         ],
-        "description": "Show generic names (recommended): tiles show 'Wind Speed' with an on/off motion indicator. The live number is visible in Eve or Controller for HomeKit. Tile names stay stable.\n\nShow live value in the tile name: tiles update to 'Wind Speed 14 mph' as readings change. Values are rounded to whole numbers so the tile name stays compatible with Apple Home's naming rules. The tile name updates on every reading (~30s in realtime, every 2 minutes in polling). If you rename a tile manually in Apple Home, the plugin detects this and stops overwriting it — your custom name wins. Some Homebridge log lines may mention name changes — these are informational and safe to ignore.",
-        "x-schema-form": {
-          "type": "radios"
-        },
+        "description": "Show generic names (recommended): tiles show 'Wind Speed' with an on/off motion indicator. The live number is visible in Eve or Controller for HomeKit. Tile names stay stable.<br><br>Show live value in the tile name: tiles update to 'Wind Speed 14 mph' as readings change. Values are rounded to whole numbers so the tile name stays compatible with Apple Home's naming rules. The tile name updates on every reading (~30s in realtime, every 2 minutes in polling).<br><br>If you rename a tile manually in Apple Home, the plugin detects this and stops overwriting it — your custom name wins. Some Homebridge log lines may mention name changes — these are informational and safe to ignore.<br><br>Selecting None uses the recommended default.",
         "condition": {
           "functionBody": "return model.extendedSensors === true;"
         }
@@ -125,7 +122,6 @@
       "thresholds": {
         "type": "object",
         "title": "Motion thresholds for extended sensors",
-        "description": "Enter values to fire each extended sensor's motion event when its reading crosses the threshold — in both directions, so Apple Home automations can react to both \"crossing up\" and \"reverting back\". Leave a field blank to disable that sensor's trigger entirely (the accessory still appears, just with motion permanently off). All values are in AWN's native units regardless of your display-unit choice below.",
         "condition": {
           "functionBody": "return model.extendedSensors === true;"
         },
@@ -171,7 +167,6 @@
       "units": {
         "type": "object",
         "title": "Display units for extended sensors",
-        "description": "AWN reports US/imperial units regardless of station location. Choose a different unit here to convert at display time. Thresholds above stay in AWN's native units regardless of your choice here.",
         "condition": {
           "functionBody": "return model.extendedSensors === true;"
         },
@@ -185,7 +180,8 @@
               { "title": "kph (kilometers per hour)", "enum": ["kph"] },
               { "title": "m/s (meters per second)", "enum": ["mps"] },
               { "title": "kts (knots)", "enum": ["kts"] }
-            ]
+            ],
+            "description": "Selecting None uses the default (mph)."
           },
           "rain": {
             "title": "Rain",
@@ -194,7 +190,8 @@
             "oneOf": [
               { "title": "in (inches)", "enum": ["in"] },
               { "title": "mm (millimeters)", "enum": ["mm"] }
-            ]
+            ],
+            "description": "Selecting None uses the default (in)."
           },
           "pressure": {
             "title": "Barometric pressure",
@@ -203,7 +200,8 @@
             "oneOf": [
               { "title": "inHg (inches of mercury)", "enum": ["inHg"] },
               { "title": "hPa (hectopascals, same as millibars)", "enum": ["hPa"] }
-            ]
+            ],
+            "description": "Selecting None uses the default (inHg)."
           },
           "distance": {
             "title": "Lightning distance",
@@ -212,7 +210,8 @@
             "oneOf": [
               { "title": "mi (miles)", "enum": ["mi"] },
               { "title": "km (kilometers)", "enum": ["km"] }
-            ]
+            ],
+            "description": "Selecting None uses the default (mi)."
           }
         }
       },
@@ -224,7 +223,7 @@
           { "title": "Polling — REST API every 2 minutes (default)", "enum": ["polling"] },
           { "title": "Realtime — websocket subscription (opt-in)", "enum": ["realtime"] }
         ],
-        "description": "Polling fetches the AWN REST endpoint every 2 minutes. Realtime opens a websocket to rt2.ambientweather.net and receives updates as the station reports them (typically ~30s indoors). Realtime is opt-in for now; the default will switch to realtime in a future release once it has been broadly validated."
+        "description": "Polling fetches the AWN REST endpoint every 2 minutes. Realtime opens a websocket to rt2.ambientweather.net and receives updates as the station reports them (typically ~30s indoors). Realtime is opt-in for now; the default will switch to realtime in a future release once it has been broadly validated.<br><br>Selecting None uses the default (polling)."
       },
       "excludeSensors": {
         "title": "Exclude Sensors (blacklist)",
@@ -251,5 +250,57 @@
         ]
       }
     }
-  }
+  },
+  "form": [
+    "name",
+    "apiKey",
+    "applicationKey",
+    "temperatureSensors",
+    "humiditySensors",
+    "solarRadiationSensors",
+    "co2Sensors",
+    "airQualitySensors",
+    "extendedSensors",
+    "windSensors",
+    "rainSensors",
+    "pressureSensors",
+    "uvSensors",
+    "lightningSensors",
+    "extendedDisplayMode",
+    {
+      "type": "fieldset",
+      "title": "Motion thresholds for extended sensors",
+      "condition": { "functionBody": "return model.extendedSensors === true;" },
+      "items": [
+        {
+          "type": "help",
+          "helpvalue": "<p>Enter values to fire each extended sensor's motion event when its reading crosses the threshold — in both directions, so Apple Home automations can react to both \"crossing up\" and \"reverting back\". Leave a field blank to disable that sensor's trigger entirely (the accessory still appears, just with motion permanently off). All values are in AWN's native units regardless of your display-unit choice below.</p>"
+        },
+        "thresholds.windSpeedMph",
+        "thresholds.windGustMph",
+        "thresholds.rainRateInHr",
+        "thresholds.uv",
+        "thresholds.lightningDistanceMi",
+        "thresholds.pressureInHg"
+      ]
+    },
+    {
+      "type": "fieldset",
+      "title": "Display units for extended sensors",
+      "condition": { "functionBody": "return model.extendedSensors === true;" },
+      "items": [
+        {
+          "type": "help",
+          "helpvalue": "<p>AWN reports US/imperial units regardless of station location. Choose a different unit here to convert at display time. Thresholds above stay in AWN's native units regardless of your choice here.</p>"
+        },
+        "units.windSpeed",
+        "units.rain",
+        "units.pressure",
+        "units.distance"
+      ]
+    },
+    "dataSource",
+    "excludeSensors",
+    "includeOnly"
+  ]
 }

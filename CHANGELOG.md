@@ -9,6 +9,35 @@ entries short and user-facing.
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/
 
+## [1.5.0-beta.3] — 2026-06-09
+
+Config-form-only release — no code or behavior changes. All fixes are
+to how the settings form renders in homebridge-config-ui-x.
+
+### Changed
+
+- **Display-mode picker is a dropdown again.** Reverted from the
+  radio-button widget tried in beta.2 — angular-schema-form's radio
+  rendering left the unselected option indented and misaligned in
+  HB UI X, which looked worse than the dropdown's "None" placeholder.
+- **Description text now uses HTML line breaks.** Previously
+  paragraph breaks in the extendedDisplayMode description were
+  written as `\n\n` and rendered as a single run-on block. They're
+  now `<br><br>` and render as actual paragraphs, matching the
+  intended structure (generic-names paragraph / live-value paragraph
+  / rename-and-log-note paragraph).
+- **"Motion thresholds" and "Display units" section help text now
+  appears at the top of each section** — directly under the section
+  title rather than after all the fields. Achieved via a top-level
+  `form` array with explicit `fieldset` blocks and `helpvalue`
+  items so layout is deterministic instead of inferred from the
+  schema.
+- **Dropdown "None" placeholder documented.** Every `oneOf`
+  dropdown (extendedDisplayMode, units.*, dataSource) now ends its
+  description with "Selecting None uses the default (...)" so users
+  who see the placeholder understand it's safe — picking None is
+  equivalent to picking the default.
+
 ## [1.5.0-beta.2] — 2026-06-09
 
 ### Fixed
@@ -300,6 +329,7 @@ upstream pull requests [#21][pr21] (Homebridge 2.x compatibility) and
 [upstream]: https://github.com/peledies/homebridge-ambient-weather-sensors
 [pr21]: https://github.com/peledies/homebridge-ambient-weather-sensors/pull/21
 [pr22]: https://github.com/peledies/homebridge-ambient-weather-sensors/pull/22
+[1.5.0-beta.3]: https://github.com/bcourbage/homebridge-ambient-weather-sensors/releases/tag/v1.5.0-beta.3
 [1.5.0-beta.2]: https://github.com/bcourbage/homebridge-ambient-weather-sensors/releases/tag/v1.5.0-beta.2
 [1.5.0-beta.1]: https://github.com/bcourbage/homebridge-ambient-weather-sensors/releases/tag/v1.5.0-beta.1
 [1.5.0-beta.0]: https://github.com/bcourbage/homebridge-ambient-weather-sensors/releases/tag/v1.5.0-beta.0
