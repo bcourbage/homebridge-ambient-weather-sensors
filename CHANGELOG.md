@@ -9,6 +9,27 @@ entries short and user-facing.
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/
 
+## [1.5.0-beta.10] — 2026-06-09
+
+Config-form-only patch — no code or behavior changes. Completes the
+font-size unification.
+
+### Changed
+
+- **All remaining field-level help text now renders in the larger
+  helpvalue font.** Beta.9 caught the units + dataSource holdouts;
+  beta.10 catches the rest: name, apiKey, applicationKey, co2Sensors,
+  airQualitySensors, lightningSensors (WH57 caveat), and the
+  multi-paragraph extendedDisplayMode walkthrough. All seven were
+  schema-level descriptions rendering at the small caption size —
+  now migrated to explicit `<help>` items in the form array,
+  matching every other description in the form.
+
+  The schema is now description-free for individual properties
+  (other than the two array-typed fields where HB UI X auto-renders
+  descriptions at the larger size anyway). All explanatory prose
+  lives in the form array as `<help>` blocks.
+
 ## [1.5.0-beta.9] — 2026-06-09
 
 Config-form-only patch — no code or behavior changes.
@@ -528,6 +549,7 @@ upstream pull requests [#21][pr21] (Homebridge 2.x compatibility) and
 [upstream]: https://github.com/peledies/homebridge-ambient-weather-sensors
 [pr21]: https://github.com/peledies/homebridge-ambient-weather-sensors/pull/21
 [pr22]: https://github.com/peledies/homebridge-ambient-weather-sensors/pull/22
+[1.5.0-beta.10]: https://github.com/bcourbage/homebridge-ambient-weather-sensors/releases/tag/v1.5.0-beta.10
 [1.5.0-beta.9]: https://github.com/bcourbage/homebridge-ambient-weather-sensors/releases/tag/v1.5.0-beta.9
 [1.5.0-beta.8]: https://github.com/bcourbage/homebridge-ambient-weather-sensors/releases/tag/v1.5.0-beta.8
 [1.5.0-beta.7]: https://github.com/bcourbage/homebridge-ambient-weather-sensors/releases/tag/v1.5.0-beta.7

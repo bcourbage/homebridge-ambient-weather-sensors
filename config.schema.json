@@ -11,14 +11,12 @@
       "name": {
         "title": "Name",
         "type": "string",
-        "default": "AmbientWeatherSensors",
-        "description": "The name that will appear in your homebridge log"
+        "default": "AmbientWeatherSensors"
       },
       "apiKey": {
         "title": "API Key",
         "type": "string",
         "placeholder": "api key from ambient weather account",
-        "description": "Stored in plain text in Homebridge's config.json. Treat the file with the same care as any password-bearing config.",
         "x-schema-form": {
           "type": "password"
         }
@@ -27,7 +25,6 @@
         "title": "Application Key",
         "type": "string",
         "placeholder": "application key from ambient weather account",
-        "description": "Stored in plain text in Homebridge's config.json. Treat the file with the same care as any password-bearing config.",
         "x-schema-form": {
           "type": "password"
         }
@@ -50,14 +47,12 @@
       "co2Sensors": {
         "title": "CO2 Sensors",
         "type": "boolean",
-        "default": false,
-        "description": "Expose CO2 readings from AWN's AQIN family (co2_in_aqin) and any standalone CO2 sensor."
+        "default": false
       },
       "airQualitySensors": {
         "title": "Air Quality Sensors (PM2.5 / PM10)",
         "type": "boolean",
-        "default": false,
-        "description": "Expose particulate readings (pm25, pm25_in_aqin, pm10_in_aqin) as HomeKit AirQualitySensor accessories with the corresponding density characteristic and an EPA-bucket-derived AirQuality enum."
+        "default": false
       },
       "extendedSensors": {
         "title": "Enable Extended Sensors",
@@ -101,7 +96,6 @@
         "title": "Lightning sensors (count, distance, time-since-last)",
         "type": "boolean",
         "default": false,
-        "description": "Only available if your station has a WH57-compatible lightning sensor reporting lightning_day / lightning_distance / lightning_time on the AWN API.",
         "condition": {
           "functionBody": "return model.extendedSensors === true;"
         }
@@ -114,7 +108,6 @@
           { "title": "Show generic names (recommended)", "enum": ["static"] },
           { "title": "Show live value in the tile name", "enum": ["embed"] }
         ],
-        "description": "Show generic names (recommended): tiles show 'Wind Speed' with an on/off motion indicator. The live number is visible in Eve or Controller for HomeKit. Tile names stay stable.<br><br>Show live value in the tile name: tiles update to 'Wind Speed 14 mph' as readings change. Values are rounded to whole numbers so the tile name stays compatible with Apple Home's naming rules. The tile name updates on every reading (~30s in realtime, every 2 minutes in polling).<br><br>If you rename a tile manually in Apple Home, the plugin detects this and stops overwriting it — your custom name wins. Some Homebridge log lines may mention name changes — these are informational and safe to ignore.<br><br>Selecting None uses the recommended default.",
         "condition": {
           "functionBody": "return model.extendedSensors === true;"
         }
@@ -272,20 +265,50 @@
   },
   "form": [
     "name",
+    {
+      "type": "help",
+      "helpvalue": "<p>The name that will appear in your Homebridge log.</p>"
+    },
     "apiKey",
+    {
+      "type": "help",
+      "helpvalue": "<p>Stored in plain text in Homebridge's config.json. Treat the file with the same care as any password-bearing config.</p>"
+    },
     "applicationKey",
+    {
+      "type": "help",
+      "helpvalue": "<p>Stored in plain text in Homebridge's config.json. Treat the file with the same care as any password-bearing config.</p>"
+    },
     "temperatureSensors",
     "humiditySensors",
     "solarRadiationSensors",
     "co2Sensors",
+    {
+      "type": "help",
+      "helpvalue": "<p>Expose CO2 readings from AWN's AQIN family (co2_in_aqin) and any standalone CO2 sensor.</p>"
+    },
     "airQualitySensors",
+    {
+      "type": "help",
+      "helpvalue": "<p>Expose particulate readings (pm25, pm25_in_aqin, pm10_in_aqin) as HomeKit AirQualitySensor accessories with the corresponding density characteristic and an EPA-bucket-derived AirQuality enum.</p>"
+    },
     "extendedSensors",
     "windSensors",
     "rainSensors",
     "pressureSensors",
     "uvSensors",
     "lightningSensors",
+    {
+      "type": "help",
+      "helpvalue": "<p>Lightning sensors are only available if your station has a WH57-compatible sensor reporting lightning_day / lightning_distance / lightning_time on the AWN API.</p>",
+      "condition": { "functionBody": "return model.extendedSensors === true;" }
+    },
     "extendedDisplayMode",
+    {
+      "type": "help",
+      "helpvalue": "<p>Show generic names (recommended): tiles show 'Wind Speed' with an on/off motion indicator. The live number is visible in Eve or Controller for HomeKit. Tile names stay stable.</p><p>Show live value in the tile name: tiles update to 'Wind Speed 14 mph' as readings change. Values are rounded to whole numbers so the tile name stays compatible with Apple Home's naming rules. The tile name updates on every reading (~30s in realtime, every 2 minutes in polling).</p><p>If you rename a tile manually in Apple Home, the plugin detects this and stops overwriting it — your custom name wins. Some Homebridge log lines may mention name changes — these are informational and safe to ignore.</p><p>Selecting None uses the recommended default.</p>",
+      "condition": { "functionBody": "return model.extendedSensors === true;" }
+    },
     {
       "type": "fieldset",
       "title": "Motion thresholds for extended sensors",
