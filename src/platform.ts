@@ -201,34 +201,37 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
     // truthy for the type to be returned — so a user who hasn't opted
     // in sees no behavior change vs. v1.4.x.
     //
-    // Additionally, sensors with a user-configurable threshold are
-    // hidden entirely (return NOT_SUPPORTED) when the threshold field
-    // is blank in the config. This matches the natural intuition:
-    // "I left the threshold blank because I don't care about this
-    // sensor." Users who DO want a sensor visible (for viewing in
-    // Eve / Controller for HomeKit) but don't want it to drive
-    // automations can set the threshold to a value the sensor can
-    // never reach (e.g. 99999 mph for wind). Sensors without a
-    // user-configurable threshold (wind direction, rain accumulation
-    // totals, last-event timestamps, lightning counts) always appear
-    // when their category is enabled — use Exclude Sensors to hide
-    // them individually.
+    // Additionally, each user-configurable threshold has an explicit
+    // per-threshold enable checkbox in the config form (default true).
+    // When the checkbox is unchecked, the corresponding sensor
+    // accessory is hidden from HomeKit. This replaces the beta.6
+    // "blank threshold = hide" mechanic because homebridge-config-ui-x
+    // re-injects schema defaults into blanked number fields, making
+    // "blank" impossible to express through the form.
+    //
+    // Sensors without a user-configurable threshold (wind direction,
+    // rain accumulation totals, last-event timestamps, lightning
+    // counts) have no enable checkbox; they appear whenever their
+    // category is on. Use Exclude Sensors to hide them individually.
     if (!this.config.extendedSensors) {
       return 'NOT_SUPPORTED';
     }
     const thresholds = this.config.thresholds ?? {};
-    const isSet = (v: unknown): v is number => typeof v === 'number';
+    // Default-true semantics: only explicit `false` disables the
+    // sensor. Undefined (first install, never touched the form) or
+    // any non-false value means enabled.
+    const enabled = (v: unknown): boolean => v !== false;
 
     if (this.config.windSensors) {
       if (sensor === 'windspeedmph') {
-        return isSet(thresholds.windSpeedMph) ? 'WindSpeed' : 'NOT_SUPPORTED';
+        return enabled(thresholds.windSpeedEnabled) ? 'WindSpeed' : 'NOT_SUPPORTED';
       }
       if (sensor === 'windgustmph') {
-        return isSet(thresholds.windGustMph) ? 'WindGust' : 'NOT_SUPPORTED';
+        return enabled(thresholds.windGustEnabled) ? 'WindGust' : 'NOT_SUPPORTED';
       }
       if (sensor === 'maxdailygust') {
-        // Max Daily Gust shares the windGustMph threshold with Wind Gust.
-        return isSet(thresholds.windGustMph) ? 'WindMaxDailyGust' : 'NOT_SUPPORTED';
+        // Max Daily Gust shares the windGustEnabled toggle with Wind Gust.
+        return enabled(thresholds.windGustEnabled) ? 'WindMaxDailyGust' : 'NOT_SUPPORTED';
       }
       if (sensor === 'winddir') {
         return 'WindDirection';
@@ -239,7 +242,7 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
     }
     if (this.config.rainSensors) {
       if (sensor === 'hourlyrainin') {
-        return isSet(thresholds.rainRateInHr) ? 'RainRate' : 'NOT_SUPPORTED';
+        return enabled(thresholds.rainRateEnabled) ? 'RainRate' : 'NOT_SUPPORTED';
       }
       // Accumulation totals and lastRain have no user-configurable
       // threshold — they trigger on any non-zero accumulation /
@@ -264,18 +267,17 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
       }
     }
     if (this.config.pressureSensors) {
-      // Both pressure accessories share the pressureInHg threshold,
-      // so blanking it hides both tiles together.
+      // Both pressure accessories share the pressureEnabled toggle.
       if (sensor === 'baromrelin') {
-        return isSet(thresholds.pressureInHg) ? 'PressureRelative' : 'NOT_SUPPORTED';
+        return enabled(thresholds.pressureEnabled) ? 'PressureRelative' : 'NOT_SUPPORTED';
       }
       if (sensor === 'baromabsin') {
-        return isSet(thresholds.pressureInHg) ? 'PressureAbsolute' : 'NOT_SUPPORTED';
+        return enabled(thresholds.pressureEnabled) ? 'PressureAbsolute' : 'NOT_SUPPORTED';
       }
     }
     if (this.config.uvSensors) {
       if (sensor === 'uv') {
-        return isSet(thresholds.uv) ? 'UV' : 'NOT_SUPPORTED';
+        return enabled(thresholds.uvEnabled) ? 'UV' : 'NOT_SUPPORTED';
       }
     }
     if (this.config.lightningSensors) {
@@ -289,7 +291,7 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
         return 'LightningHour';
       }
       if (sensor === 'lightning_distance') {
-        return isSet(thresholds.lightningDistanceMi) ? 'LightningDistance' : 'NOT_SUPPORTED';
+        return enabled(thresholds.lightningDistanceEnabled) ? 'LightningDistance' : 'NOT_SUPPORTED';
       }
       if (sensor === 'lightning_time') {
         return 'LightningLastStrike';

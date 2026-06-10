@@ -9,6 +9,61 @@ entries short and user-facing.
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/
 
+## [1.5.0-beta.8] — 2026-06-09
+
+This release replaces the unreachable "blank threshold = hidden"
+mechanic from beta.6 with explicit per-threshold enable checkboxes,
+and unifies all extended-sensor help text to render at the larger
+font size used elsewhere in the form. Becomes the new GA candidate.
+
+### Changed
+
+- **Per-threshold enable checkbox.** Each of the 6 user-configurable
+  thresholds (controlling 8 accessories — wind speed, wind gust pair,
+  rain rate, UV, lightning distance, pressure pair) now has a paired
+  enable checkbox in the **Motion thresholds for extended sensors**
+  section. When the checkbox is unchecked, the corresponding sensor
+  accessory is hidden from HomeKit entirely and the threshold field
+  is hidden from the form. Default is ON (checked) for all six, so
+  upgrading from beta.6 → beta.8 produces no behavior change for
+  users who hadn't tried to use the blank-threshold mechanic.
+
+  This works around homebridge-config-ui-x re-injecting schema
+  default values into number fields after save — the beta.6 "leave
+  blank to hide" approach was non-functional because the form never
+  let "blank" persist.
+
+  Workaround for "show value without trigger" unchanged: keep the
+  checkbox enabled, set the threshold to an unreachable value
+  (99999 mph for wind, 99 for UV, 0 for inverted-direction pressure
+  and lightning-distance sensors).
+
+- **Consistent font sizes for help text.** Per-threshold descriptions
+  ("Fires when sustained wind speed equals or exceeds this...") and
+  the units section preamble now render in the larger `helpvalue`
+  font instead of the smaller per-field-description font. Achieved
+  by moving the descriptions out of the schema's individual
+  property descriptions and into explicit `<help>` items in the
+  form array. Matches the larger size that section preambles
+  (Motion thresholds / Display units / Exclude Sensors / Include
+  Only) already used.
+
+### Implementation
+
+- `config.schema.json` adds six new booleans inside the `thresholds`
+  object: `windSpeedEnabled`, `windGustEnabled`, `rainRateEnabled`,
+  `uvEnabled`, `lightningDistanceEnabled`, `pressureEnabled`. All
+  default `true`. Each threshold value field has a
+  `condition.functionBody` that hides it when its enable peer is
+  explicitly false.
+- `platform.ts#determineSensorType` checks each `*Enabled` flag and
+  returns `NOT_SUPPORTED` when false, replacing the previous
+  blank-threshold check. Default-true semantics: only an explicit
+  `false` disables.
+- Form array restructured: per-threshold sections now interleave
+  enable checkbox → threshold field → help paragraph (all three
+  hidden when the enable is unchecked).
+
 ## [1.5.0-beta.7] — 2026-06-09
 
 Config-form-only fix. No code or behavior changes.
@@ -455,6 +510,7 @@ upstream pull requests [#21][pr21] (Homebridge 2.x compatibility) and
 [upstream]: https://github.com/peledies/homebridge-ambient-weather-sensors
 [pr21]: https://github.com/peledies/homebridge-ambient-weather-sensors/pull/21
 [pr22]: https://github.com/peledies/homebridge-ambient-weather-sensors/pull/22
+[1.5.0-beta.8]: https://github.com/bcourbage/homebridge-ambient-weather-sensors/releases/tag/v1.5.0-beta.8
 [1.5.0-beta.7]: https://github.com/bcourbage/homebridge-ambient-weather-sensors/releases/tag/v1.5.0-beta.7
 [1.5.0-beta.6]: https://github.com/bcourbage/homebridge-ambient-weather-sensors/releases/tag/v1.5.0-beta.6
 [1.5.0-beta.5]: https://github.com/bcourbage/homebridge-ambient-weather-sensors/releases/tag/v1.5.0-beta.5
