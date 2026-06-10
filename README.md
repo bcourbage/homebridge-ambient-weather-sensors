@@ -112,7 +112,7 @@ Apple Home does not natively understand wind, rain, barometric pressure, UV, or 
 
 **Why MotionSensor?** It's the only HAP service whose state (`MotionDetected`) is both native to Apple Home AND triggerable by an external value, which makes it work as a universal "this number crossed a threshold" sensor. Picking it puts you in good company — every comparable plugin (homebridge-ecowitt-weather-sensors, homebridge-weather-plus, homebridge-mqttthing's weather station) settled on the same idea.
 
-**Lightning sensor caveat:** the lightning fields are only populated by AWN if your station has a WH57-compatible sensor connected. Without one, enabling the Lightning toggle does nothing (the fields are absent from the AWN payload and the plugin silently skips them).
+**Hardware-aware (safe to over-enable):** the plugin only creates an accessory for a sensor field that's actually present in your station's AWN payload. If you enable a category whose hardware you don't have (e.g. Lightning without a WH57, Air Quality without an AQIN, CO2 without an AQIN), the relevant fields are simply absent from AWN's response, no accessory is registered, and nothing appears in HomeKit. Enabling a category is a zero-cost no-op when the underlying hardware isn't installed — so when in doubt, leave it on.
 
 ## Setup
 An ambientweather.net account is required (no paid subscription is needed) so that you can generate the two keys this plugin uses.

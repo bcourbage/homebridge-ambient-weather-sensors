@@ -216,6 +216,10 @@ The **embed-value display mode** is a workaround that puts the value into the ti
 
 The child bridge needs a restart. Homebridge UI → **Status** → click your child bridge → **Restart**. Wait ~30 seconds, then check **Accessories**.
 
+### "Will tiles appear for sensors my station doesn't have?"
+
+No. The plugin only creates accessories for sensor fields actually present in your station's AWN payload. If you enable a category whose hardware you don't have — Lightning without a WH57, Air Quality without an AQIN, CO2 without an AQIN, etc. — the relevant fields are absent from AWN's response, no accessory gets registered, and nothing appears in HomeKit. Enabling a category is a zero-cost no-op when the underlying hardware isn't installed. The reverse is also handled: if you previously had a probe that's now disconnected, the orphaned tile is cleaned up on the next plugin startup.
+
 ### "I see 'Wind Direction' but the motion indicator is always off."
 
 That's intentional. Wind direction is informational only — there's no meaningful threshold for "direction is high." The Value characteristic carries the direction (e.g. "315° (NW)") for Eve users to see; MotionDetected stays false.
