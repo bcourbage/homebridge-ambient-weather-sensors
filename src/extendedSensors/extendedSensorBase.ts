@@ -2,12 +2,7 @@ import { Characteristic, PlatformAccessory, Service, WithUUID } from 'homebridge
 
 import { setupBatteryService } from '../batteryService.js';
 import { AmbientWeatherSensorsPlatform, SensorAccessory } from '../platform.js';
-import {
-  INTENSITY_CHARACTERISTIC_UUID,
-  LAST_UPDATED_CHARACTERISTIC_UUID,
-  VALUE_CHARACTERISTIC_UUID,
-  register as registerCharacteristics,
-} from './customCharacteristics.js';
+import { register as registerCharacteristics } from './customCharacteristics.js';
 import { composeStaticName, composeEmbeddedName, isUserRenamed } from './nameComposer.js';
 
 /**
@@ -80,6 +75,18 @@ export abstract class ExtendedSensorBase implements SensorAccessory {
   private readonly customCharacteristics: ReturnType<typeof registerCharacteristics>;
   private lastSetName: string | undefined;
   private readonly batterySetter?: (low: boolean) => void;
+  // Cached Characteristic *instances* for the three custom characteristics
+  // attached to the MotionSensor service. We hold these refs (instead of
+  // looking them up by UUID string in setValue) because HAP-NodeJS's
+  // Service#getCharacteristic(string) overload matches by `displayName`
+  // ONLY — not by UUID. Calling `service.updateCharacteristic(uuidString, val)`
+  // therefore returns undefined and throws "Cannot read properties of
+  // undefined (reading 'updateValue')" — the bug observed in v1.5.0-beta.4.
+  // Going through cached instances + `.updateValue()` directly bypasses
+  // the string lookup path entirely.
+  private readonly valueChar: Characteristic;
+  private readonly lastUpdatedChar: Characteristic;
+  private readonly intensityChar: Characteristic | undefined;
 
   constructor(
     protected readonly platform: AmbientWeatherSensorsPlatform,
@@ -109,20 +116,18 @@ export abstract class ExtendedSensorBase implements SensorAccessory {
     this.service.setCharacteristic(this.platform.Characteristic.ConfiguredName, initialName);
     this.lastSetName = initialName;
 
-    // Register our three custom characteristics on this service.
-    // Service#addOptionalCharacteristic + Service#getCharacteristic is
-    // the recommended pattern for adding a non-stock characteristic to
-    // a stock service — it lets HAP discover the characteristic via
-    // its UUID without us having to track the Characteristic instance
-    // separately.
-    this.ensureCustomCharacteristic(this.customCharacteristics.Value);
-    this.ensureCustomCharacteristic(this.customCharacteristics.LastUpdated);
+    // Attach the three custom characteristics to the MotionSensor service
+    // and hold instance refs for later updates. See note on the
+    // class-level field declarations for why we cache instances rather
+    // than letting setValue do UUID-string lookups on every tick.
+    this.valueChar = this.attachCustomCharacteristic(this.customCharacteristics.Value);
+    this.lastUpdatedChar = this.attachCustomCharacteristic(this.customCharacteristics.LastUpdated);
     // Intensity is opt-in — sensors that don't have a meaningful
-    // qualitative bucket (e.g. wind direction) just don't override
-    // `formatIntensity()`, and we skip adding the characteristic.
-    if (this.formatIntensity(0) !== undefined) {
-      this.ensureCustomCharacteristic(this.customCharacteristics.Intensity);
-    }
+    // qualitative bucket (e.g. wind direction, pressure) just don't
+    // override `formatIntensity()`, and we skip adding the characteristic.
+    this.intensityChar = this.formatIntensity(0) !== undefined
+      ? this.attachCustomCharacteristic(this.customCharacteristics.Intensity)
+      : undefined;
 
     // Attach the Battery sub-service driven by the same probe's batt*
     // field (battout, battin, batt_lightning, etc. — see
@@ -169,24 +174,20 @@ export abstract class ExtendedSensorBase implements SensorAccessory {
       `raw=${rawValue} threshold=${this.options.threshold} motion=${detected}`,
     );
 
-    // HAP's Service#updateCharacteristic overloads accept either a
-    // characteristic constructor (with the `WithUUID` brand) OR a
-    // string. We use the UUID strings here because the two-overload
-    // type signature for updateCharacteristic is awkwardly different
-    // from testCharacteristic's — `updateCharacteristic` wants
-    // `WithUUID<new () => Characteristic>` while `testCharacteristic`
-    // wants `WithUUID<typeof Characteristic>`, and those forms aren't
-    // bidirectionally assignable in TypeScript. Going through the
-    // UUID string sidesteps both type forms and is just as
-    // unambiguous at runtime.
-    this.service
-      .updateCharacteristic(VALUE_CHARACTERISTIC_UUID, valueStr)
-      .updateCharacteristic(LAST_UPDATED_CHARACTERISTIC_UUID, timestamp)
-      .updateCharacteristic(this.platform.Characteristic.MotionDetected, detected);
-
-    if (intensityStr !== undefined) {
-      this.service.updateCharacteristic(INTENSITY_CHARACTERISTIC_UUID, intensityStr);
+    // Update the three custom characteristics via the cached instance
+    // refs. Calling `.updateValue()` directly avoids HAP's broken
+    // string-based getCharacteristic path (which matches by displayName,
+    // not UUID, and silently returns undefined).
+    this.valueChar.updateValue(valueStr);
+    this.lastUpdatedChar.updateValue(timestamp);
+    if (intensityStr !== undefined && this.intensityChar) {
+      this.intensityChar.updateValue(intensityStr);
     }
+
+    // MotionDetected is HAP-native and can use the standard service
+    // helper (constructor-form lookup works correctly for stock
+    // characteristics).
+    this.service.updateCharacteristic(this.platform.Characteristic.MotionDetected, detected);
 
     this.maybeUpdateTileName(valueStr);
   }
@@ -218,18 +219,32 @@ export abstract class ExtendedSensorBase implements SensorAccessory {
   }
 
   /**
-   * Add a custom characteristic to the service if it isn't already
-   * present. `Service#testCharacteristic` accepts either a name, a
-   * UUID string, or a constructor; passing the constructor lets HAP
-   * do the UUID lookup for us. Calling `addCharacteristic` twice
-   * with the same UUID throws, so the guard matters across
-   * child-bridge restarts where the service may be restored from
-   * cache with our characteristics already attached.
+   * Attach a custom characteristic to the service and return the
+   * Characteristic instance so the caller can cache the ref for
+   * future `.updateValue()` calls.
+   *
+   * If the characteristic was previously restored from cache, the
+   * service already has an instance — `getCharacteristic(ctor)`
+   * finds it (HAP matches by static UUID for constructor-form
+   * input). Otherwise `addCharacteristic(ctor)` creates and attaches
+   * a fresh one.
+   *
+   * The double cast through `unknown` reconciles the type-form
+   * mismatch between HAP's `WithUUID<typeof Characteristic>` (the
+   * shape testCharacteristic expects) and `WithUUID<new () =>
+   * Characteristic>` (the shape getCharacteristic/addCharacteristic
+   * expect). At runtime the underlying object is identical — a class
+   * constructor with a static UUID — so the cast is safe.
    */
-  private ensureCustomCharacteristic(CharCtor: WithUUID<typeof Characteristic>): void {
-    if (!this.service.testCharacteristic(CharCtor)) {
-      this.service.addCharacteristic(CharCtor);
+  private attachCustomCharacteristic(
+    CharCtor: WithUUID<typeof Characteristic>,
+  ): Characteristic {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const ctorForGet = CharCtor as any;
+    if (this.service.testCharacteristic(CharCtor)) {
+      return this.service.getCharacteristic(ctorForGet);
     }
+    return this.service.addCharacteristic(ctorForGet);
   }
 
   /**

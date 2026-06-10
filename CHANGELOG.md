@@ -9,6 +9,36 @@ entries short and user-facing.
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/
 
+## [1.5.0-beta.5] — 2026-06-09
+
+This release fixes a latent runtime bug that affected every Extended
+Sensor accessory. Becomes the new GA candidate (supersedes beta.4
+which had the same bug from beta.0).
+
+### Fixed
+
+- **"Cannot read properties of undefined (reading 'updateValue')"
+  error when adding any Extended Sensor accessory.** ExtendedSensorBase
+  called `service.updateCharacteristic(UUID_STRING, value)` to update
+  the custom Value / Intensity / Last Updated characteristics on every
+  poll tick. HAP-NodeJS's `Service#getCharacteristic(string)` overload
+  matches by `displayName` only — *not* by UUID. Since our
+  characteristics have displayNames like "Value" and "Last Updated"
+  (not their UUIDs), the lookup returned undefined and then the
+  internal `.updateValue()` call threw.
+
+  Only manifested on Extended Sensors (wind / rain / pressure / UV /
+  lightning) — native HAP services use the constructor-form lookup,
+  which works correctly. The bug was latent from beta.0 because none
+  of the betas were tested with an Extended Sensor enabled until now.
+
+  Fix: cache the Characteristic instances at construction time (via
+  the new `attachCustomCharacteristic` helper) and call
+  `.updateValue()` directly on the cached refs, bypassing the
+  string-lookup path entirely. The MotionDetected characteristic
+  continues to use the standard service helper since
+  constructor-form lookup works for stock HAP characteristics.
+
 ## [1.5.0-beta.4] — 2026-06-09
 
 Housekeeping release — no code or behavior changes. This is the
@@ -364,6 +394,7 @@ upstream pull requests [#21][pr21] (Homebridge 2.x compatibility) and
 [upstream]: https://github.com/peledies/homebridge-ambient-weather-sensors
 [pr21]: https://github.com/peledies/homebridge-ambient-weather-sensors/pull/21
 [pr22]: https://github.com/peledies/homebridge-ambient-weather-sensors/pull/22
+[1.5.0-beta.5]: https://github.com/bcourbage/homebridge-ambient-weather-sensors/releases/tag/v1.5.0-beta.5
 [1.5.0-beta.4]: https://github.com/bcourbage/homebridge-ambient-weather-sensors/releases/tag/v1.5.0-beta.4
 [1.5.0-beta.3]: https://github.com/bcourbage/homebridge-ambient-weather-sensors/releases/tag/v1.5.0-beta.3
 [1.5.0-beta.2]: https://github.com/bcourbage/homebridge-ambient-weather-sensors/releases/tag/v1.5.0-beta.2
