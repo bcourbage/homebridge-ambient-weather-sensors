@@ -103,7 +103,7 @@ Below the per-category checkboxes is a dropdown: **How should Apple Home display
 - **Show live value in the tile name** — Tile shows "Wind Speed 14 mph" updating as readings change. Apple Home users see the value directly. Trade-offs:
   - Values are rounded to whole numbers
   - Tile name updates on every reading (~30s in realtime mode, every 2 minutes in polling)
-  - If you manually rename a tile in Apple Home, the plugin overwrites your custom name on the next reading
+  - If you rename a tile manually in Apple Home, the plugin detects this and stops overwriting it — your custom name wins from that point on
   - Some Homebridge log lines may mention the name change — informational, safe to ignore
 
 If you're only ever going to use Eve or Controller for HomeKit, stick with "generic names". If you want the value in Apple Home tiles, switch to embed mode.

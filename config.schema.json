@@ -114,7 +114,10 @@
           { "title": "Show generic names (recommended)", "enum": ["static"] },
           { "title": "Show live value in the tile name", "enum": ["embed"] }
         ],
-        "description": "Static mode (recommended): tiles show 'Wind Speed' with an on/off motion indicator. The live number is visible in Eve or Controller for HomeKit. Tile names stay stable.\n\nEmbed mode: tiles update to 'Wind Speed 14 mph' as readings change. Values are rounded to whole numbers so the tile name stays compatible with Apple Home's naming rules. The tile name updates on every reading (~30s in realtime, every 2 minutes in polling). If you manually rename a tile in Apple Home, the plugin will overwrite your custom name on the next reading. Some Homebridge log lines may mention the name change — these are informational and safe to ignore.",
+        "description": "Show generic names (recommended): tiles show 'Wind Speed' with an on/off motion indicator. The live number is visible in Eve or Controller for HomeKit. Tile names stay stable.\n\nShow live value in the tile name: tiles update to 'Wind Speed 14 mph' as readings change. Values are rounded to whole numbers so the tile name stays compatible with Apple Home's naming rules. The tile name updates on every reading (~30s in realtime, every 2 minutes in polling). If you rename a tile manually in Apple Home, the plugin detects this and stops overwriting it — your custom name wins. Some Homebridge log lines may mention name changes — these are informational and safe to ignore.",
+        "x-schema-form": {
+          "type": "radios"
+        },
         "condition": {
           "functionBody": "return model.extendedSensors === true;"
         }
