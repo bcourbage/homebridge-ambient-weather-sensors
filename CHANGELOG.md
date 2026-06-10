@@ -9,6 +9,74 @@ entries short and user-facing.
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/
 
+## [1.5.0-beta.2] — 2026-06-09
+
+### Fixed
+
+- **Plugin-name warning in Homebridge logs.** Every newly-registered
+  accessory was logging *"A platform configured a new accessory under
+  the plugin name 'homebridge-ambient-weather-sensors'. However no
+  loaded plugin could be found for the name!"* The `PLUGIN_NAME`
+  constant was inherited unchanged from upstream and pointed at the
+  unscoped npm name. v1.5.0-beta.2 fixes it to match the scoped
+  package name. On first restart Homebridge auto-migrates any
+  cached accessories under the old name (one-time
+  "Plugin association is now being transformed!" log line per
+  accessory), then the warnings stop permanently. Latent bug since
+  the v1.4.0 fork; surfaced by the new accessories in beta.0.
+
+### Changed
+
+- **Realtime reconnect logs are quiet during healthy operation.**
+  AWN cycles long-lived websockets every 45m-3h as part of normal
+  server-side grooming. Previously every cycle emitted 5 info-level
+  log lines (~40/day on a healthy box). Now: clean disconnects
+  (`transport close`, `ping timeout`, `io server disconnect`) and
+  their follow-on reconnect cycle log at **debug** instead. Real
+  anomalies (transport errors, connect errors, stalled subscriptions)
+  still surface at warn/error. The first connect of a session always
+  logs at info so users see realtime start. Net effect: typical day's
+  log goes from ~40 reconnect lines to 0.
+- **Threshold help text consolidation.** The "Motion thresholds for
+  extended sensors" section header now covers the "blank = disabled"
+  behavior in one place. Per-field descriptions are back to just
+  describing each threshold and its default; no more repeated "Leave
+  blank to disable..." line per field.
+
+### Added
+
+- **Blank threshold field disables the motion trigger entirely.**
+  Previously a cleared threshold silently fell back to the schema
+  default — same trigger, just at the default value. Now: clearing
+  a field means no automation trigger at all (`MotionDetected`
+  stays permanently false), but the accessory still exists so the
+  reading remains visible in Eve / Controller for HomeKit. Useful
+  for users who want to see a value without it driving automations.
+  Applies to all 6 configurable thresholds (wind speed, wind gust,
+  rain rate, UV, lightning distance, low pressure). Schema defaults
+  unchanged — first-install behavior is identical to beta.1.
+
+### Documented
+
+- **`UPGRADING.md`** — full step-by-step upgrade guide from v1.4.x.
+  Covers what appears automatically (battery sub-service, feels-like,
+  dew point), how to opt into the Extended Sensors and pick a display
+  mode, threshold tuning, example automations (close awning, skip
+  sprinkler, lightning alert, low-battery reminder), the battery
+  coverage table, and a troubleshooting / FAQ section.
+- README adds a "What's New in v1.5.0" callout near the top pointing
+  to UPGRADING.md.
+- `excludeSensors` and `includeOnly` descriptions explicitly call out
+  that they work on Extended Sensors too, with friendly-name and
+  raw-AWN-field examples for both natives and extended.
+- Display-mode dropdown switched to radio buttons (no spurious "None"
+  option), and the description text uses the actual radio labels
+  ("Show generic names" / "Show live value") rather than invented
+  "Static mode" / "Embed mode" terms.
+- Corrected wording about user-renamed tiles: the plugin already
+  detects renames via `isUserRenamed()` and stops overwriting; the
+  earlier "plugin will overwrite your custom name" copy was wrong.
+
 ## [1.5.0-beta.1] — 2026-06-09
 
 ### Added — Battery sub-service for low-battery automations
@@ -232,6 +300,7 @@ upstream pull requests [#21][pr21] (Homebridge 2.x compatibility) and
 [upstream]: https://github.com/peledies/homebridge-ambient-weather-sensors
 [pr21]: https://github.com/peledies/homebridge-ambient-weather-sensors/pull/21
 [pr22]: https://github.com/peledies/homebridge-ambient-weather-sensors/pull/22
+[1.5.0-beta.2]: https://github.com/bcourbage/homebridge-ambient-weather-sensors/releases/tag/v1.5.0-beta.2
 [1.5.0-beta.1]: https://github.com/bcourbage/homebridge-ambient-weather-sensors/releases/tag/v1.5.0-beta.1
 [1.5.0-beta.0]: https://github.com/bcourbage/homebridge-ambient-weather-sensors/releases/tag/v1.5.0-beta.0
 [1.4.3]: https://github.com/bcourbage/homebridge-ambient-weather-sensors/releases/tag/v1.4.3
