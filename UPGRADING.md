@@ -123,6 +123,8 @@ Each extended sensor has a configurable threshold that controls when the Motion 
 
 If you want different values, change them in the **Motion thresholds for extended sensors** section. They're in AWN's native units (mph, in/hr, inHg, mi) regardless of your display unit choice.
 
+**Important about blank fields**: leaving a threshold field empty doesn't disable the trigger — it falls back to the default value above. If you want the accessory to exist (so you can see the reading in Eve) but never drive an automation, set the threshold to a value the sensor can't reach (e.g. 9999 mph for wind, 99999 in/hr for rain). If you don't want the accessory at all, uncheck the category toggle instead.
+
 ### Pick display units (optional)
 
 If you're outside the US, change the display units in the **Display units for extended sensors** section: kph or m/s or kts for wind, mm for rain, hPa for pressure, km for lightning distance. Thresholds stay in AWN's native units — only the displayed number is converted.

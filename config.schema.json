@@ -125,7 +125,7 @@
       "thresholds": {
         "type": "object",
         "title": "Motion thresholds for extended sensors",
-        "description": "Set the value at which each extended sensor's MotionDetected boolean flips to true. Used by Apple Home automations (e.g. 'when Wind Speed motion detected → close awning'). All values are in AWN's native units regardless of your display-unit choice below.",
+        "description": "Set the value at which each extended sensor's MotionDetected boolean flips to true. Used by Apple Home automations (e.g. 'when Wind Speed motion detected → close awning'). All values are in AWN's native units regardless of your display-unit choice below.\n\nLeaving a threshold field blank uses the default value shown below — it does NOT disable the trigger. If you want a sensor's tile to exist (so you can still see its value in Eve) but never drive any automation, set the threshold to a value the sensor will never reach (e.g. 9999 mph for wind, 99999 in/hr for rain). If you don't want the accessory at all, uncheck its category toggle above instead.",
         "condition": {
           "functionBody": "return model.extendedSensors === true;"
         },
