@@ -9,6 +9,41 @@ entries short and user-facing.
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/
 
+## [1.5.0-beta.4] — 2026-06-09
+
+Housekeeping release — no code or behavior changes. This is the
+release intended to roll forward to v1.5.0 GA once beta testing
+completes; solmssen and other testers should validate this exact
+build.
+
+### Changed
+
+- **Repo self-containment.** README header image URL switched from
+  `raw.githubusercontent.com/peledies/...` to `.../bcourbage/...`
+  Previously the README depended on upstream's repo staying online
+  for its header image; now we serve our own copy from `images/`.
+- **UPGRADING.md label parity.** The closing sentence of the "Pick
+  a display mode" section used informal shorthand ("generic names"
+  / "embed mode") instead of the actual dropdown labels. Updated
+  to quote the labels verbatim so users skimming the doc can find
+  the exact strings in the settings form.
+
+### Removed (upstream-template vestiges)
+
+- `README_DEV.md` — Generic "how to develop a Homebridge plugin"
+  boilerplate inherited from the upstream template. Nothing
+  project-specific; nothing else referenced it.
+- `nodemon.json` + the `watch` npm script + the `nodemon`
+  devDependency — Auto-restart dev loop that this project's
+  edit-on-Heracles → push → CI workflow never used. Drops 18
+  transitive packages from `npm install`.
+- `.vscode/settings.json` `workbench.colorCustomizations` block —
+  Upstream maintainer's personal terminal/title-bar colors. Kept
+  the universally-useful editor settings (LF line endings,
+  ESLint-on-save, 140-char ruler).
+- `.DS_Store` — macOS Finder cache cleanup. Already in
+  `.gitignore`; was never tracked.
+
 ## [1.5.0-beta.3] — 2026-06-09
 
 Config-form-only release — no code or behavior changes. All fixes are
@@ -329,6 +364,7 @@ upstream pull requests [#21][pr21] (Homebridge 2.x compatibility) and
 [upstream]: https://github.com/peledies/homebridge-ambient-weather-sensors
 [pr21]: https://github.com/peledies/homebridge-ambient-weather-sensors/pull/21
 [pr22]: https://github.com/peledies/homebridge-ambient-weather-sensors/pull/22
+[1.5.0-beta.4]: https://github.com/bcourbage/homebridge-ambient-weather-sensors/releases/tag/v1.5.0-beta.4
 [1.5.0-beta.3]: https://github.com/bcourbage/homebridge-ambient-weather-sensors/releases/tag/v1.5.0-beta.3
 [1.5.0-beta.2]: https://github.com/bcourbage/homebridge-ambient-weather-sensors/releases/tag/v1.5.0-beta.2
 [1.5.0-beta.1]: https://github.com/bcourbage/homebridge-ambient-weather-sensors/releases/tag/v1.5.0-beta.1
