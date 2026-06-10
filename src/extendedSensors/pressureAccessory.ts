@@ -43,7 +43,12 @@ abstract class PressureLikeAccessory extends ExtendedSensorBase {
     // — opposite of wind/UV/rain. The configured threshold value is
     // in AWN's native unit (inHg); default 29.5 inHg ≈ 999 hPa is the
     // conventional "low pressure system incoming" boundary.
-    const thresholdInHg = (platform.config.thresholds?.pressureInHg as number) ?? 29.5;
+    //
+    // Blank in HB UI form → undefined → Infinity → Number.isFinite
+    // check in the base class returns false → MotionDetected never
+    // fires. Accessory still appears so pressure is visible in Eve.
+    const raw = platform.config.thresholds?.pressureInHg;
+    const thresholdInHg = typeof raw === 'number' ? raw : Infinity;
 
     super(platform, accessory, {
       sensorLabel,

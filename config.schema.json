@@ -125,7 +125,7 @@
       "thresholds": {
         "type": "object",
         "title": "Motion thresholds for extended sensors",
-        "description": "Set the value at which each extended sensor's MotionDetected boolean flips to true. Used by Apple Home automations (e.g. 'when Wind Speed motion detected → close awning'). All values are in AWN's native units regardless of your display-unit choice below.\n\nLeaving a threshold field blank uses the default value shown below — it does NOT disable the trigger. If you want a sensor's tile to exist (so you can still see its value in Eve) but never drive any automation, set the threshold to a value the sensor will never reach (e.g. 9999 mph for wind, 99999 in/hr for rain). If you don't want the accessory at all, uncheck its category toggle above instead.",
+        "description": "Set the value at which each extended sensor's MotionDetected boolean flips to true. Used by Apple Home automations (e.g. 'when Wind Speed motion detected → close awning'). All values are in AWN's native units regardless of your display-unit choice below.\n\n**Leave a threshold field blank to disable that sensor's automation trigger entirely.** The accessory still appears (so its value remains visible in Eve / Controller for HomeKit), but its MotionDetected boolean stays permanently false and won't drive any Apple Home automation. To remove the accessory from HomeKit entirely instead, uncheck its category toggle above or add it to Exclude Sensors below.",
         "condition": {
           "functionBody": "return model.extendedSensors === true;"
         },
@@ -134,37 +134,37 @@
             "title": "Wind speed threshold (mph)",
             "type": "number",
             "default": 25,
-            "description": "Trigger when sustained wind speed equals or exceeds this. 25 mph ≈ Beaufort 6 (Strong breeze)."
+            "description": "Trigger when sustained wind speed equals or exceeds this. 25 mph ≈ Beaufort 6 (Strong breeze). Leave blank to disable the wind-speed trigger."
           },
           "windGustMph": {
             "title": "Wind gust threshold (mph)",
             "type": "number",
             "default": 35,
-            "description": "Trigger when an instantaneous gust equals or exceeds this. Applies to both 'Wind Gust' and 'Max Daily Gust' sensors."
+            "description": "Trigger when an instantaneous gust equals or exceeds this. Applies to both 'Wind Gust' and 'Max Daily Gust' sensors. Leave blank to disable both gust triggers."
           },
           "rainRateInHr": {
             "title": "Rain rate threshold (in/hr)",
             "type": "number",
             "default": 0.01,
-            "description": "Trigger when current rain rate equals or exceeds this. 0.01 in/hr is effectively 'any measurable rain'."
+            "description": "Trigger when current rain rate equals or exceeds this. 0.01 in/hr is effectively 'any measurable rain'. Leave blank to disable the rain-rate trigger."
           },
           "uv": {
             "title": "UV index threshold",
             "type": "number",
             "default": 3,
-            "description": "Trigger when UV index equals or exceeds this. 3 = EPA 'Moderate' (sun protection recommended)."
+            "description": "Trigger when UV index equals or exceeds this. 3 = EPA 'Moderate' (sun protection recommended). Leave blank to disable the UV trigger."
           },
           "lightningDistanceMi": {
             "title": "Lightning distance threshold (miles, inverted)",
             "type": "number",
             "default": 10,
-            "description": "Trigger when the last strike is CLOSER than this distance. 10 mi ≈ 16 km, the conventional 'too close for outdoor activity' boundary."
+            "description": "Trigger when the last strike is CLOSER than this distance. 10 mi ≈ 16 km, the conventional 'too close for outdoor activity' boundary. Leave blank to disable the lightning-distance trigger."
           },
           "pressureInHg": {
             "title": "Low-pressure threshold (inHg, inverted)",
             "type": "number",
             "default": 29.5,
-            "description": "Trigger when barometric pressure drops BELOW this value. 29.5 inHg ≈ 999 hPa, the conventional 'low pressure system' boundary."
+            "description": "Trigger when barometric pressure drops BELOW this value. 29.5 inHg ≈ 999 hPa, the conventional 'low pressure system' boundary. Leave blank to disable the pressure trigger."
           }
         }
       },
@@ -229,19 +229,19 @@
       "excludeSensors": {
         "title": "Exclude Sensors (blacklist)",
         "type": "array",
-        "description": "Hide specific sensors. Matching is case-insensitive and whitespace is trimmed, so typos like trailing spaces from copy-paste still work. Each entry can be a sensor's friendly name (\"Indoor Temperature\"), a station name to hide everything from that station (\"Backyard Station\"), a raw AWN field (\"tempinf\"), a MAC address, or the full uniqueId (\"AA:BB:CC:DD:EE:FF-tempinf\"). The per-type toggles above still apply on top of this list.",
+        "description": "Hide specific sensors. Works on both native sensors (Temperature, Humidity, Solar, CO2, PM2.5, PM10) and Extended Sensors (Wind, Rain, Pressure, UV, Lightning). Matching is case-insensitive and whitespace is trimmed, so typos like trailing spaces from copy-paste still work. Each entry can be a sensor's friendly name (\"Indoor Temperature\", \"Wind Direction\", \"Lightning Distance\"), a station name to hide everything from that station (\"Backyard Station\"), a raw AWN field (\"tempinf\", \"winddir\", \"lightning_distance\"), a MAC address, or the full uniqueId (\"AA:BB:CC:DD:EE:FF-tempinf\"). The per-type toggles above still apply on top of this list.",
         "items": {
           "type": "string",
           "placeholder": "e.g. Indoor Temperature"
         },
         "examples": [
-          ["Indoor Temperature", "tempinf", "Backyard Station"]
+          ["Indoor Temperature", "tempinf", "Backyard Station", "Wind Direction"]
         ]
       },
       "includeOnly": {
         "title": "Include Only These Sensors (allowlist)",
         "type": "array",
-        "description": "If set, ONLY sensors matching one of these entries are exposed; everything else is hidden. Same matching rules as Exclude Sensors above (case-insensitive, whitespace-trimmed, accepts friendly names / station names / raw AWN fields / MAC / uniqueId). Useful when you have multiple stations and only want HomeKit to see specific ones. Both filters apply: a sensor must match an allowlist entry AND not match a blacklist entry to be exposed.",
+        "description": "If set, ONLY sensors matching one of these entries are exposed; everything else is hidden. Works on both native and Extended Sensors. Same matching rules as Exclude Sensors above (case-insensitive, whitespace-trimmed, accepts friendly names / station names / raw AWN fields / MAC / uniqueId). Useful when you have multiple stations and only want HomeKit to see specific ones, or when you've turned on a whole category (e.g. Wind sensors) but only want one or two of its members visible. Both filters apply: a sensor must match an allowlist entry AND not match a blacklist entry to be exposed.",
         "items": {
           "type": "string",
           "placeholder": "e.g. Backyard Station"

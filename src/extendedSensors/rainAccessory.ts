@@ -61,7 +61,10 @@ abstract class RainRateLikeAccessory extends ExtendedSensorBase {
  */
 export class RainRateAccessory extends RainRateLikeAccessory {
   constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory) {
-    const threshold = (platform.config.thresholds?.rainRateInHr as number) ?? 0.01;
+    // Blank in HB UI form → undefined → Infinity → never triggers.
+    // Accessory still appears so the rate is visible in Eve.
+    const raw = platform.config.thresholds?.rainRateInHr;
+    const threshold = typeof raw === 'number' ? raw : Infinity;
     super(platform, accessory, 'Rain Rate', 'hourlyrainin', threshold);
   }
 }

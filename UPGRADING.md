@@ -123,7 +123,7 @@ Each extended sensor has a configurable threshold that controls when the Motion 
 
 If you want different values, change them in the **Motion thresholds for extended sensors** section. They're in AWN's native units (mph, in/hr, inHg, mi) regardless of your display unit choice.
 
-**Important about blank fields**: leaving a threshold field empty doesn't disable the trigger — it falls back to the default value above. If you want the accessory to exist (so you can see the reading in Eve) but never drive an automation, set the threshold to a value the sensor can't reach (e.g. 9999 mph for wind, 99999 in/hr for rain). If you don't want the accessory at all, uncheck the category toggle instead.
+**Disabling a trigger**: leave the threshold field blank. The accessory still appears in HomeKit (the value remains visible in Eve / Controller for HomeKit), but its MotionDetected boolean stays permanently false and won't fire any Apple Home automation. This is the right path if you want to *see* a sensor's reading without it driving any automation. To remove the accessory entirely instead, uncheck its category toggle above or add it to Exclude Sensors.
 
 ### Pick display units (optional)
 

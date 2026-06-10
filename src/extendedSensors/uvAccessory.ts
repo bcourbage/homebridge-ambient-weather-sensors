@@ -18,7 +18,10 @@ export class UvAccessory extends ExtendedSensorBase {
   constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory) {
     const displayMode: ExtendedDisplayMode =
       platform.config.extendedDisplayMode === 'embed' ? 'embed' : 'static';
-    const threshold = (platform.config.thresholds?.uv as number) ?? 3;
+    // Blank in HB UI form → undefined → Infinity → never triggers.
+    // Accessory still appears so the UV index is visible in Eve.
+    const raw = platform.config.thresholds?.uv;
+    const threshold = typeof raw === 'number' ? raw : Infinity;
 
     super(platform, accessory, {
       sensorLabel: 'UV Index',

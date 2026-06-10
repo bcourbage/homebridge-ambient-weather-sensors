@@ -62,7 +62,12 @@ abstract class WindSpeedLikeAccessory extends ExtendedSensorBase {
  */
 export class WindSpeedAccessory extends WindSpeedLikeAccessory {
   constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory) {
-    const threshold = (platform.config.thresholds?.windSpeedMph as number) ?? 25;
+    // Blank threshold field in HB UI → undefined here → Infinity → base
+    // class's Number.isFinite check returns false → MotionDetected
+    // never fires. Accessory still exists for the value reading in Eve;
+    // only the automation trigger is disabled.
+    const raw = platform.config.thresholds?.windSpeedMph;
+    const threshold = typeof raw === 'number' ? raw : Infinity;
     super(platform, accessory, 'Wind Speed', 'windspeedmph', threshold);
   }
 }
@@ -75,7 +80,8 @@ export class WindSpeedAccessory extends WindSpeedLikeAccessory {
  */
 export class WindGustAccessory extends WindSpeedLikeAccessory {
   constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory) {
-    const threshold = (platform.config.thresholds?.windGustMph as number) ?? 35;
+    const raw = platform.config.thresholds?.windGustMph;
+    const threshold = typeof raw === 'number' ? raw : Infinity;
     super(platform, accessory, 'Wind Gust', 'windgustmph', threshold);
   }
 }
@@ -88,7 +94,8 @@ export class WindGustAccessory extends WindSpeedLikeAccessory {
  */
 export class WindMaxDailyGustAccessory extends WindSpeedLikeAccessory {
   constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory) {
-    const threshold = (platform.config.thresholds?.windGustMph as number) ?? 35;
+    const raw = platform.config.thresholds?.windGustMph;
+    const threshold = typeof raw === 'number' ? raw : Infinity;
     super(platform, accessory, 'Max Daily Gust', 'maxdailygust', threshold);
   }
 }

@@ -94,7 +94,11 @@ export class LightningDistanceAccessory extends ExtendedSensorBase {
     const displayMode: ExtendedDisplayMode =
       platform.config.extendedDisplayMode === 'embed' ? 'embed' : 'static';
     const distanceUnit: DistanceUnit = (platform.config.units?.distance as DistanceUnit) || 'mi';
-    const thresholdMi = (platform.config.thresholds?.lightningDistanceMi as number) ?? 10;
+    // Blank in HB UI form → undefined → Infinity → Number.isFinite check
+    // in the base class returns false → MotionDetected never fires.
+    // Accessory still appears so distance is visible in Eve.
+    const raw = platform.config.thresholds?.lightningDistanceMi;
+    const thresholdMi = typeof raw === 'number' ? raw : Infinity;
 
     super(platform, accessory, {
       sensorLabel: 'Lightning Distance',
