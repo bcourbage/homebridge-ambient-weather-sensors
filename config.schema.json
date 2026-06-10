@@ -274,7 +274,7 @@
       "items": [
         {
           "type": "help",
-          "helpvalue": "<p>Enter values to fire each extended sensor's motion event when its reading crosses the threshold — in both directions, so Apple Home automations can react to both \"crossing up\" and \"reverting back\". Leave a field blank to disable that sensor's trigger entirely (the accessory still appears, just with motion permanently off). All values are in AWN's native units regardless of your display-unit choice below.</p>"
+          "helpvalue": "<p>Enter values to fire each extended sensor's motion event when its reading crosses the threshold — in both directions, so Apple Home automations can react to both \"crossing up\" and \"reverting back\". <strong>Leave a field blank to hide that sensor from HomeKit entirely.</strong> If you want a sensor visible in Eve / Controller for HomeKit (for the live numeric reading) but don't want it to drive any automation, set the threshold to a value the sensor can never reach (e.g. 99999 mph for wind, 99 for UV). All values are in AWN's native units regardless of your display-unit choice below.</p><p>Sensors without a configurable threshold (wind direction, rain accumulation totals, time-since-event sensors, lightning strike counts) always appear when their category is enabled — use Exclude Sensors below to hide them individually.</p>"
         },
         "thresholds.windSpeedMph",
         "thresholds.windGustMph",

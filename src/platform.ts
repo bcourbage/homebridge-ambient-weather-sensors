@@ -200,19 +200,35 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
     // `extendedSensors` AND a per-category sub-toggle. Both must be
     // truthy for the type to be returned — so a user who hasn't opted
     // in sees no behavior change vs. v1.4.x.
+    //
+    // Additionally, sensors with a user-configurable threshold are
+    // hidden entirely (return NOT_SUPPORTED) when the threshold field
+    // is blank in the config. This matches the natural intuition:
+    // "I left the threshold blank because I don't care about this
+    // sensor." Users who DO want a sensor visible (for viewing in
+    // Eve / Controller for HomeKit) but don't want it to drive
+    // automations can set the threshold to a value the sensor can
+    // never reach (e.g. 99999 mph for wind). Sensors without a
+    // user-configurable threshold (wind direction, rain accumulation
+    // totals, last-event timestamps, lightning counts) always appear
+    // when their category is enabled — use Exclude Sensors to hide
+    // them individually.
     if (!this.config.extendedSensors) {
       return 'NOT_SUPPORTED';
     }
+    const thresholds = this.config.thresholds ?? {};
+    const isSet = (v: unknown): v is number => typeof v === 'number';
 
     if (this.config.windSensors) {
       if (sensor === 'windspeedmph') {
-        return 'WindSpeed';
+        return isSet(thresholds.windSpeedMph) ? 'WindSpeed' : 'NOT_SUPPORTED';
       }
       if (sensor === 'windgustmph') {
-        return 'WindGust';
+        return isSet(thresholds.windGustMph) ? 'WindGust' : 'NOT_SUPPORTED';
       }
       if (sensor === 'maxdailygust') {
-        return 'WindMaxDailyGust';
+        // Max Daily Gust shares the windGustMph threshold with Wind Gust.
+        return isSet(thresholds.windGustMph) ? 'WindMaxDailyGust' : 'NOT_SUPPORTED';
       }
       if (sensor === 'winddir') {
         return 'WindDirection';
@@ -223,8 +239,11 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
     }
     if (this.config.rainSensors) {
       if (sensor === 'hourlyrainin') {
-        return 'RainRate';
+        return isSet(thresholds.rainRateInHr) ? 'RainRate' : 'NOT_SUPPORTED';
       }
+      // Accumulation totals and lastRain have no user-configurable
+      // threshold — they trigger on any non-zero accumulation /
+      // any reported timestamp, and stay visible while the category is on.
       if (sensor === 'eventrainin') {
         return 'RainEvent';
       }
@@ -245,19 +264,24 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
       }
     }
     if (this.config.pressureSensors) {
+      // Both pressure accessories share the pressureInHg threshold,
+      // so blanking it hides both tiles together.
       if (sensor === 'baromrelin') {
-        return 'PressureRelative';
+        return isSet(thresholds.pressureInHg) ? 'PressureRelative' : 'NOT_SUPPORTED';
       }
       if (sensor === 'baromabsin') {
-        return 'PressureAbsolute';
+        return isSet(thresholds.pressureInHg) ? 'PressureAbsolute' : 'NOT_SUPPORTED';
       }
     }
     if (this.config.uvSensors) {
       if (sensor === 'uv') {
-        return 'UV';
+        return isSet(thresholds.uv) ? 'UV' : 'NOT_SUPPORTED';
       }
     }
     if (this.config.lightningSensors) {
+      // Strike counts (day/hour) and last-strike timestamp have no
+      // user-configurable threshold; they stay visible while the
+      // category is on. Distance is the one configurable trigger.
       if (sensor === 'lightning_day') {
         return 'LightningDay';
       }
@@ -265,7 +289,7 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
         return 'LightningHour';
       }
       if (sensor === 'lightning_distance') {
-        return 'LightningDistance';
+        return isSet(thresholds.lightningDistanceMi) ? 'LightningDistance' : 'NOT_SUPPORTED';
       }
       if (sensor === 'lightning_time') {
         return 'LightningLastStrike';

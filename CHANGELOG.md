@@ -9,6 +9,43 @@ entries short and user-facing.
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/
 
+## [1.5.0-beta.6] — 2026-06-09
+
+This release refines the "blank threshold" semantics to match the
+natural user intuition. Becomes the new GA candidate (supersedes
+beta.5).
+
+### Changed (behavior change for any user who set thresholds in beta.5)
+
+- **Blank threshold field now hides the accessory from HomeKit
+  entirely** instead of showing it with a permanently-false motion
+  state. The previous behavior (introduced in beta.2) made it easy
+  to disable a trigger but cluttered Apple Home with useless always-off
+  tiles. The new behavior is what most users actually want when they
+  blank a threshold: "I don't care about this sensor, please remove it."
+
+  Affects the 6 user-configurable thresholds (8 accessories total):
+
+  | Threshold | Sensors hidden when blank |
+  |---|---|
+  | `windSpeedMph` | Wind Speed |
+  | `windGustMph` | Wind Gust, Max Daily Gust |
+  | `rainRateInHr` | Rain Rate |
+  | `uv` | UV Index |
+  | `lightningDistanceMi` | Lightning Distance |
+  | `pressureInHg` | Pressure Sea Level, Pressure Station |
+
+  Sensors without a user-configurable threshold (wind direction +
+  10-min avg, rain accumulation totals, time-since-event sensors,
+  lightning strike counts) continue to appear when their category
+  toggle is on — use `excludeSensors` to hide them individually.
+
+  **Workaround for "show the value but don't trigger automations":**
+  set the threshold to a value the sensor can never reach (e.g.
+  `99999` for wind/rain, `99` for UV, `0` for the inverted-direction
+  pressure and lightning-distance sensors since both are always
+  positive). Schema and UPGRADING.md document this.
+
 ## [1.5.0-beta.5] — 2026-06-09
 
 This release fixes a latent runtime bug that affected every Extended
@@ -394,6 +431,7 @@ upstream pull requests [#21][pr21] (Homebridge 2.x compatibility) and
 [upstream]: https://github.com/peledies/homebridge-ambient-weather-sensors
 [pr21]: https://github.com/peledies/homebridge-ambient-weather-sensors/pull/21
 [pr22]: https://github.com/peledies/homebridge-ambient-weather-sensors/pull/22
+[1.5.0-beta.6]: https://github.com/bcourbage/homebridge-ambient-weather-sensors/releases/tag/v1.5.0-beta.6
 [1.5.0-beta.5]: https://github.com/bcourbage/homebridge-ambient-weather-sensors/releases/tag/v1.5.0-beta.5
 [1.5.0-beta.4]: https://github.com/bcourbage/homebridge-ambient-weather-sensors/releases/tag/v1.5.0-beta.4
 [1.5.0-beta.3]: https://github.com/bcourbage/homebridge-ambient-weather-sensors/releases/tag/v1.5.0-beta.3

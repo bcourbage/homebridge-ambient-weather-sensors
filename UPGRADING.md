@@ -123,7 +123,16 @@ Each extended sensor has a configurable threshold that controls when the Motion 
 
 If you want different values, change them in the **Motion thresholds for extended sensors** section. They're in AWN's native units (mph, in/hr, inHg, mi) regardless of your display unit choice.
 
-**Disabling a trigger**: leave the threshold field blank. The accessory still appears in HomeKit (the value remains visible in Eve / Controller for HomeKit), but its MotionDetected boolean stays permanently false and won't fire any Apple Home automation. This is the right path if you want to *see* a sensor's reading without it driving any automation. To remove the accessory entirely instead, uncheck its category toggle above or add it to Exclude Sensors.
+**Hiding a sensor entirely**: leave its threshold field blank. The accessory won't appear in HomeKit (or Eve, or any client) — same as if you'd excluded it. This is the right path if you don't care about a particular sensor at all (for example, you've enabled "Wind sensors" mainly for direction, but don't want speed/gust tiles cluttering your room).
+
+**Showing a sensor without an automation trigger** (the value's visible in Eve / Controller for HomeKit, but never fires a Home.app automation): set the threshold to a value the sensor can never reach. Examples:
+- Wind speed / gust: `99999` mph
+- Rain rate: `99999` in/hr
+- UV: `99`
+- Lightning distance (inverted): `0` mi (never fires because distance is always positive)
+- Pressure (inverted): `0` inHg (never fires because pressure is always positive)
+
+Sensors without a configurable threshold (wind direction, rain accumulation totals, time-since sensors, lightning strike counts) always appear when their category is enabled. To hide one specifically, add its name to the **Exclude Sensors** list at the bottom of the form.
 
 ### Pick display units (optional)
 
