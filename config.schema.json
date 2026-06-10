@@ -57,8 +57,7 @@
       "extendedSensors": {
         "title": "Enable Extended Sensors",
         "type": "boolean",
-        "default": false,
-        "description": "Adds wind, rain, barometric pressure, UV index, and lightning sensors to HomeKit. These data types aren't natively supported by Apple's Home app, so live numeric values are only visible in the Eve or Controller for HomeKit apps. In Apple Home, each sensor appears as a Motion tile that triggers above your chosen threshold — useful for automations like 'close awning when wind speed exceeds 25 mph'. Default off; leave disabled if you only want the natively-supported sensor types above."
+        "default": false
       },
       "windSensors": {
         "title": "Wind sensors (speed, gust, direction)",
@@ -293,6 +292,10 @@
       "helpvalue": "<p>Expose particulate readings (pm25, pm25_in_aqin, pm10_in_aqin) as HomeKit AirQualitySensor accessories with the corresponding density characteristic and an EPA-bucket-derived AirQuality enum.</p>"
     },
     "extendedSensors",
+    {
+      "type": "help",
+      "helpvalue": "<p>Adds wind, rain, barometric pressure, UV index, and lightning sensors to HomeKit. These data types aren't natively supported by Apple's Home app, so live numeric values are only visible in the Eve or Controller for HomeKit apps. In Apple Home, each sensor appears as a Motion tile that triggers above your chosen threshold — useful for automations like 'close awning when wind speed exceeds 25 mph'. Default off; leave disabled if you only want the natively-supported sensor types above.</p>"
+    },
     "windSensors",
     "rainSensors",
     "pressureSensors",

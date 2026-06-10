@@ -9,6 +9,21 @@ entries short and user-facing.
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/
 
+## [1.5.0-beta.11] — 2026-06-09
+
+Config-form-only patch — no code or behavior changes.
+
+### Changed
+
+- **extendedSensors master-toggle description** moved into a
+  `<help>` block in the form array. This was the one I missed in
+  beta.10's "move all field descriptions" pass — it was the master
+  toggle description ("Adds wind, rain, barometric pressure...")
+  that still rendered at the smaller schema-description font.
+  Programmatically confirmed afterwards that no non-array property
+  in the schema retains a `description` field: all explanatory
+  text lives in form-array `<help>` blocks.
+
 ## [1.5.0-beta.10] — 2026-06-09
 
 Config-form-only patch — no code or behavior changes. Completes the
@@ -549,6 +564,7 @@ upstream pull requests [#21][pr21] (Homebridge 2.x compatibility) and
 [upstream]: https://github.com/peledies/homebridge-ambient-weather-sensors
 [pr21]: https://github.com/peledies/homebridge-ambient-weather-sensors/pull/21
 [pr22]: https://github.com/peledies/homebridge-ambient-weather-sensors/pull/22
+[1.5.0-beta.11]: https://github.com/bcourbage/homebridge-ambient-weather-sensors/releases/tag/v1.5.0-beta.11
 [1.5.0-beta.10]: https://github.com/bcourbage/homebridge-ambient-weather-sensors/releases/tag/v1.5.0-beta.10
 [1.5.0-beta.9]: https://github.com/bcourbage/homebridge-ambient-weather-sensors/releases/tag/v1.5.0-beta.9
 [1.5.0-beta.8]: https://github.com/bcourbage/homebridge-ambient-weather-sensors/releases/tag/v1.5.0-beta.8
