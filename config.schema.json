@@ -204,8 +204,7 @@
               { "title": "kph (kilometers per hour)", "enum": ["kph"] },
               { "title": "m/s (meters per second)", "enum": ["mps"] },
               { "title": "kts (knots)", "enum": ["kts"] }
-            ],
-            "description": "Selecting None uses the default (mph)."
+            ]
           },
           "rain": {
             "title": "Rain",
@@ -214,8 +213,7 @@
             "oneOf": [
               { "title": "in (inches)", "enum": ["in"] },
               { "title": "mm (millimeters)", "enum": ["mm"] }
-            ],
-            "description": "Selecting None uses the default (in)."
+            ]
           },
           "pressure": {
             "title": "Barometric pressure",
@@ -224,8 +222,7 @@
             "oneOf": [
               { "title": "inHg (inches of mercury)", "enum": ["inHg"] },
               { "title": "hPa (hectopascals, same as millibars)", "enum": ["hPa"] }
-            ],
-            "description": "Selecting None uses the default (inHg)."
+            ]
           },
           "distance": {
             "title": "Lightning distance",
@@ -234,8 +231,7 @@
             "oneOf": [
               { "title": "mi (miles)", "enum": ["mi"] },
               { "title": "km (kilometers)", "enum": ["km"] }
-            ],
-            "description": "Selecting None uses the default (mi)."
+            ]
           }
         }
       },
@@ -246,8 +242,7 @@
         "oneOf": [
           { "title": "Polling — REST API every 2 minutes (default)", "enum": ["polling"] },
           { "title": "Realtime — websocket subscription (opt-in)", "enum": ["realtime"] }
-        ],
-        "description": "Polling fetches the AWN REST endpoint every 2 minutes. Realtime opens a websocket to rt2.ambientweather.net and receives updates as the station reports them (typically ~30s indoors). Realtime is opt-in for now; the default will switch to realtime in a future release once it has been broadly validated.<br><br>Selecting None uses the default (polling)."
+        ]
       },
       "excludeSensors": {
         "title": "Exclude Sensors (blacklist)",
@@ -378,6 +373,10 @@
       ]
     },
     "dataSource",
+    {
+      "type": "help",
+      "helpvalue": "<p>Polling fetches the AWN REST endpoint every 2 minutes. Realtime opens a websocket to rt2.ambientweather.net and receives updates as the station reports them (typically ~30s indoors). Realtime is opt-in for now; the default will switch to realtime in a future release once it has been broadly validated.</p><p>Selecting None uses the default (polling).</p>"
+    },
     {
       "key": "excludeSensors",
       "type": "array",

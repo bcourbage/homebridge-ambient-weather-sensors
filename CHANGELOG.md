@@ -9,6 +9,24 @@ entries short and user-facing.
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/
 
+## [1.5.0-beta.9] — 2026-06-09
+
+Config-form-only patch — no code or behavior changes.
+
+### Changed
+
+- **Unit-field and Data Source descriptions render in the larger
+  helpvalue font** instead of the smaller schema-description font.
+  Beta.8 missed these on the cleanup pass — the per-unit "Selecting
+  None uses the default (...)" notes and the Data Source polling vs
+  realtime explanation were still using schema-level `description`,
+  which HB UI X renders smaller than `helpvalue` blocks.
+
+  Fix: removed the per-unit "Selecting None" lines entirely (the
+  units section preamble already covers None behavior), and moved
+  the Data Source description into a `<help>` block in the form
+  array.
+
 ## [1.5.0-beta.8] — 2026-06-09
 
 This release replaces the unreachable "blank threshold = hidden"
@@ -510,6 +528,7 @@ upstream pull requests [#21][pr21] (Homebridge 2.x compatibility) and
 [upstream]: https://github.com/peledies/homebridge-ambient-weather-sensors
 [pr21]: https://github.com/peledies/homebridge-ambient-weather-sensors/pull/21
 [pr22]: https://github.com/peledies/homebridge-ambient-weather-sensors/pull/22
+[1.5.0-beta.9]: https://github.com/bcourbage/homebridge-ambient-weather-sensors/releases/tag/v1.5.0-beta.9
 [1.5.0-beta.8]: https://github.com/bcourbage/homebridge-ambient-weather-sensors/releases/tag/v1.5.0-beta.8
 [1.5.0-beta.7]: https://github.com/bcourbage/homebridge-ambient-weather-sensors/releases/tag/v1.5.0-beta.7
 [1.5.0-beta.6]: https://github.com/bcourbage/homebridge-ambient-weather-sensors/releases/tag/v1.5.0-beta.6
