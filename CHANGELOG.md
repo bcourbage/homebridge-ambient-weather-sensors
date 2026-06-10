@@ -9,6 +9,30 @@ entries short and user-facing.
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/
 
+## [1.5.0-beta.7] — 2026-06-09
+
+Config-form-only fix. No code or behavior changes.
+
+### Fixed
+
+- **Exclude Sensors and Include Only These Sensors lists rendered
+  with no input fields** in homebridge-config-ui-x. The custom
+  `form` array added in beta.3 referenced these array-typed fields
+  by string only; angular-schema-form's custom-layout mode requires
+  an explicit `items` template to render the array's "Add" button
+  and per-entry input row. Without it, only the title and
+  description appeared — users couldn't add or edit allowlist /
+  blocklist entries through the form (though the underlying
+  config was still readable if edited by hand).
+
+  Fix: replaced the bare string references in the form array with
+  explicit array form objects containing `items: [{ key, type,
+  placeholder }]` so the rendering re-finds its way to the
+  per-entry input.
+
+  Pre-existing entries are preserved — this is a render-side bug
+  only; the schema and saved config were always intact.
+
 ## [1.5.0-beta.6] — 2026-06-09
 
 This release refines the "blank threshold" semantics to match the
@@ -431,6 +455,7 @@ upstream pull requests [#21][pr21] (Homebridge 2.x compatibility) and
 [upstream]: https://github.com/peledies/homebridge-ambient-weather-sensors
 [pr21]: https://github.com/peledies/homebridge-ambient-weather-sensors/pull/21
 [pr22]: https://github.com/peledies/homebridge-ambient-weather-sensors/pull/22
+[1.5.0-beta.7]: https://github.com/bcourbage/homebridge-ambient-weather-sensors/releases/tag/v1.5.0-beta.7
 [1.5.0-beta.6]: https://github.com/bcourbage/homebridge-ambient-weather-sensors/releases/tag/v1.5.0-beta.6
 [1.5.0-beta.5]: https://github.com/bcourbage/homebridge-ambient-weather-sensors/releases/tag/v1.5.0-beta.5
 [1.5.0-beta.4]: https://github.com/bcourbage/homebridge-ambient-weather-sensors/releases/tag/v1.5.0-beta.4

@@ -300,7 +300,27 @@
       ]
     },
     "dataSource",
-    "excludeSensors",
-    "includeOnly"
+    {
+      "key": "excludeSensors",
+      "type": "array",
+      "items": [
+        {
+          "key": "excludeSensors[]",
+          "type": "string",
+          "placeholder": "e.g. Indoor Temperature"
+        }
+      ]
+    },
+    {
+      "key": "includeOnly",
+      "type": "array",
+      "items": [
+        {
+          "key": "includeOnly[]",
+          "type": "string",
+          "placeholder": "e.g. Backyard Station"
+        }
+      ]
+    }
   ]
 }
