@@ -63,6 +63,24 @@ const MAX_BACKOFF_MS = 60_000;
 // subscription is visible within a few cycles without spamming the log.
 const HEARTBEAT_INTERVAL_MS = 5 * 60_000;
 
+/**
+ * Socket.IO disconnect reasons that represent expected, server-driven
+ * connection grooming — AWN cycles long-lived sockets every 45m-3h+,
+ * the local network may switch, the client sleeps and wakes, etc.
+ * For these we log the entire reconnect cycle at debug level so a
+ * healthy steady state stays quiet. Anything outside this set is a
+ * real anomaly (transport error, parse error, etc.) and stays at
+ * warn/error so the user sees it.
+ *
+ * Sourced from socket.io-client's documented disconnect reason
+ * strings; see https://socket.io/docs/v4/client-socket-instance/#disconnect.
+ */
+const CLEAN_DISCONNECT_REASONS = new Set([
+  'transport close',       // socket closed at the network layer cleanly
+  'ping timeout',          // server stopped responding to heartbeats
+  'io server disconnect',  // server explicitly disconnected us
+]);
+
 export class RealtimeSource {
   private socket: Socket | undefined;
   private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
@@ -73,6 +91,15 @@ export class RealtimeSource {
   // user can see at a glance whether the subscription is actually
   // delivering updates.
   private updatesSinceHeartbeat = 0;
+  // Tracks whether the socket has ever successfully connected this
+  // session. The first connect is always logged at info ("welcome to
+  // realtime"); subsequent reconnects are logged at debug if the
+  // previous disconnect was clean, info if not.
+  private hasEverConnected = false;
+  // Set by the disconnect handler based on whether the reason string
+  // is in CLEAN_DISCONNECT_REASONS. Used by scheduleReconnect / the
+  // next connect cycle to decide whether to log at debug or info.
+  private lastDisconnectWasClean = false;
 
   constructor(private readonly opts: RealtimeOptions) {}
 
@@ -129,7 +156,22 @@ export class RealtimeSource {
     // contract); apiKey is sent later via the `subscribe` event.
     const url = `https://rt2.ambientweather.net/?api=1&applicationKey=${encodeURIComponent(this.opts.applicationKey)}`;
 
-    this.opts.log.info('Realtime: connecting to AWN websocket');
+    // Log verbosity: the very first connect of a session is always
+    // visible at info level so users know realtime started. Every
+    // *subsequent* connect cycle that follows a clean disconnect
+    // (transport close, ping timeout, io server disconnect — AWN's
+    // routine connection grooming) is demoted to debug to keep the
+    // log quiet during healthy steady-state. Reconnects that follow
+    // a non-clean disconnect (transport error, parse error, etc.)
+    // stay at info because they're real anomalies worth surfacing.
+    //
+    // Captured per-invocation so callbacks fired later in this
+    // connect cycle log at the same level even if a *different* event
+    // updates lastDisconnectWasClean in the interim.
+    const isReconnectAfterClean = this.hasEverConnected && this.lastDisconnectWasClean;
+    const cycleLog = isReconnectAfterClean ? this.opts.log.debug.bind(this.opts.log) : this.opts.log.info.bind(this.opts.log);
+
+    cycleLog('Realtime: connecting to AWN websocket');
 
     this.socket = io(url, {
       transports: ['websocket'],
@@ -137,13 +179,15 @@ export class RealtimeSource {
     });
 
     this.socket.on('connect', () => {
-      this.opts.log.info(`Realtime: connected (sid=${this.socket?.id ?? '?'})`);
+      cycleLog(`Realtime: connected (sid=${this.socket?.id ?? '?'})`);
+      this.hasEverConnected = true;
+      this.lastDisconnectWasClean = false;
       this.currentBackoff = INITIAL_BACKOFF_MS;
       this.socket?.emit('subscribe', { apiKeys: [this.opts.apiKey] });
     });
 
     this.socket.on('subscribed', (payload: unknown) => {
-      this.opts.log.info('Realtime: subscription confirmed by AWN');
+      cycleLog('Realtime: subscription confirmed by AWN');
       this.handleDevicePayload(payload);
     });
 
@@ -154,11 +198,24 @@ export class RealtimeSource {
     });
 
     this.socket.on('disconnect', (reason: string) => {
-      this.opts.log.warn(`Realtime: disconnected (${reason})`);
+      this.lastDisconnectWasClean = CLEAN_DISCONNECT_REASONS.has(reason);
+      if (this.lastDisconnectWasClean) {
+        // AWN grooming a long-lived socket — expected, not worth
+        // a warn-level log on a healthy box. The whole reconnect
+        // cycle that follows will also be debug-level via
+        // isReconnectAfterClean above.
+        this.opts.log.debug(`Realtime: disconnected (${reason}) — expected, reconnecting`);
+      } else {
+        this.opts.log.warn(`Realtime: disconnected (${reason})`);
+      }
       this.scheduleReconnect();
     });
 
     this.socket.on('connect_error', (error: Error) => {
+      // connect_error always indicates a real problem — bad URL,
+      // network down, TLS error, etc. Clear the clean flag so the
+      // next reconnect cycle logs at info, not debug.
+      this.lastDisconnectWasClean = false;
       this.opts.log.error('Realtime: connection error:', error.message);
       this.scheduleReconnect();
     });
@@ -172,7 +229,13 @@ export class RealtimeSource {
       return; // already scheduled
     }
     const delay = this.currentBackoff;
-    this.opts.log.info(`Realtime: scheduling reconnect in ${delay}ms`);
+    // Match the same debug-vs-info policy as the connect cycle: clean
+    // reconnects stay quiet, real anomalies surface.
+    if (this.lastDisconnectWasClean) {
+      this.opts.log.debug(`Realtime: scheduling reconnect in ${delay}ms`);
+    } else {
+      this.opts.log.info(`Realtime: scheduling reconnect in ${delay}ms`);
+    }
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = undefined;
       this.connect();

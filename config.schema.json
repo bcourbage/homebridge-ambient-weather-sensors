@@ -125,7 +125,7 @@
       "thresholds": {
         "type": "object",
         "title": "Motion thresholds for extended sensors",
-        "description": "Set the value at which each extended sensor's MotionDetected boolean flips to true. Used by Apple Home automations (e.g. 'when Wind Speed motion detected → close awning'). All values are in AWN's native units regardless of your display-unit choice below.\n\n**Leave a threshold field blank to disable that sensor's automation trigger entirely.** The accessory still appears (so its value remains visible in Eve / Controller for HomeKit), but its MotionDetected boolean stays permanently false and won't drive any Apple Home automation. To remove the accessory from HomeKit entirely instead, uncheck its category toggle above or add it to Exclude Sensors below.",
+        "description": "Enter values to fire each extended sensor's motion event when its reading crosses the threshold — in both directions, so Apple Home automations can react to both \"crossing up\" and \"reverting back\". Leave a field blank to disable that sensor's trigger entirely (the accessory still appears, just with motion permanently off). All values are in AWN's native units regardless of your display-unit choice below.",
         "condition": {
           "functionBody": "return model.extendedSensors === true;"
         },
@@ -134,37 +134,37 @@
             "title": "Wind speed threshold (mph)",
             "type": "number",
             "default": 25,
-            "description": "Trigger when sustained wind speed equals or exceeds this. 25 mph ≈ Beaufort 6 (Strong breeze). Leave blank to disable the wind-speed trigger."
+            "description": "Fires when sustained wind speed equals or exceeds this. 25 mph ≈ Beaufort 6 (Strong breeze)."
           },
           "windGustMph": {
             "title": "Wind gust threshold (mph)",
             "type": "number",
             "default": 35,
-            "description": "Trigger when an instantaneous gust equals or exceeds this. Applies to both 'Wind Gust' and 'Max Daily Gust' sensors. Leave blank to disable both gust triggers."
+            "description": "Fires when an instantaneous gust equals or exceeds this. Applies to both 'Wind Gust' and 'Max Daily Gust' sensors."
           },
           "rainRateInHr": {
             "title": "Rain rate threshold (in/hr)",
             "type": "number",
             "default": 0.01,
-            "description": "Trigger when current rain rate equals or exceeds this. 0.01 in/hr is effectively 'any measurable rain'. Leave blank to disable the rain-rate trigger."
+            "description": "Fires when current rain rate equals or exceeds this. 0.01 in/hr is effectively 'any measurable rain'."
           },
           "uv": {
             "title": "UV index threshold",
             "type": "number",
             "default": 3,
-            "description": "Trigger when UV index equals or exceeds this. 3 = EPA 'Moderate' (sun protection recommended). Leave blank to disable the UV trigger."
+            "description": "Fires when UV index equals or exceeds this. 3 = EPA 'Moderate' (sun protection recommended)."
           },
           "lightningDistanceMi": {
             "title": "Lightning distance threshold (miles, inverted)",
             "type": "number",
             "default": 10,
-            "description": "Trigger when the last strike is CLOSER than this distance. 10 mi ≈ 16 km, the conventional 'too close for outdoor activity' boundary. Leave blank to disable the lightning-distance trigger."
+            "description": "Fires when the last strike is CLOSER than this distance. 10 mi ≈ 16 km, the conventional 'too close for outdoor activity' boundary."
           },
           "pressureInHg": {
             "title": "Low-pressure threshold (inHg, inverted)",
             "type": "number",
             "default": 29.5,
-            "description": "Trigger when barometric pressure drops BELOW this value. 29.5 inHg ≈ 999 hPa, the conventional 'low pressure system' boundary. Leave blank to disable the pressure trigger."
+            "description": "Fires when barometric pressure drops BELOW this value. 29.5 inHg ≈ 999 hPa, the conventional 'low pressure system' boundary."
           }
         }
       },
