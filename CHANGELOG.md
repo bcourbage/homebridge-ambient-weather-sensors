@@ -9,6 +9,34 @@ entries short and user-facing.
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/
 
+## [1.5.0-beta.12] — 2026-06-10
+
+Branding + assets refresh. No code or behavior changes.
+
+### Changed
+
+- **New plugin icon** (`images/icon.png`). House outline with weather
+  data flowing through plus a small sensor dot. Transparent
+  background; pngquant-optimized to 72 KB. Replaces the four
+  inherited upstream variants (`homebridge_ambient_weather*.png`).
+- **Display name shortened** from "Homebridge Ambient Weather
+  Sensors (bcourbage fork)" to **"Ambient Weather"**. Matches the
+  Homebridge convention used by other plugins (Eve, Tado, Honeywell,
+  UniFi Protect, etc.) of stripping "Homebridge" and generic suffix
+  words. The npm scope `@bcourbage/...` continues to disambiguate
+  from upstream.
+- **README image URL switched to a relative path** (`images/icon.png`)
+  so the icon renders correctly on GitHub branch views, npmjs.com,
+  and local Markdown previews without depending on which branch the
+  image happens to be on.
+
+### Added
+
+- **Trademark notice** in the README acknowledging "Ambient Weather"
+  is a trademark of Ambient Weather, Inc. and that this plugin is an
+  independent, unofficial integration (nominative fair use). Standard
+  defensive practice for unofficial integration plugins.
+
 ## [1.5.0-beta.11] — 2026-06-09
 
 Config-form-only patch — no code or behavior changes.
@@ -564,6 +592,7 @@ upstream pull requests [#21][pr21] (Homebridge 2.x compatibility) and
 [upstream]: https://github.com/peledies/homebridge-ambient-weather-sensors
 [pr21]: https://github.com/peledies/homebridge-ambient-weather-sensors/pull/21
 [pr22]: https://github.com/peledies/homebridge-ambient-weather-sensors/pull/22
+[1.5.0-beta.12]: https://github.com/bcourbage/homebridge-ambient-weather-sensors/releases/tag/v1.5.0-beta.12
 [1.5.0-beta.11]: https://github.com/bcourbage/homebridge-ambient-weather-sensors/releases/tag/v1.5.0-beta.11
 [1.5.0-beta.10]: https://github.com/bcourbage/homebridge-ambient-weather-sensors/releases/tag/v1.5.0-beta.10
 [1.5.0-beta.9]: https://github.com/bcourbage/homebridge-ambient-weather-sensors/releases/tag/v1.5.0-beta.9
