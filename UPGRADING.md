@@ -6,7 +6,7 @@ This document covers what to expect when upgrading your installation. For techni
 
 ## v1.4.x → v1.5.0
 
-v1.5.0 is the largest release of the bcourbage fork. It adds a sizable set of new sensors and a battery-status feature, but **nothing changes for existing users unless you opt in.** If you upgrade and don't touch any settings, your HomeKit experience is identical to v1.4.3 — plus one bonus: low-battery notifications on the sensors you already have.
+v1.5.0 is the largest release of this plugin. It adds a sizable set of new sensors and a battery-status feature, but **nothing changes for existing users unless you opt in.** If you upgrade and don't touch any settings, your HomeKit experience is identical to v1.4.3 — plus one bonus: low-battery notifications on the sensors you already have.
 
 ### TL;DR
 
@@ -25,7 +25,7 @@ If you have a Homebridge instance you want to update right now, the steps are be
 If you previously installed v1.4.x via Homebridge UI:
 
 1. Open Homebridge UI → **Plugins**
-2. Find "Homebridge Ambient Weather Sensors (bcourbage fork)"
+2. Find "Ambient Weather" (`@bcourbage/homebridge-ambient-weather-sensors`)
 3. Click **Update** to take the latest stable (currently `1.4.3`)
 
 If you want to test the **beta** (which is where v1.5.0 currently lives):
@@ -81,7 +81,7 @@ Wind, rain, barometric pressure, UV, and lightning are all off by default. Apple
 
 ### Enable the master toggle
 
-1. Homebridge UI → **Plugins** → "Ambient Weather Sensors (bcourbage fork)" → **Settings** (gear icon)
+1. Homebridge UI → **Plugins** → "Ambient Weather" → **Settings** (gear icon)
 2. Scroll past the existing native-sensor checkboxes (Temperature, Humidity, etc.)
 3. Find **Enable Extended Sensors** — check it
 4. Five new checkboxes appear:
