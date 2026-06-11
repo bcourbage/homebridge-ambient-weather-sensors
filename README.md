@@ -11,7 +11,7 @@
 <SPAN ALIGN="CENTER" STYLE="text-align:center">
 <DIV ALIGN="CENTER" STYLE="text-align:center">
 
-<img src="https://raw.githubusercontent.com/bcourbage/homebridge-ambient-weather-sensors/main/images/homebridge_ambient_weather.png" width='400px'>
+<img src="https://raw.githubusercontent.com/bcourbage/homebridge-ambient-weather-sensors/main/images/icon.png" width='400px'>
 
 ## Complete HomeKit support for the Ambient Weather weather station ecosystem using [Homebridge](https://homebridge.io).
 
