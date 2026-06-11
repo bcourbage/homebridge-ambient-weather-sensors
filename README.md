@@ -11,7 +11,7 @@
 <SPAN ALIGN="CENTER" STYLE="text-align:center">
 <DIV ALIGN="CENTER" STYLE="text-align:center">
 
-<img src="https://raw.githubusercontent.com/bcourbage/homebridge-ambient-weather-sensors/main/images/icon.png" width='400px'>
+<img src="images/icon.png" width='400px'>
 
 ## Complete HomeKit support for the Ambient Weather weather station ecosystem using [Homebridge](https://homebridge.io).
 
@@ -153,3 +153,7 @@ This fork exists only because upstream activity has been quiet (last commit Febr
 ### License
 
 Apache License 2.0 — preserved unchanged from upstream. See [LICENSE](./LICENSE) and [NOTICE](./NOTICE).
+
+### Trademark notice
+
+"Ambient Weather" is a trademark of [Ambient Weather, Inc.](https://ambientweather.com/). This plugin is an independent, unofficial integration that uses the trademark only to identify the product it interoperates with (nominative fair use). It is not affiliated with, endorsed by, or sponsored by Ambient Weather, Inc.
