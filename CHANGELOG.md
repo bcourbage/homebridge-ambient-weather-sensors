@@ -9,6 +9,51 @@ entries short and user-facing.
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/
 
+## [1.5.0-beta.15] — 2026-06-13
+
+### Changed
+
+- **Single-station setups now get clean Apple Home tile names by
+  default.** `composeDisplayName()` previously always prepended the
+  station name (`info.name` from AWN), producing tiles like
+  `"Fairhills WS 2000 Outdoor Temperature"` — which Apple Home
+  truncated in the tile view to `"Fairhills WS 20..."`. For users
+  with a single AWN station (the common case), the prefix was just
+  noise. Now: when the AWN payload contains exactly one device, the
+  accessory displayName is just the bare sensor label
+  (`"Outdoor Temperature"`); multi-station accounts continue to get
+  the station prefix for disambiguation, same as before.
+
+  **Existing accessories migrate automatically** on the first
+  beta.15 restart: the existing rename path in `discoverDevices`
+  detects the displayName change and calls
+  `updatePlatformAccessories` to push the new name to HomeKit. Users
+  who previously renamed tiles manually in Apple Home keep their
+  custom names — Apple Home preserves user renames over plugin-side
+  updates.
+
+- **Why the change matters now.** The maintainer's beta.14 diagnostic
+  proved that Apple Home only honors the service `ConfiguredName`
+  characteristic for tile rendering AFTER the user explicitly
+  renames the accessory in the Home app — at which point Apple Home
+  flips an internal "user-confirmed" flag and starts using
+  `ConfiguredName`. Until then, the tile reads `accessory.displayName`
+  directly, regardless of what the plugin sets `ConfiguredName` to.
+  So the fix had to happen at the displayName level, not the service
+  Name level.
+
+  For the multi-station case, the prefix is still load-bearing —
+  without it, two stations would produce indistinguishable
+  "Outdoor Temperature" tiles. Branching on `json.length > 1` in
+  `parseDevices` correctly distinguishes the two paths.
+
+- **Backward compat for excludeSensors / includeOnly.** The
+  `matchCandidates` array now includes BOTH the new unprefixed
+  displayName AND the legacy prefixed form, so a user with an
+  existing config entry like `"Fairhills WS 2000 Indoor Dew Point"`
+  continues to filter correctly even though the new displayName is
+  just `"Indoor Dew Point"`.
+
 ## [1.5.0-beta.14] — 2026-06-13
 
 ### Changed
@@ -654,6 +699,7 @@ upstream pull requests [#21][pr21] (Homebridge 2.x compatibility) and
 [upstream]: https://github.com/peledies/homebridge-ambient-weather-sensors
 [pr21]: https://github.com/peledies/homebridge-ambient-weather-sensors/pull/21
 [pr22]: https://github.com/peledies/homebridge-ambient-weather-sensors/pull/22
+[1.5.0-beta.15]: https://github.com/bcourbage/homebridge-ambient-weather-sensors/releases/tag/v1.5.0-beta.15
 [1.5.0-beta.14]: https://github.com/bcourbage/homebridge-ambient-weather-sensors/releases/tag/v1.5.0-beta.14
 [1.5.0-beta.13]: https://github.com/bcourbage/homebridge-ambient-weather-sensors/releases/tag/v1.5.0-beta.13
 [1.5.0-beta.12]: https://github.com/bcourbage/homebridge-ambient-weather-sensors/releases/tag/v1.5.0-beta.12

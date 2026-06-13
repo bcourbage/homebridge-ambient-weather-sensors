@@ -315,10 +315,23 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
 
   /**
    * Compose a HAP-clean accessory displayName from station + sensor
-   * metadata. Form: `${station_name} ${sensor_label}` when the user has
-   * set a station name on ambientweather.net (e.g.
-   * "Backyard Station Indoor Temperature"), otherwise
-   * `${mac_no_colons} ${sensor_label}` as a last-resort disambiguator.
+   * metadata.
+   *
+   * Single-station setups (the vast majority) get just the sensor
+   * label — e.g. "Indoor Temperature" — so the Apple Home tile reads
+   * cleanly without a station prefix. Multi-station setups get the
+   * prefix to disambiguate — e.g. "Backyard Station Indoor
+   * Temperature" — falling back to `${mac_no_colons} ${sensor_label}`
+   * if the user hasn't set a station name on ambientweather.net.
+   *
+   * Why the split: Apple Home's tile only honors a custom Name field
+   * after the user explicitly renames via the Home app (the rename
+   * action flips an internal "user-confirmed" flag; programmatic
+   * `setCharacteristic` from the accessory side doesn't). Until then,
+   * the tile shows `accessory.displayName` verbatim. So for the
+   * single-station case where the station prefix is redundant, we
+   * have to drop it at the displayName level — not at the service
+   * Name level — to get clean tiles by default.
    *
    * City/state are intentionally NOT included even though the API
    * supplies them: HomeKit's room/home hierarchy already gives users a
@@ -327,11 +340,19 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
    *
    * Truncates from the right to HAP 2.x's 64-character `Name` limit.
    */
-  composeDisplayName(obj: { macAddress: string; info?: { name?: string } }, sensorKey: string): string {
-    const stationName = hapClean(obj.info?.name ?? '');
-    const macFallback = obj.macAddress.replaceAll(':', '');
+  composeDisplayName(
+    obj: { macAddress: string; info?: { name?: string } },
+    sensorKey: string,
+    isMultiStation: boolean,
+  ): string {
     const sensorLabel = friendlySensorName(sensorKey);
 
+    if (!isMultiStation) {
+      return hapClean(sensorLabel);
+    }
+
+    const stationName = hapClean(obj.info?.name ?? '');
+    const macFallback = obj.macAddress.replaceAll(':', '');
     const baseName = stationName || macFallback;
     const composed = hapClean(`${baseName} ${sensorLabel}`);
 
@@ -350,6 +371,14 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
     const includeMatchers = toMatcherSet(this.config.includeOnly);
     const excludeMatchers = toMatcherSet(this.config.excludeSensors);
 
+    // Detect whether the user has multiple AWN stations on this
+    // account. The accessory displayName uses a station prefix only
+    // when this is true — single-station users get clean
+    // "Indoor Temperature" tiles, multi-station users get
+    // "Backyard Station Indoor Temperature" / "Garage Station
+    // Indoor Temperature" for disambiguation. See composeDisplayName.
+    const isMultiStation = Array.isArray(json) && json.length > 1;
+
     if (Array.isArray(json)) {
       json.forEach( (obj) => {
         Object.entries(obj.lastData).forEach( (device) => {
@@ -360,19 +389,30 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
           }
 
           const uniqueId = `${obj.macAddress}-${sensorKey}`;
-          const displayName = this.composeDisplayName(obj, sensorKey);
+          const displayName = this.composeDisplayName(obj, sensorKey, isMultiStation);
 
           // Candidates a user might use to identify this sensor in
           // their config. Ordered from most-specific to least so the
           // log messages can pick whichever they hit first if we
           // wanted that — currently we just check any-match.
+          //
+          // Includes BOTH naming styles (with-prefix and without)
+          // because: (a) on single-station setups the displayName is
+          // unprefixed but a user may have an existing config entry
+          // with the old prefixed name from a previous version, and
+          // (b) on multi-station setups the user may match by either
+          // the prefixed name or the bare sensor label. Generating
+          // both forms here lets either work.
+          const stationName = obj.info?.name ?? '';
+          const prefixedForm = stationName ? `${stationName} ${friendlySensorName(sensorKey)}` : '';
           const matchCandidates: string[] = [
             uniqueId,                          // AA:BB:CC:DD:EE:FF-tempinf
-            displayName,                       // Backyard Station Indoor Temperature
+            displayName,                       // current displayName (with or without prefix)
+            prefixedForm,                      // always include the prefixed form for back-compat
             sensorKey,                         // tempinf
             friendlySensorName(sensorKey),     // Indoor Temperature
             obj.macAddress,                    // AA:BB:CC:DD:EE:FF
-            obj.info?.name ?? '',              // Backyard Station (as user typed in AWN, before hapClean)
+            stationName,                       // Backyard Station (as user typed in AWN, before hapClean)
           ].map(normalizeMatchKey).filter((s) => s.length > 0);
 
           if (includeMatchers.size > 0 && !matchCandidates.some((c) => includeMatchers.has(c))) {
