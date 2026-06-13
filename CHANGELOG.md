@@ -9,6 +9,24 @@ entries short and user-facing.
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/
 
+## [1.5.0-beta.14] — 2026-06-13
+
+### Changed
+
+- **Excluded sensors now log at info level the first time they're
+  filtered each session.** Previously a sensor on the `excludeSensors`
+  blacklist (or filtered out by the `includeOnly` allowlist) was only
+  logged at debug level, invisible at default verbosity. After
+  Homebridge restart, users had no way to confirm their filter
+  config was being applied without enabling debug logs.
+  Now: on the first poll/realtime tick after restart, each filtered
+  sensor produces one info-level line:
+    `Excluding <displayName>: matched Exclude Sensors list`
+    `Excluding <displayName>: not in Include Only These Sensors allowlist`
+  Subsequent polls stay at debug level, so the log doesn't flood
+  every 2 minutes. Pattern modeled on `homebridge-smartthings-oauth`'s
+  startup "Ignoring X because..." lines.
+
 ## [1.5.0-beta.13] — 2026-06-11
 
 Acts on solmssen's beta.12 feedback. Becomes the new GA candidate.
@@ -636,6 +654,7 @@ upstream pull requests [#21][pr21] (Homebridge 2.x compatibility) and
 [upstream]: https://github.com/peledies/homebridge-ambient-weather-sensors
 [pr21]: https://github.com/peledies/homebridge-ambient-weather-sensors/pull/21
 [pr22]: https://github.com/peledies/homebridge-ambient-weather-sensors/pull/22
+[1.5.0-beta.14]: https://github.com/bcourbage/homebridge-ambient-weather-sensors/releases/tag/v1.5.0-beta.14
 [1.5.0-beta.13]: https://github.com/bcourbage/homebridge-ambient-weather-sensors/releases/tag/v1.5.0-beta.13
 [1.5.0-beta.12]: https://github.com/bcourbage/homebridge-ambient-weather-sensors/releases/tag/v1.5.0-beta.12
 [1.5.0-beta.11]: https://github.com/bcourbage/homebridge-ambient-weather-sensors/releases/tag/v1.5.0-beta.11

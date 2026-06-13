@@ -2,7 +2,7 @@
   "private": false,
   "displayName": "Ambient Weather",
   "name": "@bcourbage/homebridge-ambient-weather-sensors",
-  "version": "1.5.0-beta.13",
+  "version": "1.5.0-beta.14",
   "description": "Homebridge plugin for Ambient Weather sensors via the AWN REST/websocket API. Soft fork of peledies/homebridge-ambient-weather-sensors with Homebridge 2.x / Node 22+ compatibility, multi-station support, websocket realtime, CO2/PM coverage, and other UX improvements while upstream PRs remain unmerged.",
   "license": "Apache-2.0",
   "author": "Bruno Courbage (https://github.com/bcourbage)",

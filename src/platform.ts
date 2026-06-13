@@ -125,6 +125,18 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
   // wrapper having to call fetchDevices() on its own timer.
   private readonly wrappers: Map<string, SensorAccessory> = new Map();
 
+  // Tracks which sensors have already been logged as excluded this
+  // session, so we surface one info-level log per excluded sensor
+  // per Homebridge restart instead of one per poll tick. Subsequent
+  // poll iterations still debug-log so the verbose path is intact
+  // for users who run with HB_LOG_LEVEL=debug. SmartThings follows
+  // the same pattern (see homebridge-smartthings-oauth's startup
+  // "Ignoring X because..." lines) and it's the right shape — users
+  // need confirmation their exclude/include filters are working,
+  // but not on every fetch.
+  private readonly loggedExcludeHits = new Set<string>();
+  private readonly loggedIncludeMisses = new Set<string>();
+
   // Handle for the platform-level poll timer so we never start two.
   private pollTimer: ReturnType<typeof setInterval> | undefined;
 
@@ -364,11 +376,25 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
           ].map(normalizeMatchKey).filter((s) => s.length > 0);
 
           if (includeMatchers.size > 0 && !matchCandidates.some((c) => includeMatchers.has(c))) {
-            this.log.debug(`Excluding ${uniqueId} (not in includeOnly allowlist)`);
+            // First time we've seen this sensor get filtered out by the
+            // include-only allowlist this session: surface at info so
+            // the user sees in the log that their config is being
+            // honored. Subsequent polls keep the noisier debug path.
+            if (!this.loggedIncludeMisses.has(uniqueId)) {
+              this.log.info(`Excluding ${displayName}: not in Include Only These Sensors allowlist`);
+              this.loggedIncludeMisses.add(uniqueId);
+            } else {
+              this.log.debug(`Excluding ${uniqueId} (not in includeOnly allowlist)`);
+            }
             return;
           }
           if (excludeMatchers.size > 0 && matchCandidates.some((c) => excludeMatchers.has(c))) {
-            this.log.debug(`Excluding ${uniqueId} (matched excludeSensors)`);
+            if (!this.loggedExcludeHits.has(uniqueId)) {
+              this.log.info(`Excluding ${displayName}: matched Exclude Sensors list`);
+              this.loggedExcludeHits.add(uniqueId);
+            } else {
+              this.log.debug(`Excluding ${uniqueId} (matched excludeSensors)`);
+            }
             return;
           }
 
