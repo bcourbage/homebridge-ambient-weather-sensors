@@ -6,7 +6,7 @@ import { timeSince } from './intensityBuckets.js';
 import { convertDistance, DistanceUnit } from './unitConversions.js';
 
 /**
- * AWN's WH57 lightning sensor reports four fields, and we expose each
+ * AWN's WH31L lightning sensor (Ecowitt WH57 equivalent) reports four fields, and we expose each
  * as its own MotionSensor accessory:
  *   - lightning_day      — strike count since local midnight
  *   - lightning_hour     — strike count in the trailing hour

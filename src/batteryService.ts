@@ -35,8 +35,16 @@ export function setupBatteryService(
   const initialLow: boolean | undefined = accessory.context.device.batteryLow;
   if (initialLow === undefined) {
     // No battery reported for this sensor's probe — skip the
-    // sub-service entirely so Apple Home doesn't show a misleading
-    // "battery normal" indicator on a probe we have no data for.
+    // sub-service entirely. Also cleanup: if a previous version of
+    // the plugin attached a Battery sub-service here (v1.5.0-beta.1
+    // through beta.12 attached a Battery sub-service to every
+    // probe-backed accessory, before the per-probe dedup added in
+    // beta.13), remove the stale sub-service from the cached
+    // accessory so it disappears from HomeKit on next restart.
+    const existing = accessory.getService(platform.Service.Battery);
+    if (existing) {
+      accessory.removeService(existing);
+    }
     return undefined;
   }
 

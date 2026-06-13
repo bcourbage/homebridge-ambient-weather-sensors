@@ -1,7 +1,7 @@
 import { API, Characteristic, DynamicPlatformPlugin, Logger, PlatformAccessory, PlatformConfig, Service } from 'homebridge';
 
 import { AirQualityAccessory } from './airQualityAccessory.js';
-import { batteryFieldForSensor, readBatteryLow } from './batteryFields.js';
+import { batteryFieldForSensor, isCanonicalSensorForBattery, readBatteryLow } from './batteryFields.js';
 import { Co2Accessory } from './co2Accessory.js';
 import {
   LightningDayAccessory,
@@ -385,12 +385,19 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
 
           // Look up the corresponding battery field for this sensor's
           // physical probe and capture the HomeKit-aligned
-          // low/normal boolean. undefined means AWN doesn't report
-          // a battery for this probe (or the field is missing on
-          // this particular station) — the wrapper will skip the
-          // Battery sub-service in that case.
+          // low/normal boolean. Only the canonical sensor for each
+          // battery field gets the Battery sub-service — all other
+          // sensors sharing the same physical probe get `undefined`
+          // here so they skip the sub-service entirely. Without
+          // this dedup, a typical WS-2000 produces 30+ battery
+          // tiles in Apple Home (one per accessory); with dedup,
+          // each physical probe shows ONE battery status on its
+          // most representative sensor (canonical mapping in
+          // batteryFields.ts).
           const batteryField = batteryFieldForSensor(sensorKey);
-          const batteryLow = readBatteryLow(obj.lastData as Record<string, unknown>, batteryField);
+          const batteryLow = (batteryField && isCanonicalSensorForBattery(sensorKey, batteryField))
+            ? readBatteryLow(obj.lastData as Record<string, unknown>, batteryField)
+            : undefined;
 
           Devices.push({
             macAddress: obj.macAddress,

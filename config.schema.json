@@ -303,7 +303,7 @@
     "lightningSensors",
     {
       "type": "help",
-      "helpvalue": "<p>Lightning sensors are only available if your station has a WH57-compatible sensor reporting lightning_day / lightning_distance / lightning_time on the AWN API.</p>",
+      "helpvalue": "<p>Lightning sensors are only available if your station has a WH31L-compatible sensor (Ecowitt catalogs the same hardware as a WH57) reporting lightning_day / lightning_distance / lightning_time on the AWN API.</p>",
       "condition": { "functionBody": "return model.extendedSensors === true;" }
     },
     "extendedDisplayMode",

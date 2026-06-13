@@ -192,7 +192,7 @@ The battery automation works on any v1.5.0+ sensor; pick whichever tile correspo
 | Indoor display console | `battin` | Indoor temp/humidity, feels-like, dew point, both barometric pressures |
 | WH31 numbered probe 1-N | `batt1`–`battN` | Per-channel temp, humidity, feels-like, dew point |
 | AQIN module | `batt_co2` | CO2, PM2.5, PM10, AQIN-housing temp/humidity |
-| WH57 lightning | `batt_lightning` | All four lightning sensors |
+| WH31L lightning (Ecowitt WH57) | `batt_lightning` | All four lightning sensors |
 
 Probes AWN doesn't report a battery for get no Battery sub-service — better than misleading "battery normal" on something we can't actually confirm.
 
@@ -218,7 +218,7 @@ The child bridge needs a restart. Homebridge UI → **Status** → click your ch
 
 ### "Will tiles appear for sensors my station doesn't have?"
 
-No. The plugin only creates accessories for sensor fields actually present in your station's AWN payload. If you enable a category whose hardware you don't have — Lightning without a WH57, Air Quality without an AQIN, CO2 without an AQIN, etc. — the relevant fields are absent from AWN's response, no accessory gets registered, and nothing appears in HomeKit. Enabling a category is a zero-cost no-op when the underlying hardware isn't installed. The reverse is also handled: if you previously had a probe that's now disconnected, the orphaned tile is cleaned up on the next plugin startup.
+No. The plugin only creates accessories for sensor fields actually present in your station's AWN payload. If you enable a category whose hardware you don't have — Lightning without a WH31L, Air Quality without an AQIN, CO2 without an AQIN, etc. — the relevant fields are absent from AWN's response, no accessory gets registered, and nothing appears in HomeKit. Enabling a category is a zero-cost no-op when the underlying hardware isn't installed. The reverse is also handled: if you previously had a probe that's now disconnected, the orphaned tile is cleaned up on the next plugin startup.
 
 ### "I see 'Wind Direction' but the motion indicator is always off."
 
@@ -226,11 +226,15 @@ That's intentional. Wind direction is informational only — there's no meaningf
 
 ### "My lightning sensors don't appear."
 
-Your station needs a WH57 lightning sensor. If the AWN payload for your station doesn't include `lightning_day` / `lightning_distance` / `lightning_time` fields, this plugin has nothing to expose. Check the AWN dashboard — if you don't see lightning data there either, no plugin can fix that.
+Your station needs a WH31L lightning sensor (Ecowitt catalogs the same hardware as a WH57). If the AWN payload for your station doesn't include `lightning_day` / `lightning_distance` / `lightning_time` fields, this plugin has nothing to expose. Check the AWN dashboard — if you don't see lightning data there either, no plugin can fix that.
 
 ### "Apple Home shows 'battery 5%' but the batteries are brand new."
 
 AWN reports only "low" or "good" — not an actual percentage. When AWN says "low," the plugin shows 5% as a sentinel value so Apple Home's tile shows an alarming indicator. When AWN says "good," the plugin shows 100%. There's no way to get the real percentage; AWN doesn't expose it.
+
+### "My lightning sensor (WH31L) shows low battery in HomeKit but AWN's dashboard shows it as healthy. Replacing batteries didn't help."
+
+This is an upstream AWN issue, not a plugin bug. AWN's API has been observed to report `batt_lightning = 0` (which the plugin interprets as low, consistent with every other batt* field) even when the WH31L's batteries are fresh and the AWN dashboard correctly shows the sensor as healthy. Suspected causes include an AWN API encoding bug for that specific field or a quirk of the WH31L's battery reporting that AWN's dashboard knows to ignore. Either way, the plugin reads what AWN's API returns — if your lightning Battery tile in HomeKit disagrees with the AWN dashboard, the discrepancy is at AWN's end. Replacing the batteries (with known-good ones) does not change the API value, so don't waste batteries trying to fix it. Treat the lightning Battery tile as cosmetic until AWN fixes their API.
 
 ### "I want one sensor from a category but not others (e.g. wind speed but not direction)."
 

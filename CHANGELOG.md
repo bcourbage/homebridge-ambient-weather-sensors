@@ -9,6 +9,50 @@ entries short and user-facing.
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/
 
+## [1.5.0-beta.13] — 2026-06-11
+
+Acts on solmssen's beta.12 feedback. Becomes the new GA candidate.
+
+### Changed
+
+- **One Battery sub-service per physical probe, not one per
+  accessory.** Previously every sensor whose probe reported a
+  battery field got its own HomeKit Battery sub-service — a fully
+  populated WS-2000 with 4 channels + AQIN + WH31L produced 30+
+  battery tiles, which solmssen reasonably called "overwhelming."
+  Each `batt*` field now attaches to exactly ONE canonical sensor:
+    - `battout` → Outdoor Temperature
+    - `battin` → Indoor Temperature
+    - `batt1..10` → channel temperature for that channel
+    - `batt_co2` → CO2 (AQIN)
+    - `batt_lightning` → Lightning Strikes Today
+  A typical fully-populated station now shows ~7 battery tiles
+  instead of 30+, while still surfacing every physical probe's
+  battery state to Apple Home automations.
+  On upgrade, stale Battery sub-services attached to non-canonical
+  accessories by beta.1 → beta.12 are removed automatically on the
+  next plugin restart.
+
+- **Renamed "WH57" → "WH31L" across docs and code comments.** AWN
+  catalogs the lightning sensor as the WH31L; Ecowitt catalogs the
+  same hardware as the WH57. Since this plugin is specifically for
+  AWN users, use AWN's name as primary with the Ecowitt name as a
+  cross-reference. Affects README, UPGRADING, schema helpvalue,
+  and two code-comment files. CHANGELOG entries from prior betas
+  retain the old "WH57" name as historical record.
+
+### Added
+
+- **FAQ entry documenting the AWN lightning-battery API quirk.**
+  AWN's API has been observed to report `batt_lightning = 0`
+  (which the plugin reads as "low") even when the WH31L has
+  known-good batteries and AWN's own dashboard shows the sensor as
+  healthy. The plugin reads what AWN's API returns; the
+  discrepancy is upstream. UPGRADING's Troubleshooting / FAQ
+  section now documents this so users hitting the same problem
+  don't burn batteries trying to fix it. README also adds a short
+  note in the Battery status section.
+
 ## [1.5.0-beta.12] — 2026-06-10
 
 Branding + assets refresh. No code or behavior changes.
@@ -592,6 +636,7 @@ upstream pull requests [#21][pr21] (Homebridge 2.x compatibility) and
 [upstream]: https://github.com/peledies/homebridge-ambient-weather-sensors
 [pr21]: https://github.com/peledies/homebridge-ambient-weather-sensors/pull/21
 [pr22]: https://github.com/peledies/homebridge-ambient-weather-sensors/pull/22
+[1.5.0-beta.13]: https://github.com/bcourbage/homebridge-ambient-weather-sensors/releases/tag/v1.5.0-beta.13
 [1.5.0-beta.12]: https://github.com/bcourbage/homebridge-ambient-weather-sensors/releases/tag/v1.5.0-beta.12
 [1.5.0-beta.11]: https://github.com/bcourbage/homebridge-ambient-weather-sensors/releases/tag/v1.5.0-beta.11
 [1.5.0-beta.10]: https://github.com/bcourbage/homebridge-ambient-weather-sensors/releases/tag/v1.5.0-beta.10

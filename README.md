@@ -69,7 +69,9 @@ These map cleanly to native HomeKit accessory services. They render in Apple's H
 
 Every sensor whose physical probe reports a battery in AWN's payload also exposes a HomeKit `Battery` sub-service. Apple Home (and every third-party HomeKit client) will fire its built-in low-battery push notification when AWN reports a probe as low. Use this to build the automation *"When Outdoor Temperature battery is low, remind me to replace it"* — no Eve dependency, no manual checking the AWN dashboard.
 
-Probes covered: outdoor base (powers wind, rain, solar, UV, outdoor temp/humid), indoor display (indoor temp/humid + pressure), WH31 numbered probes (per-channel), AQIN module (PM, CO2), and the WH57 lightning sensor. Probes that AWN doesn't report a battery for get no Battery sub-service.
+Probes covered: outdoor base (powers wind, rain, solar, UV, outdoor temp/humid), indoor display (indoor temp/humid + pressure), WH31 numbered probes (per-channel), AQIN module (PM, CO2), and the WH31L lightning sensor (Ecowitt WH57 equivalent hardware). Each physical probe shows ONE battery sub-service in HomeKit (attached to its most-representative accessory), not one per accessory the probe powers — see the Troubleshooting section in [UPGRADING.md](./UPGRADING.md) for how this maps. Probes that AWN doesn't report a battery for get no Battery sub-service.
+
+**Note on the lightning sensor battery:** AWN's API has been observed to report the lightning sensor as low-battery (`batt_lightning = 0`) even when fresh batteries are installed and the AWN dashboard itself shows the sensor as healthy. The plugin reads what AWN's API returns — if your lightning Battery tile in HomeKit disagrees with the AWN dashboard, the issue is upstream of this plugin. Replacing the batteries doesn't help; consider it cosmetic until AWN fixes their API.
 
 ### Solar Radiation: W/m² ↔ lux
 
@@ -99,7 +101,7 @@ Apple Home does not natively understand wind, rain, barometric pressure, UV, or 
 | Barometric pressure (sea-level corrected + raw at station) | `baromrelin`, `baromabsin` |
 | UV index | `uv` |
 | Lightning strike count (today, this hour) | `lightning_day`, `lightning_hour` |
-| Lightning distance and time-since-last (requires WH57) | `lightning_distance`, `lightning_time` |
+| Lightning distance and time-since-last (requires WH31L) | `lightning_distance`, `lightning_time` |
 
 **How this looks in HomeKit:**
 
@@ -112,7 +114,7 @@ Apple Home does not natively understand wind, rain, barometric pressure, UV, or 
 
 **Why MotionSensor?** It's the only HAP service whose state (`MotionDetected`) is both native to Apple Home AND triggerable by an external value, which makes it work as a universal "this number crossed a threshold" sensor. Picking it puts you in good company — every comparable plugin (homebridge-ecowitt-weather-sensors, homebridge-weather-plus, homebridge-mqttthing's weather station) settled on the same idea.
 
-**Hardware-aware (safe to over-enable):** the plugin only creates an accessory for a sensor field that's actually present in your station's AWN payload. If you enable a category whose hardware you don't have (e.g. Lightning without a WH57, Air Quality without an AQIN, CO2 without an AQIN), the relevant fields are simply absent from AWN's response, no accessory is registered, and nothing appears in HomeKit. Enabling a category is a zero-cost no-op when the underlying hardware isn't installed — so when in doubt, leave it on.
+**Hardware-aware (safe to over-enable):** the plugin only creates an accessory for a sensor field that's actually present in your station's AWN payload. If you enable a category whose hardware you don't have (e.g. Lightning without a WH31L, Air Quality without an AQIN, CO2 without an AQIN), the relevant fields are simply absent from AWN's response, no accessory is registered, and nothing appears in HomeKit. Enabling a category is a zero-cost no-op when the underlying hardware isn't installed — so when in doubt, leave it on.
 
 ## Setup
 An ambientweather.net account is required (no paid subscription is needed) so that you can generate the two keys this plugin uses.

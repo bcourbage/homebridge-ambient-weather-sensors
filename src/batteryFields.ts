@@ -6,13 +6,20 @@
  * `Battery` sub-service with a meaningful `StatusLowBattery` boolean.
  *
  * Why per-sensor and not per-station? AWN stations are modular —
- * the outdoor base, the indoor display, the AQIN module, the WH57
+ * the outdoor base, the indoor display, the AQIN module, the WH31L
  * lightning sensor, and each WH31 channel probe all have separate
  * batteries. A single station can have 7+ independently-batteried
- * components. HomeKit's convention is to surface the battery state
- * as a sub-service on each sensor accessory, so a low battery shows
- * up on every sensor reading from the affected probe — useful for
- * "when Outdoor Temperature battery is low, notify me" automations.
+ * components.
+ *
+ * IMPORTANT: in HomeKit only ONE Battery sub-service per probe is
+ * exposed, attached to a designated "canonical" sensor accessory
+ * (see CANONICAL_SENSOR_FOR_BATTERY below). Without this dedup, a
+ * fully-populated WS-2000 produces 30+ battery tiles in Apple Home
+ * (one per accessory the probe powers) — overwhelming and
+ * redundant. With dedup, each physical probe shows ONE battery
+ * status, attached to its most representative sensor (outdoor
+ * temp, indoor temp, channel temp, CO2 for AQIN, lightning_day
+ * for the WH31L).
  *
  * AWN's batt* field convention:
  *   battout         — outdoor combo array (wind, rain, solar, UV,
@@ -25,8 +32,10 @@
  *                     CO2, AQIN's internal temp/humid housing
  *                     sensors). Despite the name, this powers the
  *                     whole AQIN module, not just CO2.
- *   batt_lightning  — WH57 lightning sensor (strike count, distance,
- *                     timestamp).
+ *   batt_lightning  — WH31L lightning sensor (strike count, distance,
+ *                     timestamp). AWN catalogs this sensor as the
+ *                     WH31L; Ecowitt catalogs the same hardware as
+ *                     the WH57.
  *
  * Returns the batt-field name as a string, or undefined when the
  * sensor key doesn't correspond to a known physical probe. Callers
@@ -63,12 +72,69 @@ const FIXED_MAPPINGS: Record<string, string> = {
   yearlyrainin:  'battout',
   lastRain:      'battout',
 
-  // WH57 lightning sensor
+  // WH31L lightning sensor (Ecowitt WH57 equivalent hardware)
   lightning_day:      'batt_lightning',
   lightning_hour:     'batt_lightning',
   lightning_distance: 'batt_lightning',
   lightning_time:     'batt_lightning',
 };
+
+/**
+ * The canonical sensor (per battery field) chosen to host the
+ * HomeKit Battery sub-service. Other sensors sharing the same
+ * physical probe do NOT get a Battery sub-service — they would
+ * just duplicate the same low/normal signal and clutter Apple
+ * Home with redundant tiles.
+ *
+ * Choice of canonical sensor per field:
+ *   battout         → `tempf` (Outdoor Temperature) — the most
+ *                     universally-enabled outdoor sensor; users
+ *                     who enable wind/rain/solar without
+ *                     Temperature are very rare
+ *   battin          → `tempinf` (Indoor Temperature) — same
+ *                     reasoning as battout
+ *   batt{1..10}     → `temp{N}f` — each channel probe's
+ *                     temperature is its primary reading
+ *   batt_co2        → `co2_in_aqin` — the AQIN's most
+ *                     distinctive reading
+ *   batt_lightning  → `lightning_day` — has no per-threshold
+ *                     enable checkbox in the form (unlike
+ *                     lightning_distance), so it's harder to
+ *                     accidentally hide
+ *
+ * If the canonical sensor isn't enabled (user excluded it, or
+ * its category is off, or its per-threshold enable checkbox is
+ * unchecked for the extended sensors), the corresponding battery
+ * status is not visible in HomeKit. Workaround: enable the
+ * canonical sensor, or rely on AWN's dashboard for that
+ * battery's status.
+ */
+const CANONICAL_SENSOR_FOR_BATTERY: Record<string, string> = {
+  battout:        'tempf',
+  battin:         'tempinf',
+  batt1:          'temp1f',
+  batt2:          'temp2f',
+  batt3:          'temp3f',
+  batt4:          'temp4f',
+  batt5:          'temp5f',
+  batt6:          'temp6f',
+  batt7:          'temp7f',
+  batt8:          'temp8f',
+  batt9:          'temp9f',
+  batt10:         'temp10f',
+  batt_co2:       'co2_in_aqin',
+  batt_lightning: 'lightning_day',
+};
+
+/**
+ * Whether this sensor key is the canonical one for displaying the
+ * HomeKit Battery sub-service for the given battery field. Used by
+ * the platform layer to suppress redundant battery sub-services on
+ * non-canonical accessories sharing the same physical probe.
+ */
+export function isCanonicalSensorForBattery(sensorKey: string, batteryField: string): boolean {
+  return CANONICAL_SENSOR_FOR_BATTERY[batteryField] === sensorKey;
+}
 
 // Numbered WH31 probes — `temp1f`, `humidity2`, `feelsLike3`,
 // `dewPoint4`, etc. all roll up to `batt{N}` for their channel number.
