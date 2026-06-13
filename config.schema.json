@@ -221,8 +221,9 @@
             "type": "string",
             "default": "mi",
             "oneOf": [
-              { "title": "mi (miles)", "enum": ["mi"] },
-              { "title": "km (kilometers)", "enum": ["km"] }
+              { "title": "mi (statute miles)", "enum": ["mi"] },
+              { "title": "km (kilometers)", "enum": ["km"] },
+              { "title": "nm (nautical miles)", "enum": ["nm"] }
             ]
           }
         }

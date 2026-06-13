@@ -16,7 +16,7 @@
 export type SpeedUnit = 'mph' | 'kph' | 'mps' | 'kts';
 export type RainUnit = 'in' | 'mm';
 export type PressureUnit = 'inHg' | 'hPa';
-export type DistanceUnit = 'mi' | 'km';
+export type DistanceUnit = 'mi' | 'km' | 'nm';
 
 export function convertSpeed(mph: number, target: SpeedUnit): number {
   switch (target) {
@@ -36,5 +36,9 @@ export function convertPressure(inHg: number, target: PressureUnit): number {
 }
 
 export function convertDistance(miles: number, target: DistanceUnit): number {
-  return target === 'km' ? miles * 1.60934 : miles;
+  switch (target) {
+    case 'mi': return miles;
+    case 'km': return miles * 1.60934;
+    case 'nm': return miles * 0.868976;  // 1 statute mile = 0.868976 nautical miles
+  }
 }
