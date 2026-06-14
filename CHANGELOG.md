@@ -9,6 +9,21 @@ entries short and user-facing.
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/
 
+## [1.5.0-beta.21] — 2026-06-13
+
+### Changed
+
+- **Renamed the Station Filter form field to "Include Only These
+  Stations (allowlist)"** to match the existing "Include Only These
+  Sensors (allowlist)" pattern. Logic is unchanged. The previous
+  "Station Filter" label was ambiguous — "filter" can colloquially
+  mean either an allowlist (keep matching) or a blocklist (drop
+  matching), and the first-user test made clear the latter reading
+  was the natural one. New title and description make the allowlist
+  semantics unmistakable by direct analogy to the per-sensor field
+  below it. The underlying config key (`stationFilter`) is
+  unchanged so existing configs continue to work.
+
 ## [1.5.0-beta.20] — 2026-06-13
 
 ### Changed
