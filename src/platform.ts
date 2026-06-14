@@ -403,8 +403,16 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
           // (b) on multi-station setups the user may match by either
           // the prefixed name or the bare sensor label. Generating
           // both forms here lets either work.
+          //
+          // `hapClean` is applied to the prefixedForm so that any
+          // non-alphanumeric characters in AWN's `info.name` (hyphens,
+          // periods, etc.) are stripped. The pre-beta.15 displayName
+          // also passed through hapClean, so user excludeSensors
+          // entries that match the old cleaned name (e.g.
+          // "Fairhills WS 2000 Indoor Dew Point" from a station whose
+          // raw AWN name is "Fairhills WS-2000") continue to match.
           const stationName = obj.info?.name ?? '';
-          const prefixedForm = stationName ? `${stationName} ${friendlySensorName(sensorKey)}` : '';
+          const prefixedForm = stationName ? hapClean(`${stationName} ${friendlySensorName(sensorKey)}`) : '';
           const matchCandidates: string[] = [
             uniqueId,                          // AA:BB:CC:DD:EE:FF-tempinf
             displayName,                       // current displayName (with or without prefix)
@@ -586,6 +594,17 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
             if (existingAccessory.displayName !== device.displayName) {
               this.log.info(`Renaming accessory: "${existingAccessory.displayName}" -> "${device.displayName}"`);
               existingAccessory.displayName = device.displayName;
+              // ALSO explicitly update the AccessoryInformation Name
+              // characteristic. accessory.displayName is Homebridge
+              // bookkeeping and gets persisted to the cached accessory
+              // file, but it does NOT automatically propagate to the
+              // HAP-side AccessoryInformation Name characteristic that
+              // Apple Home reads for the tile. Without this update,
+              // accessories that the user has never renamed via Home
+              // app keep showing their original (long) tile name in
+              // Apple Home even after the displayName is changed.
+              existingAccessory.getService(this.Service.AccessoryInformation)
+                ?.updateCharacteristic(this.Characteristic.Name, device.displayName);
             }
             existingAccessory.context.device = device;
             this.api.updatePlatformAccessories([existingAccessory]);

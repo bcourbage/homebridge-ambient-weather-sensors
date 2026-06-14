@@ -9,6 +9,42 @@ entries short and user-facing.
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/
 
+## [1.5.0-beta.16] — 2026-06-13
+
+Two follow-up fixes for issues observed during beta.15 testing.
+
+### Fixed
+
+- **Apple Home tile names didn't update for accessories the user
+  had never renamed.** The beta.15 migration step updated
+  `accessory.displayName` and called `updatePlatformAccessories`,
+  which writes to Homebridge's cached accessory file. But Apple
+  Home reads the **`AccessoryInformation.Name` characteristic** —
+  a separate HAP-level field that wasn't touched by the
+  `displayName` assignment. Result: tiles for accessories the user
+  had renamed in Apple Home (where Apple Home uses `ConfiguredName`,
+  which the plugin DOES update on every restart) saw the new short
+  name; tiles for accessories the user had never renamed stayed on
+  the original long name. Fix: explicitly call
+  `updateCharacteristic(Characteristic.Name, ...)` on the
+  AccessoryInformation service in the migration block so the
+  HAP-side Name characteristic gets the new value too.
+
+- **`excludeSensors` / `includeOnly` back-compat for entries whose
+  station name had non-alphanumeric characters.** beta.15 added a
+  `prefixedForm` to `matchCandidates` for backward compatibility
+  with existing config entries that referenced the pre-beta.15
+  long-form displayName. But it computed `prefixedForm` from AWN's
+  RAW `info.name`, while the pre-beta.15 displayName had run that
+  through `hapClean` (stripping hyphens, periods, etc.). User
+  configs whose old-form excludes used the cleaned station name
+  (e.g. "Fairhills WS 2000 Indoor Feels Like" for a station whose
+  raw AWN name is "Fairhills WS-2000") therefore didn't match the
+  back-compat candidate, and previously-excluded sensors started
+  re-appearing as new accessories on the first beta.15 restart.
+  Fix: apply `hapClean` to the prefixedForm so it produces the
+  same cleaned string the old displayName produced.
+
 ## [1.5.0-beta.15] — 2026-06-13
 
 ### Changed
@@ -699,6 +735,7 @@ upstream pull requests [#21][pr21] (Homebridge 2.x compatibility) and
 [upstream]: https://github.com/peledies/homebridge-ambient-weather-sensors
 [pr21]: https://github.com/peledies/homebridge-ambient-weather-sensors/pull/21
 [pr22]: https://github.com/peledies/homebridge-ambient-weather-sensors/pull/22
+[1.5.0-beta.16]: https://github.com/bcourbage/homebridge-ambient-weather-sensors/releases/tag/v1.5.0-beta.16
 [1.5.0-beta.15]: https://github.com/bcourbage/homebridge-ambient-weather-sensors/releases/tag/v1.5.0-beta.15
 [1.5.0-beta.14]: https://github.com/bcourbage/homebridge-ambient-weather-sensors/releases/tag/v1.5.0-beta.14
 [1.5.0-beta.13]: https://github.com/bcourbage/homebridge-ambient-weather-sensors/releases/tag/v1.5.0-beta.13
