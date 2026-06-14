@@ -594,18 +594,21 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
             if (existingAccessory.displayName !== device.displayName) {
               this.log.info(`Renaming accessory: "${existingAccessory.displayName}" -> "${device.displayName}"`);
               existingAccessory.displayName = device.displayName;
-              // ALSO explicitly update the AccessoryInformation Name
-              // characteristic. accessory.displayName is Homebridge
-              // bookkeeping and gets persisted to the cached accessory
-              // file, but it does NOT automatically propagate to the
-              // HAP-side AccessoryInformation Name characteristic that
-              // Apple Home reads for the tile. Without this update,
-              // accessories that the user has never renamed via Home
-              // app keep showing their original (long) tile name in
-              // Apple Home even after the displayName is changed.
-              existingAccessory.getService(this.Service.AccessoryInformation)
-                ?.updateCharacteristic(this.Characteristic.Name, device.displayName);
             }
+            // Unconditionally set the AccessoryInformation Name
+            // characteristic to the current displayName on every
+            // restore. This is what Apple Home reads for the tile when
+            // the user hasn't explicitly renamed the accessory via
+            // Home.app. We do this every restore (not just when the
+            // displayName diverged) because earlier beta versions of
+            // this plugin updated `accessory.displayName` without
+            // updating the HAP-side Name characteristic — accessories
+            // touched by those betas have a stale Name characteristic
+            // even though `displayName` is already correct. This
+            // unconditional update is idempotent and pushes the
+            // correct value to HAP on every restart.
+            existingAccessory.getService(this.Service.AccessoryInformation)
+              ?.updateCharacteristic(this.Characteristic.Name, device.displayName);
             existingAccessory.context.device = device;
             this.api.updatePlatformAccessories([existingAccessory]);
             accessory = existingAccessory;

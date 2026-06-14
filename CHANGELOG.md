@@ -9,6 +9,25 @@ entries short and user-facing.
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/
 
+## [1.5.0-beta.17] — 2026-06-13
+
+### Fixed
+
+- **AccessoryInformation Name characteristic now updated on every
+  restore, not just when displayName changes.** beta.16's fix only
+  updated the HAP-side Name characteristic inside the
+  `if (displayName !== device.displayName)` block. But users who
+  had run beta.15 (where `accessory.displayName` got updated but
+  the Name characteristic didn't) ended up with cached accessories
+  where `displayName` was already correct (so the migration block
+  didn't fire) but the underlying Name characteristic was still
+  stuck at the original long value. Result: tiles in Apple Home
+  still showed the long name. Fix: pull the AccessoryInformation
+  Name update OUT of the conditional and run it on every restore.
+  Idempotent; ensures the Name characteristic matches displayName
+  on every plugin restart, regardless of whether displayName itself
+  changed.
+
 ## [1.5.0-beta.16] — 2026-06-13
 
 Two follow-up fixes for issues observed during beta.15 testing.
@@ -735,6 +754,7 @@ upstream pull requests [#21][pr21] (Homebridge 2.x compatibility) and
 [upstream]: https://github.com/peledies/homebridge-ambient-weather-sensors
 [pr21]: https://github.com/peledies/homebridge-ambient-weather-sensors/pull/21
 [pr22]: https://github.com/peledies/homebridge-ambient-weather-sensors/pull/22
+[1.5.0-beta.17]: https://github.com/bcourbage/homebridge-ambient-weather-sensors/releases/tag/v1.5.0-beta.17
 [1.5.0-beta.16]: https://github.com/bcourbage/homebridge-ambient-weather-sensors/releases/tag/v1.5.0-beta.16
 [1.5.0-beta.15]: https://github.com/bcourbage/homebridge-ambient-weather-sensors/releases/tag/v1.5.0-beta.15
 [1.5.0-beta.14]: https://github.com/bcourbage/homebridge-ambient-weather-sensors/releases/tag/v1.5.0-beta.14
