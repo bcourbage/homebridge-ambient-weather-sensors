@@ -148,6 +148,15 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
   // user has to fix, not a transient situation.
   private warnedStationFilterEmpty = false;
 
+  // Tracks which stations we've already announced at startup. The
+  // first time parseDevices sees a station MAC, we info-log its name
+  // + MAC + sensor count so users can identify exactly which string
+  // to put in their `stationFilter` config. Subsequent ticks stay
+  // quiet. Logged BEFORE filtering so users running the plugin to
+  // discover station names see every station their AWN account has,
+  // not just the filtered subset.
+  private readonly loggedDiscoveredStations = new Set<string>();
+
   // Handle for the platform-level poll timer so we never start two.
   private pollTimer: ReturnType<typeof setInterval> | undefined;
 
@@ -395,6 +404,21 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
     // and behavior is identical to v1.5.0-beta.17 and earlier.
     let stations: Array<{ macAddress: string; info?: { name?: string }; lastData: Record<string, unknown> }> =
       Array.isArray(json) ? json : [];
+
+    // Announce each discovered station once per Homebridge restart.
+    // This is the primary way users find out the exact `info.name`
+    // and MAC strings to put in their `stationFilter` config — the
+    // value isn't visible anywhere else in the Homebridge UI. Logged
+    // BEFORE any filtering so users see every station available on
+    // their AWN account, not just the filtered subset.
+    for (const station of stations) {
+      if (!this.loggedDiscoveredStations.has(station.macAddress)) {
+        const sensorCount = Object.keys(station.lastData ?? {}).length;
+        this.log.info(`Discovered station "${station.info?.name ?? '(unnamed)'}" `
+          + `(MAC: ${station.macAddress}) — ${sensorCount} sensor fields reported`);
+        this.loggedDiscoveredStations.add(station.macAddress);
+      }
+    }
 
     if (stationMatchers.size > 0) {
       const matched: typeof stations = [];

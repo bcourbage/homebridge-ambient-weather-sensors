@@ -33,6 +33,7 @@ export declare class AmbientWeatherSensorsPlatform implements DynamicPlatformPlu
     private readonly loggedIncludeMisses;
     private readonly loggedStationFilterDrops;
     private warnedStationFilterEmpty;
+    private readonly loggedDiscoveredStations;
     private pollTimer;
     private realtimeSource;
     constructor(log: Logger, config: PlatformConfig, api: API);

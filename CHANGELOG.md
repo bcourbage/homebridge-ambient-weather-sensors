@@ -9,6 +9,20 @@ entries short and user-facing.
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/
 
+## [1.5.0-beta.19] — 2026-06-13
+
+### Added
+
+- **Discovered-station log line at startup.** On the first successful
+  poll of the AWN API, each station is announced once with its name
+  (AWN's `info.name`), MAC address, and sensor count, e.g.
+  `Discovered station "Fairhills WS-2000" (MAC: AA:BB:CC:11:22:33) — 19 sensor fields reported`.
+  This is the primary way users find the exact string to put in their
+  new `stationFilter` config (beta.18) — the value isn't surfaced
+  anywhere else in the Homebridge UI. Logged BEFORE filtering so users
+  running the plugin to discover stations see every one AWN reports,
+  not the filtered subset.
+
 ## [1.5.0-beta.18] — 2026-06-13
 
 ### Added

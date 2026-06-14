@@ -93,6 +93,14 @@ export class AmbientWeatherSensorsPlatform {
         // AWN response. Warn once per session — this is a config error the
         // user has to fix, not a transient situation.
         this.warnedStationFilterEmpty = false;
+        // Tracks which stations we've already announced at startup. The
+        // first time parseDevices sees a station MAC, we info-log its name
+        // + MAC + sensor count so users can identify exactly which string
+        // to put in their `stationFilter` config. Subsequent ticks stay
+        // quiet. Logged BEFORE filtering so users running the plugin to
+        // discover station names see every station their AWN account has,
+        // not just the filtered subset.
+        this.loggedDiscoveredStations = new Set();
         this.sleep = (delay) => new Promise((resolve) => setTimeout(resolve, delay));
         this.log.debug('Finished initializing platform:', this.config.platform);
         this.api.on('didFinishLaunching', () => {
@@ -311,6 +319,20 @@ export class AmbientWeatherSensorsPlatform {
         // When stationFilter is empty (the default), no filtering happens
         // and behavior is identical to v1.5.0-beta.17 and earlier.
         let stations = Array.isArray(json) ? json : [];
+        // Announce each discovered station once per Homebridge restart.
+        // This is the primary way users find out the exact `info.name`
+        // and MAC strings to put in their `stationFilter` config — the
+        // value isn't visible anywhere else in the Homebridge UI. Logged
+        // BEFORE any filtering so users see every station available on
+        // their AWN account, not just the filtered subset.
+        for (const station of stations) {
+            if (!this.loggedDiscoveredStations.has(station.macAddress)) {
+                const sensorCount = Object.keys(station.lastData ?? {}).length;
+                this.log.info(`Discovered station "${station.info?.name ?? '(unnamed)'}" `
+                    + `(MAC: ${station.macAddress}) — ${sensorCount} sensor fields reported`);
+                this.loggedDiscoveredStations.add(station.macAddress);
+            }
+        }
         if (stationMatchers.size > 0) {
             const matched = [];
             for (const station of stations) {
