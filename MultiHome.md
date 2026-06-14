@@ -211,6 +211,8 @@ Check that the iPhone Home app was on the right Home when you scanned the QR cod
 
 The filter values don't match any station in the AWN response for that instance. Check spelling (the match is case-insensitive but exact otherwise — `Cabin WS-5000` does not match `Cabin WS5000`). Verify the station name in AWN's dashboard or in the unfiltered Homebridge log of the first instance.
 
+Note that zero-match deregisters every accessory previously exposed by that platform instance — Homebridge sees an empty result and treats every cached accessory as orphaned. **This is the intended behavior** and is also useful as an explicit "clean slate" trigger: setting `"stationFilter": ["CLEAR"]` (or any value you know won't match), restarting the child bridge, then removing the filter and restarting again, will re-discover every accessory from scratch without touching the filesystem cache. Just be aware that room assignments, automations, and any custom Apple Home names set on those accessories are lost during the wipe, same as any HomeKit accessory removal.
+
 ### "After splitting, my old accessories disappeared and new ones appeared in their place"
 
 Each child bridge has its own HAP identity, so the accessories on it are technically new from HomeKit's perspective — even though the underlying AWN sensor is the same. Any automations you'd built against the old accessories need to be re-pointed at the new tiles. There's no migration path because HomeKit doesn't expose one; the bridge↔Home pairing is the unit of identity.

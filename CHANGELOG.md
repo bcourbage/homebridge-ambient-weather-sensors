@@ -9,6 +9,21 @@ entries short and user-facing.
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/
 
+## [1.5.0-beta.22] — 2026-06-13
+
+### Changed
+
+- **Documented the "clean slate" use of `stationFilter`.** Setting a
+  deliberately non-matching value deregisters every accessory from
+  that platform instance — this is the intended behavior of the
+  filter and is also useful as a no-filesystem way to wipe and
+  re-discover accessories without manually touching the cache file.
+  Config form description, help text, and MultiHome.md
+  troubleshooting entry all now mention this explicitly, with the
+  obvious caveat that HomeKit state (room assignments,
+  automations, custom names) is lost during the wipe as it would
+  be on any HomeKit accessory removal.
+
 ## [1.5.0-beta.21] — 2026-06-13
 
 ### Changed
