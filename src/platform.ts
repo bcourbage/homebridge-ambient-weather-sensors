@@ -148,6 +148,13 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
   // user has to fix, not a transient situation.
   private warnedStationFilterEmpty = false;
 
+  // Tripped once we've emitted the "stationFilter active" confirmation
+  // line for this session. Without this, users who configure a filter
+  // that matches all available stations have no visible signal the
+  // filter is working — they see the same accessories they had
+  // before and assume it's broken. One line at startup is enough.
+  private loggedStationFilterSummary = false;
+
   // Tracks which stations we've already announced at startup. The
   // first time parseDevices sees a station MAC, we info-log its name
   // + MAC + sensor count so users can identify exactly which string
@@ -421,6 +428,7 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
     }
 
     if (stationMatchers.size > 0) {
+      const totalBeforeFilter = stations.length;
       const matched: typeof stations = [];
       for (const station of stations) {
         const nameKey = normalizeMatchKey(station.info?.name ?? '');
@@ -439,6 +447,16 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
         this.log.warn(`stationFilter is set but matched zero stations in the AWN response. `
           + `Filter values: [${[...stationMatchers].join(', ')}]. No accessories will be exposed by this platform instance.`);
         this.warnedStationFilterEmpty = true;
+      } else if (matched.length > 0 && !this.loggedStationFilterSummary) {
+        // Positive confirmation that the filter is active. Without
+        // this, a user whose filter matches every available station
+        // sees zero "filtered out" lines and assumes the filter
+        // isn't doing anything. This line fires regardless of how
+        // many stations matched — once per session, on the first
+        // tick where at least one station passes.
+        this.log.info(`stationFilter active: [${[...stationMatchers].join(', ')}] — `
+          + `${matched.length} of ${totalBeforeFilter} station(s) passed`);
+        this.loggedStationFilterSummary = true;
       }
       stations = matched;
     }

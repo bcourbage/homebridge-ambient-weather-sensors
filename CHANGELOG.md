@@ -9,6 +9,27 @@ entries short and user-facing.
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/
 
+## [1.5.0-beta.20] — 2026-06-13
+
+### Changed
+
+- **Station Filter moved above Exclude / Include Only in the config
+  form.** It operates at the station level — dropping whole stations
+  before any per-sensor processing — so the coarser-granularity
+  filter belongs above the per-sensor allowlist/blocklist. Help text
+  updated to clarify the relationship.
+
+### Added
+
+- **Positive confirmation log line when `stationFilter` is active.**
+  Without it, a user whose filter matches every available station
+  saw zero "filtered out" log lines and reasonably assumed the
+  filter wasn't doing anything. New line fires once per session on
+  the first tick where at least one station passes the filter:
+  `stationFilter active: [Fairhills WS-2000] — 1 of 1 station(s) passed`.
+  Complements the existing one-time warn when the filter matches
+  zero stations.
+
 ## [1.5.0-beta.19] — 2026-06-13
 
 ### Added

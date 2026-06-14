@@ -418,6 +418,21 @@
       "helpvalue": "<p>Polling fetches the AWN REST endpoint every 2 minutes. Realtime opens a websocket to rt2.ambientweather.net and receives updates as the station reports them (typically ~30s indoors). Realtime is opt-in for now; the default will switch to realtime in a future release once it has been broadly validated.</p><p>Selecting None uses the default (polling).</p>"
     },
     {
+      "key": "stationFilter",
+      "type": "array",
+      "items": [
+        {
+          "key": "stationFilter[]",
+          "type": "string",
+          "placeholder": "e.g. Backyard WS-2000"
+        }
+      ]
+    },
+    {
+      "type": "help",
+      "helpvalue": "<p>Station Filter operates at the station level — drops whole stations before any per-sensor processing — so it sits above the per-sensor filters below. The primary use case is multi-Home setups: create a second platform entry in your config.json (use the JSON Config menu) with its own <code>_bridge</code> block and its own Station Filter pointing at the station(s) you want in the other HomeKit Home. See <a href='https://github.com/bcourbage/homebridge-ambient-weather-sensors/blob/main/MultiHome.md'>MultiHome.md</a> for the full walkthrough.</p>"
+    },
+    {
       "key": "excludeSensors",
       "type": "array",
       "items": [
@@ -438,21 +453,6 @@
           "placeholder": "e.g. Backyard Station"
         }
       ]
-    },
-    {
-      "key": "stationFilter",
-      "type": "array",
-      "items": [
-        {
-          "key": "stationFilter[]",
-          "type": "string",
-          "placeholder": "e.g. Backyard WS-2000"
-        }
-      ]
-    },
-    {
-      "type": "help",
-      "helpvalue": "<p>Station Filter is the recommended way to split stations across multiple HomeKit Homes. For multi-Home setups, create a second platform entry in your config.json (use the JSON Config menu) with its own <code>_bridge</code> block and its own Station Filter pointing at the station(s) you want in the other Home. See <a href='https://github.com/bcourbage/homebridge-ambient-weather-sensors/blob/main/MultiHome.md'>MultiHome.md</a> for the full walkthrough.</p>"
     }
   ]
 }
