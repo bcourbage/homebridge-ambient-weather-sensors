@@ -1,0 +1,1 @@
+{"version":3,"file":"batteryService.d.ts","sourceRoot":"","sources":["../src/batteryService.ts"],"names":[],"mappings":"AAAA,OAAO,EAAE,iBAAiB,EAAE,MAAM,YAAY,CAAC;AAE/C,OAAO,KAAK,EAAE,6BAA6B,EAAE,MAAM,eAAe,CAAC;AAEnE;;;;;;;;;;;;;;;;;;;;;;;;;GAyBG;AACH,wBAAgB,mBAAmB,CACjC,QAAQ,EAAE,6BAA6B,EACvC,SAAS,EAAE,iBAAiB,GAC3B,CAAC,CAAC,GAAG,EAAE,OAAO,KAAK,IAAI,CAAC,GAAG,SAAS,CAwCtC"}

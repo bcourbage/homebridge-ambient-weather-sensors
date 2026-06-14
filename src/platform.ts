@@ -137,6 +137,17 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
   private readonly loggedExcludeHits = new Set<string>();
   private readonly loggedIncludeMisses = new Set<string>();
 
+  // Same per-session-once log policy for stationFilter drops. The key
+  // is the station MAC address (stable, present on every AWN payload)
+  // so we surface one info-level line per dropped station per
+  // Homebridge restart and stay quiet thereafter.
+  private readonly loggedStationFilterDrops = new Set<string>();
+
+  // Tripped if stationFilter is set but matches zero stations in the
+  // AWN response. Warn once per session — this is a config error the
+  // user has to fix, not a transient situation.
+  private warnedStationFilterEmpty = false;
+
   // Handle for the platform-level poll timer so we never start two.
   private pollTimer: ReturnType<typeof setInterval> | undefined;
 
@@ -370,6 +381,43 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
     // accidentally match every sensor.
     const includeMatchers = toMatcherSet(this.config.includeOnly);
     const excludeMatchers = toMatcherSet(this.config.excludeSensors);
+    const stationMatchers = toMatcherSet(this.config.stationFilter);
+
+    // Apply stationFilter at the station level BEFORE any per-sensor
+    // processing. The filter is the supported way to split stations
+    // across multiple HomeKit Homes: each platform instance gets its
+    // own filter, its own child bridge, and exposes only the stations
+    // matching its filter. Match accepts either AWN's `info.name` or
+    // the station's MAC address — MAC is more stable if the user
+    // renames stations in the AWN app.
+    //
+    // When stationFilter is empty (the default), no filtering happens
+    // and behavior is identical to v1.5.0-beta.17 and earlier.
+    let stations: Array<{ macAddress: string; info?: { name?: string }; lastData: Record<string, unknown> }> =
+      Array.isArray(json) ? json : [];
+
+    if (stationMatchers.size > 0) {
+      const matched: typeof stations = [];
+      for (const station of stations) {
+        const nameKey = normalizeMatchKey(station.info?.name ?? '');
+        const macKey = normalizeMatchKey(station.macAddress ?? '');
+        const hit = (nameKey.length > 0 && stationMatchers.has(nameKey))
+          || (macKey.length > 0 && stationMatchers.has(macKey));
+        if (hit) {
+          matched.push(station);
+        } else if (!this.loggedStationFilterDrops.has(station.macAddress)) {
+          this.log.info(`Station "${station.info?.name ?? '(unnamed)'}" (MAC: ${station.macAddress}) `
+            + 'filtered out by stationFilter');
+          this.loggedStationFilterDrops.add(station.macAddress);
+        }
+      }
+      if (matched.length === 0 && !this.warnedStationFilterEmpty) {
+        this.log.warn(`stationFilter is set but matched zero stations in the AWN response. `
+          + `Filter values: [${[...stationMatchers].join(', ')}]. No accessories will be exposed by this platform instance.`);
+        this.warnedStationFilterEmpty = true;
+      }
+      stations = matched;
+    }
 
     // Detect whether the user has multiple AWN stations on this
     // account. The accessory displayName uses a station prefix only
@@ -377,10 +425,16 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
     // "Indoor Temperature" tiles, multi-station users get
     // "Backyard Station Indoor Temperature" / "Garage Station
     // Indoor Temperature" for disambiguation. See composeDisplayName.
-    const isMultiStation = Array.isArray(json) && json.length > 1;
+    //
+    // This is recomputed AFTER stationFilter has been applied. A
+    // multi-Home setup with one station per platform instance gets
+    // bare tile names in each Home (since each instance sees exactly
+    // one station post-filter); a multi-station-single-home setup
+    // sees multiple stations and gets prefixed names for clarity.
+    const isMultiStation = stations.length > 1;
 
-    if (Array.isArray(json)) {
-      json.forEach( (obj) => {
+    if (stations.length > 0) {
+      stations.forEach( (obj) => {
         Object.entries(obj.lastData).forEach( (device) => {
           const sensorKey = device[0];
           const type = this.determineSensorType(sensorKey);

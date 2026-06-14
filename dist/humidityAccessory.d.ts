@@ -4,7 +4,9 @@ export declare class HumidityAccessory implements SensorAccessory {
     private readonly platform;
     private readonly accessory;
     private service;
+    private readonly batterySetter?;
     constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory);
+    setBatteryLow(batteryLow: boolean): void;
     /**
      * Push a fresh raw AWN humidity reading (0-100 %) into the HomeKit
      * characteristic. Called by the platform's poll tick.

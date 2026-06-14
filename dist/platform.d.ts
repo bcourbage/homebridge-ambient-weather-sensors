@@ -9,6 +9,17 @@ import { DEVICE } from './types.js';
  */
 export interface SensorAccessory {
     setValue(rawValue: number): void;
+    /**
+     * Optional hook for per-probe battery state. Implementations that
+     * advertise a Battery sub-service should override this to flip
+     * `StatusLowBattery` based on the boolean. Called by the polling
+     * and realtime fanout in addition to `setValue` on each tick.
+     *
+     * Default no-op for accessories that don't expose a battery — the
+     * platform calls this blindly and lets the wrapper decide whether
+     * to act.
+     */
+    setBatteryLow?(batteryLow: boolean): void;
 }
 export declare class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
     readonly log: Logger;
@@ -18,17 +29,34 @@ export declare class AmbientWeatherSensorsPlatform implements DynamicPlatformPlu
     readonly Characteristic: typeof Characteristic;
     readonly accessories: PlatformAccessory[];
     private readonly wrappers;
+    private readonly loggedExcludeHits;
+    private readonly loggedIncludeMisses;
+    private readonly loggedStationFilterDrops;
+    private warnedStationFilterEmpty;
     private pollTimer;
     private realtimeSource;
     constructor(log: Logger, config: PlatformConfig, api: API);
     configureAccessory(accessory: PlatformAccessory): void;
-    determineSensorType(sensor: string): "Solar Radiation" | "CO2" | "Temperature" | "Humidity" | "PM2.5" | "PM10" | "NOT_SUPPORTED";
+    determineSensorType(sensor: string): "Solar Radiation" | "CO2" | "Temperature" | "Humidity" | "PM2.5" | "PM10" | "NOT_SUPPORTED" | "WindSpeed" | "WindGust" | "WindMaxDailyGust" | "WindDirection" | "WindDirection10m" | "RainRate" | "RainEvent" | "RainDaily" | "RainWeekly" | "RainMonthly" | "RainYearly" | "LastRain" | "PressureRelative" | "PressureAbsolute" | "UV" | "LightningDay" | "LightningHour" | "LightningDistance" | "LightningLastStrike";
     /**
      * Compose a HAP-clean accessory displayName from station + sensor
-     * metadata. Form: `${station_name} ${sensor_label}` when the user has
-     * set a station name on ambientweather.net (e.g.
-     * "Fairhills WS 2000 Indoor Temperature"), otherwise
-     * `${mac_no_colons} ${sensor_label}` as a last-resort disambiguator.
+     * metadata.
+     *
+     * Single-station setups (the vast majority) get just the sensor
+     * label — e.g. "Indoor Temperature" — so the Apple Home tile reads
+     * cleanly without a station prefix. Multi-station setups get the
+     * prefix to disambiguate — e.g. "Backyard Station Indoor
+     * Temperature" — falling back to `${mac_no_colons} ${sensor_label}`
+     * if the user hasn't set a station name on ambientweather.net.
+     *
+     * Why the split: Apple Home's tile only honors a custom Name field
+     * after the user explicitly renames via the Home app (the rename
+     * action flips an internal "user-confirmed" flag; programmatic
+     * `setCharacteristic` from the accessory side doesn't). Until then,
+     * the tile shows `accessory.displayName` verbatim. So for the
+     * single-station case where the station prefix is redundant, we
+     * have to drop it at the displayName level — not at the service
+     * Name level — to get clean tiles by default.
      *
      * City/state are intentionally NOT included even though the API
      * supplies them: HomeKit's room/home hierarchy already gives users a
@@ -42,7 +70,7 @@ export declare class AmbientWeatherSensorsPlatform implements DynamicPlatformPlu
         info?: {
             name?: string;
         };
-    }, sensorKey: string): string;
+    }, sensorKey: string, isMultiStation: boolean): string;
     parseDevices(json: any): DEVICE[];
     sleep: (delay: any) => Promise<unknown>;
     fetchDevices(): any;

@@ -1,3 +1,4 @@
+import { setupBatteryService } from './batteryService.js';
 export class SolarRadiationAccessory {
     constructor(platform, accessory) {
         this.platform = platform;
@@ -19,9 +20,13 @@ export class SolarRadiationAccessory {
             minValue: 0,
             maxValue: 200000,
         });
+        this.batterySetter = setupBatteryService(this.platform, this.accessory);
         if (typeof accessory.context.device.value === 'number') {
             this.setValue(accessory.context.device.value);
         }
+    }
+    setBatteryLow(batteryLow) {
+        this.batterySetter?.(batteryLow);
     }
     /**
      * Push a fresh raw AWN solar-radiation reading (W/m²) into the HomeKit

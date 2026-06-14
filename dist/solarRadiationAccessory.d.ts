@@ -4,7 +4,9 @@ export declare class SolarRadiationAccessory implements SensorAccessory {
     private readonly platform;
     private readonly accessory;
     private service;
+    private readonly batterySetter?;
     constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory);
+    setBatteryLow(batteryLow: boolean): void;
     /**
      * Push a fresh raw AWN solar-radiation reading (W/m²) into the HomeKit
      * LightSensor characteristic after converting to lux. Called by the

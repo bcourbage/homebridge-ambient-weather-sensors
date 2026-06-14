@@ -9,6 +9,44 @@ entries short and user-facing.
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/
 
+## [1.5.0-beta.18] — 2026-06-13
+
+### Added
+
+- **`stationFilter` config field** for multi-Home setups. Accepts an
+  array of station names or MAC addresses; when set, the platform
+  instance only sees the matching stations (everything else is
+  dropped before sensor processing). Combined with multiple platform
+  instances in `config.json` and Homebridge child bridges, this lets
+  users with stations in physically separate places (main house +
+  cabin, primary + rental property, etc.) expose each station in its
+  own HomeKit Home. The plugin's existing `isMultiStation` logic is
+  recomputed after filtering, so an instance reduced to one station
+  gets bare tile names ("Outdoor Temperature") while an instance
+  retaining multiple stations keeps the disambiguating prefix
+  ("Cabin Outdoor Temperature").
+
+- **`MultiHome.md`** — full walkthrough for splitting stations
+  across HomeKit Homes: concepts, step-by-step setup, variations,
+  troubleshooting. Linked from `README.md` Features section and
+  from the `UPGRADING.md` FAQ.
+
+- **`docs/future/tabbed-config-ui.md`** — design proposal for a
+  custom Angular-based plugin config UI with per-Home tabs that
+  would replace the JSON-Config workflow for multi-Home setups.
+  Deferred for now (zero confirmed multi-Home users, ~2-3 weeks of
+  dev effort); revisit triggers documented in the proposal.
+
+### Changed
+
+- Tile names are now bare in a multi-Home setup where each platform
+  instance has been filtered down to one station, even though the
+  underlying AWN account has multiple stations. Previously the
+  `isMultiStation` boolean used the unfiltered AWN response and
+  multi-Home users would have seen station-prefixed tile names in
+  each Home. The recompute happens silently — no migration needed
+  for users not using `stationFilter`.
+
 ## [1.5.0-beta.17] — 2026-06-13
 
 ### Fixed

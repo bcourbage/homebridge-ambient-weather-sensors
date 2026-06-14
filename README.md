@@ -44,6 +44,7 @@ This plugin allows you to pull sensor data from your Ambient Weather weather sta
 ## Features
 - Supports parsing sensors attached to multiple weather stations
 - Two data sources: REST polling (default, 2 minute cadence) or websocket realtime updates (opt-in)
+- **Multi-Home support** for users with stations in physically separate places (main house + cabin, primary residence + rental, etc.). Each station can appear in its own HomeKit Home via the `stationFilter` config field and Homebridge child bridges. See [MultiHome.md](./MultiHome.md) for the full walkthrough.
 
 ## Data Source
 The plugin can read sensor values one of two ways. Pick whichever fits your setup; both feed the same HomeKit accessories.
@@ -150,7 +151,7 @@ This fork exists only because upstream activity has been quiet (last commit Febr
 - PM2.5 / PM10 (AQIN) support as HomeKit `AirQualitySensor` with EPA-bucket-derived AirQuality enum
 - API/application keys masked as password fields in homebridge-config-ui-x
 - Independent latent bug fixes (`Cache.isValid()` async-in-sync, ProductData characteristic on the wrong service, etc.)
-- **v1.5.0** — Extended sensors (wind, rain, barometric pressure, UV, lightning) exposed as `MotionSensor` accessories with custom Value/Intensity/Last-Updated characteristics; threshold-driven Apple Home automations; optional embed-value tile mode; per-unit selection; bonus native sensors (feels-like and dew point per probe)
+- **v1.5.0** — Extended sensors (wind, rain, barometric pressure, UV, lightning) exposed as `MotionSensor` accessories with custom Value/Intensity/Last-Updated characteristics; threshold-driven Apple Home automations; optional embed-value tile mode; per-unit selection; bonus native sensors (feels-like and dew point per probe); `stationFilter` field for assigning stations to separate HomeKit Homes via child bridges (see [MultiHome.md](./MultiHome.md))
 
 ### License
 

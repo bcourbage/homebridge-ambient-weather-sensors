@@ -1,3 +1,4 @@
+import { setupBatteryService } from './batteryService.js';
 export class TemperatureAccessory {
     constructor(platform, accessory) {
         this.platform = platform;
@@ -12,11 +13,19 @@ export class TemperatureAccessory {
             || this.accessory.addService(this.platform.Service.TemperatureSensor);
         // set the service name, this is what is displayed as the default name on the Home app
         this.service.setCharacteristic(this.platform.Characteristic.Name, accessory.context.device.displayName);
+        // Attach a Battery sub-service driven by the corresponding batt*
+        // field for this sensor's physical probe. Returns undefined (and
+        // skips the sub-service) when AWN doesn't report a battery for
+        // the probe — see batteryService.ts.
+        this.batterySetter = setupBatteryService(this.platform, this.accessory);
         // Seed the characteristic with whatever value is cached on the accessory
         // so HomeKit has something sensible to display until the first poll tick.
         if (typeof accessory.context.device.value === 'number') {
             this.setValue(accessory.context.device.value);
         }
+    }
+    setBatteryLow(batteryLow) {
+        this.batterySetter?.(batteryLow);
     }
     fahrenheitToCelsius(temperature) {
         return (temperature - 32) * 5 / 9;

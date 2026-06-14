@@ -260,6 +260,19 @@
         "examples": [
           ["Backyard Station", "Outdoor Temperature"]
         ]
+      },
+      "stationFilter": {
+        "title": "Station Filter (limit this plugin instance to specific stations)",
+        "type": "array",
+        "description": "If set, this plugin instance only sees the stations whose name or MAC address matches one of these entries. Everything else is dropped before any sensor processing. Match is case-insensitive and whitespace-trimmed. The primary use case is multi-Home setups: create one platform instance per HomeKit Home with its own child bridge, and use stationFilter to assign each station to its instance. See MultiHome.md in the repo. When the filter reduces this instance to exactly one station, tile names are automatically rendered without a station prefix (clean single-station naming). When the filter leaves multiple stations in this instance, the station prefix is preserved for disambiguation.",
+        "items": {
+          "type": "string",
+          "placeholder": "e.g. Backyard WS-2000 or AA:BB:CC:DD:EE:FF"
+        },
+        "examples": [
+          ["Backyard WS-2000"],
+          ["Main House WS-2000", "Front Yard WS-5000"]
+        ]
       }
     }
   },
@@ -425,6 +438,21 @@
           "placeholder": "e.g. Backyard Station"
         }
       ]
+    },
+    {
+      "key": "stationFilter",
+      "type": "array",
+      "items": [
+        {
+          "key": "stationFilter[]",
+          "type": "string",
+          "placeholder": "e.g. Backyard WS-2000"
+        }
+      ]
+    },
+    {
+      "type": "help",
+      "helpvalue": "<p>Station Filter is the recommended way to split stations across multiple HomeKit Homes. For multi-Home setups, create a second platform entry in your config.json (use the JSON Config menu) with its own <code>_bridge</code> block and its own Station Filter pointing at the station(s) you want in the other Home. See <a href='https://github.com/bcourbage/homebridge-ambient-weather-sensors/blob/main/MultiHome.md'>MultiHome.md</a> for the full walkthrough.</p>"
     }
   ]
 }

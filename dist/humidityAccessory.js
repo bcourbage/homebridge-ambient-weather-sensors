@@ -1,3 +1,4 @@
+import { setupBatteryService } from './batteryService.js';
 export class HumidityAccessory {
     constructor(platform, accessory) {
         this.platform = platform;
@@ -13,9 +14,13 @@ export class HumidityAccessory {
             || this.accessory.addService(this.platform.Service.HumiditySensor);
         // set the service name, this is what is displayed as the default name on the Home app
         this.service.setCharacteristic(this.platform.Characteristic.Name, accessory.context.device.displayName);
+        this.batterySetter = setupBatteryService(this.platform, this.accessory);
         if (typeof accessory.context.device.value === 'number') {
             this.setValue(accessory.context.device.value);
         }
+    }
+    setBatteryLow(batteryLow) {
+        this.batterySetter?.(batteryLow);
     }
     /**
      * Push a fresh raw AWN humidity reading (0-100 %) into the HomeKit

@@ -1,5 +1,11 @@
 import { AirQualityAccessory } from './airQualityAccessory.js';
+import { batteryFieldForSensor, isCanonicalSensorForBattery, readBatteryLow } from './batteryFields.js';
 import { Co2Accessory } from './co2Accessory.js';
+import { LightningDayAccessory, LightningDistanceAccessory, LightningHourAccessory, LightningLastStrikeAccessory, } from './extendedSensors/lightningAccessory.js';
+import { PressureAbsoluteAccessory, PressureRelativeAccessory, } from './extendedSensors/pressureAccessory.js';
+import { LastRainAccessory, RainDailyAccessory, RainEventAccessory, RainMonthlyAccessory, RainRateAccessory, RainWeeklyAccessory, RainYearlyAccessory, } from './extendedSensors/rainAccessory.js';
+import { UvAccessory } from './extendedSensors/uvAccessory.js';
+import { WindDirection10mAccessory, WindDirectionAccessory, WindGustAccessory, WindMaxDailyGustAccessory, WindSpeedAccessory, } from './extendedSensors/windAccessory.js';
 import { HumidityAccessory } from './humidityAccessory.js';
 import { RealtimeSource } from './realtimeSource.js';
 import { friendlySensorName } from './sensorNames.js';
@@ -67,6 +73,26 @@ export class AmbientWeatherSensorsPlatform {
         // looked up by the poll tick to fan out fresh API values without each
         // wrapper having to call fetchDevices() on its own timer.
         this.wrappers = new Map();
+        // Tracks which sensors have already been logged as excluded this
+        // session, so we surface one info-level log per excluded sensor
+        // per Homebridge restart instead of one per poll tick. Subsequent
+        // poll iterations still debug-log so the verbose path is intact
+        // for users who run with HB_LOG_LEVEL=debug. SmartThings follows
+        // the same pattern (see homebridge-smartthings-oauth's startup
+        // "Ignoring X because..." lines) and it's the right shape — users
+        // need confirmation their exclude/include filters are working,
+        // but not on every fetch.
+        this.loggedExcludeHits = new Set();
+        this.loggedIncludeMisses = new Set();
+        // Same per-session-once log policy for stationFilter drops. The key
+        // is the station MAC address (stable, present on every AWN payload)
+        // so we surface one info-level line per dropped station per
+        // Homebridge restart and stay quiet thereafter.
+        this.loggedStationFilterDrops = new Set();
+        // Tripped if stationFilter is set but matches zero stations in the
+        // AWN response. Warn once per session — this is a config error the
+        // user has to fix, not a transient situation.
+        this.warnedStationFilterEmpty = false;
         this.sleep = (delay) => new Promise((resolve) => setTimeout(resolve, delay));
         this.log.debug('Finished initializing platform:', this.config.platform);
         this.api.on('didFinishLaunching', () => {
@@ -95,7 +121,17 @@ export class AmbientWeatherSensorsPlatform {
         // also indiscriminately. The newer matchers below use stricter
         // regexes to avoid catching battery-status keys like `batt_co2` or
         // AQIN's own internal temperature key `pm_in_temp_aqin`.
-        if (sensor.includes('temp') && this.config.temperatureSensors) {
+        //
+        // NOTE on the `aqi_pm25*` family: AWN reports `999` as a "no
+        // sensor present" sentinel on the base station's outdoor PM
+        // fields when only the AQIN has working PM hardware. The `pm25`
+        // regex below uses `^pm25($|_)` (anchored start), which
+        // deliberately does NOT match `aqi_pm25_*` keys — those are
+        // pre-computed AQI values, not raw PM concentrations, and they
+        // can carry sentinel values that would mislead HomeKit users.
+        // If a future change loosens the regex, re-check this guard.
+        if ((sensor.includes('temp') || sensor.includes('feelsLike') || sensor.includes('dewPoint'))
+            && this.config.temperatureSensors) {
             return 'Temperature';
         }
         else if (sensor.includes('humid') && this.config.humiditySensors) {
@@ -112,23 +148,128 @@ export class AmbientWeatherSensorsPlatform {
         }
         else if (/^pm10($|_)/.test(sensor) && this.config.airQualitySensors) {
             return 'PM10';
-            // } else if (sensor.includes('baromabs') && this.config.barometricSensors) {
-            //   return 'Barometric Pressure';
-            // } else if (sensor.includes('windspeed') && this.config.windSensors) {
-            //   return 'Wind Speed';
-            // } else if (sensor === 'winddir' && this.config.windSensors) {
-            //   return 'Wind Direction';
         }
-        else {
+        // Extended sensors (v1.5.0). Gated by the master toggle
+        // `extendedSensors` AND a per-category sub-toggle. Both must be
+        // truthy for the type to be returned — so a user who hasn't opted
+        // in sees no behavior change vs. v1.4.x.
+        //
+        // Additionally, each user-configurable threshold has an explicit
+        // per-threshold enable checkbox in the config form (default true).
+        // When the checkbox is unchecked, the corresponding sensor
+        // accessory is hidden from HomeKit. This replaces the beta.6
+        // "blank threshold = hide" mechanic because homebridge-config-ui-x
+        // re-injects schema defaults into blanked number fields, making
+        // "blank" impossible to express through the form.
+        //
+        // Sensors without a user-configurable threshold (wind direction,
+        // rain accumulation totals, last-event timestamps, lightning
+        // counts) have no enable checkbox; they appear whenever their
+        // category is on. Use Exclude Sensors to hide them individually.
+        if (!this.config.extendedSensors) {
             return 'NOT_SUPPORTED';
         }
+        const thresholds = this.config.thresholds ?? {};
+        // Default-true semantics: only explicit `false` disables the
+        // sensor. Undefined (first install, never touched the form) or
+        // any non-false value means enabled.
+        const enabled = (v) => v !== false;
+        if (this.config.windSensors) {
+            if (sensor === 'windspeedmph') {
+                return enabled(thresholds.windSpeedEnabled) ? 'WindSpeed' : 'NOT_SUPPORTED';
+            }
+            if (sensor === 'windgustmph') {
+                return enabled(thresholds.windGustEnabled) ? 'WindGust' : 'NOT_SUPPORTED';
+            }
+            if (sensor === 'maxdailygust') {
+                // Max Daily Gust shares the windGustEnabled toggle with Wind Gust.
+                return enabled(thresholds.windGustEnabled) ? 'WindMaxDailyGust' : 'NOT_SUPPORTED';
+            }
+            if (sensor === 'winddir') {
+                return 'WindDirection';
+            }
+            if (sensor === 'winddir_avg10m') {
+                return 'WindDirection10m';
+            }
+        }
+        if (this.config.rainSensors) {
+            if (sensor === 'hourlyrainin') {
+                return enabled(thresholds.rainRateEnabled) ? 'RainRate' : 'NOT_SUPPORTED';
+            }
+            // Accumulation totals and lastRain have no user-configurable
+            // threshold — they trigger on any non-zero accumulation /
+            // any reported timestamp, and stay visible while the category is on.
+            if (sensor === 'eventrainin') {
+                return 'RainEvent';
+            }
+            if (sensor === 'dailyrainin') {
+                return 'RainDaily';
+            }
+            if (sensor === 'weeklyrainin') {
+                return 'RainWeekly';
+            }
+            if (sensor === 'monthlyrainin') {
+                return 'RainMonthly';
+            }
+            if (sensor === 'yearlyrainin') {
+                return 'RainYearly';
+            }
+            if (sensor === 'lastRain') {
+                return 'LastRain';
+            }
+        }
+        if (this.config.pressureSensors) {
+            // Both pressure accessories share the pressureEnabled toggle.
+            if (sensor === 'baromrelin') {
+                return enabled(thresholds.pressureEnabled) ? 'PressureRelative' : 'NOT_SUPPORTED';
+            }
+            if (sensor === 'baromabsin') {
+                return enabled(thresholds.pressureEnabled) ? 'PressureAbsolute' : 'NOT_SUPPORTED';
+            }
+        }
+        if (this.config.uvSensors) {
+            if (sensor === 'uv') {
+                return enabled(thresholds.uvEnabled) ? 'UV' : 'NOT_SUPPORTED';
+            }
+        }
+        if (this.config.lightningSensors) {
+            // Strike counts (day/hour) and last-strike timestamp have no
+            // user-configurable threshold; they stay visible while the
+            // category is on. Distance is the one configurable trigger.
+            if (sensor === 'lightning_day') {
+                return 'LightningDay';
+            }
+            if (sensor === 'lightning_hour') {
+                return 'LightningHour';
+            }
+            if (sensor === 'lightning_distance') {
+                return enabled(thresholds.lightningDistanceEnabled) ? 'LightningDistance' : 'NOT_SUPPORTED';
+            }
+            if (sensor === 'lightning_time') {
+                return 'LightningLastStrike';
+            }
+        }
+        return 'NOT_SUPPORTED';
     }
     /**
      * Compose a HAP-clean accessory displayName from station + sensor
-     * metadata. Form: `${station_name} ${sensor_label}` when the user has
-     * set a station name on ambientweather.net (e.g.
-     * "Fairhills WS 2000 Indoor Temperature"), otherwise
-     * `${mac_no_colons} ${sensor_label}` as a last-resort disambiguator.
+     * metadata.
+     *
+     * Single-station setups (the vast majority) get just the sensor
+     * label — e.g. "Indoor Temperature" — so the Apple Home tile reads
+     * cleanly without a station prefix. Multi-station setups get the
+     * prefix to disambiguate — e.g. "Backyard Station Indoor
+     * Temperature" — falling back to `${mac_no_colons} ${sensor_label}`
+     * if the user hasn't set a station name on ambientweather.net.
+     *
+     * Why the split: Apple Home's tile only honors a custom Name field
+     * after the user explicitly renames via the Home app (the rename
+     * action flips an internal "user-confirmed" flag; programmatic
+     * `setCharacteristic` from the accessory side doesn't). Until then,
+     * the tile shows `accessory.displayName` verbatim. So for the
+     * single-station case where the station prefix is redundant, we
+     * have to drop it at the displayName level — not at the service
+     * Name level — to get clean tiles by default.
      *
      * City/state are intentionally NOT included even though the API
      * supplies them: HomeKit's room/home hierarchy already gives users a
@@ -137,10 +278,13 @@ export class AmbientWeatherSensorsPlatform {
      *
      * Truncates from the right to HAP 2.x's 64-character `Name` limit.
      */
-    composeDisplayName(obj, sensorKey) {
+    composeDisplayName(obj, sensorKey, isMultiStation) {
+        const sensorLabel = friendlySensorName(sensorKey);
+        if (!isMultiStation) {
+            return hapClean(sensorLabel);
+        }
         const stationName = hapClean(obj.info?.name ?? '');
         const macFallback = obj.macAddress.replaceAll(':', '');
-        const sensorLabel = friendlySensorName(sensorKey);
         const baseName = stationName || macFallback;
         const composed = hapClean(`${baseName} ${sensorLabel}`);
         return composed.length <= HAP_NAME_MAX ? composed : composed.slice(0, HAP_NAME_MAX).trim();
@@ -155,8 +299,56 @@ export class AmbientWeatherSensorsPlatform {
         // accidentally match every sensor.
         const includeMatchers = toMatcherSet(this.config.includeOnly);
         const excludeMatchers = toMatcherSet(this.config.excludeSensors);
-        if (Array.isArray(json)) {
-            json.forEach((obj) => {
+        const stationMatchers = toMatcherSet(this.config.stationFilter);
+        // Apply stationFilter at the station level BEFORE any per-sensor
+        // processing. The filter is the supported way to split stations
+        // across multiple HomeKit Homes: each platform instance gets its
+        // own filter, its own child bridge, and exposes only the stations
+        // matching its filter. Match accepts either AWN's `info.name` or
+        // the station's MAC address — MAC is more stable if the user
+        // renames stations in the AWN app.
+        //
+        // When stationFilter is empty (the default), no filtering happens
+        // and behavior is identical to v1.5.0-beta.17 and earlier.
+        let stations = Array.isArray(json) ? json : [];
+        if (stationMatchers.size > 0) {
+            const matched = [];
+            for (const station of stations) {
+                const nameKey = normalizeMatchKey(station.info?.name ?? '');
+                const macKey = normalizeMatchKey(station.macAddress ?? '');
+                const hit = (nameKey.length > 0 && stationMatchers.has(nameKey))
+                    || (macKey.length > 0 && stationMatchers.has(macKey));
+                if (hit) {
+                    matched.push(station);
+                }
+                else if (!this.loggedStationFilterDrops.has(station.macAddress)) {
+                    this.log.info(`Station "${station.info?.name ?? '(unnamed)'}" (MAC: ${station.macAddress}) `
+                        + 'filtered out by stationFilter');
+                    this.loggedStationFilterDrops.add(station.macAddress);
+                }
+            }
+            if (matched.length === 0 && !this.warnedStationFilterEmpty) {
+                this.log.warn(`stationFilter is set but matched zero stations in the AWN response. `
+                    + `Filter values: [${[...stationMatchers].join(', ')}]. No accessories will be exposed by this platform instance.`);
+                this.warnedStationFilterEmpty = true;
+            }
+            stations = matched;
+        }
+        // Detect whether the user has multiple AWN stations on this
+        // account. The accessory displayName uses a station prefix only
+        // when this is true — single-station users get clean
+        // "Indoor Temperature" tiles, multi-station users get
+        // "Backyard Station Indoor Temperature" / "Garage Station
+        // Indoor Temperature" for disambiguation. See composeDisplayName.
+        //
+        // This is recomputed AFTER stationFilter has been applied. A
+        // multi-Home setup with one station per platform instance gets
+        // bare tile names in each Home (since each instance sees exactly
+        // one station post-filter); a multi-station-single-home setup
+        // sees multiple stations and gets prefixed names for clarity.
+        const isMultiStation = stations.length > 1;
+        if (stations.length > 0) {
+            stations.forEach((obj) => {
                 Object.entries(obj.lastData).forEach((device) => {
                     const sensorKey = device[0];
                     const type = this.determineSensorType(sensorKey);
@@ -164,33 +356,94 @@ export class AmbientWeatherSensorsPlatform {
                         return;
                     }
                     const uniqueId = `${obj.macAddress}-${sensorKey}`;
-                    const displayName = this.composeDisplayName(obj, sensorKey);
+                    const displayName = this.composeDisplayName(obj, sensorKey, isMultiStation);
                     // Candidates a user might use to identify this sensor in
                     // their config. Ordered from most-specific to least so the
                     // log messages can pick whichever they hit first if we
                     // wanted that — currently we just check any-match.
+                    //
+                    // Includes BOTH naming styles (with-prefix and without)
+                    // because: (a) on single-station setups the displayName is
+                    // unprefixed but a user may have an existing config entry
+                    // with the old prefixed name from a previous version, and
+                    // (b) on multi-station setups the user may match by either
+                    // the prefixed name or the bare sensor label. Generating
+                    // both forms here lets either work.
+                    //
+                    // `hapClean` is applied to the prefixedForm so that any
+                    // non-alphanumeric characters in AWN's `info.name` (hyphens,
+                    // periods, etc.) are stripped. The pre-beta.15 displayName
+                    // also passed through hapClean, so user excludeSensors
+                    // entries that match the old cleaned name (e.g.
+                    // "Fairhills WS 2000 Indoor Dew Point" from a station whose
+                    // raw AWN name is "Fairhills WS-2000") continue to match.
+                    const stationName = obj.info?.name ?? '';
+                    const prefixedForm = stationName ? hapClean(`${stationName} ${friendlySensorName(sensorKey)}`) : '';
                     const matchCandidates = [
-                        uniqueId, // 84:F3:EB:66:D2:67-tempinf
-                        displayName, // Fairhills WS 2000 Indoor Temperature
+                        uniqueId, // AA:BB:CC:DD:EE:FF-tempinf
+                        displayName, // current displayName (with or without prefix)
+                        prefixedForm, // always include the prefixed form for back-compat
                         sensorKey, // tempinf
                         friendlySensorName(sensorKey), // Indoor Temperature
-                        obj.macAddress, // 84:F3:EB:66:D2:67
-                        obj.info?.name ?? '', // Fairhills WS-2000 (as user typed in AWN, before hapClean)
+                        obj.macAddress, // AA:BB:CC:DD:EE:FF
+                        stationName, // Backyard Station (as user typed in AWN, before hapClean)
                     ].map(normalizeMatchKey).filter((s) => s.length > 0);
                     if (includeMatchers.size > 0 && !matchCandidates.some((c) => includeMatchers.has(c))) {
-                        this.log.debug(`Excluding ${uniqueId} (not in includeOnly allowlist)`);
+                        // First time we've seen this sensor get filtered out by the
+                        // include-only allowlist this session: surface at info so
+                        // the user sees in the log that their config is being
+                        // honored. Subsequent polls keep the noisier debug path.
+                        if (!this.loggedIncludeMisses.has(uniqueId)) {
+                            this.log.info(`Excluding ${displayName}: not in Include Only These Sensors allowlist`);
+                            this.loggedIncludeMisses.add(uniqueId);
+                        }
+                        else {
+                            this.log.debug(`Excluding ${uniqueId} (not in includeOnly allowlist)`);
+                        }
                         return;
                     }
                     if (excludeMatchers.size > 0 && matchCandidates.some((c) => excludeMatchers.has(c))) {
-                        this.log.debug(`Excluding ${uniqueId} (matched excludeSensors)`);
+                        if (!this.loggedExcludeHits.has(uniqueId)) {
+                            this.log.info(`Excluding ${displayName}: matched Exclude Sensors list`);
+                            this.loggedExcludeHits.add(uniqueId);
+                        }
+                        else {
+                            this.log.debug(`Excluding ${uniqueId} (matched excludeSensors)`);
+                        }
                         return;
                     }
+                    // AWN reports `lastRain` as an ISO-8601 string (e.g.
+                    // "2026-04-21T22:19:00.000Z"); the LastRainAccessory expects
+                    // a Unix-ms number so its formatter can compute a relative
+                    // "time since" string. Convert here so the SensorAccessory
+                    // interface stays uniformly numeric.
+                    let value = device[1];
+                    if (sensorKey === 'lastRain' && typeof device[1] === 'string') {
+                        const parsed = Date.parse(device[1]);
+                        value = Number.isFinite(parsed) ? parsed : 0;
+                    }
+                    // Look up the corresponding battery field for this sensor's
+                    // physical probe and capture the HomeKit-aligned
+                    // low/normal boolean. Only the canonical sensor for each
+                    // battery field gets the Battery sub-service — all other
+                    // sensors sharing the same physical probe get `undefined`
+                    // here so they skip the sub-service entirely. Without
+                    // this dedup, a typical WS-2000 produces 30+ battery
+                    // tiles in Apple Home (one per accessory); with dedup,
+                    // each physical probe shows ONE battery status on its
+                    // most representative sensor (canonical mapping in
+                    // batteryFields.ts).
+                    const batteryField = batteryFieldForSensor(sensorKey);
+                    const batteryLow = (batteryField && isCanonicalSensorForBattery(sensorKey, batteryField))
+                        ? readBatteryLow(obj.lastData, batteryField)
+                        : undefined;
                     Devices.push({
                         macAddress: obj.macAddress,
                         uniqueId,
                         displayName,
                         type,
-                        value: device[1],
+                        value,
+                        batteryLow,
                     });
                 });
             });
@@ -288,6 +541,20 @@ export class AmbientWeatherSensorsPlatform {
                             this.log.info(`Renaming accessory: "${existingAccessory.displayName}" -> "${device.displayName}"`);
                             existingAccessory.displayName = device.displayName;
                         }
+                        // Unconditionally set the AccessoryInformation Name
+                        // characteristic to the current displayName on every
+                        // restore. This is what Apple Home reads for the tile when
+                        // the user hasn't explicitly renamed the accessory via
+                        // Home.app. We do this every restore (not just when the
+                        // displayName diverged) because earlier beta versions of
+                        // this plugin updated `accessory.displayName` without
+                        // updating the HAP-side Name characteristic — accessories
+                        // touched by those betas have a stale Name characteristic
+                        // even though `displayName` is already correct. This
+                        // unconditional update is idempotent and pushes the
+                        // correct value to HAP on every restart.
+                        existingAccessory.getService(this.Service.AccessoryInformation)
+                            ?.updateCharacteristic(this.Characteristic.Name, device.displayName);
                         existingAccessory.context.device = device;
                         this.api.updatePlatformAccessories([existingAccessory]);
                         accessory = existingAccessory;
@@ -341,6 +608,7 @@ export class AmbientWeatherSensorsPlatform {
      */
     createSensorWrapper(accessory) {
         switch (accessory.context.device.type) {
+            // Native HomeKit services (v1.x baseline)
             case 'Temperature':
                 return new TemperatureAccessory(this, accessory);
             case 'Humidity':
@@ -352,6 +620,45 @@ export class AmbientWeatherSensorsPlatform {
             case 'PM2.5':
             case 'PM10':
                 return new AirQualityAccessory(this, accessory);
+            // Extended sensors (v1.5.0) — MotionSensor + custom characteristics.
+            case 'WindSpeed':
+                return new WindSpeedAccessory(this, accessory);
+            case 'WindGust':
+                return new WindGustAccessory(this, accessory);
+            case 'WindMaxDailyGust':
+                return new WindMaxDailyGustAccessory(this, accessory);
+            case 'WindDirection':
+                return new WindDirectionAccessory(this, accessory);
+            case 'WindDirection10m':
+                return new WindDirection10mAccessory(this, accessory);
+            case 'RainRate':
+                return new RainRateAccessory(this, accessory);
+            case 'RainEvent':
+                return new RainEventAccessory(this, accessory);
+            case 'RainDaily':
+                return new RainDailyAccessory(this, accessory);
+            case 'RainWeekly':
+                return new RainWeeklyAccessory(this, accessory);
+            case 'RainMonthly':
+                return new RainMonthlyAccessory(this, accessory);
+            case 'RainYearly':
+                return new RainYearlyAccessory(this, accessory);
+            case 'LastRain':
+                return new LastRainAccessory(this, accessory);
+            case 'PressureRelative':
+                return new PressureRelativeAccessory(this, accessory);
+            case 'PressureAbsolute':
+                return new PressureAbsoluteAccessory(this, accessory);
+            case 'UV':
+                return new UvAccessory(this, accessory);
+            case 'LightningDay':
+                return new LightningDayAccessory(this, accessory);
+            case 'LightningHour':
+                return new LightningHourAccessory(this, accessory);
+            case 'LightningDistance':
+                return new LightningDistanceAccessory(this, accessory);
+            case 'LightningLastStrike':
+                return new LightningLastStrikeAccessory(this, accessory);
             default:
                 return undefined;
         }
@@ -421,6 +728,9 @@ export class AmbientWeatherSensorsPlatform {
             const wrapper = this.wrappers.get(update.uniqueId);
             if (wrapper) {
                 wrapper.setValue(update.value);
+                if (update.batteryLow !== undefined && wrapper.setBatteryLow) {
+                    wrapper.setBatteryLow(update.batteryLow);
+                }
             }
         }
     }

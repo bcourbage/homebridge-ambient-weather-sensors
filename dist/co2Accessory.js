@@ -1,3 +1,4 @@
+import { setupBatteryService } from './batteryService.js';
 // ppm threshold above which HomeKit's CarbonDioxideDetected boolean
 // flips to "abnormal". 1000 ppm is the conventional indoor-air-quality
 // guideline (ASHRAE 62.1) — well-ventilated spaces typically read
@@ -14,9 +15,13 @@ export class Co2Accessory {
         this.service = this.accessory.getService(this.platform.Service.CarbonDioxideSensor)
             || this.accessory.addService(this.platform.Service.CarbonDioxideSensor);
         this.service.setCharacteristic(this.platform.Characteristic.Name, accessory.context.device.displayName);
+        this.batterySetter = setupBatteryService(this.platform, this.accessory);
         if (typeof accessory.context.device.value === 'number') {
             this.setValue(accessory.context.device.value);
         }
+    }
+    setBatteryLow(batteryLow) {
+        this.batterySetter?.(batteryLow);
     }
     /**
      * AWN reports CO2 in ppm directly. HomeKit's CarbonDioxideLevel is

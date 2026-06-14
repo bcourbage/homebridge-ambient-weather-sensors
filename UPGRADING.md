@@ -248,6 +248,20 @@ No — v1.5.0 is fully additive. Every accessory you have today remains, with th
 
 Both plugins now use the same MotionSensor + custom-characteristic pattern, so the tile shapes match. You can use `Exclude Sensors` (in this plugin) and the Ecowitt plugin's `customHidden` map to make sure neither plugin duplicates what the other exposes.
 
+### "I have stations at multiple locations and want them in different Apple Home Homes."
+
+Use the new `stationFilter` config field (added in v1.5.0-beta.18) with multiple platform instances, one per Home. Each instance gets its own Homebridge child bridge that pairs with one Home. Full walkthrough: [MultiHome.md](./MultiHome.md).
+
+Quick version:
+1. Open Homebridge UI → JSON Config
+2. Duplicate the `AmbientWeatherSensors` platform entry, one per Home
+3. Add `stationFilter` to each (array of station names or MACs)
+4. Add a `_bridge` block to each with unique `username` and `port`
+5. Save, restart Homebridge
+6. Pair each child bridge with its target Home from the Status tab
+
+Tile names are bare ("Outdoor Temperature") when an instance's filter resolves to one station, and prefixed ("Cabin Outdoor Temperature") when it resolves to multiple — so each Home gets clean naming automatically.
+
 ---
 
 ## Where to get help
