@@ -9,6 +9,35 @@ entries short and user-facing.
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/
 
+## [1.5.0-beta.23] — 2026-06-14
+
+### Fixed
+
+- **`Cannot read properties of undefined (reading 'toFixed')` crash
+  when LightningDistanceAccessory is being added as a new accessory.**
+  Reported by solmssen on beta.22 after a clean-slate reset that
+  promoted Lightning Distance from cached to fresh-add. Root cause
+  was a constructor-ordering bug: `ExtendedSensorBase`'s constructor
+  ended with a `setValue(cachedValue)` call to seed the tile, but
+  subclasses set their unit/formatter state via `this.field = ...`
+  lines that run AFTER `super()` returns. So `setValue` →
+  `formatValue` would dereference an undefined `this.distanceUnit`,
+  pass it to `convertDistance()`, which is a switch with no default
+  case and returns `undefined`, then `.toFixed()` crashes the
+  `discoverDevices` for-loop — silently dropping every accessory
+  that was supposed to be registered after Lightning Distance
+  (AQIN in solmssen's case). The same ordering bug existed in
+  Wind / Pressure / Rain but didn't crash because their convert
+  functions tolerate undefined; only Distance and Speed switches
+  fall through to undefined.
+
+  Fix: move the seed-from-cache step out of the base-class
+  constructor and into the platform layer (`discoverDevices()`),
+  AFTER the subclass constructor has fully completed and its
+  fields are populated. Also wrapped the seed call in a try/catch
+  as defense-in-depth — a future similar bug would now produce a
+  one-line warn rather than halting platform setup.
+
 ## [1.5.0-beta.22] — 2026-06-13
 
 ### Changed

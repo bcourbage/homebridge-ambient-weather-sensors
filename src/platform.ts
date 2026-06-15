@@ -717,6 +717,24 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
           const wrapper = this.createSensorWrapper(accessory);
           if (wrapper) {
             this.wrappers.set(device.uniqueId, wrapper);
+            // Seed the freshly-constructed wrapper with the current
+            // value so HomeKit has something to display until the
+            // first realtime/poll tick fills it in. This runs AFTER
+            // the subclass constructor returns, so subclass-specific
+            // formatter state (units, etc.) is fully initialized by
+            // now — extended sensors' formatValue calls are safe.
+            // Native wrappers also self-seed in their constructors,
+            // so this is a harmless duplicate for them; for extended
+            // sensors, this is the ONLY seed path. See the comment
+            // in ExtendedSensorBase for why.
+            if (typeof device.value === 'number') {
+              try {
+                wrapper.setValue(device.value);
+              } catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                this.log.warn(`Initial value seed failed for ${device.displayName}: ${message}`);
+              }
+            }
           }
 
           if (!existingAccessory) {

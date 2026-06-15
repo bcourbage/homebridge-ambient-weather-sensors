@@ -139,12 +139,18 @@ export abstract class ExtendedSensorBase implements SensorAccessory {
     // typical station.
     this.batterySetter = setupBatteryService(this.platform, this.accessory);
 
-    // Replay any cached value so the tile isn't blank on the first
-    // poll after a Homebridge restart. Same idiom the native
-    // accessories use.
-    if (typeof accessory.context.device.value === 'number') {
-      this.setValue(accessory.context.device.value);
-    }
+    // NOTE: Don't call setValue() from this constructor. Subclasses
+    // assign their unit-conversion / formatter state AFTER super()
+    // returns, so a setValue invoked from here would observe those
+    // fields as undefined — silently producing "NaN" tiles for most
+    // subclasses, and CRASHING with "Cannot read properties of
+    // undefined (reading 'toFixed')" for LightningDistanceAccessory
+    // because convertDistance() is a switch with no default case and
+    // returns undefined when handed an undefined unit.
+    //
+    // The seed-from-cache call is done by the platform layer in
+    // discoverDevices(), AFTER the subclass constructor has fully
+    // completed — see platform.ts.
   }
 
   setBatteryLow(batteryLow: boolean): void {
