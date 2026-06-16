@@ -33,6 +33,10 @@ const friendlyNames: Record<string, string> = {
   // PM10 — AQIN only as of this writing.
   pm10_in_aqin: 'Indoor PM10',
   pm10_in_24h_aqin: 'Indoor PM10 24h Average',
+  // AQIN module's own internal temperature/humidity sensors — useful
+  // for sensor drift detection. Distinct from the room indoor sensors.
+  pm_in_temp_aqin: 'AQIN Temperature',
+  pm_in_humidity_aqin: 'AQIN Humidity',
   // Extended sensors (v1.5.0) — non-native HomeKit types exposed via
   // MotionSensor + custom characteristics.
   windspeedmph: 'Wind Speed',
@@ -79,4 +83,50 @@ export function friendlySensorName(key: string): string {
     }
   }
   return key;
+}
+
+/**
+ * Inverse of `friendlySensorName`: map a friendly-name string back to
+ * its AWN sensorKey. Used by the platform layer to resolve user-typed
+ * config entries like `"Lightning Strikes Today-batt"` into the
+ * corresponding battery field via `batteryFieldForSensor()`.
+ *
+ * Matching is case-insensitive and whitespace-trimmed, same as the
+ * forward-direction matchers in parseDevices. Returns undefined when
+ * the friendly name doesn't correspond to any known sensor — caller
+ * should treat that as "user typed something we don't recognize" and
+ * fall through to whatever default behavior fits.
+ *
+ * Also handles the numbered-probe friendly-name patterns
+ * (`Temperature 3`, `Humidity 2`, `Feels Like 1`, `Dew Point 4`) by
+ * reconstructing the corresponding numbered sensorKey.
+ */
+export function sensorKeyByFriendlyName(friendly: string): string | undefined {
+  const normalized = friendly.trim().toLowerCase();
+  if (normalized.length === 0) {
+    return undefined;
+  }
+  for (const [key, name] of Object.entries(friendlyNames)) {
+    if (name.toLowerCase() === normalized) {
+      return key;
+    }
+  }
+  // Numbered probes: "temperature 3" → "temp3f", "humidity 2" → "humidity2", etc.
+  const numMatch = normalized.match(/^(temperature|humidity|feels like|dew point)\s+(\d+)$/);
+  if (numMatch) {
+    const [, kind, num] = numMatch;
+    if (kind === 'temperature') {
+      return `temp${num}f`;
+    }
+    if (kind === 'humidity') {
+      return `humidity${num}`;
+    }
+    if (kind === 'feels like') {
+      return `feelsLike${num}`;
+    }
+    if (kind === 'dew point') {
+      return `dewPoint${num}`;
+    }
+  }
+  return undefined;
 }

@@ -34,6 +34,7 @@ export declare class AmbientWeatherSensorsPlatform implements DynamicPlatformPlu
     private readonly loggedStationFilterDrops;
     private warnedStationFilterEmpty;
     private loggedStationFilterSummary;
+    private readonly loggedBatterySuppressions;
     private readonly loggedDiscoveredStations;
     private pollTimer;
     private realtimeSource;
@@ -73,6 +74,33 @@ export declare class AmbientWeatherSensorsPlatform implements DynamicPlatformPlu
             name?: string;
         };
     }, sensorKey: string, isMultiStation: boolean): string;
+    /**
+     * Parse `excludeSensors` entries that target battery sub-services
+     * specifically, rather than entire accessories. Three forms are
+     * accepted, all resolving to a set of AWN battery field names to
+     * suppress:
+     *
+     *   - "<friendly name>-batt"  e.g. "Lightning Strikes Today-batt"
+     *   - "<sensorKey>-batt"      e.g. "lightning_distance-batt"
+     *   - "<battery field>"       e.g. "batt_lightning"
+     *
+     * Any sensor name (friendly or raw) sharing a probe with the target
+     * battery resolves to the same field, so users don't need to know
+     * which accessory is the canonical Battery-sub-service host. The
+     * field-name form is direct and lets users skip the reverse lookup
+     * entirely.
+     *
+     * The primary use case is working around upstream AWN API bugs that
+     * report a battery as low even with known-good cells (e.g.
+     * `batt_lightning` for the WH31L lightning sensor — see README).
+     *
+     * Note: entries that target whole accessories (no `-batt` suffix,
+     * not a battery field name) continue to flow through the existing
+     * per-accessory exclude path; they're not consumed here. So users
+     * can mix battery-suppression entries with accessory-exclusion
+     * entries in the same list freely.
+     */
+    private buildSuppressedBatteries;
     parseDevices(json: any): DEVICE[];
     sleep: (delay: any) => Promise<unknown>;
     fetchDevices(): any;

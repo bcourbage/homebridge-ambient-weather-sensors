@@ -1,1 +1,1 @@
-{"version":3,"file":"sensorNames.d.ts","sourceRoot":"","sources":["../src/sensorNames.ts"],"names":[],"mappings":"AA4DA,wBAAgB,kBAAkB,CAAC,GAAG,EAAE,MAAM,GAAG,MAAM,CAqBtD"}
+{"version":3,"file":"sensorNames.d.ts","sourceRoot":"","sources":["../src/sensorNames.ts"],"names":[],"mappings":"AAgEA,wBAAgB,kBAAkB,CAAC,GAAG,EAAE,MAAM,GAAG,MAAM,CAqBtD;AAED;;;;;;;;;;;;;;;GAeG;AACH,wBAAgB,uBAAuB,CAAC,QAAQ,EAAE,MAAM,GAAG,MAAM,GAAG,SAAS,CA4B5E"}

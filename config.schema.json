@@ -240,13 +240,15 @@
       "excludeSensors": {
         "title": "Exclude Sensors (blacklist)",
         "type": "array",
-        "description": "Hide specific sensors. Works on both native sensors (Temperature, Humidity, Solar, CO2, PM2.5, PM10) and Extended Sensors (Wind, Rain, Pressure, UV, Lightning). Matching is case-insensitive and whitespace is trimmed, so typos like trailing spaces from copy-paste still work. Each entry can be a sensor's friendly name (\"Indoor Temperature\", \"Wind Direction\", \"Lightning Distance\"), a station name to hide everything from that station (\"Backyard Station\"), a raw AWN field (\"tempinf\", \"winddir\", \"lightning_distance\"), a MAC address, or the full uniqueId (\"AA:BB:CC:DD:EE:FF-tempinf\"). The per-type toggles above still apply on top of this list.",
+        "description": "Hide specific sensors. Works on both native sensors (Temperature, Humidity, Solar, CO2, PM2.5, PM10) and Extended Sensors (Wind, Rain, Pressure, UV, Lightning). Matching is case-insensitive and whitespace is trimmed, so typos like trailing spaces from copy-paste still work. Each entry can be a sensor's friendly name (\"Indoor Temperature\", \"Wind Direction\", \"Lightning Distance\"), a station name to hide everything from that station (\"Backyard Station\"), a raw AWN field (\"tempinf\", \"winddir\", \"lightning_distance\"), a MAC address, or the full uniqueId (\"AA:BB:CC:DD:EE:FF-tempinf\"). The per-type toggles above still apply on top of this list. ALSO: append \"-batt\" to a sensor's friendly name or AWN key (e.g. \"Lightning Strikes Today-batt\" or \"lightning_distance-batt\") to suppress that sensor's probe's Battery sub-service WITHOUT hiding the accessory itself — useful for working around upstream AWN API bugs that report a battery as low even with fresh cells (the WH31L lightning sensor is the known case). Raw AWN battery field names also work directly (\"batt_lightning\", \"batt_co2\", \"battin\", \"battout\", \"batt1\".. \"batt10\").",
         "items": {
           "type": "string",
           "placeholder": "e.g. Indoor Temperature"
         },
         "examples": [
-          ["Indoor Temperature", "tempinf", "Backyard Station", "Wind Direction"]
+          ["Indoor Temperature", "tempinf", "Backyard Station", "Wind Direction"],
+          ["Lightning Strikes Today-batt"],
+          ["batt_lightning"]
         ]
       },
       "includeOnly": {
@@ -323,7 +325,7 @@
     "extendedDisplayMode",
     {
       "type": "help",
-      "helpvalue": "<p>Show generic names (recommended): tiles show 'Wind Speed' with an on/off motion indicator. The live number is visible in Eve or Controller for HomeKit. Tile names stay stable.</p><p>Show live value in the tile name: tiles update to 'Wind Speed 14 mph' as readings change. Values are rounded to whole numbers so the tile name stays compatible with Apple Home's naming rules. The tile name updates on every reading (~30s in realtime, every 2 minutes in polling).</p><p>If you rename a tile manually in Apple Home, the plugin detects this and stops overwriting it — your custom name wins. Some Homebridge log lines may mention name changes — these are informational and safe to ignore.</p><p>Selecting None uses the recommended default.</p>",
+      "helpvalue": "<p>Show generic names (recommended): tiles show 'Wind Speed' with an on/off motion indicator. The live number is visible in Eve or Controller for HomeKit. Tile names stay stable.</p><p>Show live value in the tile name: tiles update to 'Wind Speed 14 mph' as readings change. Values are rounded to whole numbers so the tile name stays compatible with Apple Home's naming rules. The tile name updates on every reading (~30s in realtime, every 2 minutes in polling).</p><p>If you rename a tile manually in Apple Home, the plugin detects this and stops overwriting it — your custom name wins. Some Homebridge log lines may mention name changes — these are informational and safe to ignore.</p><p><strong>Known issue with this mode:</strong> tile name updates may cause Apple Home to reassign the accessory back to the bridge's default room every time the value changes. If room placement matters, leave this on 'Show generic names'. We're still characterizing the exact mechanism (see beta.24's <code>[embed-diag]</code> log lines for instrumentation).</p><p>Selecting None uses the recommended default.</p>",
       "condition": { "functionBody": "return model.extendedSensors === true;" }
     },
     {

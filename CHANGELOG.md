@@ -9,6 +9,51 @@ entries short and user-facing.
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/
 
+## [1.5.0-beta.24] — 2026-06-14
+
+### Added
+
+- **Friendly names for AQIN's internal temperature and humidity
+  sensors.** Previously these fields fell through to the
+  `hapClean`'d raw AWN key, surfacing in HomeKit as "pm in temp aqin"
+  and "pm in humidity aqin". Now they render as "AQIN Temperature"
+  and "AQIN Humidity" — distinct from the room indoor temperature
+  / humidity, and parallel to how the other AQIN-family sensors
+  are named. Reported by solmssen on beta.23.
+
+- **Battery sub-service suppression via `excludeSensors`.** Three
+  new accepted forms in the existing field, all targeting the
+  Battery sub-service of a probe WITHOUT hiding the parent
+  accessories:
+  - `<friendly name>-batt` (e.g. `Lightning Strikes Today-batt`) —
+    reverse-looks up the sensor's battery field
+  - `<sensorKey>-batt` (e.g. `lightning_distance-batt`) — same,
+    works directly with AWN keys
+  - `<battery field>` (e.g. `batt_lightning`) — direct match on the
+    raw AWN battery field name
+
+  Primary use case: working around upstream AWN API bugs that
+  report a probe as low-battery even with known-good cells — the
+  `batt_lightning` (WH31L) case documented in the README. Previously
+  the only options were to live with the spurious low-battery
+  notifications or to hide the entire lightning accessory family
+  via the existing accessory-exclusion path.
+
+- **Embed-mode diagnostic logging.** Every embed-mode tile name
+  update now emits a single `[embed-diag]` info-level line capturing
+  the decision state (current ConfiguredName, lastSet, userRenamed,
+  newName, willUpdate). Goal is to characterize the root cause of
+  solmssen's reported "tile gets reassigned to default room when
+  the value changes" symptom that pushed him off embed mode in
+  beta.22. Static-mode users see none of these lines (embed mode is
+  opt-in).
+
+### Changed
+
+- **Help text added under the Extended Sensors display-mode dropdown**
+  warning users that embed mode may cause Apple Home to reassign
+  tiles to the bridge's default room on every value change.
+
 ## [1.5.0-beta.23] — 2026-06-14
 
 ### Fixed

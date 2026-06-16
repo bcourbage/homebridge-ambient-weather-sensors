@@ -259,6 +259,19 @@ export abstract class ExtendedSensorBase implements SensorAccessory {
    * if the current ConfiguredName doesn't match what we last set,
    * the user has renamed the tile in Apple Home and we leave it
    * alone. In static display mode this is a no-op.
+   *
+   * DIAGNOSTIC INSTRUMENTATION: every embed-mode invocation logs a
+   * single `[embed-diag] ...` line at info level capturing the
+   * decision state. Goal is to correlate the plugin's name-update
+   * activity with the user-observed "tile gets reassigned to default
+   * room" symptom — solmssen reported in beta.22 that embed mode
+   * caused tiles to lose their room assignment in Apple Home /
+   * Homebridge UI on every value change. Mechanism is unclear; the
+   * log lets a tester capture timestamps when the symptom occurs and
+   * compare against what the plugin was doing at the moment.
+   *
+   * The diag log is info-level (not debug) because embed mode is
+   * opt-in — users who haven't enabled it see none of these lines.
    */
   private maybeUpdateTileName(valueStr: string): void {
     if (this.options.displayMode !== 'embed') {
@@ -266,16 +279,21 @@ export abstract class ExtendedSensorBase implements SensorAccessory {
     }
 
     const currentName = this.service.getCharacteristic(this.platform.Characteristic.ConfiguredName).value as string | undefined;
-    if (isUserRenamed(currentName, this.lastSetName)) {
-      this.platform.log.debug(
-        `EXTENDED ${this.options.awnKey}: tile renamed by user ("${currentName}"), skipping embed-mode name update`,
-      );
-      return;
-    }
-
+    const renamed = isUserRenamed(currentName, this.lastSetName);
     const newName = composeEmbeddedName(this.options.sensorLabel, valueStr);
-    if (newName === this.lastSetName) {
-      // No-op; value hasn't changed enough to alter the rounded label.
+    const nameChange = newName !== this.lastSetName;
+    const willUpdate = !renamed && nameChange;
+
+    this.platform.log.info(
+      `[embed-diag] ${this.options.awnKey}: ` +
+      `currentConfigured="${currentName ?? '(unset)'}" ` +
+      `lastSet="${this.lastSetName ?? '(none)'}" ` +
+      `userRenamed=${renamed} ` +
+      `newName="${newName}" ` +
+      `willUpdate=${willUpdate}`,
+    );
+
+    if (renamed || !nameChange) {
       return;
     }
 

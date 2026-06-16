@@ -1,5 +1,10 @@
 import { AirQualityAccessory } from './airQualityAccessory.js';
 import { batteryFieldForSensor, isCanonicalSensorForBattery, readBatteryLow } from './batteryFields.js';
+// Battery field naming pattern, used to detect raw battery field
+// names in user-supplied excludeSensors entries. Anchored to avoid
+// matching unrelated sensor keys like `batteryStatus` if one ever
+// appears.
+const BATTERY_FIELD_REGEX = /^batt(?:out|in|_co2|_lightning|\d+)$/;
 import { Co2Accessory } from './co2Accessory.js';
 import { LightningDayAccessory, LightningDistanceAccessory, LightningHourAccessory, LightningLastStrikeAccessory, } from './extendedSensors/lightningAccessory.js';
 import { PressureAbsoluteAccessory, PressureRelativeAccessory, } from './extendedSensors/pressureAccessory.js';
@@ -8,7 +13,7 @@ import { UvAccessory } from './extendedSensors/uvAccessory.js';
 import { WindDirection10mAccessory, WindDirectionAccessory, WindGustAccessory, WindMaxDailyGustAccessory, WindSpeedAccessory, } from './extendedSensors/windAccessory.js';
 import { HumidityAccessory } from './humidityAccessory.js';
 import { RealtimeSource } from './realtimeSource.js';
-import { friendlySensorName } from './sensorNames.js';
+import { friendlySensorName, sensorKeyByFriendlyName } from './sensorNames.js';
 import { PLATFORM_NAME, PLUGIN_NAME } from './settings.js';
 import { SolarRadiationAccessory } from './solarRadiationAccessory.js';
 import { TemperatureAccessory } from './temperatureAccessory.js';
@@ -99,6 +104,11 @@ export class AmbientWeatherSensorsPlatform {
         // filter is working — they see the same accessories they had
         // before and assume it's broken. One line at startup is enough.
         this.loggedStationFilterSummary = false;
+        // Tracks which battery-field suppressions we've already announced
+        // at info level this session. Format follows the existing exclude/
+        // include logging policy: one line per suppressed field per
+        // Homebridge restart, debug-only thereafter.
+        this.loggedBatterySuppressions = new Set();
         // Tracks which stations we've already announced at startup. The
         // first time parseDevices sees a station MAC, we info-log its name
         // + MAC + sensor count so users can identify exactly which string
@@ -303,6 +313,81 @@ export class AmbientWeatherSensorsPlatform {
         const composed = hapClean(`${baseName} ${sensorLabel}`);
         return composed.length <= HAP_NAME_MAX ? composed : composed.slice(0, HAP_NAME_MAX).trim();
     }
+    /**
+     * Parse `excludeSensors` entries that target battery sub-services
+     * specifically, rather than entire accessories. Three forms are
+     * accepted, all resolving to a set of AWN battery field names to
+     * suppress:
+     *
+     *   - "<friendly name>-batt"  e.g. "Lightning Strikes Today-batt"
+     *   - "<sensorKey>-batt"      e.g. "lightning_distance-batt"
+     *   - "<battery field>"       e.g. "batt_lightning"
+     *
+     * Any sensor name (friendly or raw) sharing a probe with the target
+     * battery resolves to the same field, so users don't need to know
+     * which accessory is the canonical Battery-sub-service host. The
+     * field-name form is direct and lets users skip the reverse lookup
+     * entirely.
+     *
+     * The primary use case is working around upstream AWN API bugs that
+     * report a battery as low even with known-good cells (e.g.
+     * `batt_lightning` for the WH31L lightning sensor — see README).
+     *
+     * Note: entries that target whole accessories (no `-batt` suffix,
+     * not a battery field name) continue to flow through the existing
+     * per-accessory exclude path; they're not consumed here. So users
+     * can mix battery-suppression entries with accessory-exclusion
+     * entries in the same list freely.
+     */
+    buildSuppressedBatteries(excludeRaw) {
+        const suppressed = new Set();
+        if (!Array.isArray(excludeRaw)) {
+            return suppressed;
+        }
+        for (const rawEntry of excludeRaw) {
+            if (typeof rawEntry !== 'string') {
+                continue;
+            }
+            const normalized = rawEntry.trim().toLowerCase();
+            if (normalized.length === 0) {
+                continue;
+            }
+            // Form 1: raw AWN battery field name (battout, battin, batt1..N, batt_co2, batt_lightning).
+            if (BATTERY_FIELD_REGEX.test(normalized)) {
+                suppressed.add(normalized);
+                if (!this.loggedBatterySuppressions.has(normalized)) {
+                    this.log.info(`Battery sub-service suppressed: ${normalized} (matched excludeSensors entry "${rawEntry}")`);
+                    this.loggedBatterySuppressions.add(normalized);
+                }
+                continue;
+            }
+            // Forms 2 + 3: "<sensor>-batt" suffix. Stem can be either an AWN
+            // sensorKey or its friendly name; we try each.
+            if (normalized.endsWith('-batt')) {
+                const stem = normalized.slice(0, -'-batt'.length).trim();
+                // Try as a sensorKey directly first.
+                let field = batteryFieldForSensor(stem);
+                if (!field) {
+                    // Reverse-lookup via the friendly-name table.
+                    const sensorKey = sensorKeyByFriendlyName(stem);
+                    if (sensorKey) {
+                        field = batteryFieldForSensor(sensorKey);
+                    }
+                }
+                if (field) {
+                    suppressed.add(field);
+                    if (!this.loggedBatterySuppressions.has(field)) {
+                        this.log.info(`Battery sub-service suppressed: ${field} (matched excludeSensors entry "${rawEntry}")`);
+                        this.loggedBatterySuppressions.add(field);
+                    }
+                }
+                else {
+                    this.log.debug(`Battery suppression entry "${rawEntry}" did not resolve to a known sensor; skipping`);
+                }
+            }
+        }
+        return suppressed;
+    }
     parseDevices(json) {
         const Devices = [];
         // Build matcher sets once per call. Matching is intentionally
@@ -314,6 +399,10 @@ export class AmbientWeatherSensorsPlatform {
         const includeMatchers = toMatcherSet(this.config.includeOnly);
         const excludeMatchers = toMatcherSet(this.config.excludeSensors);
         const stationMatchers = toMatcherSet(this.config.stationFilter);
+        // Battery-suppression set: entries in excludeSensors that target
+        // a sub-service rather than a whole accessory. See
+        // buildSuppressedBatteries() for the accepted forms.
+        const suppressedBatteries = this.buildSuppressedBatteries(this.config.excludeSensors);
         // Apply stationFilter at the station level BEFORE any per-sensor
         // processing. The filter is the supported way to split stations
         // across multiple HomeKit Homes: each platform instance gets its
@@ -474,7 +563,9 @@ export class AmbientWeatherSensorsPlatform {
                     // most representative sensor (canonical mapping in
                     // batteryFields.ts).
                     const batteryField = batteryFieldForSensor(sensorKey);
-                    const batteryLow = (batteryField && isCanonicalSensorForBattery(sensorKey, batteryField))
+                    const batteryLow = (batteryField
+                        && isCanonicalSensorForBattery(sensorKey, batteryField)
+                        && !suppressedBatteries.has(batteryField))
                         ? readBatteryLow(obj.lastData, batteryField)
                         : undefined;
                     Devices.push({

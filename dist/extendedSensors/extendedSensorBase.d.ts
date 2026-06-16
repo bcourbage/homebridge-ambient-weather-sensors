@@ -132,6 +132,19 @@ export declare abstract class ExtendedSensorBase implements SensorAccessory {
      * if the current ConfiguredName doesn't match what we last set,
      * the user has renamed the tile in Apple Home and we leave it
      * alone. In static display mode this is a no-op.
+     *
+     * DIAGNOSTIC INSTRUMENTATION: every embed-mode invocation logs a
+     * single `[embed-diag] ...` line at info level capturing the
+     * decision state. Goal is to correlate the plugin's name-update
+     * activity with the user-observed "tile gets reassigned to default
+     * room" symptom — solmssen reported in beta.22 that embed mode
+     * caused tiles to lose their room assignment in Apple Home /
+     * Homebridge UI on every value change. Mechanism is unclear; the
+     * log lets a tester capture timestamps when the symptom occurs and
+     * compare against what the plugin was doing at the moment.
+     *
+     * The diag log is info-level (not debug) because embed mode is
+     * opt-in — users who haven't enabled it see none of these lines.
      */
     private maybeUpdateTileName;
 }
