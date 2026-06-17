@@ -9,6 +9,83 @@ entries short and user-facing.
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/
 
+## [1.5.0] — 2026-06-16
+
+GA release. The full 24-beta cycle is summarized below; this entry
+captures what changes if you're upgrading directly from 1.4.x.
+
+### Added (since 1.4.x)
+
+- **Battery sub-services for every probe-backed sensor.** Native
+  HomeKit low-battery push notifications fire when AWN reports
+  any sensor's battery as low. Per-probe dedup (one Battery
+  sub-service per physical probe, attached to its canonical
+  sensor) avoids overwhelming Apple Home with redundant tiles.
+- **Feels-like and dew-point temperature accessories** appear
+  automatically when Temperature Sensors is enabled, on every
+  probe AWN reports calculated values for (outdoor, indoor, each
+  WH31 channel).
+- **Extended Sensors (opt-in)** — wind, rain, barometric
+  pressure, UV, and lightning exposed as MotionSensor accessories
+  with threshold-driven Apple Home automations. Custom
+  Value/Intensity/LastUpdated characteristics surface live numeric
+  readings in Eve / Controller for HomeKit.
+- **`stationFilter` config field** for multi-Home setups —
+  combined with multiple platform instances and Homebridge child
+  bridges, lets users with stations in physically separate
+  locations expose each station in its own HomeKit Home. Full
+  walkthrough in `MultiHome.md`.
+- **Battery sub-service suppression via `excludeSensors`** — three
+  accepted forms (`<friendly name>-batt`, `<sensorKey>-batt`, raw
+  AWN battery field name) hide a probe's Battery sub-service
+  without removing the parent accessories. Primary use case: the
+  documented `batt_lightning` AWN API false-low bug.
+- **Startup discovery log** announces each AWN station's name +
+  MAC + sensor count on first poll, so users can identify the
+  exact string to put in `stationFilter`.
+- **Realtime data source (opt-in)** — websocket subscription to
+  AWN's `rt2.ambientweather.net` endpoint with automatic reconnect.
+  ~30-second update cadence vs. polling's 2 minutes.
+
+### Changed (since 1.4.x)
+
+- **Tile names are bare in single-station setups** ("Outdoor
+  Temperature" not "Backyard Station Outdoor Temperature"). The
+  station prefix is preserved when an instance exposes multiple
+  stations, for disambiguation. Migration is automatic; user
+  renames in Apple Home are preserved.
+- **Per-accessory poll timers consolidated into one platform-level
+  timer** — eliminates parallel-fetch race against AWN's 1 req/s
+  rate limit.
+- **AccessoryInformation Name characteristic updated on every
+  restart** to keep HAP-side metadata aligned with the displayed
+  name across all clients.
+
+### Documentation
+
+- New `UPGRADING.md` with a full upgrade walkthrough from 1.4.x.
+- New `MultiHome.md` with the multi-Home setup pattern.
+- New `docs/future/tabbed-config-ui.md` capturing the deferred
+  custom-UI design.
+- README and trademark notice clarify the fork's relationship to
+  upstream `peledies/homebridge-ambient-weather-sensors`.
+
+### Final beta.24 → GA changes
+
+- Corrected the embed-mode help text: the room-reset behavior
+  reported during beta testing is specific to the Homebridge UI
+  Accessories page, NOT Apple Home or Eve. Apple Home and Eve
+  preserve room assignments correctly across name changes; the
+  HB UI tracks rooms by display name and resets affected tiles
+  when the name updates. Updated wording recommends users who
+  primarily use the HB UI Accessories page stay on generic
+  names.
+- Downgraded the `[embed-diag]` log line from info to debug
+  level — the mechanism was characterized during beta.24 testing,
+  so the instrument no longer needs to be on by default. Toggle
+  `HB_LOG_LEVEL=debug` to capture if needed for future
+  investigation.
+
 ## [1.5.0-beta.24] — 2026-06-14
 
 ### Added

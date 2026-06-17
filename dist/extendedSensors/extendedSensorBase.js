@@ -157,17 +157,16 @@ export class ExtendedSensorBase {
      * alone. In static display mode this is a no-op.
      *
      * DIAGNOSTIC INSTRUMENTATION: every embed-mode invocation logs a
-     * single `[embed-diag] ...` line at info level capturing the
-     * decision state. Goal is to correlate the plugin's name-update
-     * activity with the user-observed "tile gets reassigned to default
-     * room" symptom — solmssen reported in beta.22 that embed mode
-     * caused tiles to lose their room assignment in Apple Home /
-     * Homebridge UI on every value change. Mechanism is unclear; the
-     * log lets a tester capture timestamps when the symptom occurs and
-     * compare against what the plugin was doing at the moment.
-     *
-     * The diag log is info-level (not debug) because embed mode is
-     * opt-in — users who haven't enabled it see none of these lines.
+     * single `[embed-diag] ...` line at debug level capturing the
+     * decision state. Originally added at info-level in beta.24 to
+     * characterize solmssen's "tile gets reassigned to default room"
+     * report; downgraded to debug in 1.5.0 GA once the mechanism was
+     * identified (it's the Homebridge UI Accessories page tracking
+     * rooms by displayName — when the name updates, the UI puts the
+     * tile in the default room until the name happens to revert to
+     * its placed-state value). Apple Home and Eve aren't affected.
+     * The instrument is kept available for any future investigation
+     * — toggle HB_LOG_LEVEL=debug to capture.
      */
     maybeUpdateTileName(valueStr) {
         if (this.options.displayMode !== 'embed') {
@@ -178,7 +177,7 @@ export class ExtendedSensorBase {
         const newName = composeEmbeddedName(this.options.sensorLabel, valueStr);
         const nameChange = newName !== this.lastSetName;
         const willUpdate = !renamed && nameChange;
-        this.platform.log.info(`[embed-diag] ${this.options.awnKey}: ` +
+        this.platform.log.debug(`[embed-diag] ${this.options.awnKey}: ` +
             `currentConfigured="${currentName ?? '(unset)'}" ` +
             `lastSet="${this.lastSetName ?? '(none)'}" ` +
             `userRenamed=${renamed} ` +
