@@ -1,3 +1,4 @@
+import { setupBatteryService } from './batteryService.js';
 /**
  * EPA AQI breakpoints for PM2.5 (24-hour averaged μg/m³) mapped to
  * HomeKit's AirQuality enum. We use these as approximate buckets even
@@ -53,9 +54,13 @@ export class AirQualityAccessory {
         this.service = this.accessory.getService(this.platform.Service.AirQualitySensor)
             || this.accessory.addService(this.platform.Service.AirQualitySensor);
         this.service.setCharacteristic(this.platform.Characteristic.Name, accessory.context.device.displayName);
+        this.batterySetter = setupBatteryService(this.platform, this.accessory);
         if (typeof accessory.context.device.value === 'number') {
             this.setValue(accessory.context.device.value);
         }
+    }
+    setBatteryLow(batteryLow) {
+        this.batterySetter?.(batteryLow);
     }
     /**
      * AWN reports particulate density in μg/m³ directly. HomeKit's

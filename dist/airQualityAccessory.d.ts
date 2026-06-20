@@ -5,7 +5,9 @@ export declare class AirQualityAccessory implements SensorAccessory {
     private readonly accessory;
     private service;
     private readonly variant;
+    private readonly batterySetter?;
     constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory);
+    setBatteryLow(batteryLow: boolean): void;
     /**
      * AWN reports particulate density in μg/m³ directly. HomeKit's
      * PM2_5Density and PM10Density characteristics take the same units,

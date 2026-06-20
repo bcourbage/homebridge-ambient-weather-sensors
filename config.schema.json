@@ -11,14 +11,12 @@
       "name": {
         "title": "Name",
         "type": "string",
-        "default": "AmbientWeatherSensors",
-        "description": "The name that will appear in your homebridge log"
+        "default": "AmbientWeatherSensors"
       },
       "apiKey": {
         "title": "API Key",
         "type": "string",
         "placeholder": "api key from ambient weather account",
-        "description": "Stored in plain text in Homebridge's config.json. Treat the file with the same care as any password-bearing config.",
         "x-schema-form": {
           "type": "password"
         }
@@ -27,7 +25,6 @@
         "title": "Application Key",
         "type": "string",
         "placeholder": "application key from ambient weather account",
-        "description": "Stored in plain text in Homebridge's config.json. Treat the file with the same care as any password-bearing config.",
         "x-schema-form": {
           "type": "password"
         }
@@ -50,14 +47,186 @@
       "co2Sensors": {
         "title": "CO2 Sensors",
         "type": "boolean",
-        "default": false,
-        "description": "Expose CO2 readings from AWN's AQIN family (co2_in_aqin) and any standalone CO2 sensor."
+        "default": false
       },
       "airQualitySensors": {
         "title": "Air Quality Sensors (PM2.5 / PM10)",
         "type": "boolean",
+        "default": false
+      },
+      "extendedSensors": {
+        "title": "Enable Extended Sensors",
+        "type": "boolean",
+        "default": false
+      },
+      "windSensors": {
+        "title": "Wind sensors (speed, gust, direction)",
+        "type": "boolean",
         "default": false,
-        "description": "Expose particulate readings (pm25, pm25_in_aqin, pm10_in_aqin) as HomeKit AirQualitySensor accessories with the corresponding density characteristic and an EPA-bucket-derived AirQuality enum."
+        "condition": {
+          "functionBody": "return model.extendedSensors === true;"
+        }
+      },
+      "rainSensors": {
+        "title": "Rain sensors (rate, daily, event totals)",
+        "type": "boolean",
+        "default": false,
+        "condition": {
+          "functionBody": "return model.extendedSensors === true;"
+        }
+      },
+      "pressureSensors": {
+        "title": "Barometric pressure (relative + absolute)",
+        "type": "boolean",
+        "default": false,
+        "condition": {
+          "functionBody": "return model.extendedSensors === true;"
+        }
+      },
+      "uvSensors": {
+        "title": "UV index",
+        "type": "boolean",
+        "default": false,
+        "condition": {
+          "functionBody": "return model.extendedSensors === true;"
+        }
+      },
+      "lightningSensors": {
+        "title": "Lightning sensors (count, distance, time-since-last)",
+        "type": "boolean",
+        "default": false,
+        "condition": {
+          "functionBody": "return model.extendedSensors === true;"
+        }
+      },
+      "extendedDisplayMode": {
+        "title": "How should Apple Home display extended sensors?",
+        "type": "string",
+        "default": "static",
+        "oneOf": [
+          { "title": "Show generic names (recommended)", "enum": ["static"] },
+          { "title": "Show live value in the tile name", "enum": ["embed"] }
+        ],
+        "condition": {
+          "functionBody": "return model.extendedSensors === true;"
+        }
+      },
+      "thresholds": {
+        "type": "object",
+        "title": "Motion thresholds for extended sensors",
+        "condition": {
+          "functionBody": "return model.extendedSensors === true;"
+        },
+        "properties": {
+          "windSpeedEnabled": {
+            "title": "Wind speed sensor",
+            "type": "boolean",
+            "default": true
+          },
+          "windSpeedMph": {
+            "title": "Wind speed threshold (mph)",
+            "type": "number",
+            "default": 25
+          },
+          "windGustEnabled": {
+            "title": "Wind gust sensors (shared threshold for Wind Gust and Max Daily Gust)",
+            "type": "boolean",
+            "default": true
+          },
+          "windGustMph": {
+            "title": "Wind gust threshold (mph)",
+            "type": "number",
+            "default": 35
+          },
+          "rainRateEnabled": {
+            "title": "Rain rate sensor",
+            "type": "boolean",
+            "default": true
+          },
+          "rainRateInHr": {
+            "title": "Rain rate threshold (in/hr)",
+            "type": "number",
+            "default": 0.01
+          },
+          "uvEnabled": {
+            "title": "UV index sensor",
+            "type": "boolean",
+            "default": true
+          },
+          "uv": {
+            "title": "UV index threshold",
+            "type": "number",
+            "default": 3
+          },
+          "lightningDistanceEnabled": {
+            "title": "Lightning distance sensor",
+            "type": "boolean",
+            "default": true
+          },
+          "lightningDistanceMi": {
+            "title": "Lightning distance threshold (miles, inverted)",
+            "type": "number",
+            "default": 10
+          },
+          "pressureEnabled": {
+            "title": "Barometric pressure sensors (shared threshold for sea-level and station pressure)",
+            "type": "boolean",
+            "default": true
+          },
+          "pressureInHg": {
+            "title": "Low-pressure threshold (inHg, inverted)",
+            "type": "number",
+            "default": 29.5
+          }
+        }
+      },
+      "units": {
+        "type": "object",
+        "title": "Display units for extended sensors",
+        "condition": {
+          "functionBody": "return model.extendedSensors === true;"
+        },
+        "properties": {
+          "windSpeed": {
+            "title": "Wind speed",
+            "type": "string",
+            "default": "mph",
+            "oneOf": [
+              { "title": "mph (miles per hour)", "enum": ["mph"] },
+              { "title": "kph (kilometers per hour)", "enum": ["kph"] },
+              { "title": "m/s (meters per second)", "enum": ["mps"] },
+              { "title": "kts (knots)", "enum": ["kts"] }
+            ]
+          },
+          "rain": {
+            "title": "Rain",
+            "type": "string",
+            "default": "in",
+            "oneOf": [
+              { "title": "in (inches)", "enum": ["in"] },
+              { "title": "mm (millimeters)", "enum": ["mm"] }
+            ]
+          },
+          "pressure": {
+            "title": "Barometric pressure",
+            "type": "string",
+            "default": "inHg",
+            "oneOf": [
+              { "title": "inHg (inches of mercury)", "enum": ["inHg"] },
+              { "title": "hPa (hectopascals, same as millibars)", "enum": ["hPa"] }
+            ]
+          },
+          "distance": {
+            "title": "Lightning distance",
+            "type": "string",
+            "default": "mi",
+            "oneOf": [
+              { "title": "mi (statute miles)", "enum": ["mi"] },
+              { "title": "km (kilometers)", "enum": ["km"] },
+              { "title": "nm (nautical miles)", "enum": ["nm"] }
+            ]
+          }
+        }
       },
       "dataSource": {
         "title": "Data Source",
@@ -66,25 +235,26 @@
         "oneOf": [
           { "title": "Polling — REST API every 2 minutes (default)", "enum": ["polling"] },
           { "title": "Realtime — websocket subscription (opt-in)", "enum": ["realtime"] }
-        ],
-        "description": "Polling fetches the AWN REST endpoint every 2 minutes. Realtime opens a websocket to rt2.ambientweather.net and receives updates as the station reports them (typically ~30s indoors). Realtime is opt-in for now; the default will switch to realtime in a future release once it has been broadly validated."
+        ]
       },
       "excludeSensors": {
         "title": "Exclude Sensors (blacklist)",
         "type": "array",
-        "description": "Hide specific sensors. Matching is case-insensitive and whitespace is trimmed, so typos like trailing spaces from copy-paste still work. Each entry can be a sensor's friendly name (\"Indoor Temperature\"), a station name to hide everything from that station (\"Backyard Station\"), a raw AWN field (\"tempinf\"), a MAC address, or the full uniqueId (\"AA:BB:CC:DD:EE:FF-tempinf\"). The per-type toggles above still apply on top of this list.",
+        "description": "Hide specific sensors. Works on both native sensors (Temperature, Humidity, Solar, CO2, PM2.5, PM10) and Extended Sensors (Wind, Rain, Pressure, UV, Lightning). Matching is case-insensitive and whitespace is trimmed, so typos like trailing spaces from copy-paste still work. Each entry can be a sensor's friendly name (\"Indoor Temperature\", \"Wind Direction\", \"Lightning Distance\"), a station name to hide everything from that station (\"Backyard Station\"), a raw AWN field (\"tempinf\", \"winddir\", \"lightning_distance\"), a MAC address, or the full uniqueId (\"AA:BB:CC:DD:EE:FF-tempinf\"). The per-type toggles above still apply on top of this list. ALSO: append \"-batt\" to a sensor's friendly name or AWN key (e.g. \"Lightning Strikes Today-batt\" or \"lightning_distance-batt\") to suppress that sensor's probe's Battery sub-service WITHOUT hiding the accessory itself — useful for working around upstream AWN API bugs that report a battery as low even with fresh cells (the WH31L lightning sensor is the known case). Raw AWN battery field names also work directly (\"batt_lightning\", \"batt_co2\", \"battin\", \"battout\", \"batt1\".. \"batt10\").",
         "items": {
           "type": "string",
           "placeholder": "e.g. Indoor Temperature"
         },
         "examples": [
-          ["Indoor Temperature", "tempinf", "Backyard Station"]
+          ["Indoor Temperature", "tempinf", "Backyard Station", "Wind Direction"],
+          ["Lightning Strikes Today-batt"],
+          ["batt_lightning"]
         ]
       },
       "includeOnly": {
         "title": "Include Only These Sensors (allowlist)",
         "type": "array",
-        "description": "If set, ONLY sensors matching one of these entries are exposed; everything else is hidden. Same matching rules as Exclude Sensors above (case-insensitive, whitespace-trimmed, accepts friendly names / station names / raw AWN fields / MAC / uniqueId). Useful when you have multiple stations and only want HomeKit to see specific ones. Both filters apply: a sensor must match an allowlist entry AND not match a blacklist entry to be exposed.",
+        "description": "If set, ONLY sensors matching one of these entries are exposed; everything else is hidden. Works on both native and Extended Sensors. Same matching rules as Exclude Sensors above (case-insensitive, whitespace-trimmed, accepts friendly names / station names / raw AWN fields / MAC / uniqueId). Useful when you have multiple stations and only want HomeKit to see specific ones, or when you've turned on a whole category (e.g. Wind sensors) but only want one or two of its members visible. Both filters apply: a sensor must match an allowlist entry AND not match a blacklist entry to be exposed.",
         "items": {
           "type": "string",
           "placeholder": "e.g. Backyard Station"
@@ -92,7 +262,199 @@
         "examples": [
           ["Backyard Station", "Outdoor Temperature"]
         ]
+      },
+      "stationFilter": {
+        "title": "Include Only These Stations (allowlist)",
+        "type": "array",
+        "description": "If set, ONLY stations whose name or MAC address matches one of these entries are exposed by this plugin instance; everything else is dropped before any sensor processing. Leave blank (default) to expose all stations. Match is case-insensitive and whitespace-trimmed. The primary use case is multi-Home setups: create one platform instance per HomeKit Home with its own child bridge, and list the station(s) you want in each Home's instance. See MultiHome.md in the repo. When the allowlist reduces this instance to exactly one station, tile names are automatically rendered without a station prefix (clean single-station naming). When the allowlist leaves multiple stations in this instance, the station prefix is preserved for disambiguation. Tip: setting a deliberately non-matching value (e.g. 'CLEAR') is a quick way to wipe all this instance's accessories from HomeKit without touching the cache file — useful if you want a clean slate to reconfigure in Apple Home. Then remove or correct the filter and restart to re-discover.",
+        "items": {
+          "type": "string",
+          "placeholder": "e.g. Backyard WS-2000 or AA:BB:CC:DD:EE:FF"
+        },
+        "examples": [
+          ["Backyard WS-2000"],
+          ["Main House WS-2000", "Front Yard WS-5000"]
+        ]
       }
     }
-  }
+  },
+  "form": [
+    "name",
+    {
+      "type": "help",
+      "helpvalue": "<p>The name that will appear in your Homebridge log.</p>"
+    },
+    "apiKey",
+    {
+      "type": "help",
+      "helpvalue": "<p>Stored in plain text in Homebridge's config.json. Treat the file with the same care as any password-bearing config.</p>"
+    },
+    "applicationKey",
+    {
+      "type": "help",
+      "helpvalue": "<p>Stored in plain text in Homebridge's config.json. Treat the file with the same care as any password-bearing config.</p>"
+    },
+    "temperatureSensors",
+    "humiditySensors",
+    "solarRadiationSensors",
+    "co2Sensors",
+    {
+      "type": "help",
+      "helpvalue": "<p>Expose CO2 readings from AWN's AQIN family (co2_in_aqin) and any standalone CO2 sensor.</p>"
+    },
+    "airQualitySensors",
+    {
+      "type": "help",
+      "helpvalue": "<p>Expose particulate readings (pm25, pm25_in_aqin, pm10_in_aqin) as HomeKit AirQualitySensor accessories with the corresponding density characteristic and an EPA-bucket-derived AirQuality enum.</p>"
+    },
+    "extendedSensors",
+    {
+      "type": "help",
+      "helpvalue": "<p>Adds wind, rain, barometric pressure, UV index, and lightning sensors to HomeKit. These data types aren't natively supported by Apple's Home app, so live numeric values are only visible in the Eve or Controller for HomeKit apps. In Apple Home, each sensor appears as a Motion tile that triggers above your chosen threshold — useful for automations like 'close awning when wind speed exceeds 25 mph'. Default off; leave disabled if you only want the natively-supported sensor types above.</p>"
+    },
+    "windSensors",
+    "rainSensors",
+    "pressureSensors",
+    "uvSensors",
+    "lightningSensors",
+    {
+      "type": "help",
+      "helpvalue": "<p>Lightning sensors are only available if your station has a WH31L-compatible sensor (Ecowitt catalogs the same hardware as a WH57) reporting lightning_day / lightning_distance / lightning_time on the AWN API.</p>",
+      "condition": { "functionBody": "return model.extendedSensors === true;" }
+    },
+    "extendedDisplayMode",
+    {
+      "type": "help",
+      "helpvalue": "<p>Show generic names (recommended): tiles show 'Wind Speed' with an on/off motion indicator. The live number is visible in Eve or Controller for HomeKit. Tile names stay stable.</p><p>Show live value in the tile name: tiles update to 'Wind Speed 14 mph' as readings change. Values are rounded to whole numbers so the tile name stays compatible with Apple Home's naming rules. The tile name updates on every reading (~30s in realtime, every 2 minutes in polling).</p><p>If you rename a tile manually in Apple Home, the plugin detects this and stops overwriting it — your custom name wins. Some Homebridge log lines may mention name changes — these are informational and safe to ignore.</p><p><strong>Known limitation with this mode (Homebridge UI only):</strong> the Homebridge UI's Accessories page tracks each tile's room placement by its display name. When the name updates on each reading, the UI moves the tile to the bridge's default room until the name happens to revert to whatever it was when you placed it. Apple Home and Eve are NOT affected — they preserve room assignments correctly across name changes. If you primarily use Apple Home or Eve, embed mode is fine. If you primarily use the Homebridge UI Accessories page, leave this on 'Show generic names' or be prepared to leave the extended-sensor tiles in the default room.</p><p>Selecting None uses the recommended default.</p>",
+      "condition": { "functionBody": "return model.extendedSensors === true;" }
+    },
+    {
+      "type": "fieldset",
+      "title": "Motion thresholds for extended sensors",
+      "condition": { "functionBody": "return model.extendedSensors === true;" },
+      "items": [
+        {
+          "type": "help",
+          "helpvalue": "<p>Each sensor has an enable checkbox. When checked, the sensor appears in HomeKit and its motion event fires when the reading crosses the threshold (in both directions, so Apple Home automations can react to both \"crossing up\" and \"reverting back\"). When unchecked, the sensor is hidden from HomeKit entirely and the threshold field is not shown.</p><p>If you want a sensor visible in Eve / Controller for HomeKit (for the live numeric reading) without firing any automation, keep the checkbox enabled but set the threshold to a value the sensor can never reach (e.g. 99999 mph for wind, 99 for UV, 0 for the inverted-direction pressure and lightning-distance sensors since both readings are always positive). All threshold values are in AWN's native units regardless of your display-unit choice below.</p><p>Sensors without a configurable threshold (wind direction, rain accumulation totals, time-since-event sensors, lightning strike counts) always appear when their category is enabled at the top of the form — use Exclude Sensors below to hide them individually.</p>"
+        },
+        "thresholds.windSpeedEnabled",
+        {
+          "key": "thresholds.windSpeedMph",
+          "condition": { "functionBody": "return model.thresholds && model.thresholds.windSpeedEnabled !== false;" }
+        },
+        {
+          "type": "help",
+          "helpvalue": "<p>Fires when sustained wind speed equals or exceeds this. 25 mph ≈ Beaufort 6 (Strong breeze).</p>",
+          "condition": { "functionBody": "return model.thresholds && model.thresholds.windSpeedEnabled !== false;" }
+        },
+        "thresholds.windGustEnabled",
+        {
+          "key": "thresholds.windGustMph",
+          "condition": { "functionBody": "return model.thresholds && model.thresholds.windGustEnabled !== false;" }
+        },
+        {
+          "type": "help",
+          "helpvalue": "<p>Fires when an instantaneous gust equals or exceeds this. Applies to both 'Wind Gust' and 'Max Daily Gust' sensors.</p>",
+          "condition": { "functionBody": "return model.thresholds && model.thresholds.windGustEnabled !== false;" }
+        },
+        "thresholds.rainRateEnabled",
+        {
+          "key": "thresholds.rainRateInHr",
+          "condition": { "functionBody": "return model.thresholds && model.thresholds.rainRateEnabled !== false;" }
+        },
+        {
+          "type": "help",
+          "helpvalue": "<p>Fires when current rain rate equals or exceeds this. 0.01 in/hr is effectively 'any measurable rain'.</p>",
+          "condition": { "functionBody": "return model.thresholds && model.thresholds.rainRateEnabled !== false;" }
+        },
+        "thresholds.uvEnabled",
+        {
+          "key": "thresholds.uv",
+          "condition": { "functionBody": "return model.thresholds && model.thresholds.uvEnabled !== false;" }
+        },
+        {
+          "type": "help",
+          "helpvalue": "<p>Fires when UV index equals or exceeds this. 3 = EPA 'Moderate' (sun protection recommended).</p>",
+          "condition": { "functionBody": "return model.thresholds && model.thresholds.uvEnabled !== false;" }
+        },
+        "thresholds.lightningDistanceEnabled",
+        {
+          "key": "thresholds.lightningDistanceMi",
+          "condition": { "functionBody": "return model.thresholds && model.thresholds.lightningDistanceEnabled !== false;" }
+        },
+        {
+          "type": "help",
+          "helpvalue": "<p>Fires when the last strike is CLOSER than this distance. 10 mi ≈ 16 km, the conventional 'too close for outdoor activity' boundary.</p>",
+          "condition": { "functionBody": "return model.thresholds && model.thresholds.lightningDistanceEnabled !== false;" }
+        },
+        "thresholds.pressureEnabled",
+        {
+          "key": "thresholds.pressureInHg",
+          "condition": { "functionBody": "return model.thresholds && model.thresholds.pressureEnabled !== false;" }
+        },
+        {
+          "type": "help",
+          "helpvalue": "<p>Fires when barometric pressure drops BELOW this value. 29.5 inHg ≈ 999 hPa, the conventional 'low pressure system' boundary.</p>",
+          "condition": { "functionBody": "return model.thresholds && model.thresholds.pressureEnabled !== false;" }
+        }
+      ]
+    },
+    {
+      "type": "fieldset",
+      "title": "Display units for extended sensors",
+      "condition": { "functionBody": "return model.extendedSensors === true;" },
+      "items": [
+        {
+          "type": "help",
+          "helpvalue": "<p>AWN reports US/imperial units regardless of station location. Choose a different unit here to convert at display time. Thresholds above stay in AWN's native units regardless of your choice here.</p><p>Each dropdown's None option (auto-added by the form library) uses the default unit shown next to its label.</p>"
+        },
+        "units.windSpeed",
+        "units.rain",
+        "units.pressure",
+        "units.distance"
+      ]
+    },
+    "dataSource",
+    {
+      "type": "help",
+      "helpvalue": "<p>Polling fetches the AWN REST endpoint every 2 minutes. Realtime opens a websocket to rt2.ambientweather.net and receives updates as the station reports them (typically ~30s indoors). Realtime is opt-in for now; the default will switch to realtime in a future release once it has been broadly validated.</p><p>Selecting None uses the default (polling).</p>"
+    },
+    {
+      "key": "stationFilter",
+      "type": "array",
+      "items": [
+        {
+          "key": "stationFilter[]",
+          "type": "string",
+          "placeholder": "e.g. Backyard WS-2000"
+        }
+      ]
+    },
+    {
+      "type": "help",
+      "helpvalue": "<p>Include Only These Stations is a station-level allowlist (analogous to Include Only These Sensors below, but at station granularity rather than per-sensor). Leave blank to expose every station AWN returns. When set, only stations matching one of the listed names or MAC addresses pass; everything else is dropped before any per-sensor processing.</p><p>The primary use case is multi-Home setups: create one platform entry per HomeKit Home in your config.json (use the JSON Config menu) with its own <code>_bridge</code> block and its own allowlist pointing at the station(s) for that Home. See <a href='https://github.com/bcourbage/homebridge-ambient-weather-sensors/blob/main/MultiHome.md'>MultiHome.md</a> for the full walkthrough.</p><p><strong>Tip:</strong> setting a deliberately non-matching value (e.g. <code>CLEAR</code>) and restarting the child bridge is a no-filesystem way to wipe every accessory this instance exposes — useful for a clean slate before reconfiguring in Apple Home. Then remove or correct the filter and restart again to re-discover. Note: room assignments, automations, and any custom names set in Home.app are lost during the wipe, as is standard whenever a HomeKit accessory is removed.</p>"
+    },
+    {
+      "key": "excludeSensors",
+      "type": "array",
+      "items": [
+        {
+          "key": "excludeSensors[]",
+          "type": "string",
+          "placeholder": "e.g. Indoor Temperature"
+        }
+      ]
+    },
+    {
+      "key": "includeOnly",
+      "type": "array",
+      "items": [
+        {
+          "key": "includeOnly[]",
+          "type": "string",
+          "placeholder": "e.g. Backyard Station"
+        }
+      ]
+    }
+  ]
 }

@@ -1,5 +1,6 @@
 import { PlatformAccessory, Service } from 'homebridge';
 
+import { setupBatteryService } from './batteryService.js';
 import { AmbientWeatherSensorsPlatform, SensorAccessory } from './platform.js';
 
 /**
@@ -51,6 +52,7 @@ function bucket(value: number, table: Array<{ max: number; level: number }>): nu
 export class AirQualityAccessory implements SensorAccessory {
   private service: Service;
   private readonly variant: 'PM2.5' | 'PM10';
+  private readonly batterySetter?: (low: boolean) => void;
 
   constructor(
     private readonly platform: AmbientWeatherSensorsPlatform,
@@ -68,9 +70,15 @@ export class AirQualityAccessory implements SensorAccessory {
 
     this.service.setCharacteristic(this.platform.Characteristic.Name, accessory.context.device.displayName);
 
+    this.batterySetter = setupBatteryService(this.platform, this.accessory);
+
     if (typeof accessory.context.device.value === 'number') {
       this.setValue(accessory.context.device.value);
     }
+  }
+
+  setBatteryLow(batteryLow: boolean): void {
+    this.batterySetter?.(batteryLow);
   }
 
   /**

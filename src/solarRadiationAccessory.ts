@@ -1,10 +1,12 @@
 import { PlatformAccessory, Service } from 'homebridge';
 
+import { setupBatteryService } from './batteryService.js';
 import { AmbientWeatherSensorsPlatform, SensorAccessory } from './platform.js';
 
 
 export class SolarRadiationAccessory implements SensorAccessory {
   private service: Service;
+  private readonly batterySetter?: (low: boolean) => void;
 
   constructor(
     private readonly platform: AmbientWeatherSensorsPlatform,
@@ -33,9 +35,15 @@ export class SolarRadiationAccessory implements SensorAccessory {
       maxValue: 200000,
     });
 
+    this.batterySetter = setupBatteryService(this.platform, this.accessory);
+
     if (typeof accessory.context.device.value === 'number') {
       this.setValue(accessory.context.device.value);
     }
+  }
+
+  setBatteryLow(batteryLow: boolean): void {
+    this.batterySetter?.(batteryLow);
   }
 
   /**

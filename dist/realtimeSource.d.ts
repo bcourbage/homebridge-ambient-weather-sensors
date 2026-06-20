@@ -21,6 +21,14 @@ import type { Logger } from 'homebridge';
 export interface RealtimeUpdate {
     uniqueId: string;
     value: number;
+    /**
+     * HomeKit-aligned low/normal flag for the sensor's physical probe.
+     * undefined = no battery reported for this probe; true = low;
+     * false = normal. Polarity is already inverted from AWN's
+     * 0=low/1=good convention at the realtime layer so the platform
+     * doesn't need to know.
+     */
+    batteryLow?: boolean;
 }
 export type RealtimeUpdateHandler = (updates: RealtimeUpdate[]) => void;
 export interface RealtimeOptions {
@@ -44,6 +52,8 @@ export declare class RealtimeSource {
     private currentBackoff;
     private stopped;
     private updatesSinceHeartbeat;
+    private hasEverConnected;
+    private lastDisconnectWasClean;
     constructor(opts: RealtimeOptions);
     start(): void;
     stop(): void;

@@ -1,8 +1,8 @@
 {
   "private": false,
-  "displayName": "Homebridge Ambient Weather Sensors (bcourbage fork)",
+  "displayName": "Ambient Weather",
   "name": "@bcourbage/homebridge-ambient-weather-sensors",
-  "version": "1.4.3",
+  "version": "1.5.0",
   "description": "Homebridge plugin for Ambient Weather sensors via the AWN REST/websocket API. Soft fork of peledies/homebridge-ambient-weather-sensors with Homebridge 2.x / Node 22+ compatibility, multi-station support, websocket realtime, CO2/PM coverage, and other UX improvements while upstream PRs remain unmerged.",
   "license": "Apache-2.0",
   "author": "Bruno Courbage (https://github.com/bcourbage)",
@@ -32,7 +32,6 @@
   "exports": "./dist/index.js",
   "scripts": {
     "lint": "eslint src/**.ts --max-warnings=0",
-    "watch": "npm run build && npm link && nodemon",
     "build": "node -e \"require('fs').rmSync('./dist',{recursive:true,force:true})\" && node ./node_modules/typescript/bin/tsc",
     "prepublishOnly": "npm run lint && npm run build"
   },
@@ -52,7 +51,6 @@
     "@types/node": "^22.10.0",
     "eslint": "^9.17.0",
     "homebridge": "^2.0.0",
-    "nodemon": "^3.1.7",
     "rimraf": "^6.0.1",
     "ts-node": "^10.9.2",
     "typescript": "^5.7.2",

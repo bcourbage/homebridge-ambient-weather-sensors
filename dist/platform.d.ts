@@ -9,6 +9,17 @@ import { DEVICE } from './types.js';
  */
 export interface SensorAccessory {
     setValue(rawValue: number): void;
+    /**
+     * Optional hook for per-probe battery state. Implementations that
+     * advertise a Battery sub-service should override this to flip
+     * `StatusLowBattery` based on the boolean. Called by the polling
+     * and realtime fanout in addition to `setValue` on each tick.
+     *
+     * Default no-op for accessories that don't expose a battery — the
+     * platform calls this blindly and lets the wrapper decide whether
+     * to act.
+     */
+    setBatteryLow?(batteryLow: boolean): void;
 }
 export declare class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
     readonly log: Logger;
@@ -18,17 +29,37 @@ export declare class AmbientWeatherSensorsPlatform implements DynamicPlatformPlu
     readonly Characteristic: typeof Characteristic;
     readonly accessories: PlatformAccessory[];
     private readonly wrappers;
+    private readonly loggedExcludeHits;
+    private readonly loggedIncludeMisses;
+    private readonly loggedStationFilterDrops;
+    private warnedStationFilterEmpty;
+    private loggedStationFilterSummary;
+    private readonly loggedBatterySuppressions;
+    private readonly loggedDiscoveredStations;
     private pollTimer;
     private realtimeSource;
     constructor(log: Logger, config: PlatformConfig, api: API);
     configureAccessory(accessory: PlatformAccessory): void;
-    determineSensorType(sensor: string): "Solar Radiation" | "CO2" | "Temperature" | "Humidity" | "PM2.5" | "PM10" | "NOT_SUPPORTED";
+    determineSensorType(sensor: string): "Solar Radiation" | "CO2" | "Temperature" | "Humidity" | "PM2.5" | "PM10" | "NOT_SUPPORTED" | "WindSpeed" | "WindGust" | "WindMaxDailyGust" | "WindDirection" | "WindDirection10m" | "RainRate" | "RainEvent" | "RainDaily" | "RainWeekly" | "RainMonthly" | "RainYearly" | "LastRain" | "PressureRelative" | "PressureAbsolute" | "UV" | "LightningDay" | "LightningHour" | "LightningDistance" | "LightningLastStrike";
     /**
      * Compose a HAP-clean accessory displayName from station + sensor
-     * metadata. Form: `${station_name} ${sensor_label}` when the user has
-     * set a station name on ambientweather.net (e.g.
-     * "Fairhills WS 2000 Indoor Temperature"), otherwise
-     * `${mac_no_colons} ${sensor_label}` as a last-resort disambiguator.
+     * metadata.
+     *
+     * Single-station setups (the vast majority) get just the sensor
+     * label — e.g. "Indoor Temperature" — so the Apple Home tile reads
+     * cleanly without a station prefix. Multi-station setups get the
+     * prefix to disambiguate — e.g. "Backyard Station Indoor
+     * Temperature" — falling back to `${mac_no_colons} ${sensor_label}`
+     * if the user hasn't set a station name on ambientweather.net.
+     *
+     * Why the split: Apple Home's tile only honors a custom Name field
+     * after the user explicitly renames via the Home app (the rename
+     * action flips an internal "user-confirmed" flag; programmatic
+     * `setCharacteristic` from the accessory side doesn't). Until then,
+     * the tile shows `accessory.displayName` verbatim. So for the
+     * single-station case where the station prefix is redundant, we
+     * have to drop it at the displayName level — not at the service
+     * Name level — to get clean tiles by default.
      *
      * City/state are intentionally NOT included even though the API
      * supplies them: HomeKit's room/home hierarchy already gives users a
@@ -42,7 +73,34 @@ export declare class AmbientWeatherSensorsPlatform implements DynamicPlatformPlu
         info?: {
             name?: string;
         };
-    }, sensorKey: string): string;
+    }, sensorKey: string, isMultiStation: boolean): string;
+    /**
+     * Parse `excludeSensors` entries that target battery sub-services
+     * specifically, rather than entire accessories. Three forms are
+     * accepted, all resolving to a set of AWN battery field names to
+     * suppress:
+     *
+     *   - "<friendly name>-batt"  e.g. "Lightning Strikes Today-batt"
+     *   - "<sensorKey>-batt"      e.g. "lightning_distance-batt"
+     *   - "<battery field>"       e.g. "batt_lightning"
+     *
+     * Any sensor name (friendly or raw) sharing a probe with the target
+     * battery resolves to the same field, so users don't need to know
+     * which accessory is the canonical Battery-sub-service host. The
+     * field-name form is direct and lets users skip the reverse lookup
+     * entirely.
+     *
+     * The primary use case is working around upstream AWN API bugs that
+     * report a battery as low even with known-good cells (e.g.
+     * `batt_lightning` for the WH31L lightning sensor — see README).
+     *
+     * Note: entries that target whole accessories (no `-batt` suffix,
+     * not a battery field name) continue to flow through the existing
+     * per-accessory exclude path; they're not consumed here. So users
+     * can mix battery-suppression entries with accessory-exclusion
+     * entries in the same list freely.
+     */
+    private buildSuppressedBatteries;
     parseDevices(json: any): DEVICE[];
     sleep: (delay: any) => Promise<unknown>;
     fetchDevices(): any;
