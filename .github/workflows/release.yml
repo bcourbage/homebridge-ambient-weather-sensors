@@ -83,8 +83,6 @@ jobs:
 
       - name: Publish to npm
         run: npm publish --access public --provenance --tag "${{ steps.disttag.outputs.tag }}"
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Extract this version's section from CHANGELOG.md
         # Pulls the body of the FIRST `## [x.y.z] — date` heading in
