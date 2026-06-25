@@ -74,6 +74,12 @@ export abstract class ExtendedSensorBase implements SensorAccessory {
   protected readonly service: Service;
   private readonly customCharacteristics: ReturnType<typeof registerCharacteristics>;
   private lastSetName: string | undefined;
+  // Unix-ms timestamp of the last successful Name characteristic
+  // update on this accessory in embed mode. Used to enforce the
+  // `embedNameUpdateMinIntervalMinutes` throttle introduced in
+  // 1.6.0. Initialized to 0 so the first update after restart
+  // always fires regardless of how recent the cached value was.
+  private lastNameUpdateAt = 0;
   private readonly batterySetter?: (low: boolean) => void;
   // Cached Characteristic *instances* for the three custom characteristics
   // attached to the MotionSensor service. We hold these refs (instead of
@@ -277,11 +283,33 @@ export abstract class ExtendedSensorBase implements SensorAccessory {
       return;
     }
 
+    // Throttle Name characteristic updates to at most once per
+    // `embedNameUpdateMinIntervalMinutes` per accessory (default
+    // 2 minutes, configurable). Reduces HAP notification volume to
+    // paired iOS controllers — name changes on a standard service
+    // characteristic fan out to every subscribed controller and have
+    // been measured to cause significant phone battery drain when
+    // fired frequently (see UPGRADING.md, "embed mode and battery").
+    //
+    // Default of 2 minutes matches the polling cadence — for polling
+    // users, this is effectively a no-op (no faster than the data
+    // source itself updates). For any user who somehow ends up on
+    // realtime + embed (the runtime constraint in platform.ts should
+    // have prevented this, but JSON-Config edits or upgrades from an
+    // older version might still slip through), it caps the
+    // notification rate to a reasonable level.
+    const now = Date.now();
+    const minIntervalMinutes = typeof this.platform.config.embedNameUpdateMinIntervalMinutes === 'number'
+      ? this.platform.config.embedNameUpdateMinIntervalMinutes
+      : 2;
+    const minIntervalMs = Math.max(0, minIntervalMinutes) * 60 * 1000;
+    const intervalElapsed = now - this.lastNameUpdateAt >= minIntervalMs;
+
     const currentName = this.service.getCharacteristic(this.platform.Characteristic.ConfiguredName).value as string | undefined;
     const renamed = isUserRenamed(currentName, this.lastSetName);
     const newName = composeEmbeddedName(this.options.sensorLabel, valueStr);
     const nameChange = newName !== this.lastSetName;
-    const willUpdate = !renamed && nameChange;
+    const willUpdate = !renamed && nameChange && intervalElapsed;
 
     this.platform.log.debug(
       `[embed-diag] ${this.options.awnKey}: ` +
@@ -289,10 +317,12 @@ export abstract class ExtendedSensorBase implements SensorAccessory {
       `lastSet="${this.lastSetName ?? '(none)'}" ` +
       `userRenamed=${renamed} ` +
       `newName="${newName}" ` +
+      `nameChange=${nameChange} ` +
+      `intervalElapsed=${intervalElapsed} ` +
       `willUpdate=${willUpdate}`,
     );
 
-    if (renamed || !nameChange) {
+    if (!willUpdate) {
       return;
     }
 
@@ -300,5 +330,6 @@ export abstract class ExtendedSensorBase implements SensorAccessory {
       .updateCharacteristic(this.platform.Characteristic.Name, newName)
       .updateCharacteristic(this.platform.Characteristic.ConfiguredName, newName);
     this.lastSetName = newName;
+    this.lastNameUpdateAt = now;
   }
 }

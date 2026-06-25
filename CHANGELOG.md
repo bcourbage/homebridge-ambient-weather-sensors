@@ -9,6 +9,33 @@ entries short and user-facing.
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/
 
+## [1.6.0] — 2026-06-20
+
+### Changed
+
+- **Embed display mode now forces the polling data source.** If both
+  `extendedDisplayMode: "embed"` and `dataSource: "realtime"` are set,
+  the plugin coerces the data source to `polling` at startup with a
+  one-line warn log. The combination was observed to drain iOS phone
+  battery 5-7× faster than normal idle (solmssen, ~15 extended sensors
+  active) because each tile-name update generates an HAP notification
+  forwarded to every paired iOS device. Polling's 2-minute cadence
+  keeps the notification volume to a level that's not noticeable.
+  Affected users: anyone currently on embed + realtime. Tile names
+  will update every 2 minutes instead of every ~30 seconds. To silence
+  the warning, set `dataSource` to `polling` explicitly, or switch
+  `extendedDisplayMode` to `static`.
+
+### Added
+
+- **`embedNameUpdateMinIntervalMinutes` config field** caps the
+  per-accessory name-update rate in embed mode. Default 2 minutes
+  matches the polling cadence — effectively a no-op for new installs.
+  Can be increased (e.g., to 5 or 10 minutes) for users who want to
+  further reduce HAP notification volume to paired iOS devices, at the
+  cost of less-frequent tile-name updates. Has no effect in static
+  mode (which never rewrites tile names).
+
 ## [1.5.0] — 2026-06-16
 
 GA release. The full 24-beta cycle is summarized below; this entry

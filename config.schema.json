@@ -111,6 +111,16 @@
           "functionBody": "return model.extendedSensors === true;"
         }
       },
+      "embedNameUpdateMinIntervalMinutes": {
+        "title": "Minimum interval between embed-mode tile-name updates (minutes)",
+        "type": "number",
+        "default": 2,
+        "minimum": 0,
+        "description": "When embed display mode is selected, the plugin rewrites each tile's name on every reading. Each rewrite generates an HAP notification that is forwarded to every paired iOS device, which has been observed to drain phone battery noticeably if updates happen too frequently. This setting caps the per-accessory update rate. Default 2 minutes matches the polling cadence (so this is effectively a no-op for polling-mode users). Increase to 5-10 minutes for slower-changing tiles if you want to further reduce notification volume; decrease at your own risk. Has no effect in 'Show generic names' mode (which never updates the tile name at all).",
+        "condition": {
+          "functionBody": "return model.extendedSensors === true && model.extendedDisplayMode === 'embed';"
+        }
+      },
       "thresholds": {
         "type": "object",
         "title": "Motion thresholds for extended sensors",
@@ -323,9 +333,10 @@
       "condition": { "functionBody": "return model.extendedSensors === true;" }
     },
     "extendedDisplayMode",
+    "embedNameUpdateMinIntervalMinutes",
     {
       "type": "help",
-      "helpvalue": "<p>Show generic names (recommended): tiles show 'Wind Speed' with an on/off motion indicator. The live number is visible in Eve or Controller for HomeKit. Tile names stay stable.</p><p>Show live value in the tile name: tiles update to 'Wind Speed 14 mph' as readings change. Values are rounded to whole numbers so the tile name stays compatible with Apple Home's naming rules. The tile name updates on every reading (~30s in realtime, every 2 minutes in polling).</p><p>If you rename a tile manually in Apple Home, the plugin detects this and stops overwriting it — your custom name wins. Some Homebridge log lines may mention name changes — these are informational and safe to ignore.</p><p><strong>Known limitation with this mode (Homebridge UI only):</strong> the Homebridge UI's Accessories page tracks each tile's room placement by its display name. When the name updates on each reading, the UI moves the tile to the bridge's default room until the name happens to revert to whatever it was when you placed it. Apple Home and Eve are NOT affected — they preserve room assignments correctly across name changes. If you primarily use Apple Home or Eve, embed mode is fine. If you primarily use the Homebridge UI Accessories page, leave this on 'Show generic names' or be prepared to leave the extended-sensor tiles in the default room.</p><p>Selecting None uses the recommended default.</p>",
+      "helpvalue": "<p>Show generic names (recommended): tiles show 'Wind Speed' with an on/off motion indicator. The live number is visible in Eve or Controller for HomeKit. Tile names stay stable.</p><p>Show live value in the tile name: tiles update to 'Wind Speed 14 mph' as readings change. Values are rounded to whole numbers so the tile name stays compatible with Apple Home's naming rules. The minimum interval between name updates is configurable below (default 2 minutes); within that window, intermediate value changes are coalesced.</p><p>If you rename a tile manually in Apple Home, the plugin detects this and stops overwriting it — your custom name wins. Some Homebridge log lines may mention name changes — these are informational and safe to ignore.</p><p><strong>Known limitation 1 (Homebridge UI Accessories page):</strong> the HB UI tracks each tile's room placement by its display name. When the name updates, the UI moves the tile to the bridge's default room until the name reverts. Apple Home and Eve are NOT affected. If you primarily use the HB UI Accessories page, leave this on 'Show generic names' or accept the room churn.</p><p><strong>Known limitation 2 (iOS battery drain):</strong> each tile-name update generates an HAP notification forwarded to every paired iOS device. Frequent updates have been observed to drain phone battery several times faster than normal idle. The 2-minute minimum interval below mitigates this, and 1.6.0 also automatically coerces the data source to 'polling' whenever embed mode is selected (the realtime data source's ~30s update cadence interacts badly with embed mode; polling's 2-minute cadence is fine).</p><p>Selecting None uses the recommended default.</p>",
       "condition": { "functionBody": "return model.extendedSensors === true;" }
     },
     {
@@ -417,7 +428,7 @@
     "dataSource",
     {
       "type": "help",
-      "helpvalue": "<p>Polling fetches the AWN REST endpoint every 2 minutes. Realtime opens a websocket to rt2.ambientweather.net and receives updates as the station reports them (typically ~30s indoors). Realtime is opt-in for now; the default will switch to realtime in a future release once it has been broadly validated.</p><p>Selecting None uses the default (polling).</p>"
+      "helpvalue": "<p>Polling fetches the AWN REST endpoint every 2 minutes. Realtime opens a websocket to rt2.ambientweather.net and receives updates as the station reports them (typically ~30s indoors). Realtime is opt-in for now; the default will switch to realtime in a future release once it has been broadly validated.</p><p><strong>Note (1.6.0+):</strong> if you also select 'Show live value in the tile name' above, the plugin coerces this back to polling at startup with a warning. The realtime + embed-tile-name combination causes elevated iOS battery drain on every paired phone (~5×-7× normal idle drain in one measured case). If you want live tile values, polling's 2-minute cadence is the supported mode; the data source itself can stay on realtime for the underlying value characteristics (visible in Eve / Controller for HomeKit) by leaving the display mode on 'Show generic names'.</p><p>Selecting None uses the default (polling).</p>"
     },
     {
       "key": "stationFilter",

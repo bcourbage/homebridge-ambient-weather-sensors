@@ -70,6 +70,7 @@ export declare abstract class ExtendedSensorBase implements SensorAccessory {
     protected readonly service: Service;
     private readonly customCharacteristics;
     private lastSetName;
+    private lastNameUpdateAt;
     private readonly batterySetter?;
     private readonly valueChar;
     private readonly lastUpdatedChar;

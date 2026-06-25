@@ -844,7 +844,30 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
       //   "realtime"           — opt-in; subscribe to AWN's socket.io
       //                          endpoint and push updates as they
       //                          arrive (~30s cadence indoors).
-      const dataSource = this.config.dataSource === 'realtime' ? 'realtime' : 'polling';
+      //
+      // CONSTRAINT (added in 1.6.0): embed display mode is incompatible
+      // with the realtime data source. The combination produces a flood
+      // of HAP Name-characteristic update notifications to every paired
+      // iOS controller, which has been observed to drain phone battery
+      // ~5×-7× faster than normal idle (solmssen, 2026-06-18, ~15
+      // extended sensors active). Polling caps the notification volume
+      // to roughly one batch per 2 minutes, which keeps the drain
+      // negligible while still delivering live-ish tile values. If the
+      // user has selected both, we coerce to polling and warn — the
+      // user's intent ("live value in tile") is preserved at a slightly
+      // slower cadence, which is the right trade-off for an invisible
+      // side effect like battery drain.
+      let dataSource = this.config.dataSource === 'realtime' ? 'realtime' : 'polling';
+      if (dataSource === 'realtime' && this.config.extendedDisplayMode === 'embed') {
+        this.log.warn(
+          'Embed display mode is incompatible with the realtime data source — '
+          + 'the combination causes elevated iOS battery drain from HAP name-update '
+          + 'notifications. Forcing polling for this run. To silence this warning, '
+          + 'either switch the display mode to "Show generic names" or set the data '
+          + 'source explicitly to "polling".',
+        );
+        dataSource = 'polling';
+      }
       this.log.info(`Data source: ${dataSource}`);
       if (dataSource === 'realtime') {
         this.startRealtime();

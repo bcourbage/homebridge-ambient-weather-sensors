@@ -4,6 +4,48 @@ This document covers what to expect when upgrading your installation. For techni
 
 ---
 
+## v1.5.x → v1.6.0
+
+v1.6.0 is a small but behavior-changing release. Two related changes around the **Extended Sensors display mode**:
+
+### What changed
+
+1. **Embed mode now forces the polling data source.** If your config has `extendedDisplayMode: "embed"` AND `dataSource: "realtime"`, the plugin will coerce the data source to `polling` at startup with a warning log:
+   ```
+   Embed display mode is incompatible with the realtime data source —
+   the combination causes elevated iOS battery drain from HAP name-update
+   notifications. Forcing polling for this run. To silence this warning,
+   either switch the display mode to "Show generic names" or set the data
+   source explicitly to "polling".
+   ```
+
+2. **A new `embedNameUpdateMinIntervalMinutes` setting** caps how often each tile's name can be rewritten in embed mode. Default is 2 minutes, matching the polling cadence — so it's effectively a no-op for new installs.
+
+### Why
+
+Late in the 1.5.0 test cycle (after GA), solmssen reported that his iPhone was draining 5-7% per hour while idle while embed mode was active, dropping back to ~1% per hour after switching to the recommended "Show generic names" mode. The mechanism: in embed mode the plugin rewrites the HAP `Name` characteristic on every value change, and each rewrite generates a notification forwarded to every paired iOS device. With realtime + ~15 extended sensors, that's many notifications per minute, each waking the phone's radio briefly.
+
+The constraint cuts the worst case (realtime + embed) out of the available combinations; the throttle further bounds the rate even on polling.
+
+### Who's affected
+
+- **You're on static + anything** (most users, including the default): **nothing changes.** The constraint doesn't fire. The throttle has no effect because static mode never rewrites names.
+- **You're on embed + polling**: **nothing changes.** Polling's natural 2-minute cadence is already below the throttle's default ceiling.
+- **You're on embed + realtime**: **your data source gets coerced to polling.** Tile name updates will appear every 2 minutes instead of every ~30 seconds. To silence the warning, edit your config to set the data source explicitly to `polling`. If you want the realtime data source to feed the underlying value characteristics (visible in Eve / Controller for HomeKit), switch your display mode to "Show generic names" — that combination doesn't trigger the constraint.
+
+### How to upgrade
+
+Standard path:
+```sh
+sudo hb-service stop
+sudo npm install -g @bcourbage/homebridge-ambient-weather-sensors
+sudo hb-service start
+```
+
+Or via Homebridge UI's Update button on the Plugins page.
+
+---
+
 ## v1.4.x → v1.5.0
 
 v1.5.0 is the largest release of this plugin. It adds a sizable set of new sensors and a battery-status feature, but **nothing changes for existing users unless you opt in.** If you upgrade and don't touch any settings, your HomeKit experience is identical to v1.4.3 — plus one bonus: low-battery notifications on the sensors you already have.
