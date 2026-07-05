@@ -47,6 +47,17 @@ export class MockCharacteristic {
     if (event === 'change') this.listeners.push(listener);
     return this;
   }
+
+  /**
+   * HAP `setProps` is used by some wrappers to override the default
+   * min/max range on a characteristic (e.g. LightSensor's minValue
+   * needs to be 0 for solar-radiation nighttime readings). No-op in
+   * the mock — tests don't assert on prop values. Add a stored-props
+   * assertion here later if needed.
+   */
+  setProps(_props: Record<string, unknown>): this {
+    return this;
+  }
 }
 
 /**
@@ -351,5 +362,10 @@ export function makeMockAccessory(deviceContext: Record<string, unknown> = {}): 
   const uuid = mockUuidGenerate(displayName);
   const a = new MockPlatformAccessory(displayName, uuid);
   a.context.device = deviceContext;
+  // Real Homebridge auto-attaches an AccessoryInformation service to
+  // every PlatformAccessory at construction time — wrapper code
+  // assumes it's already there and uses non-null assertion (`!`) on
+  // the getService lookup. Match that behavior in the mock.
+  a.addService(MockServices.AccessoryInformation);
   return a;
 }
