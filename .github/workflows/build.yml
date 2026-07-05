@@ -37,6 +37,14 @@ jobs:
       - name: Lint the project
         run: npm run lint
 
+      - name: Run tests
+        # Vitest suite. Runs against the source tree (not dist/) so no
+        # build is required first. Tests are non-blocking on release
+        # for now — see the corresponding note in release.yml. Once
+        # the suite has proven stable across a few releases, add
+        # `npm test` to prepublishOnly so a broken suite fails npm publish.
+        run: npm test
+
       - name: Build the project
         run: npm run build
 
