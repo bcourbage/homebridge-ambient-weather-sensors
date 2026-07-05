@@ -26,6 +26,14 @@ import { createHash } from 'node:crypto';
  * Base class for both stock and custom characteristics. Identity is
  * by UUID; the same UUID means the same characteristic even across
  * different constructor-form lookups (mirrors HAP-NodeJS's behavior).
+ *
+ * The real HAP `Characteristic` is both an extendable base class AND
+ * a namespace holding all the named characteristics as static
+ * properties (e.g. `Characteristic.Name`, `Characteristic.Manufacturer`).
+ * We mirror that shape: static properties are attached below via
+ * `Object.assign(MockCharacteristic, { Name: ..., Model: ..., ... })`
+ * so plugin code like `class Value extends api.hap.Characteristic`
+ * works AND `api.hap.Characteristic.Name` resolves to the Name class.
  */
 export class MockCharacteristic {
   static readonly UUID: string;
@@ -33,7 +41,7 @@ export class MockCharacteristic {
   public value: unknown = null;
   private listeners: Array<(v: unknown) => void> = [];
 
-  constructor(displayName: string) {
+  constructor(displayName: string, _uuid?: string, _props?: Record<string, unknown>) {
     this.displayName = displayName;
   }
 
@@ -58,6 +66,17 @@ export class MockCharacteristic {
   setProps(_props: Record<string, unknown>): this {
     return this;
   }
+
+  /**
+   * HAP's `getDefaultValue` is used by custom-characteristic
+   * constructors (customCharacteristics.ts). Returns something
+   * sensible for the format — for strings, an empty string; for
+   * numbers, 0. Mock always returns empty string since our custom
+   * characteristics are all STRING-typed.
+   */
+  getDefaultValue(): unknown {
+    return '';
+  }
 }
 
 /**
@@ -76,10 +95,13 @@ export function makeCharacteristicClass(name: string, uuid: string): typeof Mock
   return klass;
 }
 
-// Stock HAP characteristics used by the plugin. UUIDs match the
-// actual HAP spec so provenance-check tests can be added later if
-// wanted; for functional tests the exact value doesn't matter as
-// long as each characteristic has a distinct UUID.
+// Named HAP characteristics as classes. Attached as STATIC properties
+// of MockCharacteristic (see below) so plugin code that does
+// `class Value extends api.hap.Characteristic` extends the BASE class
+// while `api.hap.Characteristic.Name` still resolves to the Name class.
+// Also exported as a standalone namespace `MockCharacteristics` for
+// tests that want to reference the classes directly without going
+// through the base.
 export const MockCharacteristics = {
   Name: makeCharacteristicClass('Name', '00000023-0000-1000-8000-0026BB765291'),
   ConfiguredName: makeCharacteristicClass('ConfiguredName', '000000E3-0000-1000-8000-0026BB765291'),
@@ -99,6 +121,12 @@ export const MockCharacteristics = {
   BatteryLevel: makeCharacteristicClass('BatteryLevel', '00000068-0000-1000-8000-0026BB765291'),
   ChargingState: makeCharacteristicClass('ChargingState', '0000008F-0000-1000-8000-0026BB765291'),
 };
+
+// Attach the named characteristics as static properties on the base
+// class. This makes `MockCharacteristic.Name`, `.Manufacturer`, etc.
+// resolve the same as `MockCharacteristics.Name` — matching HAP's
+// Characteristic namespace shape.
+Object.assign(MockCharacteristic, MockCharacteristics);
 
 // Enum-style constants attached to the classes to match HAP's usage
 // pattern (e.g. `Characteristic.StatusLowBattery.BATTERY_LEVEL_LOW`).
@@ -302,8 +330,15 @@ export class MockLogger {
  */
 export class MockAPI extends EventEmitter {
   public readonly hap = {
+    // Match HAP-NodeJS's shape: Service and Characteristic are both
+    // classes (extendable) AND namespaces with static members for each
+    // named service/characteristic. See MockCharacteristic below —
+    // the named characteristics are attached as static properties
+    // via Object.assign.
     Service: MockServices as unknown as Record<string, typeof MockService>,
-    Characteristic: MockCharacteristics as unknown as Record<string, typeof MockCharacteristic>,
+    Characteristic: MockCharacteristic as unknown as (
+      typeof MockCharacteristic & Record<string, typeof MockCharacteristic>
+    ),
     uuid: { generate: mockUuidGenerate },
   };
 
@@ -337,7 +372,7 @@ export class MockAPI extends EventEmitter {
  */
 export interface MockPlatform {
   Service: typeof MockServices;
-  Characteristic: typeof MockCharacteristics;
+  Characteristic: typeof MockCharacteristic & typeof MockCharacteristics;
   api: MockAPI;
   log: MockLogger;
   config: Record<string, unknown>;
@@ -346,7 +381,7 @@ export interface MockPlatform {
 export function makeMockPlatform(config: Record<string, unknown> = {}): MockPlatform {
   return {
     Service: MockServices,
-    Characteristic: MockCharacteristics,
+    Characteristic: MockCharacteristic as MockPlatform['Characteristic'],
     api: new MockAPI(),
     log: new MockLogger(),
     config,
