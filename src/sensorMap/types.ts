@@ -297,10 +297,24 @@ interface ConfiguredRowBase extends CommonMeta {
   triggerEnabled: boolean;
   triggerDirection: 'above' | 'below';
   batteryField: string | null;
+  /**
+   * True iff a HAP Battery sub-service is attached to this accessory.
+   * Bookkept separately from `batteryField` because a row can carry
+   * a batteryField for row identity WITHOUT hosting the sub-service
+   * (non-canonical rows sharing a probe's battery — see §9 of design).
+   * Structural-signature input.
+   */
+  hasBatterySubService: boolean;
   embedName: boolean;
   enabled: boolean;
   /** See §9 of design; format is `${kind}|measurement:${m}|battery:${0|1}|wrapper:${id}:v${version}`. */
   structuralSignature: string;
+  /**
+   * Stable id of the wrapper descriptor this row resolves to.
+   * Redundant with `structuralSignature` but explicit for consumers
+   * that need the wrapper without re-parsing the signature.
+   */
+  wrapperId: string;
 }
 
 export interface NumericSensorRow extends ConfiguredRowBase {
@@ -319,4 +333,96 @@ export interface BooleanSensorRow extends ConfiguredRowBase {
   measurement: 'boolean';
   sourceUnit?: never;
   displayUnit?: never;
+}
+
+/**
+ * Runtime station identity. Populated from AWN's device list or
+ * (per §8.7) from the accessory cache / discovery store when AWN is
+ * unavailable at bootstrap.
+ */
+export interface StationRecord {
+  macAddress: string;
+  name: string;
+}
+
+export type StationInventory = ReadonlyArray<StationRecord>;
+
+/**
+ * Observational entry — one row per (stationMac, dataPoint) the plugin
+ * has seen AWN report. See §8.3 of design.
+ */
+export interface DiscoveredFieldRecord {
+  stationMac: string;
+  stationName: string;
+  dataPoint: string;
+  firstSeen: string;
+  lastSeen: string;
+}
+
+export interface DiscoveryStore {
+  schemaVersion: 1;
+  entries: DiscoveredFieldRecord[];
+}
+
+/**
+ * "Forget this field" entries suppress auto-discovery of a specific
+ * (stationMac, dataPoint) — the row won't show up as unrecognized
+ * until the user removes the entry via the UI. See §9.4.
+ */
+export interface ForgottenField {
+  stationMac: string;
+  dataPoint: string;
+  forgottenAt: string;
+}
+
+export interface UiStateStore {
+  schemaVersion: 1;
+  dismissedNoticeIds: string[];
+  forgottenFields: ForgottenField[];
+}
+
+/**
+ * Structural-change notice — appended when re-registration occurs.
+ * See §8.4.
+ */
+export interface SensorMapNotice {
+  id: string;
+  type: 'structural-change';
+  stationMac: string;
+  dataPoint: string;
+  oldSignature?: string;
+  newSignature: string;
+  occurredAt: string;
+}
+
+export interface NoticeStore {
+  schemaVersion: 1;
+  notices: SensorMapNotice[];
+}
+
+/**
+ * Row-level validation failure. Attached to the effective-map result
+ * so the UI can surface these in the "needs attention" group per
+ * §3.7. Never fails the plugin as a whole.
+ */
+export interface RowValidationError {
+  /** Which override entry failed (by index in the input array). */
+  overrideIndex: number;
+  /** dataPoint of the offending entry, or undefined if the entry has none. */
+  dataPoint?: string;
+  /** stationMac from the entry, or undefined for global overrides. */
+  stationMac?: string;
+  /** Human-readable message; stable enough for tests. */
+  message: string;
+}
+
+/**
+ * Result of `buildEffectiveSensorMap`. `rows` are the resolved
+ * accessory rows (one per station+dataPoint pair for which the row
+ * is representable). `errors` accumulates row-level failures; the
+ * plugin loads valid rows regardless.
+ */
+export interface EffectiveSensorMap {
+  rows: EffectiveSensorRow[];
+  errors: RowValidationError[];
 }
