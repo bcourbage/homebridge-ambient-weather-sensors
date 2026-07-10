@@ -1,7 +1,7 @@
 # Sensor Map — Design for v2.0
 
-**Status:** Design in review — pending sixth review pass.
-**Last revised:** 2026-07-13 (after fifth external review — see §16 decision log).
+**Status:** Design approved for implementation. Five implementation acceptance criteria captured in §16.
+**Last revised:** 2026-07-13 (approved after fifth external review — see §17 decision log).
 **Implementation phase:** Beta cycle target 2.0.0-beta.0 begins after this doc is signed off; GA target 2.0.0 after test-suite refactor completes.
 
 ## 1. Motivation
@@ -270,6 +270,8 @@ Row-level failures never fail the whole plugin. Every valid row still loads. Inv
 | `wrapperId` field in an override entry | Rejected as unknown field. Row-level failure. `wrapperId` is not part of the v2.0 public schema; see §3.9. |
 | Known `dataPoint` with `kind` override incompatible with built-in measurement (§3.8) | Row-level failure. |
 | `triggerDirection` set on non-motion kind | Ignored with warn. |
+| `threshold` or `triggerEnabled` set on non-motion kind | Ignored with warn. Row still loads. |
+| `embedName: true` on non-motion kind | Ignored with warn. Row still loads. |
 | Duplicate override for same `(dataPoint, stationMac?)` key | Merged in array order with later-wins; warn; canonicalized on next UI save. |
 | Invalid `configVersion` value type (string, negative, NaN) | Row-level failure surfaces in UI; per §5 the plugin enters safe mode. |
 | JSON parse failure of `config.json` overall | Whole-plugin startup failure (Homebridge's own behavior). |
@@ -1079,7 +1081,78 @@ Still open (minor):
 - `awnClient.ts` CommonJS vs ESM.
 - Whether any of the canonical `(kind, measurement)` → wrapper choices in §3.9 turn out to be wrong for a real user's custom sensor. If so, a future v2.1+ can add a user-facing `wrapperId` override with proper validation, canonicalization, and UI. Not in v2.0.
 
-## 16. Decision log
+## 16. Implementation acceptance criteria
+
+Non-negotiable checks that the implementation must satisfy before 2.0.0-beta.0 ships. These are not open design questions; they are correctness properties the implementation must verify.
+
+### 17.1 Canonical wrappers must be verified as generic
+
+The canonical `(kind, measurement) → WrapperDescriptor` table in §3.9 reuses existing v1.6.0 wrapper classes for custom sensors — e.g., a custom `(motion, count)` sensor uses `LIGHTNING_DAY_WRAPPER`. This assumes those wrapper classes are generic enough to serve arbitrary datapoints within their `(kind, measurement)`.
+
+**Before beta.0**, audit every wrapper class reused for custom sensors and confirm none of the following are hardcoded to the wrapper's original AWN datapoint:
+
+- The AWN sensorKey (must accept any dataPoint that matches the row's `kind`/`measurement`)
+- Display labels or characteristic display names (must derive from the effective row's `name`, not a class constant)
+- Threshold defaults (must come from the row, not from the wrapper class)
+- Battery field assumptions (must come from the row's `batteryField`, not a wrapper-level default)
+- Characteristic metadata (min/max/step values) that presume the original AWN field's range
+
+Any wrapper found to hardcode its origin datapoint must be refactored to parameterize on the effective row BEFORE it appears in the custom-sensor canonical table. If refactoring proves substantial for a specific wrapper, that entry drops from the canonical table for v2.0 and its `(kind, measurement)` combination becomes "not supported for custom sensors" until v2.1+.
+
+Tests: for every wrapper in the canonical table, instantiate with a synthetic custom effective row (dataPoint `test_custom`, arbitrary threshold, no battery field) and verify the accessory renders correctly with the row's data, not the wrapper's original defaults.
+
+### 17.2 Safe mode must bypass reconciliation entirely
+
+Safe mode (§5) returns zero effective rows. The reconciliation code path that compares effective rows against cached accessories normally interprets "row is missing for this cached accessory" as "unregister the cached accessory."
+
+**Safe mode must short-circuit this path.** When `configMode === 'safe-mode'`:
+
+- `discoverDevices()` calls `configureAccessory` for every cached accessory (Homebridge's normal restore path)
+- The reconciliation-vs-effective-map step is SKIPPED entirely — no cached accessory is unregistered, no structural signature comparison runs
+- Polling / realtime updates continue to push values to existing wrappers if they can be identified from cached context
+- No new registrations happen (no config-derived rows exist)
+
+Tests: fixture a `configVersion: 3` config with a legacy accessory cache containing 15 accessories. On plugin startup, verify all 15 cached accessories remain registered; no calls to `unregisterPlatformAccessories` are made; the safe-mode banner state is exposed to the UI.
+
+### 17.3 Preserve-cached state must have a recovery path
+
+The bootstrap flow (§11.2) returns `'preserve-cached'` when neither the default map nor `LEGACY_TYPE_TO_MEASUREMENT` resolves a cached accessory's measurement. Such an accessory stays in HomeKit with its last-known values, but its context does not receive `kind` / `measurement` / `structuralSignature`.
+
+**On every subsequent `discoverDevices()` invocation**, the plugin re-attempts bootstrap for every `'preserve-cached'` accessory:
+
+- If a newly-observed AWN response includes the accessory's dataPoint AND the default map now covers it (e.g., a plugin update added the default), resolve normally
+- If a legacy type field becomes recognizable (unlikely — legacy types don't change post-registration, but a future compat table update could add entries), resolve normally
+- Otherwise, remain in `'preserve-cached'` state
+
+Once resolved, the context is populated via `updatePlatformAccessories()` (no re-registration).
+
+Tests: fixture a cached accessory with no legacy type and a dataPoint absent from the initial default map. Verify the accessory stays in HomeKit through initial startup. Then simulate a plugin update that adds the dataPoint to the default map; on the next `discoverDevices()`, verify the accessory's context receives `kind` and `measurement` and enters the normal reconciliation lifecycle.
+
+### 17.4 Canonical ordering for byte-stable sensorMap output
+
+The migration serializer's canonicalization rules (§11.3) apply to ALL sensorMap writes, not just the initial legacy → v2 migration event. Any UI save must produce a byte-stable canonical form:
+
+1. At most one entry per `(dataPoint, stationMac?)` key
+2. Global entries (no stationMac) appear before station-specific entries for the same dataPoint
+3. Entries sort by `dataPoint` first, then `stationMac` (global first, then MACs ascending alphabetically, case-insensitive)
+4. Within each entry, fields appear in a fixed alphabetical order: `batteryField`, `dataPoint`, `displayUnit`, `embedName`, `enabled`, `kind`, `measurement`, `name`, `sourceUnit`, `stationMac`, `threshold`, `triggerDirection`, `triggerEnabled`
+5. JSON output uses 2-space indentation, no trailing whitespace, LF line endings
+
+Repeated saves of the same effective state produce byte-identical `config.json` diffs of size zero. Tests: pick 10 effective-map fixtures; serialize each; deserialize + re-serialize; assert byte-equality.
+
+### 17.5 Threshold-family fields validated inapplicable on non-motion kinds
+
+The following fields are only meaningful for `kind: motion`:
+- `threshold`
+- `triggerEnabled`
+- `triggerDirection`
+- `embedName`
+
+When any of these appears in a non-motion row (default or user override), the plugin logs a warn identifying the specific field and row, ignores the field, and lets the row load normally. See §3.7 validation table.
+
+Tests: for every non-motion kind, submit an override with each of these fields; verify the specific warn is emitted and the field is absent from the resulting effective row.
+
+## 17. Decision log
 
 - **2026-07-08**: v1 drafted.
 - **2026-07-09**: First review. Revision incorporated configVersion, station-layered overrides, discovery store, structural signatures, bootstrap for existing accessories, unit source/display split, property-driven testing, minimal UI in beta.0.
@@ -1093,4 +1166,11 @@ Still open (minor):
   - **Blocking**: `wrapperId` removed from the design entirely — it was mentioned in prose but absent from `SensorMapOverride`. Rather than add it (with all the validation, canonicalization, UI, and test surface that entails), removed from v2.0 scope. Custom-sensor wrapper selection uses a canonical `(kind, measurement)` → descriptor table in §3.9 as the sole path. If a real user need surfaces, a user-facing `wrapperId` override becomes a v2.1+ project.
   - **Important**: Boolean rows with `sourceUnit`/`displayUnit` and timestamp rows with `displayUnit` now emit a warn (not silently ignored) — matches the design's "needs attention" philosophy. Row still loads; the warning surfaces the mistake. Safe mode is explicitly read-only — UI saves refused, "Refresh from Ambient Weather" disabled, lifecycle actions disabled; notice dismissal still permitted since it's schema-version-independent. Read-only banner text specified. Bootstrap measurement inference uses a new `LEGACY_TYPE_TO_MEASUREMENT` table paired with `LEGACY_TYPE_TO_KIND`; the earlier `inferMeasurementFromKind` fallback is removed because it's impossible for `motion`. If neither table matches, the plugin returns `'preserve-cached'` and leaves the accessory in HomeKit without structural reconciliation.
   - **Testing additions**: `wrapperId` rejection tests, boolean/timestamp warn tests, safe-mode read-only tests, bootstrap-measurement-never-from-kind-alone tests.
-- Status: pending sixth review pass. If this revision addresses the remaining `wrapperId` inconsistency to the reviewer's satisfaction, the design is ready for implementation.
+- **2026-07-14**: Sixth review — sign-off. Reviewer accepted the fifth revision. Five implementation acceptance criteria added as §16:
+  - Canonical wrappers verified as genuinely generic before use for custom sensors
+  - Safe mode bypasses reconciliation entirely (does NOT flow through the "row missing = unregister" path)
+  - Preserve-cached state has a recovery path (re-evaluate on subsequent `discoverDevices` invocations)
+  - Canonical ordering for byte-stable `sensorMap` serialization across all writes, not just migration
+  - Explicit validation of inapplicable fields (threshold / triggerEnabled / triggerDirection / embedName) on non-motion kinds
+  - Also added: §3.7 validation table entries for `threshold`/`triggerEnabled`/`embedName` on non-motion kinds
+- Status: **APPROVED FOR IMPLEMENTATION**. Beta cycle can begin.
