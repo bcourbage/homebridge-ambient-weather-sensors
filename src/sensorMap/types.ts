@@ -1,0 +1,322 @@
+/**
+ * Sensor map — public and internal type definitions.
+ *
+ * See docs/future/sensor-map.md §3 for the design reasoning behind
+ * the shapes below. Summary:
+ *
+ * - `SensorKind` selects the HAP wrapper family (TemperatureSensor,
+ *   MotionSensor, LeakSensor, etc.).
+ * - `Measurement` names the physical dimension (temperature vs.
+ *   wind-speed vs. pressure, etc.). Separated from `SensorKind`
+ *   because `motion` is a HAP-service catch-all spanning many
+ *   physically distinct measurements. Units and threshold semantics
+ *   are keyed by measurement, not by kind.
+ * - `SensorMapOverride` is what the user writes into `config.json`
+ *   (sparse — only fields the user has set).
+ * - `EffectiveSensorRow` is the fully-resolved runtime row after
+ *   defaults + compat + overrides are merged. Discriminated by
+ *   `kind` and by measurement shape (Numeric / Timestamp / Boolean).
+ */
+
+/**
+ * Twelve values corresponding to HAP-native sensor services the plugin
+ * can render. `unrecognized` is a sentinel for auto-discovered
+ * datapoints the plugin doesn't have a default for; those rows do NOT
+ * produce a HomeKit accessory until the user assigns a real kind.
+ *
+ * Value tiles (Apple Home renders the reading directly):
+ *   temperature, humidity, light, co2, co, air-quality-pm25, air-quality-pm10
+ *
+ * State tiles (Apple Home renders a boolean state):
+ *   motion, leak, contact, occupancy
+ */
+export type SensorKind =
+  | 'temperature'
+  | 'humidity'
+  | 'light'
+  | 'co2'
+  | 'co'
+  | 'air-quality-pm25'
+  | 'air-quality-pm10'
+  | 'motion'
+  | 'leak'
+  | 'contact'
+  | 'occupancy'
+  | 'unrecognized';
+
+/**
+ * Physical measurement dimension. Determines allowed units, threshold
+ * interpretation, conversion, AND wrapper subtype selection when `kind`
+ * alone underspecifies the wrapper (all `motion` accessories share
+ * `kind: motion` but span many measurements from wind-speed to pressure
+ * to lightning count).
+ */
+export type Measurement =
+  | 'temperature'
+  | 'humidity'
+  | 'illuminance'
+  | 'co2'
+  | 'co'
+  | 'pm25'
+  | 'pm10'
+  | 'wind-speed'
+  | 'rain-rate'
+  | 'rain-accumulation'
+  | 'pressure'
+  | 'distance'
+  | 'uv-index'
+  | 'count'
+  | 'direction'
+  | 'timestamp'
+  | 'boolean';
+
+/**
+ * All the concrete unit values referenced by any measurement's legal
+ * set. Kept as a string union rather than an enum so JSON serialization
+ * is transparent and no `enum.SOMETHING` lookup is needed.
+ */
+export type SensorUnit =
+  // Temperature
+  | 'fahrenheit'
+  | 'celsius'
+  // Humidity
+  | 'percent'
+  // Light
+  | 'wm2'
+  | 'lux'
+  // Gas
+  | 'ppm'
+  // Particulate
+  | 'ugm3'
+  // Wind
+  | 'mph'
+  | 'kph'
+  | 'mps'
+  | 'kts'
+  // Rain rate
+  | 'in_per_hr'
+  | 'mm_per_hr'
+  // Rain accumulation
+  | 'in'
+  | 'mm'
+  // Pressure
+  | 'inHg'
+  | 'hPa'
+  // Distance
+  | 'mi'
+  | 'km'
+  | 'nm'
+  // Dimensionless
+  | 'index'
+  | 'count'
+  | 'degrees'
+  // Timestamp
+  | 'ms';
+
+/**
+ * User-authored override entry in `config.json`. Sparse — only fields
+ * the user has explicitly set appear.
+ *
+ * See §3.3 of the design doc for the full field-by-field contract,
+ * including validation rules (§3.7) and known-datapoint remapping
+ * constraints (§3.8).
+ */
+export interface SensorMapOverride {
+  /** AWN field name. Required. Row identity. */
+  dataPoint: string;
+
+  /**
+   * Restrict this override to one station. Absent = global template
+   * applying to every station. Present = MUST be a MAC-formatted
+   * string; name-shaped values fail row-level validation.
+   */
+  stationMac?: string;
+
+  /**
+   * Override the default kind. Required for custom (unrecognized)
+   * dataPoints. For known dataPoints, only permitted within the
+   * measurement's compatible-kinds set (§3.8).
+   */
+  kind?: SensorKind;
+
+  /**
+   * Measurement dimension. Required for custom dataPoints alongside
+   * `kind`. Ignored for known dataPoints (measurement is fixed at the
+   * default-map level).
+   */
+  measurement?: Measurement;
+
+  /** Display name in HomeKit. Falls back to the plugin default. */
+  name?: string;
+
+  /** Motion-trigger threshold. Numeric, stored in sourceUnit. */
+  threshold?: number;
+
+  /**
+   * Default true for `kind: motion`. Set false for informational
+   * rows that should never fire (replaces the internal Infinity
+   * sentinel from v1.6.0).
+   */
+  triggerEnabled?: boolean;
+
+  /**
+   * 'above' or 'below'. Default 'above'. Only meaningful for
+   * `kind: motion`; ignored with warn on other kinds.
+   */
+  triggerDirection?: 'above' | 'below';
+
+  /** Display unit override. Must be legal for the row's measurement. */
+  displayUnit?: SensorUnit;
+
+  /**
+   * For CUSTOM dataPoints only. Declares the unit the AWN payload
+   * reports in. Ignored for known defaults. Not applicable to boolean
+   * measurements; fixed to 'ms' for timestamp.
+   */
+  sourceUnit?: SensorUnit;
+
+  /**
+   * AWN batt* field driving the Battery sub-service. `null` explicitly
+   * suppresses a Battery sub-service that the plugin default would
+   * attach.
+   */
+  batteryField?: string | null;
+
+  /**
+   * Show the live value in the tile name (embed mode). Default false.
+   * Only affects `kind: motion`.
+   */
+  embedName?: boolean;
+
+  /**
+   * Absent or true = enabled. False = the entire accessory (and its
+   * Battery sub-service) is NOT registered.
+   */
+  enabled?: boolean;
+}
+
+/**
+ * Default sensor map row — the plugin's built-in knowledge about a
+ * specific AWN datapoint. Lives in `defaultMap.ts` (code, not config).
+ *
+ * `canonicalForBattery` marks the ONE row per batteryField that gets
+ * the Battery sub-service. Other rows sharing the same batteryField
+ * (e.g., all sensors on the outdoor combo array sharing `battout`)
+ * carry the field for identity purposes but don't attach a sub-service
+ * — keeps Apple Home from showing 30+ battery tiles per station.
+ */
+export interface DefaultSensorRow {
+  dataPoint: string;
+  kind: Exclude<SensorKind, 'unrecognized'>;
+  measurement: Measurement;
+  wrapper: WrapperDescriptor;
+  name: string;
+  sourceUnit: SensorUnit;
+  displayUnit: SensorUnit;
+  batteryField: string | null;
+  /** True iff this row is the canonical sensor for its batteryField. */
+  canonicalForBattery: boolean;
+  threshold?: number;
+  triggerEnabled?: boolean;
+  triggerDirection?: 'above' | 'below';
+  embedName?: boolean;
+}
+
+/**
+ * Stable identifier for the wrapper class implementing a specific
+ * `(kind, measurement)` combination. Stable `id` lets the structural
+ * signature survive TypeScript-level class renames (see §9 of design).
+ * Per-wrapper `schemaVersion` allows bumping one wrapper's version to
+ * trigger re-registration of only that wrapper's accessories.
+ *
+ * The `constructor` field references the actual accessory class at
+ * runtime. Kept typed loosely because concrete wrapper classes span
+ * multiple modules with divergent constructor signatures — the runtime
+ * consumer (createSensorWrapper in the platform, added in a later
+ * stage) uses the row's `wrapper` to pick the right ctor.
+ */
+export interface WrapperDescriptor {
+  /**
+   * Stable identifier. Refactor-safe (a class rename does NOT change
+   * this). Kebab-case string. Baked into `structuralSignature`.
+   */
+  id: string;
+
+  /**
+   * Version of the wrapper's HAP service graph. Bump when a wrapper's
+   * characteristics change in a way that would invalidate an existing
+   * cached accessory's service graph.
+   */
+  schemaVersion: number;
+
+  /**
+   * Reference to the accessory-wrapper class. Concrete classes have
+   * divergent constructor signatures; the runtime consumer narrows.
+   */
+  constructor: unknown;
+}
+
+/**
+ * Fully-resolved runtime row after defaults + compat + overrides are
+ * merged. Discriminated union: unrecognized rows carry only observational
+ * metadata and don't have units; numeric configured rows require both
+ * source and display units; timestamp rows have fixed `sourceUnit: 'ms'`
+ * and no display unit; boolean rows have no units at all.
+ *
+ * The type system makes invalid combinations unrepresentable at compile
+ * time (e.g., a boolean row cannot accidentally carry `displayUnit`).
+ */
+export type EffectiveSensorRow =
+  | UnrecognizedRow
+  | NumericSensorRow
+  | TimestampSensorRow
+  | BooleanSensorRow;
+
+interface CommonMeta {
+  dataPoint: string;
+  stationMac: string;
+  /** ISO-8601. Absent when configured before the station has reported the field. */
+  firstSeen?: string;
+  lastSeen?: string;
+  lastValue?: unknown;
+}
+
+export interface UnrecognizedRow extends CommonMeta {
+  kind: 'unrecognized';
+  enabled: false;
+  // Observational metadata is required — an unrecognized row exists
+  // only because something reported it.
+  firstSeen: string;
+  lastSeen: string;
+}
+
+interface ConfiguredRowBase extends CommonMeta {
+  kind: Exclude<SensorKind, 'unrecognized'>;
+  name: string;
+  threshold?: number;
+  triggerEnabled: boolean;
+  triggerDirection: 'above' | 'below';
+  batteryField: string | null;
+  embedName: boolean;
+  enabled: boolean;
+  /** See §9 of design; format is `${kind}|measurement:${m}|battery:${0|1}|wrapper:${id}:v${version}`. */
+  structuralSignature: string;
+}
+
+export interface NumericSensorRow extends ConfiguredRowBase {
+  measurement: Exclude<Measurement, 'timestamp' | 'boolean'>;
+  sourceUnit: SensorUnit;
+  displayUnit: SensorUnit;
+}
+
+export interface TimestampSensorRow extends ConfiguredRowBase {
+  measurement: 'timestamp';
+  sourceUnit: 'ms';
+  displayUnit?: never;
+}
+
+export interface BooleanSensorRow extends ConfiguredRowBase {
+  measurement: 'boolean';
+  sourceUnit?: never;
+  displayUnit?: never;
+}

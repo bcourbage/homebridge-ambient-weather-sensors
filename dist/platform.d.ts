@@ -1,6 +1,34 @@
 import { API, Characteristic, DynamicPlatformPlugin, Logger, PlatformAccessory, PlatformConfig, Service } from 'homebridge';
 import { DEVICE } from './types.js';
 /**
+ * Sanitize a string for use in a HAP `Name` characteristic, per Apple's
+ * documented rule (alphanumeric, space, and apostrophe only; must start
+ * and end with an alphanumeric). HAP 2.x emits warnings for any value
+ * that doesn't comply.
+ *
+ * Exported for test coverage — the function is only used inside this
+ * module in production.
+ */
+export declare function hapClean(input: string): string;
+/**
+ * Normalize a string the user might have typed in their config for
+ * matching against sensor identifiers. Trims whitespace and lowercases.
+ * Empty / non-string values normalize to the empty string, which the
+ * caller is expected to filter out.
+ *
+ * Exported for test coverage.
+ */
+export declare function normalizeMatchKey(s: unknown): string;
+/**
+ * Build a Set of normalized matchers from a config-supplied array. Used
+ * for both `excludeSensors` and `includeOnly`; the same matching rules
+ * apply to both (case-insensitive, whitespace-trimmed, non-string and
+ * blank entries dropped).
+ *
+ * Exported for test coverage.
+ */
+export declare function toMatcherSet(raw: unknown): Set<string>;
+/**
  * Common shape for the per-accessory wrapper instances the platform
  * tracks. Each wrapper exposes a single push-style `setValue` entry
  * point that the platform's poll tick uses to deliver the freshly

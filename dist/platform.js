@@ -22,8 +22,11 @@ import { TemperatureAccessory } from './temperatureAccessory.js';
  * documented rule (alphanumeric, space, and apostrophe only; must start
  * and end with an alphanumeric). HAP 2.x emits warnings for any value
  * that doesn't comply.
+ *
+ * Exported for test coverage — the function is only used inside this
+ * module in production.
  */
-function hapClean(input) {
+export function hapClean(input) {
     return input
         .replace(/[^A-Za-z0-9 ']/g, ' ')
         .replace(/\s+/g, ' ')
@@ -38,8 +41,10 @@ const HAP_NAME_MAX = 64;
  * matching against sensor identifiers. Trims whitespace and lowercases.
  * Empty / non-string values normalize to the empty string, which the
  * caller is expected to filter out.
+ *
+ * Exported for test coverage.
  */
-function normalizeMatchKey(s) {
+export function normalizeMatchKey(s) {
     return typeof s === 'string' ? s.trim().toLowerCase() : '';
 }
 /**
@@ -47,8 +52,10 @@ function normalizeMatchKey(s) {
  * for both `excludeSensors` and `includeOnly`; the same matching rules
  * apply to both (case-insensitive, whitespace-trimmed, non-string and
  * blank entries dropped).
+ *
+ * Exported for test coverage.
  */
-function toMatcherSet(raw) {
+export function toMatcherSet(raw) {
     const out = new Set();
     if (!Array.isArray(raw)) {
         return out;
