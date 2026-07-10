@@ -35,7 +35,9 @@ import type { Logger } from '../dist/sensorMap/persistence/atomicWrite.js';
 
 /**
  * Version stamp displayed in the UI header. Update on every release
- * (or wire to package.json at build time in a later stage).
+ * (or wire to package.json at build time in a later stage — the
+ * static string keeps the bridge from taking a runtime dependency
+ * on package.json's on-disk path).
  */
 const PLUGIN_VERSION: string = '2.0.0-beta.0';
 

@@ -9,6 +9,92 @@ entries short and user-facing.
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/
 
+## [2.0.0-beta.0] — 2026-07-10
+
+First beta of the sensor-map v2.0 architecture. **Ships with the new
+pipeline OFF by default.** For everyone who doesn't opt in, this
+release is byte-identical to v1.6.0. Opting in enables a shadow-mode
+observer that runs the new pipeline in parallel to the current code
+and logs any divergence — a bake period, not a switchover. See
+`docs/future/sensor-map.md` for the full design.
+
+### How to shadow-run
+
+Set either the environment variable `SENSOR_MAP_V2=1` or the
+`_sensorMapV2: true` config field (exposed as the "Advanced (v2.0
+preview)" fieldset at the bottom of the config form). Then restart
+Homebridge. The plugin log will begin emitting `[sensor-map v2
+shadow]` lines: the detected config mode, per-cache-restore
+bootstrap inferences, and any (station, dataPoint) pair where the
+v2 pipeline would decide differently than v1.6.0.
+
+Nothing changes in HomeKit while shadow mode is on. The v1.6.0 code
+path stays the source of truth for every accessory-registration
+decision.
+
+A new preview page is accessible via the plugin's UI (Homebridge
+Config UI X → plugins → Ambient Weather Sensors → UI). It shows the
+detected config mode, discovered stations, observed datapoints,
+and any structural-change notices. Read-only during the beta.
+
+### Rollback
+
+Flip the flag off (unset the env var or set `_sensorMapV2: false`)
+and restart. Shadow mode touches no config or accessory state, so
+the flip-back is clean. Downgrade from v2.0.0-beta.0 back to v1.6.0
+works the same way: nothing in `config.json` or the accessory cache
+was written by shadow mode.
+
+### Added
+
+- Sensor-map data model: `SensorKind`, `Measurement`, `SensorUnit`,
+  `SensorMapOverride`, `EffectiveSensorRow` (discriminated union),
+  `WrapperDescriptor` with stable ids frozen at ship.
+- `DEFAULT_SENSOR_MAP` — 69 rows covering every AWN datapoint the
+  plugin recognizes (41 static + 28 numbered probes).
+- `buildEffectiveSensorMap()` — pure function merging defaults +
+  user overrides + observational data into per-(station,dataPoint)
+  effective rows.
+- Compat layer translating every v1.6.0 config field into synthetic
+  overrides. Consumed by the new pipeline; never written back to
+  `config.json`.
+- `configVersion` detection with strict safe mode on
+  `configVersion > 2` or malformed values. Existing accessories keep
+  running from cache; the UI refuses writes; an upgrade banner is
+  surfaced.
+- Bootstrap rule for pre-v2 cached accessories: three-level fallback
+  on kind (context → legacy type → HAP service walk) and measurement
+  (default map → legacy type table → preserve-cached).
+- Three persistence stores under
+  `<homebridge-storage>/plugin-data/ambient-weather/`:
+  `discovery.json` (observed datapoints), `notices.json`
+  (structural changes, capped to the newest 100), `ui-state.json`
+  (dismissed IDs + forgotten fields). Atomic writes with
+  `<name>.<pid>.<random>.tmp` temp files + rename, corrupt-file
+  quarantine.
+- `homebridge-ui/` custom UI: read-only preview page listing the
+  detected config mode, shadow-flag source, discovered stations
+  and datapoints, and any structural-change notices.
+- Shadow-mode observer wired into `platform.ts` behind the flag.
+
+### Tests
+
+Suite grew from 385 tests to 694 (309 new). Includes a
+migration-equivalence matrix (23 legacy configs × 4 AWN payloads =
+92 assertions) verifying byte-identical accessory-registration
+decisions between v1.6.0 and the v2 pipeline. This is the safety
+net that gates the eventual flag flip to on-by-default (planned for
+v2.1.0).
+
+### Not changing
+
+- v1.6.0 code path unchanged. Every user who doesn't set the flag
+  sees no behavior difference.
+- Accessory cache contexts are never mutated by shadow mode.
+- `config.json` is never written by the plugin.
+- `stationFilter`, child-bridge multi-Home behavior, and the
+  realtime data source path are unchanged.
+
 ## [1.6.0] — 2026-06-20
 
 ### Changed
