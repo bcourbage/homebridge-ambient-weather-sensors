@@ -1,7 +1,7 @@
 # Sensor Map — Design for v2.0
 
-**Status:** Design in review — pending fifth review pass.
-**Last revised:** 2026-07-12 (after fourth external review — see §16 decision log).
+**Status:** Design in review — pending sixth review pass.
+**Last revised:** 2026-07-13 (after fifth external review — see §16 decision log).
 **Implementation phase:** Beta cycle target 2.0.0-beta.0 begins after this doc is signed off; GA target 2.0.0 after test-suite refactor completes.
 
 ## 1. Motivation
@@ -212,9 +212,11 @@ TypeScript's discriminant narrowing enforces at compile time:
 Invalid states are unrepresentable.
 
 **Custom dataPoint activation rules** (§3.7):
-- Boolean-measurement custom: user provides `kind` + `measurement: 'boolean'`. No `sourceUnit` / `displayUnit` accepted; both are silently ignored if provided.
-- Timestamp-measurement custom: user provides `kind: 'motion'` + `measurement: 'timestamp'`. `sourceUnit` if provided must be `'ms'`; `displayUnit` is not accepted.
+- Boolean-measurement custom: user provides `kind` + `measurement: 'boolean'`. `sourceUnit` and `displayUnit` are not applicable; if either is provided, the plugin logs a warn identifying the row and ignores the field. The row still loads.
+- Timestamp-measurement custom: user provides `kind: 'motion'` + `measurement: 'timestamp'`. `sourceUnit` if provided must be `'ms'` (any other value is a row-level failure). `displayUnit` is not applicable; if provided, warn is logged and the field is ignored.
 - Numeric-measurement custom: user provides `kind` + `measurement` + `sourceUnit`. `displayUnit` defaults to the measurement's default if not specified.
+
+Rationale for warn-and-ignore rather than silent normalization: the plugin's overall philosophy is to make user-visible problems discoverable via the "needs attention" UI group. Silent normalization would hide the mistake; a warn log surfaces it without breaking the row.
 
 ### 3.5 Unit compatibility — allowed by measurement
 
@@ -262,8 +264,10 @@ Row-level failures never fail the whole plugin. Every valid row still loads. Inv
 | `stationMac` MAC-shaped but no station currently reports it AND no cached / discovered reference | Row loaded but flagged "waiting for station". Activates when the station starts reporting. |
 | Custom `dataPoint` missing required fields for its measurement shape (§3.4) | Row-level failure. Error message identifies the missing field. |
 | `displayUnit` not in the row's `measurement`'s legal set (numeric only) | Row-level failure. |
-| `displayUnit` or `sourceUnit` provided on a boolean-measurement row | Ignored with warn. |
+| `displayUnit` or `sourceUnit` provided on a boolean-measurement row | Ignored with warn. Row still loads. |
+| `displayUnit` provided on a timestamp-measurement row | Ignored with warn. Row still loads. |
 | `sourceUnit` provided as anything other than `'ms'` on a timestamp row | Row-level failure. |
+| `wrapperId` field in an override entry | Rejected as unknown field. Row-level failure. `wrapperId` is not part of the v2.0 public schema; see §3.9. |
 | Known `dataPoint` with `kind` override incompatible with built-in measurement (§3.8) | Row-level failure. |
 | `triggerDirection` set on non-motion kind | Ignored with warn. |
 | Duplicate override for same `(dataPoint, stationMac?)` key | Merged in array order with later-wins; warn; canonicalized on next UI save. |
@@ -345,7 +349,32 @@ Each entry in `DEFAULT_SENSOR_MAP` references its wrapper directly:
 { dataPoint: 'baromabsin',   kind: 'motion',      measurement: 'pressure',    wrapper: PRESSURE_ABSOLUTE_WRAPPER, name: 'Pressure Station',    batteryField: 'battin', threshold: 29.5, triggerDirection: 'below', ... },
 ```
 
-For CUSTOM datapoints (not in the default map), the wrapper is chosen at row-activation time from a canonical `(kind, measurement)` → descriptor lookup. The canonical choice picks a sensible default from the v1.6.0 wrapper set — e.g., custom `(motion, pressure)` uses `PRESSURE_ABSOLUTE_WRAPPER`; custom `(motion, count)` uses `LIGHTNING_DAY_WRAPPER`. Users can override via advanced JSON `wrapperId` field if the default choice doesn't fit; documented in §14 as an implementation detail.
+For CUSTOM datapoints (not in the default map), the wrapper is chosen from a canonical `(kind, measurement)` → descriptor lookup. This table is the ONLY way custom sensors pick a wrapper — there is no public `wrapperId` override in v2.0.
+
+| `(kind, measurement)` for custom sensor | Canonical wrapper |
+|---|---|
+| `(temperature, temperature)` | TEMPERATURE_WRAPPER |
+| `(humidity, humidity)` | HUMIDITY_WRAPPER |
+| `(light, illuminance)` | SOLAR_RADIATION_WRAPPER |
+| `(co2, co2)` | CO2_WRAPPER |
+| `(air-quality-pm25, pm25)` | AIR_QUALITY_PM25_WRAPPER |
+| `(air-quality-pm10, pm10)` | AIR_QUALITY_PM10_WRAPPER |
+| `(motion, wind-speed)` | WIND_SPEED_WRAPPER |
+| `(motion, rain-rate)` | RAIN_RATE_WRAPPER |
+| `(motion, rain-accumulation)` | RAIN_EVENT_WRAPPER |
+| `(motion, pressure)` | PRESSURE_ABSOLUTE_WRAPPER |
+| `(motion, distance)` | LIGHTNING_DISTANCE_WRAPPER |
+| `(motion, uv-index)` | UV_WRAPPER |
+| `(motion, count)` | LIGHTNING_DAY_WRAPPER |
+| `(motion, direction)` | WIND_DIRECTION_WRAPPER |
+| `(motion, timestamp)` | LAST_RAIN_WRAPPER |
+| `(leak, boolean)` | LEAK_WRAPPER (new; introduced when leak/contact/occupancy support ships) |
+| `(contact, boolean)` | CONTACT_WRAPPER |
+| `(occupancy, boolean)` | OCCUPANCY_WRAPPER |
+
+The wrapper class names carry v1.6.0 provenance (e.g., a custom count sensor uses the "lightning-day" wrapper class internally) but the wrapper's rendering is generic within its `(kind, measurement)` combination — the class name doesn't leak to the user through HomeKit or the UI. Users see the display name they set, not the wrapper class.
+
+If a user's custom sensor doesn't fit any canonical wrapper cleanly (e.g., they want a pressure-relative wrapper for a custom pressure sensor), they file an issue. A user-facing `wrapperId` override is deferred to a v2.1+ project with its own validation, canonicalization, and UI treatment. Not in v2.0.
 
 Bumping a descriptor's `schemaVersion` re-registers only accessories using THAT descriptor.
 
@@ -399,6 +428,17 @@ Note the `windspeedmph` entry combines `threshold` and `displayUnit` — canonic
 | Non-integer (string, negative, NaN, non-number) | Malformed | Configuration error at row-level (§3.7). Plugin enters safe mode as above. |
 
 **Safe mode rationale:** a plugin startup failure means ALL cached accessories vanish from HomeKit. Safe mode keeps them running with last-known values while surfacing the "upgrade the plugin" message. Users lose config editability, not accessories.
+
+**Safe mode is strictly read-only.** While active:
+
+- `config.json` writes from the UI are refused. If the user attempts to save through the UI, the server-side rejects the write with an explanatory error.
+- Manual "Refresh from Ambient Weather" is disabled. AWN calls that would mutate discovery state don't happen.
+- Row lifecycle actions (Enable / Disable / Remove user override / Forget discovered field) are disabled.
+- Notice dismissal remains permitted — it only writes `ui-state.json` (which the plugin reads but doesn't interpret in a schema-version-sensitive way), so an older UI can safely acknowledge notices left by a newer plugin.
+- The UI displays a prominent read-only banner:
+  > This configuration was written by a newer plugin version. Upgrade the plugin before making changes.
+
+This prevents an older plugin's UI from partially rewriting a newer configuration and corrupting it silently.
 
 **Migration event:** first UI save on a legacy config atomically:
 1. Reads effective sensor map (compat-translated)
@@ -706,7 +746,7 @@ State passes through five persistence surfaces (§8). No direct IPC.
 - Row-level failure surfacing in "needs attention" group
 - Enable/Disable / Remove override / Forget discovered field
 - Persistent notice banner (`notices \ dismissedNoticeIds`)
-- Advanced tab — raw JSON view for `sensorMap`, `triggerDirection`, `wrapperId`, and seldom-used fields
+- Advanced tab — raw JSON view for `sensorMap`, `triggerDirection`, and seldom-used fields
 - Station picker writes MAC to `stationMac` (never a name)
 - Canonical serialization: one override entry per `(dataPoint, stationMac?)` key
 
@@ -750,21 +790,70 @@ All ✓ by construction. Each row uses the same wrapper class it uses in v1.6.0.
 Existing v1.6.0 cached accessories have no `kind`, `measurement`, or `structuralSignature`. On first v2.0 startup:
 
 ```typescript
-function inferForCachedAccessory(accessory) {
-  // Kind
+function inferForCachedAccessory(accessory): { kind: SensorKind; measurement: Measurement } | 'preserve-cached' {
+  // Kind: three-level fallback
   const explicitKind = accessory.context.device?.kind;
   const kind = explicitKind
     ?? LEGACY_TYPE_TO_KIND[accessory.context.device?.type]
     ?? inferKindFromServices(accessory);
 
-  // Measurement — inferred from sensorKey via the default map lookup
+  // Measurement: three-level fallback that AVOIDS guessing from kind alone.
+  // `kind: motion` maps to multiple possible measurements — never infer from
+  // kind alone.
   const dataPoint = accessory.context.device.uniqueId.split('-').slice(1).join('-');
   const defaultRow = DEFAULT_SENSOR_MAP.find(r => r.dataPoint === dataPoint);
-  const measurement = defaultRow?.measurement ?? inferMeasurementFromKind(kind);
+  const legacyType = accessory.context.device?.type;
+  const measurement =
+      defaultRow?.measurement                       // #1 default-map lookup
+    ?? LEGACY_TYPE_TO_MEASUREMENT[legacyType];      // #2 legacy-type table
+
+  if (!measurement) {
+    // #3 give up. The cached accessory doesn't map to a known measurement.
+    // Preserve it in the accessory cache without structural reconciliation;
+    // its context.kind / context.measurement / context.structuralSignature
+    // are NOT written. On subsequent starts, if AWN starts reporting the
+    // field again, the row can be recognized. Meanwhile the accessory stays
+    // in HomeKit with its last-known values.
+    return 'preserve-cached';
+  }
 
   return { kind, measurement };
 }
 ```
+
+**`LEGACY_TYPE_TO_MEASUREMENT`** — one-to-one companion to `LEGACY_TYPE_TO_KIND`:
+
+```typescript
+const LEGACY_TYPE_TO_MEASUREMENT: Record<string, Measurement> = {
+  'Temperature':        'temperature',
+  'Humidity':           'humidity',
+  'Solar Radiation':    'illuminance',
+  'CO2':                'co2',
+  'PM2.5':              'pm25',
+  'PM10':               'pm10',
+  'WindSpeed':          'wind-speed',
+  'WindGust':           'wind-speed',
+  'WindMaxDailyGust':   'wind-speed',
+  'WindDirection':      'direction',
+  'WindDirection10m':   'direction',
+  'RainRate':           'rain-rate',
+  'RainEvent':          'rain-accumulation',
+  'RainDaily':          'rain-accumulation',
+  'RainWeekly':         'rain-accumulation',
+  'RainMonthly':        'rain-accumulation',
+  'RainYearly':         'rain-accumulation',
+  'LastRain':           'timestamp',
+  'PressureRelative':   'pressure',
+  'PressureAbsolute':   'pressure',
+  'UV':                 'uv-index',
+  'LightningDay':       'count',
+  'LightningHour':      'count',
+  'LightningDistance':  'distance',
+  'LightningLastStrike':'timestamp',
+};
+```
+
+The 'preserve-cached' fallback should be rare in practice — every v1.5.0 through v1.6.x cached accessory should have a legacy `type` field that maps via `LEGACY_TYPE_TO_MEASUREMENT`. It exists for hypothetical very old or hand-manipulated caches whose context lacks a `type` field entirely.
 
 `LEGACY_TYPE_TO_KIND` covers all v1.5.0 and v1.6.0 type strings (see previous revision for the full table — unchanged).
 
@@ -861,11 +950,12 @@ Parameterized over `DEFAULT_SENSOR_MAP`:
 
 ### 12.5 Unit-shape tests
 
-- Boolean rows reject `sourceUnit` and `displayUnit` at validation
-- Boolean custom rows activate without units
+- Boolean rows with `sourceUnit` or `displayUnit` load successfully AND emit the documented warn — the field is ignored, but the warn is present in the log
+- Boolean custom rows without units activate cleanly
 - Timestamp rows require or infer `sourceUnit: 'ms'`
-- Timestamp rows do not require or accept a display unit
-- Numeric rows require legal source and display units
+- Timestamp rows with `displayUnit` load successfully AND emit the documented warn
+- Timestamp rows with non-'ms' `sourceUnit` fail at row level (per §3.7)
+- Numeric rows require legal source and display units; illegal units fail at row level
 - Serialization omits structurally-inapplicable fields (e.g., `displayUnit` absent from boolean row output)
 
 ### 12.6 Override-key tests
@@ -890,7 +980,30 @@ v2.0 accessory graph (produced by loading the same config via compat layer)
 
 Full-graph equivalence, not just structural signature.
 
-### 12.8 Suite stays green — every merge
+### 12.8 Safe-mode read-only tests
+
+- On a `configVersion: 3` (or any unsupported version), cached accessories continue to load via `configureAccessory()` with their last-known values
+- UI's "Save" button is disabled or its server-side handler rejects the request
+- UI's "Refresh from Ambient Weather" is disabled
+- Row lifecycle actions (Enable/Disable / Remove override / Forget field) are disabled at the UI layer AND at the server layer
+- Notice dismissal remains functional (a UI write to `ui-state.json` succeeds)
+- UI displays the documented read-only banner
+
+### 12.9 Bootstrap-measurement tests
+
+- Every value of `LEGACY_TYPE_TO_KIND` has a corresponding entry in `LEGACY_TYPE_TO_MEASUREMENT`
+- For every entry in `LEGACY_TYPE_TO_MEASUREMENT`, the inferred `(kind, measurement)` matches what the default map assigns for the corresponding sensorKey
+- A cached accessory with `type: 'WindSpeed'` bootstraps to `measurement: wind-speed` (not `motion`)
+- A cached accessory with unknown `type` AND unknown dataPoint returns `'preserve-cached'` — the accessory stays in HomeKit with no structural reconciliation attempted
+- The bootstrap NEVER produces a measurement from `kind: motion` alone
+
+### 12.10 `wrapperId` rejection tests
+
+- A `sensorMap` entry with a `wrapperId` field fails at row-level validation
+- The specific error message identifies `wrapperId` as an unknown field
+- Other valid rows in the same `sensorMap` load normally
+
+### 12.11 Suite stays green — every merge
 
 Every merge to the implementation branch must leave CI green. No same-day companion-PR loophole; no known-failing tests during transition.
 
@@ -964,7 +1077,7 @@ Still open (minor):
 - Notices size cap details. Lean 100.
 - Exact schema-driven fallback shape in `config.schema.json`.
 - `awnClient.ts` CommonJS vs ESM.
-- Custom wrapper choice for `(motion, X)` combinations without a natural default — provisional canonical choices in §3.9; may need `wrapperId` override in advanced JSON.
+- Whether any of the canonical `(kind, measurement)` → wrapper choices in §3.9 turn out to be wrong for a real user's custom sensor. If so, a future v2.1+ can add a user-facing `wrapperId` override with proper validation, canonicalization, and UI. Not in v2.0.
 
 ## 16. Decision log
 
@@ -976,4 +1089,8 @@ Still open (minor):
   - **Blocking**: measurement-discriminated union for `EffectiveSensorRow` (`NumericRow` / `TimestampRow` / `BooleanRow`) — boolean and timestamp measurements no longer require inapplicable units at the type level. Uniqueness invariant: at most one override per `(dataPoint, stationMac?)`; canonical UI serialization; hand-edited duplicates merge with warn.
   - **Important**: `configVersion` handling refined — unsupported positive versions and malformed values enter **safe mode** (keep cached accessories, don't attempt structural changes, prominent upgrade-plugin error) instead of silently entering legacy mode. Wrapper consolidation removed from v2.0 scope — every v1.6.0 wrapper stays 1-to-1 in the default map via 24 `WrapperDescriptor` constants. Structural signature uses stable `WrapperDescriptor.id`, not `class.name`. Atomic write implementation details specified (§8.6).
   - **Testing additions**: unit-shape tests (§12.5), override-key tests (§12.6), migration-equivalence tests upgraded to full HAP-graph equivalence (§12.7).
-- Status: pending fifth review pass. Ready for implementation if this revision addresses the remaining points.
+- **2026-07-13**: Fifth review. This revision incorporates:
+  - **Blocking**: `wrapperId` removed from the design entirely — it was mentioned in prose but absent from `SensorMapOverride`. Rather than add it (with all the validation, canonicalization, UI, and test surface that entails), removed from v2.0 scope. Custom-sensor wrapper selection uses a canonical `(kind, measurement)` → descriptor table in §3.9 as the sole path. If a real user need surfaces, a user-facing `wrapperId` override becomes a v2.1+ project.
+  - **Important**: Boolean rows with `sourceUnit`/`displayUnit` and timestamp rows with `displayUnit` now emit a warn (not silently ignored) — matches the design's "needs attention" philosophy. Row still loads; the warning surfaces the mistake. Safe mode is explicitly read-only — UI saves refused, "Refresh from Ambient Weather" disabled, lifecycle actions disabled; notice dismissal still permitted since it's schema-version-independent. Read-only banner text specified. Bootstrap measurement inference uses a new `LEGACY_TYPE_TO_MEASUREMENT` table paired with `LEGACY_TYPE_TO_KIND`; the earlier `inferMeasurementFromKind` fallback is removed because it's impossible for `motion`. If neither table matches, the plugin returns `'preserve-cached'` and leaves the accessory in HomeKit without structural reconciliation.
+  - **Testing additions**: `wrapperId` rejection tests, boolean/timestamp warn tests, safe-mode read-only tests, bootstrap-measurement-never-from-kind-alone tests.
+- Status: pending sixth review pass. If this revision addresses the remaining `wrapperId` inconsistency to the reviewer's satisfaction, the design is ready for implementation.
