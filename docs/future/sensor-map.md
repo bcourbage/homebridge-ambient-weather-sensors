@@ -1,144 +1,220 @@
 # Sensor Map — Design for v2.0
 
-**Status:** Approved for implementation.
-**Last reviewed:** 2026-07-08.
-**Implementation phase:** Beta cycle target 2.0.0-beta.0; GA target 2.0.0 after test-suite refactor completes.
+**Status:** Design in review. Not yet approved for implementation.
+**Last revised:** 2026-07-09 (after external review — see §16 decision log for the changes).
+**Implementation phase:** Beta cycle target 2.0.0-beta.0 begins after this doc is signed off; GA target 2.0.0 after test-suite refactor.
 
 ## 1. Motivation
 
-The plugin has grown three distinct config-shaped concerns over v1.5.0 and v1.6.0:
+The plugin has grown three overlapping configuration concerns over v1.5.0 and v1.6.0:
 
-1. **Which sensors to expose** — currently per-category toggles (`temperatureSensors`, `humiditySensors`, etc.) + `excludeSensors` blacklist + `includeOnly` allowlist + `stationFilter`
+1. **Which sensors to expose** — per-category toggles (`temperatureSensors`, `humiditySensors`, etc.) + `excludeSensors` + `includeOnly` + `stationFilter`
 2. **How sensors are named** — no config field today; users rename in Apple Home, which loses the rename if the accessory ever re-registers
 3. **Which HomeKit sensor type each AWN field maps to** — hardcoded in `determineSensorType()` in `platform.ts`; users cannot influence this
 
 All three collapse into a single question: **what HomeKit accessory should each AWN datapoint produce?**
 
-The proposal is a unified data model — a **sensor map** — where each row expresses that question for one AWN datapoint. Every row is fully editable by the user. The plugin ships defaults matching current v1.6.0 behavior; auto-discovery adds rows for datapoints AWN reports that the plugin doesn't already know about; users edit any row through a custom Angular-based configuration UI.
+The proposal is a **unified sensor map** — a declarative model where each row expresses that question for one AWN datapoint on one station. The plugin ships built-in defaults matching current v1.6.0 behavior; auto-discovery adds rows for AWN fields the plugin doesn't know about; users edit rows through a custom Angular-based configuration UI.
 
-The design competes with three reference plugins whose approaches are documented and understood:
+Reference plugins whose approaches informed the design:
 
 - **valiquette/homebridge-Ambient-realtime** — user-defined custom sensors via a `sensors: []` array; no auto-discovery; no default map
-- **rhockenbury/homebridge-ecowitt-weather-sensors** — separate `nameOverrides` + `customHidden` config fields; no user-defined sensor kinds
-- **hjdhjd/homebridge-unifi-protect** — auto-discovered devices in Homebridge's accessory cache; user overrides as terse strings; custom Angular UI
+- **rhockenbury/homebridge-ecowitt-weather-sensors** — separate `nameOverrides` + `customHidden` fields; no user-defined sensor kinds
+- **hjdhjd/homebridge-unifi-protect** — auto-discovered devices in Homebridge's accessory cache; user overrides as terse strings; custom Angular UI in `homebridge-ui/`; separate discovery store
 
-The proposal unifies all three concerns into one shape and adopts hjdhjd's persistence pattern.
+The proposal unifies all three concerns into one model and adopts hjdhjd's process-boundary + persistence pattern.
 
 ## 2. Non-goals
 
-- **Not a rewrite of the accessory-wrapper layer**. TemperatureAccessory, HumidityAccessory, etc. continue to exist. The sensor map's `kind` field selects which wrapper class to instantiate for each row.
-- **Not adding new HomeKit sensor types**. The kind vocabulary is exactly the HAP-native sensor services that already work — no new characteristics.
+- **Not a rewrite of the accessory-wrapper layer**. TemperatureAccessory, HumidityAccessory, etc. continue to exist. The sensor map's `kind` field selects which wrapper class to instantiate.
+- **Not adding new HAP characteristics**. The kind vocabulary is exactly the HAP-native sensor services that already work.
 - **Not changing the AWN API integration**. The polling + realtime paths stay the same.
 - **Not changing `stationFilter` or child-bridge multi-Home behavior**. Orthogonal to sensor mapping; stays as-is.
 
 ## 3. Data model
 
-### 3.1 Row shape
+### 3.1 Public config schema — sparse user overrides
 
-Each sensor map row expresses the mapping from one AWN datapoint to one HomeKit accessory:
+Users write these into `config.json`. Only fields the user has explicitly set appear:
 
 ```typescript
-interface SensorMapRow {
-  // AWN field name — row identity. Cannot be changed by the user.
+interface SensorMapOverride {
+  // Required — the AWN field this override applies to.
   dataPoint: string;
 
-  // HomeKit sensor kind. Determines which HAP service is used.
-  // Required for the accessory to be exposed to HomeKit.
+  // Optional — restrict this override to a single station.
+  // Absent = applies to every station AWN reports (global template).
+  // Present = applies only to the station whose macAddress OR info.name
+  //           matches (case-insensitive). Layered on top of global overrides.
+  stationId?: string;
+
+  // Optional — override the default kind for this dataPoint. Required
+  // when adding an unrecognized (custom) dataPoint the plugin doesn't
+  // know about. Changing kind on an existing dataPoint triggers a
+  // structural re-registration; see §9.
   kind?: SensorKind;
 
-  // User-facing name shown in HomeKit. Falls back to the default name
-  // from the plugin's built-in map if omitted.
+  // Optional — display name in HomeKit. Falls back to the default.
   name?: string;
 
-  // Motion-threshold value for kinds that use MotionSensor. Interpreted
-  // in the row's `unit` (or AWN's native unit if `unit` is omitted).
+  // Optional — motion-trigger threshold (numeric).
   threshold?: number;
 
-  // Display unit. Falls back to the plugin's default for this kind.
-  unit?: string;
+  // Optional — whether the motion trigger is armed at all. Default
+  // true for kinds that use MotionSensor. Set false for informational
+  // motion-kind rows that should never fire (replaces the Infinity
+  // sentinel that couldn't survive JSON serialization).
+  triggerEnabled?: boolean;
 
-  // AWN batt* field name whose value drives the Battery sub-service.
-  // Set to null to explicitly suppress the sub-service even if the
-  // plugin default would attach one.
+  // Optional — display unit override. Source unit is fixed per
+  // dataPoint (see §3.4); the user can only override how the value
+  // is presented. For custom sensors, the user must ALSO declare
+  // sourceUnit (below) before the row can be activated.
+  displayUnit?: SensorUnit;
+
+  // Optional — for CUSTOM dataPoints only. Declares the unit the
+  // AWN payload reports the value in. Ignored for known defaults
+  // (whose source unit is fixed by the plugin).
+  sourceUnit?: SensorUnit;
+
+  // Optional — AWN batt* field name driving the Battery sub-service.
+  // Set to null to explicitly suppress a Battery sub-service that
+  // the plugin default would attach.
   batteryField?: string | null;
 
-  // Show the live value in the tile name (embed mode). Default false.
-  // Only affects Motion-kind rows — HAP-native value tiles already
-  // show the reading directly and ignore this flag.
+  // Optional — show the live value in the tile name (embed mode).
+  // Default false. Only affects Motion-kind rows; HAP-native value
+  // tiles render the reading directly and ignore this flag.
   embedName?: boolean;
 
-  // Explicit enable/disable. Absent = enabled by default. Present with
-  // false = hidden from HomeKit. The plugin's `Battery` sub-service
-  // still attaches per the batteryField rule; only the parent accessory
-  // is hidden.
+  // Optional — explicit disable. Absent or true = enabled. False =
+  // the entire accessory (and its Battery sub-service, if any) is
+  // NOT registered.
   enabled?: boolean;
 }
 ```
 
-### 3.2 Kind enum
+### 3.2 Effective row — internal representation after merge
+
+After `buildEffectiveSensorMap` (see §7) resolves defaults, compat translation, and user overrides, each row is fully populated:
+
+```typescript
+interface EffectiveSensorRow {
+  dataPoint: string;
+  stationId: string;              // resolved — the specific station this instance applies to
+  kind: SensorKind;
+  name: string;                   // always populated (falls back to default)
+  threshold: number | undefined;  // undefined = threshold not meaningful for this kind
+  triggerEnabled: boolean;
+  triggerDirection: 'above' | 'below';   // baked in per default row; not user-editable in primary UI
+  sourceUnit: SensorUnit;
+  displayUnit: SensorUnit;
+  batteryField: string | null;
+  embedName: boolean;
+  enabled: boolean;
+}
+```
+
+### 3.3 Kind enum
 
 Twelve values corresponding to HAP-native sensor services the plugin can render:
 
 **Value tiles** — Apple Home renders the live reading directly on the tile:
-- `temperature` → `TemperatureSensor` (unit: °F / °C)
-- `humidity` → `HumiditySensor` (unit: %)
-- `light` → `LightSensor` (unit: lux; converted from W/m² for solar radiation)
-- `co2` → `CarbonDioxideSensor` (unit: ppm)
-- `co` → `CarbonMonoxideSensor` (unit: ppm)
+- `temperature` → `TemperatureSensor`
+- `humidity` → `HumiditySensor`
+- `light` → `LightSensor` (with W/m² → lux conversion for solar radiation)
+- `co2` → `CarbonDioxideSensor`
+- `co` → `CarbonMonoxideSensor`
 - `air-quality-pm25` → `AirQualitySensor` with PM2_5Density
 - `air-quality-pm10` → `AirQualitySensor` with PM10Density
 
-**State tiles** — Apple Home renders a boolean detected/not-detected state; live values visible in Eve / Controller for HomeKit if the wrapper adds custom characteristics:
-- `motion` → `MotionSensor` with configurable threshold; used by all extended sensors that lack a HAP-native value tile
-- `leak` → `LeakSensor` (boolean)
-- `contact` → `ContactSensor` (boolean)
-- `occupancy` → `OccupancySensor` (boolean)
+**State tiles** — Apple Home renders a boolean state; live value visible in Eve / Controller for HomeKit if the wrapper adds custom characteristics:
+- `motion` → `MotionSensor` with configurable threshold; used by extended sensors (wind, rain, pressure, UV, lightning)
+- `leak` → `LeakSensor`
+- `contact` → `ContactSensor`
+- `occupancy` → `OccupancySensor`
 
 **Special:**
-- `unrecognized` → auto-discovery sentinel. Assigned to rows for AWN fields not in the plugin's default map. Accessory is NOT created until the user picks a real kind.
+- `unrecognized` — auto-discovery sentinel for AWN fields not in the plugin's default map. Row does NOT produce a HomeKit accessory until the user assigns a real kind through the UI.
 
-Not included:
-- `smoke` — no AWN equivalent
-- Complex HAP services (SecuritySystem, Doorbell, etc.) — not sensor-shaped
+### 3.4 Unit model
 
-### 3.3 Trigger direction for motion-kind rows
+Every SensorKind has a compatible set of units. Source unit (what AWN reports) is separate from display unit (what HomeKit renders):
 
-For most Motion-kind sensors, MotionDetected fires when the reading equals or exceeds the threshold (wind speed high, UV high, etc.). For pressure and lightning distance, low readings are the alarming case (storm incoming, close strike) — the plugin currently handles this via a `triggerDirection: 'below'` option in `ExtendedSensorOptions`.
+| Kind | Allowed units | Default source | Default display | Conversion |
+|---|---|---|---|---|
+| temperature | fahrenheit, celsius | fahrenheit | fahrenheit | °F↔°C |
+| humidity | percent | percent | percent | — |
+| light | wm2, lux | wm2 (for solar), lux (for direct) | lux | W/m² × 127 → lux |
+| co2 / co | ppm | ppm | ppm | — |
+| air-quality-* | ugm3 | ugm3 | ugm3 | — |
+| motion (wind speed) | mph, kph, mps, kts | mph | mph | linear |
+| motion (rain rate) | in_per_hr, mm_per_hr | in_per_hr | in_per_hr | ×25.4 |
+| motion (rain accumulation) | in, mm | in | in | ×25.4 |
+| motion (pressure) | inHg, hPa | inHg | inHg | ×33.8639 |
+| motion (distance) | mi, km, nm | mi | mi | linear |
+| motion (UV, count, direction) | index / count / degrees | dimensionless | dimensionless | — |
+| motion (timestamp) | ms | ms | — | rendered as relative time |
+| leak / contact / occupancy | — | — | — | boolean state |
 
-**Design decision:** `triggerDirection` stays baked into the plugin's default sensor map per-datapoint, NOT exposed as a user-editable field. Every wind/rain/UV/gust row has `triggerDirection: above`; every pressure/lightning-distance row has `triggerDirection: below`. Users don't need to think about this. If someone remaps a sensorKey via config (e.g., they add a `custom_pressure_field` mapped to `kind: motion` and want below-triggering), they can override via a separate `triggerBelow: true` field. Advanced use; not shown in the primary UI.
+Validation rules:
+
+- If the user sets `displayUnit`, it must be in the allowed set for the row's `kind`. Otherwise startup fails validation.
+- If the user changes `kind` on an existing row and the current unit is not allowed for the new kind, the plugin auto-selects the new kind's default unit and warns.
+- For custom (unrecognized) dataPoints, the user MUST declare `sourceUnit` when assigning a `kind`. Otherwise the row stays inactive.
+- Thresholds are always stored in `sourceUnit`. Conversion to `displayUnit` happens at render time only.
+
+### 3.5 Trigger semantics
+
+Every default row for `kind: motion` has a fixed `triggerDirection` baked into the plugin's default map (not user-editable in the primary UI). For wind / rain / UV / gust rows, direction is `above`; for pressure and lightning distance, direction is `below`.
+
+Users who add a custom Motion-kind sensor default to `triggerDirection: above`. Advanced users can override via the raw-JSON view (§10.4).
+
+`triggerEnabled: false` means "this row's motion state never fires, regardless of threshold." Replaces the v1.6.0 `Infinity` threshold sentinel, which was internal-only. In JSON, `triggerEnabled: false` is explicit and serializable.
 
 ## 4. Config schema — user-facing shape
 
-`config.json` stays minimal. The `sensorMap` field is a sparse array — **only user-modified rows appear**. Everything else uses the plugin's defaults.
+`config.json` has these fields for the sensor-map subsystem:
 
-Full example config with a user who has renamed one sensor, disabled another, added a custom sensor, and suppressed a battery:
+- `configVersion: number` — see §5 for detection semantics
+- `sensorMap: SensorMapOverride[]` — sparse array, only user-modified rows
+
+Everything else (`apiKey`, `applicationKey`, `dataSource`, `stationFilter`, etc.) stays as it is today.
+
+Full example with mixed overrides:
 
 ```jsonc
 {
   "platform": "AmbientWeatherSensors",
   "name": "Ambient Weather",
+  "configVersion": 2,
   "apiKey": "…",
   "applicationKey": "…",
   "dataSource": "realtime",
   "stationFilter": ["Fairhills WS-2000"],
 
   "sensorMap": [
-    // Rename an existing sensor
+    // Rename an existing default (applies to all stations)
     { "dataPoint": "tempinf", "name": "Backyard Indoor Temp" },
 
-    // Disable an existing sensor
+    // Rename the same dataPoint differently for one specific station
+    { "dataPoint": "tempinf", "stationId": "Cabin WS-5000", "name": "Cabin Indoor Temp" },
+
+    // Disable an existing default globally
     { "dataPoint": "lightning_distance", "enabled": false },
 
-    // Change a threshold on an existing sensor
+    // Change a threshold
     { "dataPoint": "windspeedmph", "threshold": 30 },
 
-    // Suppress the WH31L lightning battery
+    // Suppress the WH31L lightning battery sub-service
     { "dataPoint": "lightning_day", "batteryField": null },
 
-    // Define a custom sensor for an AWN field the plugin doesn't know about
+    // Add a custom sensor for an AWN field the plugin doesn't know about.
+    // MUST declare kind AND sourceUnit for the row to activate.
     {
       "dataPoint": "soilmoisture1",
       "kind": "humidity",
+      "sourceUnit": "percent",
       "name": "Garden Moisture",
       "batteryField": "batt_soil"
     }
@@ -146,350 +222,552 @@ Full example config with a user who has renamed one sensor, disabled another, ad
 }
 ```
 
-**Key invariants:**
+## 5. Config-mode detection
 
-- A row's presence in `sensorMap` means the user has modified something. A row's absence means the plugin's default applies.
-- Legacy 1.6.0 config fields (`temperatureSensors`, `excludeSensors`, `includeOnly`, `thresholds.*`, `units.*`, `extendedDisplayMode`, `embedNameUpdateMinIntervalMinutes`) continue to work — see [compat layer](#6-compat-layer).
-- New installs use `sensorMap` exclusively.
+The plugin's startup logic distinguishes three cases explicitly. **Ambiguity between "legacy default" and "explicit v2 opt-out" is the reason `configVersion` exists.**
 
-## 5. Default sensor map
+| `configVersion` field | Legacy category toggles (`temperatureSensors` etc.) | Interpretation | Behavior |
+|---|---|---|---|
+| Absent | Present or absent | Legacy v1 config | Apply compat layer (§6). Absent legacy toggles interpret as v1.6.0 defaults (all `false` = all disabled). |
+| `2` | Absent | Explicit v2 config | Start from v2 defaults (all enabled at default-map level). Apply `sensorMap` overrides. No compat translation. |
+| `2` | Present | Invalid | Warn: "Both `configVersion: 2` and legacy toggle `<name>` are set. `configVersion: 2` takes precedence; legacy toggles ignored." |
 
-The plugin ships an internal default map covering every AWN field currently exposed in v1.6.0. Each entry produces exactly the same HAP accessory shape v1.6.0 would produce for that field — preserving zero-migration.
+**Migration event:** when a user with a legacy config opens the UI and saves any change, the UI:
 
-The full canonical table lives in `src/defaultSensorMap.ts` (new file created in step 3 of the implementation). Below is the representative subset showing all patterns:
+1. Reads the effective sensor map (compat-translated from legacy)
+2. Writes it as sparse `sensorMap[]` entries
+3. Removes the legacy category toggles + `excludeSensors` + `includeOnly` + `thresholds` + `units` + `extendedDisplayMode` + `embedNameUpdateMinIntervalMinutes`
+4. Sets `configVersion: 2`
 
-| dataPoint | kind | name | threshold | unit | batteryField | notes |
-|---|---|---|---|---|---|---|
-| `tempf` | temperature | Outdoor Temperature | — | °F | battout | canonical for battout |
-| `tempinf` | temperature | Indoor Temperature | — | °F | battin | canonical for battin |
-| `feelsLike` | temperature | Outdoor Feels Like | — | °F | battout | non-canonical (no Battery sub-service) |
-| `dewPoint` | temperature | Outdoor Dew Point | — | °F | battout | non-canonical |
-| `humidity` | humidity | Outdoor Humidity | — | % | battout | non-canonical |
-| `humidityin` | humidity | Indoor Humidity | — | % | battin | non-canonical |
-| `solarradiation` | light | Solar Radiation | — | lux | battout | W/m² → lux at 127× |
-| `uv` | motion | UV Index | 3 | index | battout | triggerDirection: above |
-| `windspeedmph` | motion | Wind Speed | 25 | mph | battout | triggerDirection: above |
-| `windgustmph` | motion | Wind Gust | 35 | mph | battout | triggerDirection: above |
-| `maxdailygust` | motion | Max Daily Gust | 35 | mph | battout | triggerDirection: above |
-| `winddir` | motion | Wind Direction | Infinity | ° | battout | never triggers; informational |
-| `winddir_avg10m` | motion | Wind Direction 10m Avg | Infinity | ° | battout | never triggers |
-| `hourlyrainin` | motion | Rain Rate | 0.01 | in/hr | battout | any measurable rain |
-| `eventrainin` | motion | Rain Event | 0.01 | in | battout | accumulation |
-| `dailyrainin` | motion | Rain Daily | 0.01 | in | battout | accumulation |
-| `weeklyrainin` | motion | Rain Weekly | 0.01 | in | battout | accumulation |
-| `monthlyrainin` | motion | Rain Monthly | 0.01 | in | battout | accumulation |
-| `yearlyrainin` | motion | Rain Yearly | 0.01 | in | battout | accumulation |
-| `lastRain` | motion | Last Rain | Infinity | timestamp | battout | never triggers |
-| `baromrelin` | motion | Pressure Sea Level | 29.5 | inHg | battin | triggerDirection: below |
-| `baromabsin` | motion | Pressure Station | 29.5 | inHg | battin | triggerDirection: below |
-| `lightning_day` | motion | Lightning Strikes Today | 1 | count | batt_lightning | canonical for batt_lightning |
-| `lightning_hour` | motion | Lightning Strikes This Hour | 1 | count | batt_lightning | non-canonical |
-| `lightning_distance` | motion | Lightning Distance | 10 | mi | batt_lightning | triggerDirection: below |
-| `lightning_time` | motion | Last Lightning Strike | Infinity | timestamp | batt_lightning | never triggers |
-| `co2` | co2 | CO2 | 1000 | ppm | batt_co2 | threshold flips CarbonDioxideDetected |
-| `co2_in_aqin` | co2 | Indoor CO2 | 1000 | ppm | batt_co2 | canonical for batt_co2 |
-| `pm25` | air-quality-pm25 | Outdoor PM2.5 | — | µg/m³ | (none) | outdoor PM has no batt* field |
-| `pm25_in_aqin` | air-quality-pm25 | Indoor PM2.5 | — | µg/m³ | batt_co2 | non-canonical for batt_co2 |
-| `pm10_in_aqin` | air-quality-pm10 | Indoor PM10 | — | µg/m³ | batt_co2 | non-canonical |
-| `pm_in_temp_aqin` | temperature | AQIN Temperature | — | °F | batt_co2 | non-canonical |
-| `pm_in_humidity_aqin` | humidity | AQIN Humidity | — | % | batt_co2 | non-canonical |
-| `temp{1..10}f` | temperature | Temperature N | — | °F | batt{N} | canonical for batt{N} |
-| `humidity{1..10}` | humidity | Humidity N | — | % | batt{N} | non-canonical |
-| `feelsLike{1..4}` | temperature | Feels Like N | — | °F | batt{N} | non-canonical |
-| `dewPoint{1..4}` | temperature | Dew Point N | — | °F | batt{N} | non-canonical |
+That's the atomic migration. Users who never open the UI stay on the legacy shape indefinitely — the compat layer keeps handling them.
 
-**Enabled by default:** every default row's `enabled` defaults to `true` at the map level, but the compat layer (§6) applies category gating for existing 1.6.0 users. New 2.0 users get category-based defaults preserved via the same rules.
+**New v2 installs:** the UI writes `configVersion: 2` from the start. No legacy fields are ever created.
 
-**Canonical battery sensor per field:** the current v1.6.0 `batteryFields.CANONICAL_SENSOR_FOR_BATTERY` mapping stays as-is. Non-canonical rows have `batteryField: <field>` recorded (so they know their parent probe's battery for logging purposes) but do NOT attach a Battery sub-service — `batteryService.setupBatteryService` continues to check canonicality.
+## 6. Compat layer (legacy-mode only)
 
-## 6. Compat layer
+When `configVersion` is absent, legacy fields translate to internal sensor-map state. The translation is deterministic and one-shot per plugin boot. Nothing is written back to `config.json`.
 
-Legacy 1.6.0 config fields translate to internal sensor-map state at plugin startup. The translation is one-shot per boot, produces the same runtime behavior 1.6.0 users see today, and is invisible in `config.json` (nothing is written back).
-
-Translation rules:
-
-| 1.6.0 field | Value | Effect on runtime sensor map |
+| 1.6.0 field | Value | Effect on effective sensor map |
 |---|---|---|
-| `temperatureSensors` | `true` | All rows with `kind: temperature` → `enabled: true` |
-| `temperatureSensors` | `false` or absent | All rows with `kind: temperature` → `enabled: false` (v1.6.0 default was false) |
-| `humiditySensors` | `true` / `false` | Same, for `kind: humidity` |
-| `solarRadiationSensors` | … | Same, for `kind: light` (solar-only, doesn't affect a hypothetical future user-added light kind) |
-| `co2Sensors` | … | Same, for `kind: co2` |
-| `airQualitySensors` | … | Same, for `kind: air-quality-pm25` AND `kind: air-quality-pm10` |
-| `extendedSensors` | `false` | All Motion-kind rows for extended sensor sensorKeys → `enabled: false`, regardless of below toggles |
-| `extendedSensors` | `true` | Move to the sub-category checks below |
-| `windSensors` | `true` (with extendedSensors on) | wind* rows → `enabled: true` |
-| `windSensors` | `false` | wind* rows → `enabled: false` |
-| `rainSensors` | … | Same, for rain sensors |
-| `pressureSensors` | … | Same, for pressure sensors |
-| `uvSensors` | … | Same, for `uv` |
-| `lightningSensors` | … | Same, for lightning sensors |
+| `temperatureSensors` | true / false / absent | All `kind: temperature` rows → `enabled` set. Absent = false (v1.6.0 default). |
+| `humiditySensors` | same | Same, for `kind: humidity` |
+| `solarRadiationSensors` | same | Same, for `kind: light` (solar rows only) |
+| `co2Sensors` | same | Same, for `kind: co2` |
+| `airQualitySensors` | same | Same, for both `kind: air-quality-pm25` and `air-quality-pm10` |
+| `extendedSensors: false` | | All Motion-kind rows for extended sensor sensorKeys → `enabled: false` |
+| `extendedSensors: true` | | Sub-category toggles below apply |
+| `windSensors` / `rainSensors` / `pressureSensors` / `uvSensors` / `lightningSensors` | | Corresponding rows → `enabled` set |
 | `thresholds.<foo>Enabled: false` | | Corresponding row → `enabled: false` |
-| `thresholds.<foo>Mph` / `.<foo>InHr` / `.uv` / `.lightningDistanceMi` / `.pressureInHg` | numeric | Corresponding row's `threshold` set to this value |
-| `units.windSpeed` / `.rain` / `.pressure` / `.distance` | e.g. `kph` | Corresponding wind / rain / pressure / lightning-distance rows' `unit` set |
+| `thresholds.<foo>Mph` / `.InHr` / `.uv` / `.lightningDistanceMi` / `.pressureInHg` | numeric | Corresponding row's `threshold` set to this value |
+| `units.windSpeed` / `.rain` / `.pressure` / `.distance` | e.g. `kph` | Corresponding rows' `displayUnit` set |
 | `extendedDisplayMode: embed` | | All Motion-kind rows → `embedName: true` |
 | `embedNameUpdateMinIntervalMinutes: N` | | Global setting stays; applied per-row at render time |
-| `excludeSensors: ["Foo"]` | | Row(s) whose friendly name or sensorKey matches → `enabled: false`. The `-batt` suffix and raw battery-field-name matching from 1.6.0-beta.24 continues to work: matches set the row's `batteryField` to `null`. |
-| `includeOnly: [...]` | | Rows NOT matching any allowlist entry → `enabled: false`. Applied AFTER `excludeSensors`. |
-| `stationFilter: [...]` | | Not sensor-map related; stays as a top-level field |
-| `dataSource` | `polling` / `realtime` | Not sensor-map related; stays as a top-level field |
+| `excludeSensors: ["Foo"]` | | Row(s) whose friendly name or sensorKey matches → `enabled: false`. `-batt` suffix + raw battery-field-name matching from 1.6.0-beta.24 continues to work: matches set `batteryField: null`. |
+| `includeOnly: [...]` | | Rows NOT matching → `enabled: false`. Applied AFTER `excludeSensors`. |
+| `stationFilter: [...]` | | Not sensor-map related; stays as top-level field |
+| `dataSource` | | Not sensor-map related; stays as top-level field |
 
-The user's `sensorMap: []` entries are applied AFTER the compat translation, on a per-row per-field basis. Explicit user overrides always win.
+## 7. Effective map construction
 
-Legacy fields remain readable indefinitely. There is no plan to remove them or emit deprecation warnings. Users who never open the plugin config in HB UI continue to use the legacy shape forever; users who open the config once and save get their config auto-migrated to the new shape by the UI.
+The core operation is expressed as a **pure function**:
 
-## 7. Auto-discovery
+```typescript
+function buildEffectiveSensorMap(input: {
+  defaultMap: DefaultSensorRow[];       // built-in, from code
+  configMode: 'legacy' | 'v2';          // from configVersion detection (§5)
+  legacyConfig?: LegacyConfig;          // absent in v2 mode
+  userOverrides: SensorMapOverride[];   // from config.json sensorMap
+  discovery: DiscoveryRegistry;         // from plugin discovery store (§8.3)
+  stations: DiscoveredStation[];        // from latest AWN poll
+}): EffectiveSensorMap
+```
 
-On each successful AWN poll, the plugin builds the runtime sensor map by:
+Precedence order (later steps override earlier):
 
-1. Starting from the built-in `DEFAULT_SENSOR_MAP` (§5)
-2. Applying the compat layer (§6) to translate any legacy 1.6.0 config fields into row state
-3. Applying user overrides from `config.sensorMap`
-4. For each sensorKey present in AWN's response that isn't already a row: adding a new row with `kind: unrecognized`, `name: <sensorKey>`, no other fields set
+1. Built-in defaults from `defaultMap`
+2. Compat-layer transformation (only when `configMode === 'legacy'`)
+3. Global user overrides (rows in `userOverrides` where `stationId` is absent)
+4. Station-specific user overrides (rows where `stationId` matches)
+5. Runtime availability metadata (which stations are currently reporting the field; when it was last seen)
 
-Rows with `kind: unrecognized` do NOT produce HomeKit accessories. They exist in the runtime map so the config UI can surface them to the user with a "Kind required" badge.
+Output: an array of `EffectiveSensorRow` — one entry per `(stationId, dataPoint)` pair that either has a default, is user-overridden, or has been discovered.
 
-Users assign a kind through the UI. Once assigned, the row moves to the user's `sensorMap` in `config.json` and produces a HomeKit accessory on the next restart.
+The function is pure (no I/O, no side effects, no clocks). Every input is passed in explicitly. This makes the merge logic deterministic and testable — property-driven tests (§13) exercise it exhaustively.
 
-**Rows for AWN fields that used to be present but no longer are:** kept in the accessory cache indefinitely so user customizations survive. The cache-level presence is Homebridge's responsibility (via `cachedAccessories.*`), not ours. If a user removes hardware and wants to clean up stale rows, they use the "Remove stale sensors" action in the UI (§9.4).
+Callers use it in two places:
+- Plugin startup (`platform.discoverDevices`) — to determine which accessories to register / restore / re-register
+- Angular UI backend — to compute the effective map that the front-end displays for editing
 
-## 8. Persistence
+## 8. Persistence — three domains
 
-Two persistence layers, following hjdhjd's UniFi Protect pattern:
+Following hjdhjd's UniFi Protect pattern, persisted state lives in three separate stores. Each has a clear purpose and its own consistency guarantees.
 
-### 8.1 Homebridge accessory cache
+### 8.1 `config.json` — user intent (declarative)
 
-Managed by Homebridge itself. Each accessory the plugin registers via `registerPlatformAccessories()` gets serialized to `cachedAccessories.*` in the Homebridge config directory. On restart, Homebridge calls the plugin's `configureAccessory(accessory)` for each cached accessory, and the plugin restores runtime state from `accessory.context.device`.
+Contains only what the user has explicitly decided. Managed by Homebridge (or hand-edited). The plugin reads it at startup; the plugin never writes it. The Angular UI writes it via HB UI X's config persistence APIs.
 
-For sensor-map, `accessory.context.device` records:
+Fields relevant to sensor map:
 
-- `uniqueId`: `${macAddress}-${sensorKey}` — stable across restarts, unchanged from v1.6.0
-- `displayName`: the current name (comes from sensorMap or default)
-- `type`: legacy 1.6.0 type field, kept for compat during transition (removed in a future release)
-- `kind`: NEW in 2.0 — the SensorKind assigned to this accessory. Used for kind-change detection.
-- `value`: last-known reading
-- `batteryLow`: last-known battery state (undefined if no battery sub-service)
+- `configVersion: number`
+- `sensorMap: SensorMapOverride[]`
 
-The accessory cache is what makes the plugin robust to AWN being offline at startup — cached accessories show their last-known values until AWN comes back.
+Legacy fields (`temperatureSensors`, `excludeSensors`, etc.) are also read from `config.json` in legacy mode. They persist here until the user's first UI save, at which point they're removed atomically (see §5).
 
-### 8.2 User customizations in config.json
+### 8.2 Homebridge accessory cache — HomeKit registration state
 
-Only the `sensorMap: []` array. Sparse — one entry per user-modified row. See §4.
+Managed by Homebridge itself. On restart, Homebridge calls `configureAccessory(accessory)` for every previously-registered accessory in `cachedAccessories.*`. The plugin restores runtime state from `accessory.context.device`:
 
-### 8.3 What is NOT persisted
+```typescript
+interface AccessoryContext {
+  uniqueId: string;                // `${macAddress}-${sensorKey}` — stable across restarts
+  displayName: string;             // last name written to HomeKit
+  kind?: SensorKind;               // NEW in 2.0. See §11 bootstrap rule for legacy accessories.
+  type?: string;                   // legacy 1.6.0 field; kept for bootstrap-time kind inference
+  structuralSignature?: string;    // NEW in 2.0. See §9.
+  value?: number;                  // last-known reading
+  batteryLow?: boolean;            // last-known battery state
+}
+```
 
-- The default sensor map (lives in code)
-- Auto-discovered rows with `kind: unrecognized` — reconstructed on each poll from the AWN response
-- Compat-layer translations (recomputed each restart from the legacy fields)
+The cache is what makes the plugin robust to AWN being offline at startup. Cached accessories continue to display their last-known values until AWN comes back.
 
-## 9. Kind change semantics
+### 8.3 Plugin discovery store — observational data
 
-HAP does not allow an accessory's service type to change once registered. Changing a row's `kind` therefore requires **deregistering the old accessory and registering a new one**, which loses HomeKit-side state: room assignment, automations targeting that accessory, and any user rename in the Home app.
+New in 2.0. Persists at `api.user.persistPath()/ambient-weather-discovery.json`. Managed entirely by the plugin.
+
+```typescript
+interface DiscoveryRegistry {
+  version: number;
+  entries: DiscoveredFieldRecord[];
+  notices: SensorMapNotice[];
+}
+
+interface DiscoveredFieldRecord {
+  stationId: string;               // MAC address of the station
+  stationName: string;             // last-known info.name
+  dataPoint: string;               // AWN field name
+  firstSeen: string;               // ISO-8601 timestamp
+  lastSeen: string;                // ISO-8601 timestamp
+  lastValue?: unknown;             // last observed value (for UI preview)
+}
+
+interface SensorMapNotice {
+  id: string;
+  type: 'kind-change' | 'structural-change' | 'stale-cleanup';
+  stationId: string;
+  dataPoint: string;
+  oldKind?: SensorKind;
+  newKind?: SensorKind;
+  occurredAt: string;
+  dismissedAt?: string;
+}
+```
+
+Used for:
+
+- **Unrecognized-row survival across polls**: if AWN stops reporting a field briefly, the discovery entry stays. No accessory is (or was) registered — but the record persists so the UI can surface it.
+- **Stale detection**: `lastSeen` older than N days → row eligible for cleanup via UI action (§9.4).
+- **Structural-change notifications**: writes here when `kind` or another structural field changes and a re-registration happens; UI reads to render a persistent banner until the user dismisses.
+
+**Discovery store does NOT contain user intent.** No overrides, no enabled/disabled, no names. Pure observational + notification state.
+
+## 9. Structural signature and re-registration
+
+HAP does not allow an accessory's service graph to change on the same UUID once registered. Several row-field changes affect the service graph:
+
+- `kind` (obvious — changes the primary service)
+- `batteryField` presence/absence (adds/removes Battery sub-service)
+- Canonical-vs-non-canonical status for a battery field (affects whether Battery attaches on this row)
+- Wrapper implementation changes across plugin versions
+
+The design does NOT special-case each field. Instead, every row has a **structural signature** — a stable hash of the fields that determine the HAP service graph:
+
+```typescript
+function structuralSignature(row: EffectiveSensorRow): string {
+  return hash({
+    kind: row.kind,
+    hasBatteryService: attachesBatterySubService(row),
+    wrapperVersion: CURRENT_WRAPPER_SCHEMA_VERSION,
+  });
+}
+```
+
+Signature is stored in `accessory.context.device.structuralSignature`.
 
 ### 9.1 Detection
 
-On restart, `discoverDevices()` compares each accessory's cached `context.device.kind` against the effective sensorMap's kind for that sensorKey. If they differ:
+On startup, for each cached accessory:
 
-1. Log a warn line: `Kind changed for <sensorKey> from <oldKind> to <newKind>; re-registering the accessory. HomeKit room assignment, automations, and custom name will be lost.`
-2. Call `api.unregisterPlatformAccessories(...)` with the old accessory
-3. Remove it from the plugin's `this.accessories` array
-4. Fall through to the standard "add new accessory" path with the new kind
+1. Compute `oldSignature = accessory.context.device.structuralSignature` (or bootstrap-infer if absent — see §11)
+2. Compute `newSignature = structuralSignature(effectiveRowFor(sensorKey))`
+3. If they match: update in-place. `updatePlatformAccessories` refreshes displayName, service Name, ConfiguredName, etc. — but no HAP service is added/removed.
+4. If they differ:
+   - Log a warn: `Structural change detected for <dataPoint>: <what changed>. Re-registering accessory. HomeKit room, automations, and custom name will be lost.`
+   - Write a `SensorMapNotice` to the discovery store
+   - `unregisterPlatformAccessories(...)` the old accessory
+   - `registerPlatformAccessories(...)` a new accessory with new UUID (or same UUID + new services, per HAP's re-registration semantics)
 
-### 9.2 UI-side confirmation
+### 9.2 UI confirmation
 
-When the user changes a kind in the Angular UI, the form displays a confirmation dialog before saving:
+The Angular UI intercepts structural changes at edit time. Changing `kind` or `batteryField` from a value that currently produces a Battery service to one that doesn't, etc. — any change that would trip the signature — pops a modal:
 
-> Changing the Kind of "Wind Speed" from Motion to Humidity will remove the current HomeKit accessory and create a new one. Any room assignment, custom name, or automations targeting this accessory will be lost. Proceed?
+> Editing this sensor will remove its current HomeKit accessory and create a new one. The HomeKit room, custom name, and any automations targeting it will be lost. Proceed?
 
-This makes the trade-off explicit at the point of decision rather than after the restart.
+Non-structural changes (`name`, `threshold`, `displayUnit`, `embedName`) save without confirmation — they're in-place updates.
 
-### 9.3 Persistent notification
+### 9.3 Change notice persistence
 
-After a kind-change re-registration completes, the plugin emits an info-level log line: `Kind change complete for <sensorKey>. Re-add the new "<name>" tile to your Apple Home room and re-target any automations.` The Angular UI displays a persistent banner listing recently re-registered accessories until the user dismisses it.
+Every structural re-registration writes a `SensorMapNotice` to the discovery store. The UI reads these on load and renders a dismissible banner listing recent events. Dismissal writes `dismissedAt` and hides the row from the banner.
 
-### 9.4 Stale-row cleanup
+### 9.4 Stale-row cleanup — three distinct actions
 
-Separate concern from kind changes: if a user removes hardware (e.g., their WH31L lightning add-on) and wants to clean up the corresponding accessories, the UI provides a "Remove stale sensors" action that lists rows whose AWN field hasn't been reported in the last N polls (configurable, default 7 days). Selecting rows and confirming triggers explicit deregistration.
+The UI's "Manage sensors" panel offers three separate actions per row, each with different consequences:
+
+| Action | Applies to | Effect |
+|---|---|---|
+| **Remove accessory** | Any row with a registered HomeKit accessory | Deregisters the accessory. Loses HomeKit state. Keeps the user override in `sensorMap`. If AWN starts reporting again, the accessory re-registers per user override. |
+| **Remove user override** | Any row with an entry in `sensorMap` | Deletes the entry from `config.json`. Row reverts to plugin defaults (or unrecognized if custom). Does NOT deregister the accessory. |
+| **Forget discovered field** | Rows for AWN fields not in the default map, currently only in the discovery store | Deletes the discovery record. If AWN reports the field again on next poll, it re-appears. Only affects the discovery-store side. |
+
+The UI shows different affordances based on which of these apply to each row.
 
 ## 10. Custom Angular UI
 
-The plugin ships a `homebridge-ui/` directory containing an Angular-based custom configuration UI. Homebridge UI X loads this in place of the schema-driven form when the plugin's config panel is opened.
+Ships in `homebridge-ui/`. Homebridge UI X loads this in place of the schema-driven form when the plugin's config panel is opened.
 
-### 10.1 Directory structure
+### 10.1 Directory layout
 
 ```
 homebridge-ambient-weather-sensors/
 ├── homebridge-ui/
-│   ├── public/                    # Angular front-end
+│   ├── public/                      # Angular front-end
 │   │   ├── index.html
 │   │   ├── app/
-│   │   │   ├── sensor-map/         # Sensor-map form components
-│   │   │   ├── station-filter/     # Include Only These Stations form
-│   │   │   ├── general/            # API keys, dataSource
-│   │   │   └── ...
+│   │   │   ├── sensor-map/          # Sensor-map table + row edit
+│   │   │   ├── station-filter/      # Include Only These Stations
+│   │   │   ├── general/             # API keys, dataSource
+│   │   │   └── shared/
 │   │   ├── assets/
 │   │   └── styles.css
-│   └── server.ts                   # Node bridge for HB UI ↔ plugin
+│   └── server.ts                    # Node bridge for HB UI ↔ plugin
 ├── src/
-├── config.schema.json              # Still ships, minimal fallback
+│   └── awnClient.ts                 # NEW: shared AWN API client (§10.3)
+├── config.schema.json               # Minimal schema-driven fallback
 └── package.json
 ```
 
-### 10.2 Server responsibilities
+### 10.2 Process boundary
 
-`homebridge-ui/server.ts` uses `@homebridge/plugin-ui-utils` to:
+Two Node.js processes are involved. Diagram of responsibilities:
 
-- Read the plugin's current config
-- Write updated config (which the HB UI framework then persists to `config.json`)
-- Expose an RPC method for the Angular front-end to request a live AWN poll — the server calls the AWN REST API with the user's apiKey/applicationKey and returns the current `lastData` payload
-- Expose an RPC method returning the plugin's `DEFAULT_SENSOR_MAP` (so the UI can merge with the user's overrides and render the effective view)
+```
+┌─────────────────────────┐      ┌──────────────────────────┐      ┌─────────────────────┐
+│  Angular front-end      │      │  homebridge-ui/server.ts │      │  Plugin process     │
+│  (browser)              │◄────►│  (short-lived, spawned    │      │  (long-lived,       │
+│                         │      │   by HB UI X per session) │      │   the actual plugin)│
+│                         │      │                          │      │                     │
+│  reads/writes:          │      │  serves the front-end    │      │  writes to:         │
+│    effective map view   │      │  reads plugin cache      │      │    HB accessory     │
+│    validated overrides  │      │  reads discovery store   │      │    cache            │
+│                         │      │  writes config.json      │      │    discovery store  │
+│                         │      │  triggers AWN refresh    │      │    notification     │
+│                         │      │                          │      │    store            │
+└─────────────────────────┘      └──────────────────────────┘      └─────────────────────┘
+```
 
-### 10.3 Angular front-end responsibilities
+The UI server and the plugin process are separate. The UI server CANNOT inspect the plugin's in-memory state directly. All shared state passes through the discovery store, the accessory cache, and `config.json`.
 
-- Render the sensor-map table with the grouped-row layout (unmodified defaults collapsed, edited / disabled / additional / needs-attention groups visible)
-- Handle row expansion for editing, kind dropdown, unit dropdown, embed toggle
-- Confirmation dialog for kind changes
-- "Remove stale sensors" action
-- On save: produce a sparse sensorMap array containing only user-modified rows, write back via the server bridge
+### 10.3 Shared AWN client (`src/awnClient.ts`)
 
-### 10.4 Fallback
+To avoid duplicating AWN API logic between the plugin and the UI server, both import from `src/awnClient.ts`:
 
-`config.schema.json` continues to ship in the npm tarball. If a user has custom-UI disabled in HB UI X preferences (an option that exists), they see a minimal schema-driven form that lets them edit the raw sensorMap as an array of objects. Not the polished UX, but always available.
+- REST call to `https://rt.ambientweather.net/v1/devices?applicationKey=...&apiKey=...`
+- 429 retry-with-backoff logic
+- Same JSON parsing + type validation
+
+The plugin calls this on its normal poll cycle (or via socket.io for realtime). The UI server calls this only when the user clicks **Refresh from Ambient Weather** — no automatic UI-side polling.
+
+Credentials never round-trip through the browser. The UI server reads them from `config.json`, passes them to `awnClient`, returns the sanitized response.
+
+### 10.4 Front-end responsibilities
+
+- Render the sensor-map table with grouped-row layout (unmodified defaults collapsed, edited / disabled / additional / needs-attention groups visible)
+- Row expansion for editing; kind + unit dropdowns; embed toggle
+- Confirmation modal on structural changes
+- "Remove accessory" / "Remove user override" / "Forget discovered field" actions (§9.4)
+- Persistent banner reading from discovery store's `notices` array
+- **Advanced tab** — raw JSON view for `sensorMap` overrides; place for `triggerDirection` and other seldom-used fields
+
+### 10.5 Schema-driven fallback
+
+`config.schema.json` continues to ship. If a user disables custom UI in HB UI X preferences, they see a minimal form that lets them edit the raw `sensorMap` array of objects. Not the polished UX, but always available.
 
 ## 11. Migration semantics
 
-The plugin's default sensor map for v2.0 is constructed so that **every AWN sensorKey v1.6.0 currently exposes produces the same HAP service type in v2.0**. Users' HomeKit accessories on upgrade continue to work — same UUIDs, same service types, same characteristics, same room assignments, same automations.
+Existing v1.6.0 users must upgrade to v2.0 with zero HomeKit state loss. Two guarantees:
 
-### 11.1 The audit table
+### 11.1 The default map preserves service types
 
-Before shipping 2.0.0-beta.0, the default sensor map (§5) is verified against v1.6.0's runtime behavior for every sensorKey. For each row in the audit table below, the expected HAP service after upgrade must be identical to what v1.6.0 currently produces:
+The plugin's default sensor map for v2.0 is constructed so that **every AWN sensorKey v1.6.0 exposes produces the same HAP service type in v2.0**. The audit table:
 
-| sensorKey | v1.6.0 service | v2.0 default kind | Resulting service | Match |
-|---|---|---|---|---|
-| `tempf` | TemperatureSensor | temperature | TemperatureSensor | ✓ |
-| `tempinf` | TemperatureSensor | temperature | TemperatureSensor | ✓ |
-| `feelsLike` | TemperatureSensor | temperature | TemperatureSensor | ✓ |
-| `dewPoint` | TemperatureSensor | temperature | TemperatureSensor | ✓ |
-| `humidity` | HumiditySensor | humidity | HumiditySensor | ✓ |
-| `humidityin` | HumiditySensor | humidity | HumiditySensor | ✓ |
-| `solarradiation` | LightSensor | light | LightSensor | ✓ |
-| `co2` | CarbonDioxideSensor | co2 | CarbonDioxideSensor | ✓ |
-| `co2_in_aqin` | CarbonDioxideSensor | co2 | CarbonDioxideSensor | ✓ |
-| `pm25` | AirQualitySensor | air-quality-pm25 | AirQualitySensor | ✓ |
-| `pm25_in_aqin` | AirQualitySensor | air-quality-pm25 | AirQualitySensor | ✓ |
-| `pm10_in_aqin` | AirQualitySensor | air-quality-pm10 | AirQualitySensor | ✓ |
-| `pm_in_temp_aqin` | TemperatureSensor | temperature | TemperatureSensor | ✓ |
-| `pm_in_humidity_aqin` | HumiditySensor | humidity | HumiditySensor | ✓ |
-| `uv` | MotionSensor + custom chars | motion | MotionSensor + custom chars | ✓ |
-| `windspeedmph` | MotionSensor + custom chars | motion | MotionSensor + custom chars | ✓ |
-| `windgustmph` | MotionSensor + custom chars | motion | MotionSensor + custom chars | ✓ |
-| `maxdailygust` | MotionSensor + custom chars | motion | MotionSensor + custom chars | ✓ |
-| `winddir` | MotionSensor + custom chars | motion | MotionSensor + custom chars | ✓ |
-| `winddir_avg10m` | MotionSensor + custom chars | motion | MotionSensor + custom chars | ✓ |
-| `hourlyrainin` | MotionSensor + custom chars | motion | MotionSensor + custom chars | ✓ |
-| `eventrainin` .. `yearlyrainin` | MotionSensor + custom chars | motion | MotionSensor + custom chars | ✓ |
-| `lastRain` | MotionSensor + custom chars | motion | MotionSensor + custom chars | ✓ |
-| `baromrelin` / `baromabsin` | MotionSensor + custom chars | motion | MotionSensor + custom chars | ✓ |
-| `lightning_*` | MotionSensor + custom chars | motion | MotionSensor + custom chars | ✓ |
-| `temp{N}f` | TemperatureSensor | temperature | TemperatureSensor | ✓ |
-| `humidity{N}` | HumiditySensor | humidity | HumiditySensor | ✓ |
-| `feelsLike{N}` | TemperatureSensor | temperature | TemperatureSensor | ✓ |
-| `dewPoint{N}` | TemperatureSensor | temperature | TemperatureSensor | ✓ |
+| sensorKey | v1.6.0 service | Legacy `type` string | Inferred kind | v2.0 default kind | v2.0 service | Match |
+|---|---|---|---|---|---|---|
+| `tempf` | TemperatureSensor | `Temperature` | temperature | temperature | TemperatureSensor | ✓ |
+| `tempinf` | TemperatureSensor | `Temperature` | temperature | temperature | TemperatureSensor | ✓ |
+| `feelsLike` | TemperatureSensor | `Temperature` | temperature | temperature | TemperatureSensor | ✓ |
+| `dewPoint` | TemperatureSensor | `Temperature` | temperature | temperature | TemperatureSensor | ✓ |
+| `humidity` | HumiditySensor | `Humidity` | humidity | humidity | HumiditySensor | ✓ |
+| `humidityin` | HumiditySensor | `Humidity` | humidity | humidity | HumiditySensor | ✓ |
+| `solarradiation` | LightSensor | `Solar Radiation` | light | light | LightSensor | ✓ |
+| `co2` | CarbonDioxideSensor | `CO2` | co2 | co2 | CarbonDioxideSensor | ✓ |
+| `co2_in_aqin` | CarbonDioxideSensor | `CO2` | co2 | co2 | CarbonDioxideSensor | ✓ |
+| `pm25` | AirQualitySensor | `PM2.5` | air-quality-pm25 | air-quality-pm25 | AirQualitySensor | ✓ |
+| `pm25_in_aqin` | AirQualitySensor | `PM2.5` | air-quality-pm25 | air-quality-pm25 | AirQualitySensor | ✓ |
+| `pm10_in_aqin` | AirQualitySensor | `PM10` | air-quality-pm10 | air-quality-pm10 | AirQualitySensor | ✓ |
+| `pm_in_temp_aqin` | TemperatureSensor | `Temperature` | temperature | temperature | TemperatureSensor | ✓ |
+| `pm_in_humidity_aqin` | HumiditySensor | `Humidity` | humidity | humidity | HumiditySensor | ✓ |
+| `uv` | MotionSensor + custom chars | `UV` | motion | motion | MotionSensor + custom chars | ✓ |
+| `windspeedmph` | MotionSensor + custom chars | `WindSpeed` | motion | motion | MotionSensor + custom chars | ✓ |
+| `windgustmph` | MotionSensor + custom chars | `WindGust` | motion | motion | MotionSensor + custom chars | ✓ |
+| `maxdailygust` | MotionSensor + custom chars | `WindMaxDailyGust` | motion | motion | MotionSensor + custom chars | ✓ |
+| `winddir` | MotionSensor + custom chars | `WindDirection` | motion | motion | MotionSensor + custom chars | ✓ |
+| `winddir_avg10m` | MotionSensor + custom chars | `WindDirection10m` | motion | motion | MotionSensor + custom chars | ✓ |
+| `hourlyrainin` | MotionSensor + custom chars | `RainRate` | motion | motion | MotionSensor + custom chars | ✓ |
+| `eventrainin` .. `yearlyrainin` | MotionSensor + custom chars | `RainEvent` .. `RainYearly` | motion | motion | MotionSensor + custom chars | ✓ |
+| `lastRain` | MotionSensor + custom chars | `LastRain` | motion | motion | MotionSensor + custom chars | ✓ |
+| `baromrelin` | MotionSensor + custom chars | `PressureRelative` | motion | motion | MotionSensor + custom chars | ✓ |
+| `baromabsin` | MotionSensor + custom chars | `PressureAbsolute` | motion | motion | MotionSensor + custom chars | ✓ |
+| `lightning_day` .. `lightning_time` | MotionSensor + custom chars | `LightningDay` .. `LightningLastStrike` | motion | motion | MotionSensor + custom chars | ✓ |
+| `temp{N}f` | TemperatureSensor | `Temperature` | temperature | temperature | TemperatureSensor | ✓ |
+| `humidity{N}` | HumiditySensor | `Humidity` | humidity | humidity | HumiditySensor | ✓ |
+| `feelsLike{N}` | TemperatureSensor | `Temperature` | temperature | temperature | TemperatureSensor | ✓ |
+| `dewPoint{N}` | TemperatureSensor | `Temperature` | temperature | temperature | TemperatureSensor | ✓ |
 
-All ✓ by construction. Any future change to a default row's kind is a deliberate migration event, documented in CHANGELOG.md and (if it affects existing users) accompanied by a kind-change UI notification (§9).
+All ✓ by construction.
 
-### 11.2 Guarantees for existing users on upgrade
+### 11.2 Bootstrap rule for existing cached accessories
 
-- Zero HomeKit accessory changes on upgrade from any v1.6.x version to v2.0.0
-- Zero user action required — existing `config.json` continues to work indefinitely via the compat layer
-- Room assignments, automations, custom names in Home.app preserved
-- Battery sub-services in the same places (canonical sensor per probe)
+Existing v1.6.0 cached accessories in `cachedAccessories.*` do NOT have a `kind` field in their context. On first v2.0 startup, applying the naive `oldSignature !== newSignature` check would trip a false-positive structural change and cause mass re-registration.
+
+The plugin infers `kind` for every cached accessory using this fallback chain, in order:
+
+```typescript
+function inferKindForCachedAccessory(accessory: PlatformAccessory): SensorKind {
+  // 1. Explicit — v2 write and later
+  const explicitKind = accessory.context.device?.kind;
+  if (explicitKind) {
+    return explicitKind;
+  }
+
+  // 2. Legacy `type` field — v1.5.0 through v1.6.x
+  const legacyType = accessory.context.device?.type;
+  if (legacyType && LEGACY_TYPE_TO_KIND[legacyType]) {
+    return LEGACY_TYPE_TO_KIND[legacyType];
+  }
+
+  // 3. HAP-service inspection — worst-case fallback for very old accessories
+  const platformService = accessory.services.find(s => s.UUID !== ACCESSORY_INFORMATION_SERVICE_UUID);
+  if (platformService) {
+    return HAP_SERVICE_TO_KIND[platformService.UUID];
+  }
+
+  // 4. Give up — will trigger a re-registration, which is correct behavior for a truly-unknown accessory
+  return 'unrecognized';
+}
+```
+
+`LEGACY_TYPE_TO_KIND` is defined explicitly:
+
+```typescript
+const LEGACY_TYPE_TO_KIND: Record<string, SensorKind> = {
+  'Temperature':       'temperature',
+  'Humidity':          'humidity',
+  'Solar Radiation':   'light',
+  'CO2':               'co2',
+  'PM2.5':             'air-quality-pm25',
+  'PM10':              'air-quality-pm10',
+  'WindSpeed':         'motion',
+  'WindGust':          'motion',
+  'WindMaxDailyGust':  'motion',
+  'WindDirection':     'motion',
+  'WindDirection10m':  'motion',
+  'RainRate':          'motion',
+  'RainEvent':         'motion',
+  'RainDaily':         'motion',
+  'RainWeekly':        'motion',
+  'RainMonthly':       'motion',
+  'RainYearly':        'motion',
+  'LastRain':          'motion',
+  'PressureRelative':  'motion',
+  'PressureAbsolute':  'motion',
+  'UV':                'motion',
+  'LightningDay':      'motion',
+  'LightningHour':     'motion',
+  'LightningDistance': 'motion',
+  'LightningLastStrike': 'motion',
+};
+```
+
+After bootstrap-inference, the plugin computes the effective row for the sensor's `sensorKey` and compares `structuralSignature`. Since the audit table (§11.1) is exhaustive and constructed to match, the signatures agree for every legacy row — no re-registration triggers.
+
+The inferred kind is then persisted:
+
+```typescript
+accessory.context.device.kind = inferredKind;
+accessory.context.device.structuralSignature = newSignature;
+api.updatePlatformAccessories([accessory]);
+```
+
+Written in-place via `updatePlatformAccessories`. No HAP re-registration. Next restart, the explicit kind is already there.
+
+Every entry in `LEGACY_TYPE_TO_KIND` has a dedicated test (see §13).
 
 ### 11.3 What DOES change on upgrade
 
-- Users who open the plugin config in HB UI see the new Angular UI instead of the schema-driven form
-- Auto-discovered rows appear for AWN fields the plugin doesn't have defaults for — these are informational only (they don't create accessories) unless the user assigns a kind
-- The 1.6.0 `[embed-diag]` debug log lines continue to exist but are subsumed by richer per-sensor logging
+- Users who open the plugin config in HB UI see the Angular UI instead of the schema-driven form
+- Auto-discovered rows appear for AWN fields the plugin doesn't have defaults for — informational (they don't create accessories) until the user assigns a kind
+- The `[embed-diag]` debug log lines continue to exist but are subsumed by richer per-sensor logging
+
+### 11.4 User rename behavior
+
+The plugin manages three name-adjacent characteristics on each accessory:
+
+- `accessory.displayName` — Homebridge's own field, controls what HB UI shows
+- Service `Name` — HAP standard characteristic, shows in Apple Home before the user renames
+- Service `ConfiguredName` — HAP 2.x standard, shows in Apple Home after the user renames
+
+The plugin already has logic for this from v1.5.0-beta.15/beta.16/beta.17. Under sensor-map:
+
+- **`displayName` and service `Name`** are updated by the plugin on every restart from the effective row's `name` field. Guarantees the HB UI + Home-app first-render show the user's plugin-config name.
+- **Service `ConfiguredName`** is set ONCE at accessory registration. If the user renames the tile in Apple Home, HAP updates `ConfiguredName` and the plugin's `isUserRenamed()` check detects the divergence between `ConfiguredName` and the last plugin-written name. Once detected, the plugin stops overwriting `ConfiguredName` — user rename wins.
+- **Kind change / structural re-registration** deregisters the accessory. Apple Home considers the new accessory fresh — `ConfiguredName` is set from the plugin's `name` (not the previous user rename, which is lost with the old accessory).
+
+The Angular UI displays user-renames as "user-set" on affected rows, indicating that Apple Home rename takes precedence for that tile.
 
 ## 12. Testing plan
 
 ### 12.1 Existing test coverage
 
-The current 385-test suite (from the automated-test-suite PR, merged in v1.6.0-post-GA) covers:
+The 385-test suite merged in v1.6.0 covers pure functions, wrapper classes, `parseDevices()`, and beta.5/beta.16/beta.23 regressions.
 
-- Unit tests for pure functions (sensorNames, batteryFields, unitConversions, intensityBuckets, nameComposer, platform.ts helpers)
-- Wrapper tests for every accessory class
-- Integration tests for `parseDevices()` with fixture payloads
-- Regression tests for beta.5, beta.16, beta.23 bugs
+Under sensor-map, the following ports:
 
-Some tests become obsolete or need re-shaping:
+- **Pure-function tests (unit)**: unchanged. `sensorNames.ts`, `batteryFields.ts`, `unitConversions.ts`, `intensityBuckets.ts`, `nameComposer.ts`, platform helpers remain testable in the same shape.
+- **Wrapper tests**: mostly unchanged. Accessory classes themselves aren't rewritten — only their instantiation path is. Some assertions about "when is this constructor called" will need to be updated to route through `buildEffectiveSensorMap`.
+- **Existing `parseDevices` tests**: substantially rewritten. Behavior is now expressed in terms of the effective map, not raw category-toggle filtering. Same *semantics*, different mechanism.
+- **Regression tests**: unchanged. beta.5, beta.16, beta.23 tests continue to pin their respective behaviors.
 
-- `parseDevices.test.ts` — will be substantially rewritten around the new sensor-map data model
-- Existing filter-behavior tests (`excludeSensors`, `includeOnly`, per-category toggles) become **compat-layer tests** — same assertions, different mechanism
-- Wrapper tests stay mostly intact — the accessory classes themselves don't change, only the code that constructs them
+### 12.2 New tests — property-driven and invariant-based
 
-### 12.2 New tests required
+Rather than 200-400 handwritten tests, favor **property-driven parameterized tests over invariants**. The audit table (§11.1) is machine-readable — parameterize over it:
 
-- Default sensor map: every row in the audit table (§11.1) has an explicit test pinning its kind, threshold, unit, batteryField. Prevents accidental drift that would break migration.
-- Compat layer: for every legacy field, a test pinning its translation to sensor-map state. Prevents regression as we refactor.
-- Auto-discovery: unrecognized-sensor path, unrecognized→configured transition, stale-row detection.
-- Kind change: force re-registration path exercised with mock cached accessory.
-- User override precedence: user's sensorMap entry wins over compat-layer translation wins over default.
+```typescript
+describe('default sensor map', () => {
+  for (const row of DEFAULT_SENSOR_MAP) {
+    test(`${row.dataPoint}: kind resolves to a wrapper`, () => {
+      expect(WRAPPER_FOR_KIND[row.kind]).toBeDefined();
+    });
+    test(`${row.dataPoint}: displayUnit is legal for kind`, () => {
+      expect(ALLOWED_UNITS_FOR_KIND[row.kind]).toContain(row.displayUnit);
+    });
+    // etc.
+  }
+});
+```
 
-Estimate: 200-400 new tests. Total suite grows to ~600-800.
+Invariants covered by property-driven tests:
 
-### 12.3 Test suite refactor timing
+1. **Wrapper coverage**: every `SensorKind` resolves to exactly one wrapper class.
+2. **Unit legality**: every default row's units are in the allowed set for its kind.
+3. **Canonical battery**: for every batteryField, exactly one row in the default map is canonical.
+4. **Legacy compat**: every entry in `LEGACY_TYPE_TO_KIND` maps to a real kind.
+5. **Compat determinism**: for every legacy config field, translation is idempotent (`compat(compat(cfg)) === compat(cfg)`).
+6. **Effective-map determinism**: `buildEffectiveSensorMap(x)` is a pure function; given the same inputs it produces the same output.
+7. **Sparse-serialize round-trip**: serializing the effective map's user-overrides to sparse `sensorMap[]`, deserializing, and re-computing produces the same effective map.
+8. **Structural signature stability**: for every default row + a fixed wrapper schema version, the signature is deterministic across runs.
+9. **v1 fixture equivalence**: for every legacy 1.6.0 config fixture, the accessories produced under v2.0 have the same structural signatures as under v1.6.0 (proves zero-migration).
+10. **Bootstrap coverage**: for every entry in `LEGACY_TYPE_TO_KIND`, the bootstrap-inferred kind matches the default map's kind for the corresponding sensorKey.
 
-Per the plan: test refactor happens **before 2.0.0 GA, not before 2.0.0-beta.0**. Betas can ship with partially-broken tests during the transition; the release workflow does not currently gate on `npm test`. GA does not ship until:
+Total new test count is likely lower than 200-400 in absolute terms but higher in coverage per line. Property tests execute over 30+ default rows, so a single invariant test is 30 assertions.
 
-1. All existing tests pass (adapted or replaced as needed)
-2. New tests cover the sensor map, compat layer, auto-discovery, kind changes
-3. `npm test` is added to `prepublishOnly` (previously deferred; now the natural time to enable it)
+### 12.3 Test suite stays green throughout
+
+Every implementation PR either:
+- (a) leaves the suite green, or
+- (b) is paired with a same-day companion PR that restores green
+
+No week-long broken states. This preserves the ability to distinguish "expected transition breakage" from "real regression."
+
+**`npm test` added to CI immediately at start of the beta cycle.** Added to `prepublishOnly` before publishing 2.0.0-beta.0. Not deferred until GA — the reviewer's push here was justified and I revised from my earlier position.
 
 ## 13. Rollout plan
 
-### 13.1 Beta cycle (Step 3 of the four-step plan)
+### 13.1 Beta cycle
 
-Following the 1.5.0-beta cycle pattern:
+1. **2.0.0-beta.0**: data model + `sensorMap` config field parsing + compat layer + config-mode detection + kind/structural bootstrap rule + `LEGACY_TYPE_TO_KIND` map + discovery store scaffolding. **Includes minimal usable Angular UI**: read-only effective-map table, enable/disable, name, kind selector, raw-JSON advanced view. Enough for a tester to validate migration + do basic edits without hand-writing JSON.
+2. **2.0.0-beta.1 .. N**: full Angular UI features — grouped row layout, expansion + edit, unit selection, embed toggle, structural-change confirmation modal, stale-cleanup actions, persistent notice banner.
+3. **2.0.0-beta.N**: end-to-end tester coverage. Maintainer + solmssen exercise every path.
+4. **Final beta**: docs polished. README, UPGRADING.md, config.schema.json all describe the new shape.
 
-1. **2.0.0-beta.0**: default sensor map (§5) + `sensorMap` config field parsing + compat layer + kind-change detection + `enabled` semantics. Angular UI NOT included; users edit `sensorMap` via HB UI's JSON Config. Enough to prove the core data model against real user configs.
-2. **2.0.0-beta.1..N**: Angular UI implementation, incrementally. Sensor-map table view, then row edit, then auto-discovery integration, then kind-change dialog, then stale-row cleanup.
-3. **2.0.0-beta.N**: End-to-end user testing. maintainer + solmssen (per the memory notes) exercise every path.
-4. **2.0.0-beta.N+1**: docs polished. README, UPGRADING.md, config.schema.json all describe the new shape.
-
-Publish under `@beta` npm dist-tag only. Existing users on `@latest` stay on v1.6.0.
+Published under `@beta` npm dist-tag only. Existing users on `@latest` stay on v1.6.0.
 
 ### 13.2 GA criteria
 
 Before promoting to `@latest`:
 
-- Test-suite refactor complete (§12.3)
+- Test suite green (every invariant in §12.2 passing, all 385 legacy tests either preserved or replaced)
 - Zero-migration audit re-verified against the shipped default map (§11.1)
-- Both testers running 2.0-beta.N successfully for at least a week without regressions
-- Custom Angular UI validated in HB UI X versions the plugin supports
-- CHANGELOG, README, UPGRADING.md all reflect final shape
+- Both testers running the latest beta successfully for at least a week without regressions
+- Angular UI validated in the HB UI X versions the plugin supports
+- CHANGELOG, README, UPGRADING.md describe final shape
+- `npm test` in `prepublishOnly` (added at start of beta cycle, verified working at GA)
 
 ### 13.3 Post-GA
 
-- Deferred: multi-Home tabbed UI (`docs/future/tabbed-config-ui.md`). Now cheap since Angular infrastructure exists — likely a v2.1 feature if there's user demand.
-- Deferred: removing legacy 1.6.0 config fields. No plan; the compat layer stays permanently.
+- Deferred: multi-Home tabbed UI (`docs/future/tabbed-config-ui.md`). Angular infrastructure is now available; this becomes a smaller v2.1 feature if user demand emerges.
+- Deferred: removing legacy 1.6.0 config fields. No plan; compat layer stays permanently.
 
 ## 14. Open questions
 
-Answered up front (via prior conversation):
+Answered up front (via conversation + review):
 
-- **Custom UI or schema-driven?** — Custom (Angular). Rationale: auto-discovery in the form needs it; multi-Home tabs will need it later; hjdhjd's plugin proves the pattern works.
-- **Where do auto-discovered rows persist?** — Homebridge's `cachedAccessories.*` file, per hjdhjd's pattern. User customizations in `config.json` as sparse sensorMap entries.
-- **Kind change UX?** — Notify + force re-registration. Confirmation dialog in the UI + warn log at re-registration time.
-- **Migration for existing users?** — Zero-migration by construction (§11.1). Default sensor map produces same HAP services as v1.6.0.
-- **Test suite refactor?** — Required before GA, not before beta.
+- **Custom UI or schema-driven?** — Custom Angular UI.
+- **Where do auto-discovered rows persist?** — Plugin discovery store (`api.user.persistPath()`), separate from `config.json` and HB accessory cache.
+- **Kind change UX?** — Structural-signature-based re-registration with UI confirmation.
+- **Bootstrap for existing accessories?** — Explicit `LEGACY_TYPE_TO_KIND` map + service inspection fallback, written to context via `updatePlatformAccessories` (no re-registration).
+- **Config-mode detection?** — Explicit `configVersion` field.
+- **Row identity across stations?** — Rows are `(dataPoint, stationId?)`. Absent `stationId` = global template applying to every station.
+- **Test suite refactor?** — Green throughout the beta cycle. `npm test` in CI immediately, in `prepublishOnly` before first public beta.
+- **Beta.0 UI?** — Minimal usable UI (read-only + enable/disable/name/kind + raw-JSON advanced) in beta.0; full features layered in beta.1+.
 
-Still open:
+Still open (minor):
 
-- **Do we ship v2.0-beta.0 without the Angular UI, or wait until the UI exists?** Argument for early beta.0: the data model + compat layer can be tested against real 1.6.0 configs immediately, catching migration bugs before the UI adds complexity. Argument for waiting: users testing the beta without a UI have to hand-edit `config.json`, which is painful. Lean is: **ship beta.0 without UI** to prove data-model migration; UI arrives in beta.1+.
-- **Node/Homebridge version bumps?** No plan to bump. v2.0 stays on the same `engines` range as v1.6.0.
-- **What happens to `docs/future/tabbed-config-ui.md`?** Superseded by this document's Angular UI decision. Referenced from this doc as the eventual multi-Home tabs use case.
+- **Node/Homebridge version bumps?** No plan. v2.0 stays on the same `engines` range as v1.6.0.
+- **What happens to `docs/future/tabbed-config-ui.md`?** Superseded on the UI-technology decision by this document. Its multi-Home tabs use case is deferred to a future v2.1+.
+- **Do we run `npm test` on Windows CI too?** No current plan — plugin is macOS-only in practice. Node compatibility matrix in `.github/workflows/build.yml` stays at Linux+macOS if we ever add matrix builds.
 
-## 15. Decision log
+## 15. What's NOT settled — questions this doc still leaves open for implementation-time judgment
 
-- **2026-07-08**: Design approved for implementation. Straight to 2.0.0 (no 1.7 intermediate). Compat layer preserved indefinitely. Custom Angular UI adopted. Zero-migration by construction. Beta cycle begins in step 3 of the four-step plan.
+- Whether the Angular front-end uses Angular 17 signals, older RxJS, or a slimmer state library. Decide during implementation of the sensor-map component; no user-visible consequence.
+- Whether the discovery store's `notices` array is size-capped (e.g., last 50 events) or unbounded until manually cleared. Lean toward capped.
+- Exact schema-driven fallback shape. Live-editable but minimal.
+
+## 16. Decision log
+
+- **2026-07-08**: v1 of this doc drafted after conversation-level design discussion. Marked "approved for implementation." Sent for external review.
+- **2026-07-09**: External review returned. Substantive critiques accepted; the following changes made in this revision:
+  - Added §5 config-mode detection with explicit `configVersion` marker
+  - Rewrote §3 data model to add `triggerDirection`, `triggerEnabled` (replacing `Infinity` sentinel), `sourceUnit` / `displayUnit`, `stationId?` for layered station overrides
+  - Added §3.4 unit compatibility model
+  - Added §7 explicit pure-function `buildEffectiveSensorMap` with precedence order
+  - Rewrote §8 into three persistence domains (config.json, HB accessory cache, plugin discovery store)
+  - Rewrote §9 around structural signatures rather than kind-only comparison
+  - Added §9.4 distinct stale-cleanup actions (remove accessory / remove override / forget discovery)
+  - Added §11.2 bootstrap rule with `LEGACY_TYPE_TO_KIND` for existing accessories on first v2 startup
+  - Added §11.4 user-rename behavior clarification (references existing v1.5.0-beta.15/16/17 work)
+  - Rewrote §12 testing plan around property-driven invariants (rather than 200-400 handwritten tests)
+  - Revised §12.3: suite stays green throughout the beta cycle; `npm test` in CI immediately and `prepublishOnly` before first public beta
+  - Revised §13.1: 2.0.0-beta.0 includes a minimal usable UI, not JSON-editing only
+  - Corrected §3 "disabled row keeps Battery" — false. Disabling suppresses the entire accessory including sub-services.
+  - Removed "approved for implementation" status pending your re-review
+- Status pending re-review of these changes before implementation begins.
