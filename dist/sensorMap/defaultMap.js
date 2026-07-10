@@ -20,7 +20,7 @@
  * Non-canonical rows keep the batteryField for row identity but
  * do NOT get a sub-service — see docs §11 and batteryFields.ts.
  */
-import { TEMPERATURE_WRAPPER, HUMIDITY_WRAPPER, LIGHT_WM2_WRAPPER, CO2_WRAPPER, PM25_WRAPPER, PM10_WRAPPER, UV_INDEX_WRAPPER, WIND_SPEED_WRAPPER, WIND_GUST_WRAPPER, WIND_MAX_DAILY_GUST_WRAPPER, WIND_DIRECTION_WRAPPER, WIND_DIRECTION_10M_WRAPPER, PRESSURE_RELATIVE_WRAPPER, PRESSURE_ABSOLUTE_WRAPPER, RAIN_RATE_WRAPPER, RAIN_EVENT_WRAPPER, RAIN_DAILY_WRAPPER, RAIN_WEEKLY_WRAPPER, RAIN_MONTHLY_WRAPPER, RAIN_YEARLY_WRAPPER, LAST_RAIN_WRAPPER, LIGHTNING_DAY_WRAPPER, LIGHTNING_HOUR_WRAPPER, LIGHTNING_DISTANCE_WRAPPER, LIGHTNING_LAST_STRIKE_WRAPPER, } from './wrappers.js';
+import { TEMPERATURE_WRAPPER, HUMIDITY_WRAPPER, SOLAR_RADIATION_WRAPPER, CO2_WRAPPER, AIR_QUALITY_PM25_WRAPPER, AIR_QUALITY_PM10_WRAPPER, UV_WRAPPER, WIND_SPEED_WRAPPER, WIND_GUST_WRAPPER, WIND_MAX_DAILY_GUST_WRAPPER, WIND_DIRECTION_WRAPPER, WIND_DIRECTION_10M_WRAPPER, PRESSURE_RELATIVE_WRAPPER, PRESSURE_ABSOLUTE_WRAPPER, RAIN_RATE_WRAPPER, RAIN_EVENT_WRAPPER, RAIN_DAILY_WRAPPER, RAIN_WEEKLY_WRAPPER, RAIN_MONTHLY_WRAPPER, RAIN_YEARLY_WRAPPER, LAST_RAIN_WRAPPER, LIGHTNING_DAY_WRAPPER, LIGHTNING_HOUR_WRAPPER, LIGHTNING_DISTANCE_WRAPPER, LIGHTNING_LAST_STRIKE_WRAPPER, } from './wrappers.js';
 const STATIC_ROWS = [
     // Outdoor combo array — battout, canonical row is tempf
     {
@@ -71,7 +71,7 @@ const STATIC_ROWS = [
         dataPoint: 'solarradiation',
         kind: 'light',
         measurement: 'illuminance',
-        wrapper: LIGHT_WM2_WRAPPER,
+        wrapper: SOLAR_RADIATION_WRAPPER,
         name: 'Solar Radiation',
         sourceUnit: 'wm2',
         displayUnit: 'lux',
@@ -82,7 +82,7 @@ const STATIC_ROWS = [
         dataPoint: 'uv',
         kind: 'motion',
         measurement: 'uv-index',
-        wrapper: UV_INDEX_WRAPPER,
+        wrapper: UV_WRAPPER,
         name: 'UV Index',
         sourceUnit: 'index',
         displayUnit: 'index',
@@ -341,7 +341,7 @@ const STATIC_ROWS = [
         dataPoint: 'pm25',
         kind: 'air-quality-pm25',
         measurement: 'pm25',
-        wrapper: PM25_WRAPPER,
+        wrapper: AIR_QUALITY_PM25_WRAPPER,
         name: 'Outdoor PM2.5',
         sourceUnit: 'ugm3',
         displayUnit: 'ugm3',
@@ -352,7 +352,7 @@ const STATIC_ROWS = [
         dataPoint: 'pm25_24h',
         kind: 'air-quality-pm25',
         measurement: 'pm25',
-        wrapper: PM25_WRAPPER,
+        wrapper: AIR_QUALITY_PM25_WRAPPER,
         name: 'Outdoor PM2.5 24h Average',
         sourceUnit: 'ugm3',
         displayUnit: 'ugm3',
@@ -366,7 +366,7 @@ const STATIC_ROWS = [
         dataPoint: 'pm25_in',
         kind: 'air-quality-pm25',
         measurement: 'pm25',
-        wrapper: PM25_WRAPPER,
+        wrapper: AIR_QUALITY_PM25_WRAPPER,
         name: 'Indoor PM2.5',
         sourceUnit: 'ugm3',
         displayUnit: 'ugm3',
@@ -377,7 +377,7 @@ const STATIC_ROWS = [
         dataPoint: 'pm25_in_aqin',
         kind: 'air-quality-pm25',
         measurement: 'pm25',
-        wrapper: PM25_WRAPPER,
+        wrapper: AIR_QUALITY_PM25_WRAPPER,
         name: 'Indoor PM2.5',
         sourceUnit: 'ugm3',
         displayUnit: 'ugm3',
@@ -388,7 +388,7 @@ const STATIC_ROWS = [
         dataPoint: 'pm25_in_24h_aqin',
         kind: 'air-quality-pm25',
         measurement: 'pm25',
-        wrapper: PM25_WRAPPER,
+        wrapper: AIR_QUALITY_PM25_WRAPPER,
         name: 'Indoor PM2.5 24h Average',
         sourceUnit: 'ugm3',
         displayUnit: 'ugm3',
@@ -399,7 +399,7 @@ const STATIC_ROWS = [
         dataPoint: 'pm10_in_aqin',
         kind: 'air-quality-pm10',
         measurement: 'pm10',
-        wrapper: PM10_WRAPPER,
+        wrapper: AIR_QUALITY_PM10_WRAPPER,
         name: 'Indoor PM10',
         sourceUnit: 'ugm3',
         displayUnit: 'ugm3',
@@ -410,7 +410,7 @@ const STATIC_ROWS = [
         dataPoint: 'pm10_in_24h_aqin',
         kind: 'air-quality-pm10',
         measurement: 'pm10',
-        wrapper: PM10_WRAPPER,
+        wrapper: AIR_QUALITY_PM10_WRAPPER,
         name: 'Indoor PM10 24h Average',
         sourceUnit: 'ugm3',
         displayUnit: 'ugm3',

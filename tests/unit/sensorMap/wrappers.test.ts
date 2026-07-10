@@ -47,10 +47,12 @@ describe('WrapperDescriptor registry', () => {
     expect(wrapperFor('occupancy', 'boolean')).toBeUndefined();
   });
 
-  it('wrapperFor() returns the same object as the exported constant', () => {
+  it('wrapperFor() returns the canonical wrapper for each (kind, measurement)', () => {
     expect(wrapperFor('temperature', 'temperature')?.id).toBe('temperature');
     expect(wrapperFor('humidity', 'humidity')?.id).toBe('humidity');
-    expect(wrapperFor('motion', 'wind-speed')?.id).toBe('wind-speed-motion');
-    expect(wrapperFor('motion', 'timestamp')?.id).toBe('last-rain-timestamp-motion');
+    expect(wrapperFor('light', 'illuminance')?.id).toBe('solar-radiation');
+    expect(wrapperFor('motion', 'wind-speed')?.id).toBe('wind-speed');
+    expect(wrapperFor('motion', 'timestamp')?.id).toBe('last-rain');
+    expect(wrapperFor('motion', 'count')?.id).toBe('lightning-day');
   });
 });

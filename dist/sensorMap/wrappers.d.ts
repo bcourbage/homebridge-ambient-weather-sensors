@@ -12,6 +12,10 @@
  *      swapping a service type) is signaled by bumping `schemaVersion`,
  *      which invalidates ONLY that wrapper's accessories on next launch.
  *
+ * The 25 ids below are the FROZEN v2.0 vocabulary — matching the
+ * design doc §3.9 table exactly. Changing an id after 2.0.0 ships
+ * silently invalidates every user's accessory cache.
+ *
  * `WRAPPER_FOR_KIND_AND_MEASUREMENT` resolves the wrapper for a custom
  * sensor from its user-declared `(kind, measurement)`. Known-datapoint
  * rows carry their wrapper directly in the default map (see
@@ -26,11 +30,11 @@
 import type { WrapperDescriptor, SensorKind, Measurement } from './types.js';
 export declare const TEMPERATURE_WRAPPER: WrapperDescriptor;
 export declare const HUMIDITY_WRAPPER: WrapperDescriptor;
-export declare const LIGHT_WM2_WRAPPER: WrapperDescriptor;
+export declare const SOLAR_RADIATION_WRAPPER: WrapperDescriptor;
 export declare const CO2_WRAPPER: WrapperDescriptor;
-export declare const PM25_WRAPPER: WrapperDescriptor;
-export declare const PM10_WRAPPER: WrapperDescriptor;
-export declare const UV_INDEX_WRAPPER: WrapperDescriptor;
+export declare const AIR_QUALITY_PM25_WRAPPER: WrapperDescriptor;
+export declare const AIR_QUALITY_PM10_WRAPPER: WrapperDescriptor;
+export declare const UV_WRAPPER: WrapperDescriptor;
 export declare const WIND_SPEED_WRAPPER: WrapperDescriptor;
 export declare const WIND_GUST_WRAPPER: WrapperDescriptor;
 export declare const WIND_MAX_DAILY_GUST_WRAPPER: WrapperDescriptor;
@@ -49,36 +53,23 @@ export declare const LIGHTNING_DAY_WRAPPER: WrapperDescriptor;
 export declare const LIGHTNING_HOUR_WRAPPER: WrapperDescriptor;
 export declare const LIGHTNING_DISTANCE_WRAPPER: WrapperDescriptor;
 export declare const LIGHTNING_LAST_STRIKE_WRAPPER: WrapperDescriptor;
-/**
- * All registered wrapper descriptors. Used by tests to verify id
- * uniqueness and by the runtime for a sanity self-check at bootstrap.
- */
 export declare const ALL_WRAPPERS: ReadonlyArray<WrapperDescriptor>;
 /**
  * Custom-sensor wrapper resolution: given a user-declared
  * `(kind, measurement)`, return the wrapper the plugin should use.
  *
- * `motion`-kind rows disambiguate on measurement alone; a custom
- * `motion` + `wind-speed` sensor gets `WIND_SPEED_WRAPPER`. This
- * keeps the wrapper contract identical between known and custom rows.
+ * `motion`-kind rows disambiguate on measurement alone. Where a
+ * measurement has multiple candidate wrappers (rain-accumulation
+ * covers event/daily/weekly/monthly/yearly; count covers day/hour;
+ * timestamp covers last-rain / last-strike), the lookup picks the
+ * most "generic" — the top-level accumulation / count / timestamp
+ * variant. Users wanting a sub-flavor declare the row against the
+ * matching known dataPoint via the default map instead.
  *
- * Kinds without a concrete wrapper class in the current codebase
- * (co, leak, contact, occupancy) are absent — a custom row declaring
- * one fails validation with "no wrapper for (kind, measurement)".
- * Add wrappers for those kinds in later stages.
- *
- * Where a measurement has multiple candidate wrappers (multiple rain
- * accumulation windows, multiple lightning views), the lookup picks
- * the most "generic" — rain-event for accumulation, lightning-day for
- * count. Users wanting a different sub-flavor must declare the row
- * matching an existing AWN dataPoint (which routes through the
- * default map) rather than fabricating a custom one.
+ * Kinds without a concrete wrapper class (co, leak, contact,
+ * occupancy) are absent — a custom row declaring one fails
+ * validation with "no wrapper for (kind, measurement)".
  */
 export declare const WRAPPER_FOR_KIND_AND_MEASUREMENT: Readonly<Partial<Record<`${Exclude<SensorKind, 'unrecognized'>}|${Measurement}`, WrapperDescriptor>>>;
-/**
- * Resolve wrapper for a `(kind, measurement)` pair. Returns undefined
- * if no wrapper is registered. Callers must handle undefined by failing
- * validation (never by silently dropping the row).
- */
 export declare function wrapperFor(kind: Exclude<SensorKind, 'unrecognized'>, measurement: Measurement): WrapperDescriptor | undefined;
 //# sourceMappingURL=wrappers.d.ts.map
