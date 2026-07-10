@@ -37,11 +37,17 @@
     "CHANGELOG.md",
     "NOTICE",
     "UPGRADING.md",
-    "MultiHome.md"
+    "MultiHome.md",
+    "homebridge-ui/server.js",
+    "homebridge-ui/handlers.js",
+    "homebridge-ui/public"
   ],
   "scripts": {
     "lint": "eslint src/**.ts --max-warnings=0",
-    "build": "node -e \"require('fs').rmSync('./dist',{recursive:true,force:true})\" && node ./node_modules/typescript/bin/tsc",
+    "clean": "node -e \"require('fs').rmSync('./dist',{recursive:true,force:true}); ['server.js','handlers.js'].forEach(f => require('fs').rmSync('./homebridge-ui/' + f, {force: true}))\"",
+    "build:plugin": "node ./node_modules/typescript/bin/tsc",
+    "build:ui": "node ./node_modules/typescript/bin/tsc -p homebridge-ui/tsconfig.json",
+    "build": "npm run clean && npm run build:plugin && npm run build:ui",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
@@ -60,6 +66,7 @@
   ],
   "devDependencies": {
     "@eslint/js": "^9.17.0",
+    "@homebridge/plugin-ui-utils": "^2.2.4",
     "@types/node": "^22.10.0",
     "@vitest/coverage-v8": "^2.1.8",
     "eslint": "^9.17.0",

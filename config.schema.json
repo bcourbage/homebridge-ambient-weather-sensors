@@ -273,6 +273,12 @@
           ["Backyard Station", "Outdoor Temperature"]
         ]
       },
+      "_sensorMapV2": {
+        "title": "Enable sensor-map v2.0 shadow mode (advanced)",
+        "type": "boolean",
+        "default": false,
+        "description": "PREVIEW / TESTING ONLY. When on, the v2.0 sensor map runs in parallel to the v1.6.0 code path and logs divergences to the Homebridge log. Does NOT change accessory registration. The v2.0 UI preview page becomes accessible. Do not enable in production unless you're actively testing v2.0. Alternative: set environment variable SENSOR_MAP_V2=1."
+      },
       "stationFilter": {
         "title": "Include Only These Stations (allowlist)",
         "type": "array",
@@ -465,6 +471,19 @@
           "type": "string",
           "placeholder": "e.g. Backyard Station"
         }
+      ]
+    },
+    {
+      "type": "fieldset",
+      "expandable": true,
+      "expanded": false,
+      "title": "Advanced (v2.0 preview)",
+      "items": [
+        {
+          "type": "help",
+          "helpvalue": "<p><strong>Sensor-map v2.0 shadow mode.</strong> The v2.0 sensor-map layer runs in parallel to the current v1.6.0 code and logs any divergence to the Homebridge log. Nothing user-visible changes; existing accessories are unaffected. Enabling this also makes the v2.0 UI preview page accessible.</p><p>Do not enable in production unless you're actively testing v2.0. Bruno / solmssen — flip this on to help validate the migration.</p>"
+        },
+        "_sensorMapV2"
       ]
     }
   ]
