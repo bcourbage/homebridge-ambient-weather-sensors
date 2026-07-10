@@ -37,6 +37,7 @@ import {
 } from './extendedSensors/windAccessory.js';
 import { HumidityAccessory } from './humidityAccessory.js';
 import { RealtimeSource } from './realtimeSource.js';
+import { createShadowMode, type ShadowMode } from './sensorMap/shadowMode.js';
 import { friendlySensorName, sensorKeyByFriendlyName } from './sensorNames.js';
 import { PLATFORM_NAME, PLUGIN_NAME } from './settings.js';
 import { SolarRadiationAccessory } from './solarRadiationAccessory.js';
@@ -189,6 +190,13 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
   // opted into `dataSource: "realtime"` via config.
   private realtimeSource: RealtimeSource | undefined;
 
+  // Sensor-map v2.0 shadow-mode observer. Undefined unless the user
+  // opts in via env `SENSOR_MAP_V2=1` or hidden config `_sensorMapV2`.
+  // When present, runs the v2 pipeline in parallel and logs divergence
+  // vs. the v1.6.0 code path. Never writes to Homebridge state.
+  // See src/sensorMap/shadowMode.ts.
+  private readonly shadow: ShadowMode | undefined;
+
   constructor(
     public readonly log: Logger,
     public readonly config: PlatformConfig,
@@ -197,8 +205,22 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
 
     this.log.debug('Finished initializing platform:', this.config.platform);
 
+    // Instantiate the sensor-map shadow observer if the flag is set.
+    // Returns undefined when off, and platform.ts uses `?.` everywhere.
+    this.shadow = createShadowMode({
+      log: this.log,
+      config: this.config as unknown as Parameters<typeof createShadowMode>[0]['config'],
+      api: this.api,
+    });
+
     this.api.on('didFinishLaunching', () => {
       log.debug('Executed didFinishLaunching callback');
+      // Load persisted discovery state + log detected config mode.
+      // Non-blocking: swallow errors so a broken persistence store
+      // never prevents the plugin from starting.
+      this.shadow?.initialize().catch(e =>
+        this.log.warn(`[sensor-map v2 shadow] initialize failed: ${(e as Error).message}`),
+      );
       // run the method to discover / register your devices as accessories
       this.discoverDevices();
     });
@@ -212,6 +234,11 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
         clearInterval(this.pollTimer);
         this.pollTimer = undefined;
       }
+      // Force-flush any pending discovery writes before Homebridge
+      // finishes tearing down.
+      this.shadow?.shutdown().catch(e =>
+        this.log.warn(`[sensor-map v2 shadow] shutdown flush failed: ${(e as Error).message}`),
+      );
     });
   }
 
@@ -219,6 +246,10 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
     this.log.info('Loading accessory from cache:', accessory.displayName);
 
     this.accessories.push(accessory);
+    // Shadow-mode: log what the v2 sensor-map layer would infer for
+    // this cached accessory. No context mutation — v1.6.0 code still
+    // owns registration.
+    this.shadow?.onConfigureAccessory(accessory);
   }
 
   determineSensorType(sensor: string) {
@@ -482,6 +513,16 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
   parseDevices(json) {
     const Devices:DEVICE[] = [];
 
+    // Shadow-mode accumulators. Populated only when this.shadow is set.
+    // `shadowObserved` collects EVERY (station, dataPoint) pair AWN
+    // reported this tick — including battery fields and any keys
+    // determineSensorType skipped. `shadowV1Decisions` accumulates
+    // only the pairs the v1.6.0 code path actually registered. The
+    // diff of the two, plus the sensor-map's own decisions, is what
+    // ShadowMode.onParseTick compares.
+    const shadowObserved: Array<{ stationMac: string; stationName: string; dataPoint: string }> = [];
+    const shadowV1Decisions: Array<{ stationMac: string; dataPoint: string; type: string }> = [];
+
     // Build matcher sets once per call. Matching is intentionally
     // forgiving — case-insensitive and whitespace-trimmed — so that a
     // user typing "Indoor Temperature" or "indoor temperature " (with
@@ -577,6 +618,16 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
       stations.forEach( (obj) => {
         Object.entries(obj.lastData).forEach( (device) => {
           const sensorKey = device[0];
+          // Shadow-mode: record EVERY key AWN reported for this station,
+          // even the ones determineSensorType skips (battery fields,
+          // unknown extras). The tracker uses this to build discovery.json.
+          if (this.shadow) {
+            shadowObserved.push({
+              stationMac: obj.macAddress,
+              stationName: obj.info?.name ?? '',
+              dataPoint: sensorKey,
+            });
+          }
           const type = this.determineSensorType(sensorKey);
           if (type === 'NOT_SUPPORTED') {
             return;
@@ -677,7 +728,30 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
             value,
             batteryLow,
           });
+          // Shadow-mode: record the v1.6.0 code path's decision for
+          // this (station, dataPoint) pair. The shadow observer diffs
+          // it against the sensor-map layer's own decision.
+          if (this.shadow) {
+            shadowV1Decisions.push({
+              stationMac: obj.macAddress,
+              dataPoint: sensorKey,
+              type: String(type),
+            });
+          }
         });
+      });
+    }
+
+    // Shadow-mode dispatch. Fire-and-forget compared to the return
+    // path — the observer never blocks accessory registration.
+    if (this.shadow) {
+      this.shadow.onParseTick({
+        stations: stations.map(s => ({
+          macAddress: s.macAddress,
+          name: s.info?.name ?? '',
+        })),
+        observed: shadowObserved,
+        v1Decisions: shadowV1Decisions,
       });
     }
 

@@ -1,0 +1,292 @@
+import { promises as fs } from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
+import {
+  createShadowMode,
+  shadowModeEnabled,
+  ShadowMode,
+} from '../../../src/sensorMap/shadowMode';
+import { HAP_SERVICE_UUIDS } from '../../../src/sensorMap/bootstrap';
+import { loadDiscoveryStore } from '../../../src/sensorMap/persistence/discoveryStore';
+
+interface LogCapture {
+  info: string[];
+  warn: string[];
+  debug: string[];
+  error: string[];
+}
+
+function makeLog(): { log: import('../../../src/sensorMap/shadowMode').HomebridgeLogger; captured: LogCapture } {
+  const c: LogCapture = { info: [], warn: [], debug: [], error: [] };
+  return {
+    log: {
+      info: (m) => c.info.push(m),
+      warn: (m) => c.warn.push(m),
+      debug: (m) => c.debug.push(m),
+      error: (m) => c.error.push(m),
+    },
+    captured: c,
+  };
+}
+
+let tmpRoot: string;
+beforeEach(async () => { tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'awn-shadow-')); });
+afterEach(async () => { await fs.rm(tmpRoot, { recursive: true, force: true }); });
+
+describe('shadowModeEnabled', () => {
+  it('true when env SENSOR_MAP_V2=1', () => {
+    expect(shadowModeEnabled({ env: { SENSOR_MAP_V2: '1' } })).toBe(true);
+  });
+
+  it('true when env SENSOR_MAP_V2=true', () => {
+    expect(shadowModeEnabled({ env: { SENSOR_MAP_V2: 'true' } })).toBe(true);
+  });
+
+  it('true when config _sensorMapV2 is true', () => {
+    expect(shadowModeEnabled({ env: {}, config: { _sensorMapV2: true } })).toBe(true);
+  });
+
+  it('true when config _sensorMapV2 is "true" string (HB UI X shape)', () => {
+    expect(shadowModeEnabled({ env: {}, config: { _sensorMapV2: 'true' } })).toBe(true);
+  });
+
+  it('false when neither env nor config set', () => {
+    expect(shadowModeEnabled({ env: {}, config: {} })).toBe(false);
+  });
+
+  it('false on unrelated env var values', () => {
+    expect(shadowModeEnabled({ env: { SENSOR_MAP_V2: 'yes' } })).toBe(false);
+    expect(shadowModeEnabled({ env: { SENSOR_MAP_V2: '0' } })).toBe(false);
+  });
+});
+
+describe('createShadowMode factory', () => {
+  it('returns undefined when the flag is off', () => {
+    const { log } = makeLog();
+    const s = createShadowMode({
+      log,
+      config: {},
+      api: { user: { persistPath: () => tmpRoot } },
+    });
+    expect(s).toBeUndefined();
+  });
+
+  it('returns a ShadowMode instance when _sensorMapV2 is set', () => {
+    const { log, captured } = makeLog();
+    const s = createShadowMode({
+      log,
+      config: { _sensorMapV2: true },
+      api: { user: { persistPath: () => tmpRoot } },
+    });
+    expect(s).toBeInstanceOf(ShadowMode);
+    expect(captured.info.some(l => l.includes('[sensor-map v2 shadow] enabled'))).toBe(true);
+  });
+});
+
+describe('ShadowMode.initialize', () => {
+  it('logs the detected config mode', async () => {
+    const { log, captured } = makeLog();
+    const s = new ShadowMode({
+      log,
+      config: { configVersion: 2 as unknown as undefined, _sensorMapV2: true } as never,
+      api: { user: { persistPath: () => tmpRoot } },
+    });
+    await s.initialize();
+    expect(captured.info.some(l => l.includes('config mode: v2'))).toBe(true);
+  });
+
+  it('warns on safe mode with the banner', async () => {
+    const { log, captured } = makeLog();
+    const s = new ShadowMode({
+      log,
+      config: { configVersion: 99 as unknown as undefined, _sensorMapV2: true } as never,
+      api: { user: { persistPath: () => tmpRoot } },
+    });
+    await s.initialize();
+    expect(captured.warn.some(l => l.includes('SAFE MODE'))).toBe(true);
+    expect(captured.warn.some(l => l.includes('newer plugin version'))).toBe(true);
+  });
+
+  it('warns on ambiguous v2+legacy config', async () => {
+    const { log, captured } = makeLog();
+    const s = new ShadowMode({
+      log,
+      config: { configVersion: 2, temperatureSensors: true, _sensorMapV2: true } as never,
+      api: { user: { persistPath: () => tmpRoot } },
+    });
+    await s.initialize();
+    expect(captured.warn.some(l => l.includes('configVersion: 2 takes precedence'))).toBe(true);
+  });
+});
+
+describe('ShadowMode.onConfigureAccessory', () => {
+  it('logs an inferred kind/measurement for a legacy-type cached accessory', () => {
+    const { log, captured } = makeLog();
+    const s = new ShadowMode({
+      log,
+      config: { _sensorMapV2: true } as never,
+      api: { user: { persistPath: () => tmpRoot } },
+    });
+    s.onConfigureAccessory({
+      context: { device: { uniqueId: 'AA:BB:CC:DD:EE:01-tempf', type: 'Temperature' } },
+      services: [],
+    });
+    expect(captured.debug.some(l => l.includes('kind=temperature'))).toBe(true);
+  });
+
+  it('logs preserve-cached for an accessory with no legacy type + no services', () => {
+    const { log, captured } = makeLog();
+    const s = new ShadowMode({
+      log,
+      config: { _sensorMapV2: true } as never,
+      api: { user: { persistPath: () => tmpRoot } },
+    });
+    s.onConfigureAccessory({
+      context: { device: { uniqueId: 'AA:BB:CC:DD:EE:01-mystery' } },
+    });
+    expect(captured.debug.some(l => l.includes('preserve-cached'))).toBe(true);
+  });
+
+  it('dedupes repeated calls for the same uniqueId', () => {
+    const { log, captured } = makeLog();
+    const s = new ShadowMode({
+      log,
+      config: { _sensorMapV2: true } as never,
+      api: { user: { persistPath: () => tmpRoot } },
+    });
+    const accessory = {
+      context: { device: { uniqueId: 'AA:BB:CC:DD:EE:01-tempf', type: 'Temperature' } },
+      services: [],
+    };
+    s.onConfigureAccessory(accessory);
+    s.onConfigureAccessory(accessory);
+    expect(captured.debug.filter(l => l.includes('AA:BB:CC:DD:EE:01-tempf')).length).toBe(1);
+  });
+});
+
+describe('ShadowMode.onParseTick', () => {
+  it('feeds the discovery tracker with every observed key', async () => {
+    const { log } = makeLog();
+    const s = new ShadowMode({
+      log,
+      config: { _sensorMapV2: true, temperatureSensors: true } as never,
+      api: { user: { persistPath: () => tmpRoot } },
+    });
+    await s.initialize();
+    s.onParseTick({
+      stations: [{ macAddress: 'AA:BB:CC:DD:EE:01', name: 'Home' }],
+      observed: [
+        { stationMac: 'AA:BB:CC:DD:EE:01', stationName: 'Home', dataPoint: 'tempf' },
+        { stationMac: 'AA:BB:CC:DD:EE:01', stationName: 'Home', dataPoint: 'battout' },
+      ],
+      v1Decisions: [
+        { stationMac: 'AA:BB:CC:DD:EE:01', dataPoint: 'tempf', type: 'Temperature' },
+      ],
+    });
+    await s.shutdown();
+    const loaded = await loadDiscoveryStore(
+      path.join(tmpRoot, 'plugin-data', 'ambient-weather', 'discovery.json'),
+      { info: () => {}, warn: () => {}, debug: () => {} },
+    );
+    const keys = loaded.entries.map(e => e.dataPoint).sort();
+    expect(keys).toEqual(['battout', 'tempf']);
+  });
+
+  it('reports divergence when v2 would drop a v1-registered field', () => {
+    const { log, captured } = makeLog();
+    // temperatureSensors is FALSE — v2's compat layer disables temperature
+    // rows. But we simulate v1.6.0 registering tempf anyway (impossible
+    // in real life, but the divergence log is what we're testing).
+    const s = new ShadowMode({
+      log,
+      config: { _sensorMapV2: true } as never,
+      api: { user: { persistPath: () => tmpRoot } },
+    });
+    s.onParseTick({
+      stations: [{ macAddress: 'AA:BB:CC:DD:EE:01', name: 'Home' }],
+      observed: [{ stationMac: 'AA:BB:CC:DD:EE:01', stationName: 'Home', dataPoint: 'tempf' }],
+      v1Decisions: [{ stationMac: 'AA:BB:CC:DD:EE:01', dataPoint: 'tempf', type: 'Temperature' }],
+    });
+    expect(captured.info.some(l => l.includes('v2 would DROP'))).toBe(true);
+  });
+
+  it('reports divergence when v2 would register a v1-dropped field', () => {
+    const { log, captured } = makeLog();
+    // temperatureSensors true → v2 enables tempf. v1Decisions empty
+    // simulates v1.6.0 dropping the field.
+    const s = new ShadowMode({
+      log,
+      config: { _sensorMapV2: true, temperatureSensors: true } as never,
+      api: { user: { persistPath: () => tmpRoot } },
+    });
+    s.onParseTick({
+      stations: [{ macAddress: 'AA:BB:CC:DD:EE:01', name: 'Home' }],
+      observed: [{ stationMac: 'AA:BB:CC:DD:EE:01', stationName: 'Home', dataPoint: 'tempf' }],
+      v1Decisions: [],
+    });
+    expect(captured.info.some(l => l.includes('v2 would register'))).toBe(true);
+  });
+
+  it('no divergence when both paths agree', () => {
+    const { log, captured } = makeLog();
+    const s = new ShadowMode({
+      log,
+      config: { _sensorMapV2: true, temperatureSensors: true } as never,
+      api: { user: { persistPath: () => tmpRoot } },
+    });
+    s.onParseTick({
+      stations: [{ macAddress: 'AA:BB:CC:DD:EE:01', name: 'Home' }],
+      observed: [{ stationMac: 'AA:BB:CC:DD:EE:01', stationName: 'Home', dataPoint: 'tempf' }],
+      v1Decisions: [{ stationMac: 'AA:BB:CC:DD:EE:01', dataPoint: 'tempf', type: 'Temperature' }],
+    });
+    expect(captured.info.filter(l => l.includes('would'))).toHaveLength(0);
+  });
+
+  it('dedupes divergence logs — one line per unique key per boot', () => {
+    const { log, captured } = makeLog();
+    const s = new ShadowMode({
+      log,
+      config: { _sensorMapV2: true } as never,
+      api: { user: { persistPath: () => tmpRoot } },
+    });
+    const tick = {
+      stations: [{ macAddress: 'AA:BB:CC:DD:EE:01', name: 'Home' }],
+      observed: [{ stationMac: 'AA:BB:CC:DD:EE:01', stationName: 'Home', dataPoint: 'tempf' }],
+      v1Decisions: [{ stationMac: 'AA:BB:CC:DD:EE:01', dataPoint: 'tempf', type: 'Temperature' }],
+    };
+    s.onParseTick(tick);
+    s.onParseTick(tick);
+    expect(captured.info.filter(l => l.includes('v2 would DROP'))).toHaveLength(1);
+  });
+});
+
+describe('ShadowMode — end-to-end smoke', () => {
+  it('initialize → observe → shutdown persists discovery.json', async () => {
+    const { log } = makeLog();
+    const s = new ShadowMode({
+      log,
+      config: { _sensorMapV2: true, temperatureSensors: true } as never,
+      api: { user: { persistPath: () => tmpRoot } },
+    });
+    await s.initialize();
+    // Configure a cached temperature accessory.
+    s.onConfigureAccessory({
+      context: { device: { uniqueId: 'AA:BB:CC:DD:EE:01-tempf', type: 'Temperature' } },
+      services: [{ UUID: HAP_SERVICE_UUIDS.TEMPERATURE_SENSOR }],
+    });
+    // Simulate a poll tick.
+    s.onParseTick({
+      stations: [{ macAddress: 'AA:BB:CC:DD:EE:01', name: 'Home' }],
+      observed: [{ stationMac: 'AA:BB:CC:DD:EE:01', stationName: 'Home', dataPoint: 'tempf' }],
+      v1Decisions: [{ stationMac: 'AA:BB:CC:DD:EE:01', dataPoint: 'tempf', type: 'Temperature' }],
+    });
+    await s.shutdown();
+    // Verify persistence file was created.
+    const dp = path.join(tmpRoot, 'plugin-data', 'ambient-weather', 'discovery.json');
+    const stat = await fs.stat(dp);
+    expect(stat.isFile()).toBe(true);
+  });
+});

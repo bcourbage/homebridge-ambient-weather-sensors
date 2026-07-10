@@ -24,6 +24,34 @@
 </SPAN>
 
 
+## Sensor-map v2.0 preview (beta, opt-in)
+
+v2.0.0-beta.0 ships a new sensor-map architecture that unifies which
+sensors expose, how they're named, and which HomeKit types they use.
+**The new pipeline is OFF by default; users who don't opt in see zero
+behavior change from v1.6.0.**
+
+Opt in one of two ways:
+
+- Set environment variable `SENSOR_MAP_V2=1` on the Homebridge
+  process, OR
+- Enable `_sensorMapV2` under the "Advanced (v2.0 preview)"
+  fieldset in the plugin's config UI.
+
+Then restart Homebridge. The plugin log will begin emitting
+`[sensor-map v2 shadow]` lines. The v1.6.0 code path still owns every
+accessory-registration decision; the v2 layer runs in parallel and
+logs divergences to help catch pipeline drift before the flag flips
+to on-by-default (planned for v2.1.0). A read-only preview page is
+also accessible from the plugin's UI in Homebridge Config UI X.
+
+**Rollback:** unset the flag and restart. Shadow mode never writes
+to `config.json` or the accessory cache, so the flip-back is clean.
+Same for downgrading v2.0.0-beta.x → v1.6.0.
+
+See `docs/future/sensor-map.md` for the full design if you're
+curious about the shape of the v2 config.
+
 ## What's New in v1.5.0
 
 v1.5.0 is the largest release of this plugin. **Existing users see no behavior change unless they opt in to the new sensors**, except they automatically gain low-battery push notifications on every sensor they already have.
