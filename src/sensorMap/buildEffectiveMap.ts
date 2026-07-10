@@ -204,13 +204,14 @@ function mergeInto(prev: SensorMapOverride | undefined, next: SensorMapOverride)
   if (!prev) {
     return next;
   }
-  const out: Record<string, unknown> = { ...prev };
+  const out: SensorMapOverride = { ...prev, dataPoint: prev.dataPoint };
+  const bag = out as unknown as Record<string, unknown>;
   for (const [k, v] of Object.entries(next)) {
     if (v !== undefined) {
-      out[k] = v;
+      bag[k] = v;
     }
   }
-  return out as SensorMapOverride;
+  return out;
 }
 
 /** Station-specific fields override global fields for the same key. */

@@ -95,7 +95,7 @@ export function buildEffectiveSensorMap(input) {
     }
     // ---- 4. Resolve each pair to an EffectiveSensorRow.
     const rows = [];
-    for (const { mac, dataPoint, stationName: _stationName } of pairs.values()) {
+    for (const { mac, dataPoint } of pairs.values()) {
         const key = `${mac}|${dataPoint}`;
         // Skip forgotten unrecognized fields.
         if (forgotten.has(key) && !defaultRowFor(dataPoint)) {
@@ -143,25 +143,29 @@ function validateOverrides(overrides, errors) {
  * (dataPoint, stationMac?) key. §3.3.2.
  */
 function mergeInto(prev, next) {
-    if (!prev)
+    if (!prev) {
         return next;
-    const out = { ...prev };
+    }
+    const out = { ...prev, dataPoint: prev.dataPoint };
+    const bag = out;
     for (const [k, v] of Object.entries(next)) {
         if (v !== undefined) {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            out[k] = v;
+            bag[k] = v;
         }
     }
     return out;
 }
 /** Station-specific fields override global fields for the same key. */
 function mergeOverrides(global, station) {
-    if (!global && !station)
+    if (!global && !station) {
         return undefined;
-    if (!global)
+    }
+    if (!global) {
         return station;
-    if (!station)
+    }
+    if (!station) {
         return global;
+    }
     return mergeInto(global, station);
 }
 function resolveRow(inp) {
