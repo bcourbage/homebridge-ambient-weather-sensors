@@ -36,7 +36,15 @@
   </style>
 </head>
 <body>
-  <h1>Ambient Weather Sensors</h1>
+  <!--
+    HB UI X renders its schema-based config form at the top of this
+    page automatically when homebridge.showSchemaForm() is called
+    (see the script block below). The form appears BEFORE the h1
+    below — Homebridge injects it into the top of <body>. Our
+    preview panels come after.
+  -->
+
+  <h1 style="margin-top:24px;">Sensor-map v2.0 preview</h1>
   <p class="sub" id="version">v2 preview</p>
 
   <div id="statusBanner" class="banner info">Loading status…</div>
@@ -188,6 +196,13 @@
     }
 
     document.getElementById('refresh').addEventListener('click', refresh);
+    // Render HB UI X's schema-based config form ABOVE our preview
+    // panels. Without this, enabling `customUi: true` in the schema
+    // would hide the config form entirely — users would have no way
+    // to edit thresholds, excludes, etc. through the UI. Save flows
+    // through HB UI X, not through our server bridge, so the
+    // read-only Path B guarantee is preserved.
+    homebridge.showSchemaForm();
     homebridge.showSpinner();
     refresh().finally(() => homebridge.hideSpinner());
   </script>
