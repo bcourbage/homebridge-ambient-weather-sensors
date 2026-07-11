@@ -39,7 +39,7 @@ import type { Logger } from '../dist/sensorMap/persistence/atomicWrite.js';
  * static string keeps the bridge from taking a runtime dependency
  * on package.json's on-disk path).
  */
-const PLUGIN_VERSION: string = '2.0.0-beta.4';
+const PLUGIN_VERSION: string = '2.0.0-beta.5';
 
 // stderr is captured in the Homebridge UI's log tab, so this is
 // where our bridge logs land. The plugin's `this.log.*` isn't
