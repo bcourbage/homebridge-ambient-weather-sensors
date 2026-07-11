@@ -9,6 +9,22 @@ entries short and user-facing.
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/
 
+## [2.0.0-beta.4] — 2026-07-10
+
+### Fixed
+
+- **Custom UI page spun forever with no server-side response.** The
+  `homebridge-ui/server.js` bridge imports
+  `@homebridge/plugin-ui-utils`, which we shipped as a
+  **devDependency** through beta.3. End-user installs run
+  `npm install --production`, so the module wasn't present in the
+  tarball's runtime tree — server.js threw on load, HB UI X's
+  request channel never responded, and the UI froze on the loading
+  spinner. Verified by inspecting
+  `/opt/homebrew/lib/node_modules/@bcourbage/homebridge-ambient-weather-sensors/node_modules/`
+  on Demeter (no `@homebridge/` subdirectory). Fix: moved
+  `@homebridge/plugin-ui-utils` to `dependencies`.
+
 ## [2.0.0-beta.3] — 2026-07-10
 
 ### Fixed
