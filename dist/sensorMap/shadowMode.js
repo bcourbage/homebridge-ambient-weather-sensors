@@ -63,8 +63,10 @@ export class ShadowMode {
         this.modeLogged = false;
         this.log = opts.log;
         this.config = opts.config;
-        this.persistDir = path.join(opts.api.user.persistPath(), 'plugin-data', 'ambient-weather');
+        const storageRoot = opts.api.user.storagePath();
+        this.persistDir = path.join(storageRoot, 'plugin-data', 'ambient-weather');
         this.discoveryPath = path.join(this.persistDir, DISCOVERY_FILE);
+        this.legacyPersistCandidate = path.join(storageRoot, 'persist', 'plugin-data', 'ambient-weather');
     }
     /**
      * Called once from platform.ts's didFinishLaunching handler. Loads
@@ -73,6 +75,12 @@ export class ShadowMode {
      */
     async initialize() {
         const persistLog = persistLogger(this.log);
+        // v2.0.0-beta.1 wrote plugin data under <storagePath>/persist/plugin-data/
+        // which crashed HAP-NodeJS's node-persist scan with EISDIR. Detect
+        // and warn if that leftover directory is still present — the user
+        // must remove it manually because we deliberately don't touch
+        // HAP's storage root.
+        await this.warnOnStaleBetaDir(persistLog);
         await cleanupStaleTempFiles(this.persistDir, persistLog);
         const initial = await loadDiscoveryStore(this.discoveryPath, persistLog);
         this.tracker = new DiscoveryTracker({
@@ -199,6 +207,31 @@ export class ShadowMode {
     async shutdown() {
         if (this.tracker) {
             await this.tracker.flush(true);
+        }
+    }
+    /**
+     * Detect the beta.1 EISDIR-crash directory. If we find it, log a
+     * loud warning telling the user to remove it manually. We don't
+     * auto-delete because:
+     *   - The path is under HAP's persist tree; automated deletes there
+     *     scare people (rightly).
+     *   - The data is auto-regenerating (just observed field records).
+     *   - A one-line rm command is easier to review than opaque code.
+     */
+    async warnOnStaleBetaDir(log) {
+        if (!this.legacyPersistCandidate) {
+            return;
+        }
+        try {
+            const { promises: fs } = await import('fs');
+            await fs.access(this.legacyPersistCandidate);
+            log.warn(`Found orphan directory from v2.0.0-beta.0/beta.1 at `
+                + `${this.legacyPersistCandidate}. This path is inside HAP-NodeJS's `
+                + `persist scan and will crash HAP with EISDIR. Delete it manually: `
+                + `rm -rf "${this.legacyPersistCandidate}"`);
+        }
+        catch {
+            // Doesn't exist. Fresh install or already cleaned up. All good.
         }
     }
 }

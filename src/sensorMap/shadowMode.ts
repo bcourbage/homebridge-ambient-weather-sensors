@@ -55,9 +55,16 @@ export interface HomebridgeLogger {
 /**
  * Duck-typed subset of Homebridge's API — only what we need. Real
  * Homebridge API conforms.
+ *
+ * `storagePath()` returns Homebridge's storage root (e.g.
+ * `~/.homebridge/`). We deliberately do NOT use `persistPath()`
+ * (which returns `<storagePath>/persist/`) because HAP-NodeJS scans
+ * that directory via node-persist's readFileSync-per-entry loop —
+ * dropping a subdirectory inside it crashes HAP with EISDIR on the
+ * next child-bridge start. Learned the hard way in v2.0.0-beta.1.
  */
 export interface HomebridgeApi {
-  user: { persistPath(): string };
+  user: { storagePath(): string };
 }
 
 export interface ShadowModeOpts {
@@ -99,6 +106,13 @@ export class ShadowMode {
   private readonly log: HomebridgeLogger;
   private readonly config: ConfigInputShape & LegacyConfig;
   private readonly persistDir: string;
+  /**
+   * Where v2.0.0-beta.0/beta.1 (accidentally) wrote plugin data.
+   * Inside HAP's persist scan — see EISDIR crash notes on HomebridgeApi
+   * above. Populated only if we can derive it; used by
+   * warnOnStaleBetaDir() to nudge users to clean up.
+   */
+  private readonly legacyPersistCandidate: string | undefined;
   private readonly discoveryPath: string;
   private tracker: DiscoveryTracker | undefined;
 
@@ -112,8 +126,10 @@ export class ShadowMode {
   constructor(opts: ShadowModeOpts) {
     this.log = opts.log;
     this.config = opts.config;
-    this.persistDir = path.join(opts.api.user.persistPath(), 'plugin-data', 'ambient-weather');
+    const storageRoot = opts.api.user.storagePath();
+    this.persistDir = path.join(storageRoot, 'plugin-data', 'ambient-weather');
     this.discoveryPath = path.join(this.persistDir, DISCOVERY_FILE);
+    this.legacyPersistCandidate = path.join(storageRoot, 'persist', 'plugin-data', 'ambient-weather');
   }
 
   /**
@@ -123,6 +139,12 @@ export class ShadowMode {
    */
   async initialize(): Promise<void> {
     const persistLog = persistLogger(this.log);
+    // v2.0.0-beta.1 wrote plugin data under <storagePath>/persist/plugin-data/
+    // which crashed HAP-NodeJS's node-persist scan with EISDIR. Detect
+    // and warn if that leftover directory is still present — the user
+    // must remove it manually because we deliberately don't touch
+    // HAP's storage root.
+    await this.warnOnStaleBetaDir(persistLog);
     await cleanupStaleTempFiles(this.persistDir, persistLog);
     const initial = await loadDiscoveryStore(this.discoveryPath, persistLog);
     this.tracker = new DiscoveryTracker({
@@ -274,6 +296,33 @@ export class ShadowMode {
   async shutdown(): Promise<void> {
     if (this.tracker) {
       await this.tracker.flush(true);
+    }
+  }
+
+  /**
+   * Detect the beta.1 EISDIR-crash directory. If we find it, log a
+   * loud warning telling the user to remove it manually. We don't
+   * auto-delete because:
+   *   - The path is under HAP's persist tree; automated deletes there
+   *     scare people (rightly).
+   *   - The data is auto-regenerating (just observed field records).
+   *   - A one-line rm command is easier to review than opaque code.
+   */
+  private async warnOnStaleBetaDir(log: PersistLogger): Promise<void> {
+    if (!this.legacyPersistCandidate) {
+      return;
+    }
+    try {
+      const { promises: fs } = await import('fs');
+      await fs.access(this.legacyPersistCandidate);
+      log.warn(
+        `Found orphan directory from v2.0.0-beta.0/beta.1 at `
+        + `${this.legacyPersistCandidate}. This path is inside HAP-NodeJS's `
+        + `persist scan and will crash HAP with EISDIR. Delete it manually: `
+        + `rm -rf "${this.legacyPersistCandidate}"`,
+      );
+    } catch {
+      // Doesn't exist. Fresh install or already cleaned up. All good.
     }
   }
 }

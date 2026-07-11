@@ -9,6 +9,35 @@ entries short and user-facing.
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/
 
+## [2.0.0-beta.2] — 2026-07-10
+
+### Fixed
+
+- **Critical: EISDIR child-bridge crash on startup.** In beta.0 and
+  beta.1 the shadow-mode observer wrote persistence files under
+  `<homebridge-storage>/persist/plugin-data/ambient-weather/`. That
+  path is inside HAP-NodeJS's own persistence tree, which
+  node-persist scans with `readFileSync` per entry. Our subdirectory
+  crashed HAP with `EISDIR` on every child-bridge restart — even
+  after the shadow-mode flag was turned off, because the leftover
+  directory persisted on disk. Fix: write plugin data under
+  `<homebridge-storage>/plugin-data/ambient-weather/` instead, which
+  is outside HAP's scan area. Regression test added.
+- Startup detects any beta.0/beta.1 leftover directory and warns
+  with the `rm -rf` command needed to clean up. We deliberately
+  don't auto-delete: the path is under HAP's storage tree and
+  automated deletes there scare people (rightly).
+
+### Migration from beta.0 / beta.1
+
+If you ran either previous beta with the shadow flag on:
+
+    rm -rf ~/.homebridge/persist/plugin-data
+
+After removing that directory and restarting Homebridge, the crash
+loop stops and beta.2's shadow mode (with the flag on) writes to
+the correct location.
+
 ## [2.0.0-beta.1] — 2026-07-10
 
 ### Changed
