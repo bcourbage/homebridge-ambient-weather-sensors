@@ -9,6 +9,13 @@ entries short and user-facing.
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/
 
+## [2.0.0-beta.1] — 2026-07-10
+
+### Changed
+
+- Remove personal names from the "Advanced (v2.0 preview)" fieldset
+  help text in the config UI. Cosmetic only; no functional change.
+
 ## [2.0.0-beta.0] — 2026-07-10
 
 First beta of the sensor-map v2.0 architecture. **Ships with the new
