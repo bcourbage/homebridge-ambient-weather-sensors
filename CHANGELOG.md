@@ -9,6 +9,26 @@ entries short and user-facing.
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/
 
+## [2.0.0-beta.6] — 2026-07-10
+
+### Fixed
+
+- **Modal usable even when the observation panels can't load.** In
+  beta.5 the custom UI's initial `homebridge.showSpinner()` call
+  gated the entire modal on `homebridge.request('/status')`
+  completing. On Bruno's Demeter setup the round-trip crashed inside
+  HB UI X's frontend with `TypeError: null is not an object
+  (evaluating 'this.iframe.contentWindow.postMessage')` — HB UI X
+  received the server-side reply but couldn't relay it to the iframe.
+  The request promise never resolved, `hideSpinner()` never ran, the
+  modal stayed greyed out behind the spinner, and users couldn't
+  interact with the schema form. Fix: don't block on `refresh()`.
+  Fire it as background work. The schema form is usable immediately;
+  the observation panels populate if the request path is healthy or
+  stay on placeholder text otherwise.
+- Underlying HB UI X iframe delivery issue still needs root-cause
+  work — filed as follow-up on task #69 (UI polish).
+
 ## [2.0.0-beta.5] — 2026-07-10
 
 ### Fixed

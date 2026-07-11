@@ -75,8 +75,17 @@
     // homebridge is injected into window by Homebridge UI X.
     /* global homebridge */
 
+    // eslint-disable-next-line no-console
+    console.log('[awn-ui] script loaded, homebridge=' + (typeof homebridge));
+
     async function refresh() {
-      const config = homebridge.getPluginConfig()[0] || {};
+      let config = {};
+      try {
+        const cfgList = await homebridge.getPluginConfig();
+        config = Array.isArray(cfgList) && cfgList[0] ? cfgList[0] : {};
+      } catch (e) {
+        console.error('getPluginConfig failed', e);
+      }
       let status;
       try {
         status = await homebridge.request('/status', { config });
@@ -195,7 +204,12 @@
         .replace(/"/g, '&quot;');
     }
 
-    document.getElementById('refresh').addEventListener('click', refresh);
+    document.getElementById('refresh').addEventListener('click', () => {
+      refresh().catch((e) => {
+        // eslint-disable-next-line no-console
+        console.warn('[awn-ui] refresh failed', e);
+      });
+    });
 
     // Enable HB UI X's built-in Save button. In custom UI mode the
     // Save button is disabled by default; without this call it
@@ -212,13 +226,19 @@
     // read-only Path B guarantee is preserved.
     homebridge.showSchemaForm();
 
-    // Refresh our observation panels whenever the user saves a
-    // config change. Keeps the status pill / config-mode row in
-    // sync with what the schema form just wrote to config.json.
-    homebridge.addEventListener('configChanged', () => refresh().catch(() => { /* logged internally */ }));
-
-    homebridge.showSpinner();
-    refresh().finally(() => homebridge.hideSpinner());
+    // Kick off the observation-panel refresh in the background.
+    // Do NOT block the modal on it — during v2.0.0-beta.5 users hit
+    // a Safari + HB UI X interaction where the server bridge
+    // response never reached the iframe (postMessage to a null
+    // contentWindow inside HB UI X's frontend). Blocking the
+    // modal on that request made the entire schema form unusable.
+    // Now the schema form is usable immediately; the observation
+    // panels populate if the request succeeds, or stay on their
+    // placeholder text otherwise.
+    refresh().catch((e) => {
+      // eslint-disable-next-line no-console
+      console.warn('[awn-ui] initial refresh failed', e);
+    });
   </script>
 </body>
 </html>
