@@ -9,6 +9,30 @@ entries short and user-facing.
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/
 
+## [2.0.0-beta.3] — 2026-07-10
+
+### Fixed
+
+- **Custom UI preview page was invisible in Homebridge Config UI X.**
+  beta.0-beta.2 shipped a `homebridge-ui/` directory but did not set
+  `"customUi": true` at the top of `config.schema.json`, which is
+  the flag HB UI X checks to decide whether to open the custom UI
+  or the schema-based config form. Fix: added the flag.
+- `homebridge-ui/public/index.html` now calls
+  `homebridge.showSchemaForm()` on load so the schema-based config
+  form (thresholds, excludes, etc.) renders at the top of the
+  custom UI page. Users keep their normal config-editing surface;
+  the observation panels appear below. Save writes flow through HB
+  UI X's own APIs, preserving the Path B "no writes from our code"
+  guarantee.
+
+### How to see the preview page
+
+Update to beta.3, restart Homebridge, and click **Plugin Config** on
+the Ambient Weather card in HB UI X. The schema form renders at the
+top; the new v2 observation panels (status, discovered stations,
+notices) appear below.
+
 ## [2.0.0-beta.2] — 2026-07-10
 
 ### Fixed
