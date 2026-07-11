@@ -37,10 +37,17 @@ export interface HomebridgeLogger {
 /**
  * Duck-typed subset of Homebridge's API — only what we need. Real
  * Homebridge API conforms.
+ *
+ * `storagePath()` returns Homebridge's storage root (e.g.
+ * `~/.homebridge/`). We deliberately do NOT use `persistPath()`
+ * (which returns `<storagePath>/persist/`) because HAP-NodeJS scans
+ * that directory via node-persist's readFileSync-per-entry loop —
+ * dropping a subdirectory inside it crashes HAP with EISDIR on the
+ * next child-bridge start. Learned the hard way in v2.0.0-beta.1.
  */
 export interface HomebridgeApi {
     user: {
-        persistPath(): string;
+        storagePath(): string;
     };
 }
 export interface ShadowModeOpts {
@@ -61,6 +68,13 @@ export declare class ShadowMode {
     private readonly log;
     private readonly config;
     private readonly persistDir;
+    /**
+     * Where v2.0.0-beta.0/beta.1 (accidentally) wrote plugin data.
+     * Inside HAP's persist scan — see EISDIR crash notes on HomebridgeApi
+     * above. Populated only if we can derive it; used by
+     * warnOnStaleBetaDir() to nudge users to clean up.
+     */
+    private readonly legacyPersistCandidate;
     private readonly discoveryPath;
     private tracker;
     private readonly loggedCacheInference;
@@ -114,6 +128,16 @@ export declare class ShadowMode {
      * discovery tracker so unwritten lastSeen updates aren't lost.
      */
     shutdown(): Promise<void>;
+    /**
+     * Detect the beta.1 EISDIR-crash directory. If we find it, log a
+     * loud warning telling the user to remove it manually. We don't
+     * auto-delete because:
+     *   - The path is under HAP's persist tree; automated deletes there
+     *     scare people (rightly).
+     *   - The data is auto-regenerating (just observed field records).
+     *   - A one-line rm command is easier to review than opaque code.
+     */
+    private warnOnStaleBetaDir;
 }
 /**
  * Factory. Returns undefined when the flag is off — platform.ts uses

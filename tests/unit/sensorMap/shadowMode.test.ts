@@ -69,7 +69,7 @@ describe('createShadowMode factory', () => {
     const s = createShadowMode({
       log,
       config: {},
-      api: { user: { persistPath: () => tmpRoot } },
+      api: { user: { storagePath: () => tmpRoot } },
     });
     expect(s).toBeUndefined();
   });
@@ -79,7 +79,7 @@ describe('createShadowMode factory', () => {
     const s = createShadowMode({
       log,
       config: { _sensorMapV2: true },
-      api: { user: { persistPath: () => tmpRoot } },
+      api: { user: { storagePath: () => tmpRoot } },
     });
     expect(s).toBeInstanceOf(ShadowMode);
     expect(captured.info.some(l => l.includes('[sensor-map v2 shadow] enabled'))).toBe(true);
@@ -92,7 +92,7 @@ describe('ShadowMode.initialize', () => {
     const s = new ShadowMode({
       log,
       config: { configVersion: 2 as unknown as undefined, _sensorMapV2: true } as never,
-      api: { user: { persistPath: () => tmpRoot } },
+      api: { user: { storagePath: () => tmpRoot } },
     });
     await s.initialize();
     expect(captured.info.some(l => l.includes('config mode: v2'))).toBe(true);
@@ -103,7 +103,7 @@ describe('ShadowMode.initialize', () => {
     const s = new ShadowMode({
       log,
       config: { configVersion: 99 as unknown as undefined, _sensorMapV2: true } as never,
-      api: { user: { persistPath: () => tmpRoot } },
+      api: { user: { storagePath: () => tmpRoot } },
     });
     await s.initialize();
     expect(captured.warn.some(l => l.includes('SAFE MODE'))).toBe(true);
@@ -115,7 +115,7 @@ describe('ShadowMode.initialize', () => {
     const s = new ShadowMode({
       log,
       config: { configVersion: 2, temperatureSensors: true, _sensorMapV2: true } as never,
-      api: { user: { persistPath: () => tmpRoot } },
+      api: { user: { storagePath: () => tmpRoot } },
     });
     await s.initialize();
     expect(captured.warn.some(l => l.includes('configVersion: 2 takes precedence'))).toBe(true);
@@ -128,7 +128,7 @@ describe('ShadowMode.onConfigureAccessory', () => {
     const s = new ShadowMode({
       log,
       config: { _sensorMapV2: true } as never,
-      api: { user: { persistPath: () => tmpRoot } },
+      api: { user: { storagePath: () => tmpRoot } },
     });
     s.onConfigureAccessory({
       context: { device: { uniqueId: 'AA:BB:CC:DD:EE:01-tempf', type: 'Temperature' } },
@@ -142,7 +142,7 @@ describe('ShadowMode.onConfigureAccessory', () => {
     const s = new ShadowMode({
       log,
       config: { _sensorMapV2: true } as never,
-      api: { user: { persistPath: () => tmpRoot } },
+      api: { user: { storagePath: () => tmpRoot } },
     });
     s.onConfigureAccessory({
       context: { device: { uniqueId: 'AA:BB:CC:DD:EE:01-mystery' } },
@@ -155,7 +155,7 @@ describe('ShadowMode.onConfigureAccessory', () => {
     const s = new ShadowMode({
       log,
       config: { _sensorMapV2: true } as never,
-      api: { user: { persistPath: () => tmpRoot } },
+      api: { user: { storagePath: () => tmpRoot } },
     });
     const accessory = {
       context: { device: { uniqueId: 'AA:BB:CC:DD:EE:01-tempf', type: 'Temperature' } },
@@ -173,7 +173,7 @@ describe('ShadowMode.onParseTick', () => {
     const s = new ShadowMode({
       log,
       config: { _sensorMapV2: true, temperatureSensors: true } as never,
-      api: { user: { persistPath: () => tmpRoot } },
+      api: { user: { storagePath: () => tmpRoot } },
     });
     await s.initialize();
     s.onParseTick({
@@ -203,7 +203,7 @@ describe('ShadowMode.onParseTick', () => {
     const s = new ShadowMode({
       log,
       config: { _sensorMapV2: true } as never,
-      api: { user: { persistPath: () => tmpRoot } },
+      api: { user: { storagePath: () => tmpRoot } },
     });
     s.onParseTick({
       stations: [{ macAddress: 'AA:BB:CC:DD:EE:01', name: 'Home' }],
@@ -220,7 +220,7 @@ describe('ShadowMode.onParseTick', () => {
     const s = new ShadowMode({
       log,
       config: { _sensorMapV2: true, temperatureSensors: true } as never,
-      api: { user: { persistPath: () => tmpRoot } },
+      api: { user: { storagePath: () => tmpRoot } },
     });
     s.onParseTick({
       stations: [{ macAddress: 'AA:BB:CC:DD:EE:01', name: 'Home' }],
@@ -235,7 +235,7 @@ describe('ShadowMode.onParseTick', () => {
     const s = new ShadowMode({
       log,
       config: { _sensorMapV2: true, temperatureSensors: true } as never,
-      api: { user: { persistPath: () => tmpRoot } },
+      api: { user: { storagePath: () => tmpRoot } },
     });
     s.onParseTick({
       stations: [{ macAddress: 'AA:BB:CC:DD:EE:01', name: 'Home' }],
@@ -250,7 +250,7 @@ describe('ShadowMode.onParseTick', () => {
     const s = new ShadowMode({
       log,
       config: { _sensorMapV2: true } as never,
-      api: { user: { persistPath: () => tmpRoot } },
+      api: { user: { storagePath: () => tmpRoot } },
     });
     const tick = {
       stations: [{ macAddress: 'AA:BB:CC:DD:EE:01', name: 'Home' }],
@@ -269,7 +269,7 @@ describe('ShadowMode — end-to-end smoke', () => {
     const s = new ShadowMode({
       log,
       config: { _sensorMapV2: true, temperatureSensors: true } as never,
-      api: { user: { persistPath: () => tmpRoot } },
+      api: { user: { storagePath: () => tmpRoot } },
     });
     await s.initialize();
     // Configure a cached temperature accessory.
@@ -288,5 +288,84 @@ describe('ShadowMode — end-to-end smoke', () => {
     const dp = path.join(tmpRoot, 'plugin-data', 'ambient-weather', 'discovery.json');
     const stat = await fs.stat(dp);
     expect(stat.isFile()).toBe(true);
+  });
+});
+
+/**
+ * Regression guard for the v2.0.0-beta.1 EISDIR crash. HAP-NodeJS
+ * scans <storagePath>/persist/ via node-persist, which does
+ * readFileSync on every entry — dropping a subdirectory inside that
+ * path crashes HAP on the next child-bridge start.
+ *
+ * The ShadowMode.HomebridgeApi type deliberately declares
+ * `storagePath()` (not `persistPath()`) so a future refactor can't
+ * silently regress this. This test locks in the API surface AND
+ * verifies the derived plugin-data path is NOT under a `persist`
+ * subdirectory.
+ */
+describe('ShadowMode — HAP storage collision regression (beta.1 EISDIR)', () => {
+  it('accepts storagePath() as the api surface (not persistPath)', () => {
+    // Compile-time assertion: HomebridgeApi has storagePath, not persistPath.
+    // If this test file compiles, the type is correct.
+    const api: import('../../../src/sensorMap/shadowMode').HomebridgeApi = {
+      user: { storagePath: () => tmpRoot },
+    };
+    // Sanity: constructor accepts it.
+    const { log } = makeLog();
+    expect(() => new ShadowMode({ log, config: { _sensorMapV2: true } as never, api })).not.toThrow();
+  });
+
+  it('warns on startup if the beta.0/beta.1 orphan directory still exists', async () => {
+    // Simulate a leftover from the buggy earlier beta.
+    const leftover = path.join(tmpRoot, 'persist', 'plugin-data', 'ambient-weather');
+    await fs.mkdir(leftover, { recursive: true });
+    await fs.writeFile(path.join(leftover, 'discovery.json'), '{"schemaVersion":1,"entries":[]}', 'utf8');
+
+    const { log, captured } = makeLog();
+    const s = new ShadowMode({
+      log,
+      config: { _sensorMapV2: true } as never,
+      api: { user: { storagePath: () => tmpRoot } },
+    });
+    await s.initialize();
+
+    expect(captured.warn.some(l => l.includes('orphan directory from v2.0.0-beta'))).toBe(true);
+    expect(captured.warn.some(l => l.includes(leftover))).toBe(true);
+    expect(captured.warn.some(l => l.includes('rm -rf'))).toBe(true);
+  });
+
+  it('is silent about the orphan directory when it does not exist', async () => {
+    const { log, captured } = makeLog();
+    const s = new ShadowMode({
+      log,
+      config: { _sensorMapV2: true } as never,
+      api: { user: { storagePath: () => tmpRoot } },
+    });
+    await s.initialize();
+    expect(captured.warn.filter(l => l.includes('orphan directory'))).toHaveLength(0);
+  });
+
+  it('writes plugin data under <storagePath>/plugin-data/, NOT under <storagePath>/persist/', async () => {
+    const { log } = makeLog();
+    const s = new ShadowMode({
+      log,
+      config: { _sensorMapV2: true, temperatureSensors: true } as never,
+      api: { user: { storagePath: () => tmpRoot } },
+    });
+    await s.initialize();
+    s.onParseTick({
+      stations: [{ macAddress: 'AA:BB:CC:DD:EE:01', name: 'Home' }],
+      observed: [{ stationMac: 'AA:BB:CC:DD:EE:01', stationName: 'Home', dataPoint: 'tempf' }],
+      v1Decisions: [],
+    });
+    await s.shutdown();
+
+    // Positive: plugin-data/ exists under storage root.
+    const good = path.join(tmpRoot, 'plugin-data', 'ambient-weather', 'discovery.json');
+    await expect(fs.stat(good)).resolves.toBeTruthy();
+
+    // Negative: NOTHING under persist/. HAP owns that path.
+    const bad = path.join(tmpRoot, 'persist');
+    await expect(fs.access(bad)).rejects.toBeTruthy();
   });
 });
