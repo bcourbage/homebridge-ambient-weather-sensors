@@ -196,6 +196,14 @@
     }
 
     document.getElementById('refresh').addEventListener('click', refresh);
+
+    // Enable HB UI X's built-in Save button. In custom UI mode the
+    // Save button is disabled by default; without this call it
+    // spins forever when the user clicks Save because HB UI X
+    // waits for a signal that never comes. Every custom UI plugin
+    // that embeds the schema form calls this before showSchemaForm.
+    homebridge.enableSaveButton();
+
     // Render HB UI X's schema-based config form ABOVE our preview
     // panels. Without this, enabling `customUi: true` in the schema
     // would hide the config form entirely — users would have no way
@@ -203,6 +211,12 @@
     // through HB UI X, not through our server bridge, so the
     // read-only Path B guarantee is preserved.
     homebridge.showSchemaForm();
+
+    // Refresh our observation panels whenever the user saves a
+    // config change. Keeps the status pill / config-mode row in
+    // sync with what the schema form just wrote to config.json.
+    homebridge.addEventListener('configChanged', () => refresh().catch(() => { /* logged internally */ }));
+
     homebridge.showSpinner();
     refresh().finally(() => homebridge.hideSpinner());
   </script>

@@ -9,6 +9,22 @@ entries short and user-facing.
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/
 
+## [2.0.0-beta.5] — 2026-07-10
+
+### Fixed
+
+- **Save button spun forever when toggling the shadow-mode flag.**
+  In custom UI mode HB UI X disables its built-in Save button by
+  default; the custom UI has to call `homebridge.enableSaveButton()`
+  to opt in. Without that call, clicking Save on the schema form
+  posted an `action: button.save.enabled` message that was never
+  serviced — HB UI X spun on the modal indefinitely. Confirmed the
+  pattern by inspecting homebridge-smartthings-oauth's custom UI on
+  Demeter. Fix: call `enableSaveButton()` before `showSchemaForm()`.
+- Custom UI now also listens for HB UI X's `configChanged` event
+  and re-fetches the observation panels so the sensor-map status
+  pill stays in sync with the flag the user just toggled.
+
 ## [2.0.0-beta.4] — 2026-07-10
 
 ### Fixed
