@@ -9,6 +9,10 @@ entries short and user-facing.
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/
 
+## [1.6.1] — 2026-07-11
+
+Docs-only release. No functional change. Retroactively adds a "What's New in v1.6.0" section to the README that was missing when v1.6.0 shipped on 2026-06-20. Users on v1.6.0 have no reason to update unless they want the freshest npm-page README.
+
 ## [1.6.0] — 2026-06-20
 
 ### Changed

@@ -24,6 +24,15 @@
 </SPAN>
 
 
+## What's New in v1.6.0
+
+Small, targeted release focused on iOS device battery life for users of the Extended Sensors embed display mode.
+
+- **Embed mode now forces the polling data source.** If both `extendedDisplayMode: "embed"` and `dataSource: "realtime"` are set, the plugin coerces the data source to `polling` at startup with a one-line warn log. The combination was observed to drain iOS phone battery 5-7× faster than normal idle because each tile-name update generates an HAP notification forwarded to every paired iOS device. Polling's 2-minute cadence keeps notification volume to a level that isn't noticeable.
+- **New `embedNameUpdateMinIntervalMinutes` config field** caps the per-accessory name-update rate in embed mode. Default 2 minutes matches the polling cadence — effectively a no-op for new installs. Can be increased (e.g. 5 or 10 minutes) for users who want to further reduce HAP notification volume, at the cost of less-frequent tile-name updates. Has no effect in static mode.
+
+Existing users of static display mode (the default) see no behavior change.
+
 ## What's New in v1.5.0
 
 v1.5.0 is the largest release of this plugin. **Existing users see no behavior change unless they opt in to the new sensors**, except they automatically gain low-battery push notifications on every sensor they already have.
