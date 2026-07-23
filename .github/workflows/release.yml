@@ -11,10 +11,15 @@ name: Release to npm
 # `npm publish --access public --provenance`. The npm tarball ships
 # pre-built dist/, so the runner has to install dev deps + build first.
 #
-# Requires a repo secret named NPM_TOKEN — a granular access token on
-# npmjs.com with publish permission on the @bcourbage scope and the
-# "bypass two-factor authentication" flag set (CI can't answer 2FA
-# prompts). Generate at https://www.npmjs.com/settings/<you>/tokens.
+# Authenticates via npm Trusted Publishing (OIDC) — no NPM_TOKEN, no
+# stored secret to rotate or leak. The `id-token: write` permission below
+# and the `npm install -g npm@latest` step (npm >= 11.5.1) are what let
+# `npm publish` exchange the workflow's OIDC identity for a short-lived
+# publish credential. This requires a Trusted Publisher to be configured
+# on npmjs.com: package Settings -> Trusted Publisher -> GitHub Actions,
+# repo bcourbage/homebridge-ambient-weather-sensors, workflow release.yml,
+# allowed action "npm publish". (Migrated off a bypass-2FA granular token
+# on 2026-06-22; npm is deprecating those tokens for publishing anyway.)
 
 on:
   push:
