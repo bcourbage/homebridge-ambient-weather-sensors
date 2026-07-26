@@ -29,7 +29,7 @@ import { handleGetDiscovery, handleGetNotices, handleGetStatus, handleGetUiState
  * static string keeps the bridge from taking a runtime dependency
  * on package.json's on-disk path).
  */
-const PLUGIN_VERSION = '2.0.0-beta.6';
+const PLUGIN_VERSION = '2.0.0-beta.7';
 // stderr is captured in the Homebridge UI's log tab, so this is
 // where our bridge logs land. The plugin's `this.log.*` isn't
 // available here — the bridge runs in a subprocess separate from

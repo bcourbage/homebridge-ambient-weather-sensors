@@ -9,6 +9,14 @@ entries short and user-facing.
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/
 
+## [2.0.0-beta.7] — 2026-07-19
+
+Two-track release plan starts here. Same code shipping to `@latest` as **v1.7.0** (shadow-mode observer with the flag OFF, no UI change) and to `@beta` as v2.0.0-beta.7 (same code + the write-capable UI preview + `_sensorMapV2` config-schema field). Users on `@latest` are dormant testers of the observer's code-load path; users on `@beta` are active testers of the v2 UI + shadow-mode logging.
+
+### Fixed
+
+- No functional change since v2.0.0-beta.6. Version sync only.
+
 ## [2.0.0-beta.6] — 2026-07-10
 
 ### Fixed
