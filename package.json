@@ -2,7 +2,7 @@
   "private": false,
   "displayName": "Ambient Weather",
   "name": "@bcourbage/homebridge-ambient-weather-sensors",
-  "version": "2.0.0-beta.6",
+  "version": "1.7.0",
   "description": "Homebridge plugin for Ambient Weather sensors via the AWN REST/websocket API. Soft fork of peledies/homebridge-ambient-weather-sensors with Homebridge 2.x / Node 22+ compatibility, multi-station support, websocket realtime, CO2/PM coverage, and other UX improvements while upstream PRs remain unmerged.",
   "license": "Apache-2.0",
   "author": "Bruno Courbage (https://github.com/bcourbage)",
@@ -37,17 +37,11 @@
     "CHANGELOG.md",
     "NOTICE",
     "UPGRADING.md",
-    "MultiHome.md",
-    "homebridge-ui/server.js",
-    "homebridge-ui/handlers.js",
-    "homebridge-ui/public"
+    "MultiHome.md"
   ],
   "scripts": {
     "lint": "eslint src/**.ts --max-warnings=0",
-    "clean": "node -e \"require('fs').rmSync('./dist',{recursive:true,force:true}); ['server.js','handlers.js'].forEach(f => require('fs').rmSync('./homebridge-ui/' + f, {force: true}))\"",
-    "build:plugin": "node ./node_modules/typescript/bin/tsc",
-    "build:ui": "node ./node_modules/typescript/bin/tsc -p homebridge-ui/tsconfig.json",
-    "build": "npm run clean && npm run build:plugin && npm run build:ui",
+    "build": "node -e \"require('fs').rmSync('./dist',{recursive:true,force:true})\" && node ./node_modules/typescript/bin/tsc",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
@@ -80,7 +74,6 @@
     "node": "22.12.0"
   },
   "dependencies": {
-    "@homebridge/plugin-ui-utils": "^2.2.4",
     "socket.io-client": "^4.8.1"
   },
   "allowScripts": {

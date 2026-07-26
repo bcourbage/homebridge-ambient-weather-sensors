@@ -24,33 +24,13 @@
 </SPAN>
 
 
-## Sensor-map v2.0 preview (beta, opt-in)
+## What's New in v1.7.0
 
-v2.0.0-beta.0 ships a new sensor-map architecture that unifies which
-sensors expose, how they're named, and which HomeKit types they use.
-**The new pipeline is OFF by default; users who don't opt in see zero
-behavior change from v1.6.0.**
+Preparatory release for the upcoming v2.0.0 sensor-map architecture. **No behavior change for standard users.** The new sensor-map code loads into memory but stays inert unless explicitly opted into via the environment variable `SENSOR_MAP_V2=1`. When enabled, a shadow-mode observer runs the v2 pipeline in parallel to the v1.6.0 code path and logs any divergence to Homebridge's log. The v1.6.0 code path still owns every accessory-registration decision; nothing on disk is modified by shadow mode.
 
-Opt in one of two ways:
+If you're curious to help validate v2.0.0 before it ships, install v1.7.0, add `SENSOR_MAP_V2=1` to Homebridge's environment, restart. To roll back, unset the variable and restart.
 
-- Set environment variable `SENSOR_MAP_V2=1` on the Homebridge
-  process, OR
-- Enable `_sensorMapV2` under the "Advanced (v2.0 preview)"
-  fieldset in the plugin's config UI.
-
-Then restart Homebridge. The plugin log will begin emitting
-`[sensor-map v2 shadow]` lines. The v1.6.0 code path still owns every
-accessory-registration decision; the v2 layer runs in parallel and
-logs divergences to help catch pipeline drift before the flag flips
-to on-by-default (planned for v2.1.0). A read-only preview page is
-also accessible from the plugin's UI in Homebridge Config UI X.
-
-**Rollback:** unset the flag and restart. Shadow mode never writes
-to `config.json` or the accessory cache, so the flip-back is clean.
-Same for downgrading v2.0.0-beta.x → v1.6.0.
-
-See `docs/future/sensor-map.md` for the full design if you're
-curious about the shape of the v2 config.
+The full v2.0.0 preview (including its new configuration UI) is developing on the `@beta` npm channel: `npm install -g @bcourbage/homebridge-ambient-weather-sensors@beta`.
 
 ## What's New in v1.6.0
 

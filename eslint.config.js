@@ -1,8 +1,6 @@
 // ESLint flat config (eslint 9.x convention). Replaces the legacy
-// .eslintrc that shipped with the upstream plugin template. Targets
-// src/**/*.ts and homebridge-ui/*.ts (source). Compiled outputs
-// (dist/**, homebridge-ui/*.js), images/, and node_modules/ are
-// excluded.
+// .eslintrc that shipped with the upstream plugin template. Targeting
+// only src/**/*.ts; dist/, images/, and node_modules/ are excluded.
 //
 // Stylistic rules from the original .eslintrc (quotes, indent,
 // brace-style, comma-spacing, etc.) intentionally NOT carried over —
@@ -17,15 +15,13 @@ export default tseslint.config(
     ignores: [
       'dist/**',
       'images/**',
-      'homebridge-ui/*.js',
-      'homebridge-ui/public/**',
       'node_modules/**',
     ],
   },
   eslint.configs.recommended,
   ...tseslint.configs.recommended,
   {
-    files: ['src/**/*.ts', 'homebridge-ui/*.ts'],
+    files: ['src/**/*.ts'],
     languageOptions: {
       ecmaVersion: 2022,
       sourceType: 'module',
