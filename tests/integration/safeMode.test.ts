@@ -5,23 +5,29 @@
  * was downgraded past a config file's schemaVersion), the platform
  * enters safe mode. The contract:
  *
- *   - cached accessories keep serving their last-known HAP
- *     characteristic values;
- *   - polling / realtime keep pushing fresh values into their
- *     wrappers by uniqueId (the "updates continue" clause);
+ *   - cached accessories that can't be bound (extended-sensor types,
+ *     unknown types, custom dataPoints, missing characteristics)
+ *     keep serving their last-known HAP characteristic values;
+ *   - identifiable native default-map accessories are BOUND
+ *     (`bindSafeMode`) and POLLING pushes fresh values into their
+ *     existing characteristics via `updateValue()` — the "updates
+ *     continue" clause. Realtime is disabled in safe mode;
+ *   - binding NEVER mutates the HAP graph: no addService,
+ *     removeService, or attaching a missing characteristic on
+ *     demand;
  *   - the platform makes ZERO calls to `registerPlatformAccessories`,
  *     `unregisterPlatformAccessories`, or `updatePlatformAccessories`
  *     — the reconciliation path is disabled;
  *   - the shadow-mode observer's persistence tree is not touched
  *     (Group 2's shadowMode.ts short-circuit, tested there).
  *
- * The test constructs the real `AmbientWeatherSensorsPlatform` with
- * a mocked Homebridge API, feeds it a couple of cached accessories
- * via `configureAccessory`, fires `didFinishLaunching`, and asserts
- * MockAPI's tracking arrays stayed empty. It does NOT exercise the
- * actual REST fetch — that would require a network mock that this
- * suite doesn't have; polling is tested at the shape level (poll
- * timer started, transport chosen) rather than at the wire level.
+ * These tests construct the real `AmbientWeatherSensorsPlatform`
+ * with a mocked Homebridge API, feed it cached accessories via
+ * `configureAccessory`, fire `didFinishLaunching`, and assert both
+ * the reconciliation-free contract (MockAPI tracking arrays stay
+ * empty) AND the value-flow contract (a mocked REST payload driven
+ * through `safeModePollAndDistribute` reaches the bound
+ * characteristic).
  */
 
 import { describe, expect, it, vi } from 'vitest';
@@ -241,12 +247,13 @@ describe('platform safe-mode (finding #1 / §17.2)', () => {
     vi.restoreAllMocks();
   });
 
-  it('safe mode: a polled AWN value pushes through distribute() to the cached wrapper', async () => {
-    // The live-update contract from §17.2: "polling / realtime
-    // updates continue to push values to existing wrappers." This
-    // test proves the value actually flows end-to-end in safe mode
-    // — mocking `fetch` to return a realistic AWN payload and
-    // asserting the cached wrapper's setValue was invoked.
+  it('safe mode: a polled AWN value pushes through safeModePollAndDistribute to the cached binding', async () => {
+    // The live-update contract from §17.2: "polling updates continue
+    // to push values to identifiable cached accessories." This test
+    // proves the value actually flows end-to-end in safe mode —
+    // mocking `fetch` to return a realistic AWN payload and
+    // asserting the cached binding's setValue was invoked (polling
+    // only; realtime is disabled in safe mode).
     const { platform, api } = makePlatform({
       configVersion: 999,
       apiKey: 'test',

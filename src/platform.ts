@@ -201,11 +201,14 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
 
   // Safe-mode bindings — populated by `safeModeStart()` only when
   // configMode === 'safe-mode'. Each binding pushes AWN values to
-  // an EXISTING service+characteristic on a cached accessory via
-  // updateCharacteristic, never addService/removeService. Distinct
-  // from `this.wrappers` because wrapper constructors mutate the
-  // HAP graph, which safe mode forbids per sensor-map.md §17.2.
-  // See src/safeModeBinding.ts for the mapping.
+  // an EXISTING characteristic on a cached accessory via the
+  // retained characteristic instance's `updateValue()` — never
+  // `Service.updateCharacteristic` (which attaches a missing
+  // characteristic on demand), never addService/removeService.
+  // Distinct from `this.wrappers` because wrapper constructors
+  // mutate the HAP graph, which safe mode forbids per
+  // sensor-map.md §17.2. Keyed by normalized uniqueId (MAC
+  // uppercased). See src/safeModeBinding.ts for the mapping.
   private readonly safeModeBindings = new Map<string, SafeModeBinding>();
 
   // Sensor-map v2.0 shadow-mode observer. Undefined unless the user
@@ -216,24 +219,28 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
   private readonly shadow: ShadowMode | undefined;
 
   // Sensor-map v2.0 configVersion detection outcome, computed once at
-  // startup and never re-evaluated. Drives whether discoverDevices +
-  // polling + realtime are allowed to run:
+  // startup and never re-evaluated. Drives which startup pipeline
+  // runs:
   //
-  //   'legacy' / 'v2' — normal operation (v1.6.0 code path drives
-  //                     everything; v2 is a shadow observer until
-  //                     task #65's flag flip).
-  //   'safe-mode'    — CRITICAL: safe mode is contractually read-only
-  //                     per sensor-map.md §5. `discoverDevices()` MUST
-  //                     bail before touching the AWN API or the
-  //                     accessory cache; cached accessories keep
-  //                     serving their last-known HAP characteristic
-  //                     values (Homebridge restores them from the
-  //                     accessory cache automatically), but the
-  //                     plugin does not fetch, does not reconcile,
-  //                     does not start polling or realtime. Losing
-  //                     live values is preferable to a downgraded
-  //                     plugin destroying user-critical HomeKit state
-  //                     while it can't interpret the config safely.
+  //   'legacy' / 'v2' — normal operation via `discoverDevices()`
+  //                     (v1.6.0 code path drives everything; v2 is a
+  //                     shadow observer until task #65's flag flip).
+  //   'safe-mode'    — safe mode is contractually reconciliation-free
+  //                     per sensor-map.md §17.2. `discoverDevices()`
+  //                     is NOT called; `safeModeStart()` runs the
+  //                     reduced pipeline instead — it binds existing
+  //                     services/characteristics on cached
+  //                     accessories (no register/deregister/rename/
+  //                     updatePlatformAccessories, no HAP graph
+  //                     mutation) and starts POLLING (realtime
+  //                     disabled) to push fresh values through
+  //                     `safeModePollAndDistribute()`. Accessories
+  //                     it can't bind (extended-sensor / unknown /
+  //                     custom-dataPoint / missing-characteristic)
+  //                     stay frozen at last-known values. This keeps
+  //                     live values flowing to identifiable native
+  //                     sensors while never destroying user-critical
+  //                     HomeKit state under an uninterpretable config.
   private configMode: ConfigMode = 'legacy';
 
   constructor(
@@ -256,10 +263,10 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
       log.debug('Executed didFinishLaunching callback');
 
       // Detect config mode ONCE at startup. This is the authoritative
-      // gate for whether the v1.6.0 code path is allowed to run:
-      // safe mode short-circuits below and never touches the AWN API
-      // or the accessory cache. See the `configMode` field comment
-      // for the full contract.
+      // gate: in safe mode `discoverDevices()` is skipped and
+      // `safeModeStart()` runs the reduced, reconciliation-free
+      // pipeline instead. See the `configMode` field comment for the
+      // full contract.
       const detected = detectConfigMode(this.config as never);
       this.configMode = detected.mode;
       for (const w of detected.warnings) {
