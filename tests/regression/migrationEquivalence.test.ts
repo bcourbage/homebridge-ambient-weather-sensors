@@ -60,11 +60,14 @@ function v1RegisteredSet(config: LegacyConfig, stations: RawStation[]): Set<stri
  * `${mac}|${dataPoint}` shape.
  */
 function v2RegisteredSet(config: LegacyConfig, stations: RawStation[]): Set<string> {
-  const overrides = compatToOverrides(config);
   const inventory: StationInventory = stations.map(s => ({
     macAddress: s.macAddress,
     name: s.info?.name ?? '',
   }));
+  // Pass the inventory so include/exclude matchers use the full v1
+  // seven-candidate list (finding #2). Without this the pair-set
+  // comparison silently diverges on any station-scoped entry.
+  const overrides = compatToOverrides(config, inventory);
   const discovery: DiscoveryStore = { schemaVersion: 1, entries: [] };
   for (const s of stations) {
     for (const key of Object.keys(s.lastData)) {
@@ -241,6 +244,44 @@ const CONFIG_MATRIX: Array<{ label: string; config: LegacyConfig }> = [
     extendedSensors: true, windSensors: true,
     extendedDisplayMode: 'embed',
   } },
+  // ---- Finding #2: station-aware include/exclude parity ----
+  { label: 'excludeSensors by uniqueId (MAC-sensorKey)', config: {
+    temperatureSensors: true, humiditySensors: true,
+    excludeSensors: ['AA:BB:CC:DD:EE:01-tempf'],
+  } },
+  { label: 'excludeSensors by station MAC (all rows on that station)', config: {
+    temperatureSensors: true, humiditySensors: true,
+    excludeSensors: ['AA:BB:CC:DD:EE:01'],
+  } },
+  { label: 'excludeSensors by station name (all rows on that station)', config: {
+    temperatureSensors: true, humiditySensors: true,
+    excludeSensors: ['Backyard'],
+  } },
+  { label: 'excludeSensors by prefixed form (station name + friendly)', config: {
+    temperatureSensors: true, humiditySensors: true,
+    excludeSensors: ['Backyard Outdoor Temperature'],
+  } },
+  { label: 'includeOnly by uniqueId keeps exactly that one', config: {
+    temperatureSensors: true, humiditySensors: true,
+    includeOnly: ['AA:BB:CC:DD:EE:01-tempf'],
+  } },
+  { label: 'includeOnly by station MAC keeps every row on that station', config: {
+    temperatureSensors: true, humiditySensors: true,
+    includeOnly: ['AA:BB:CC:DD:EE:01'],
+  } },
+  // ---- Finding #13: malformed-but-tolerated legacy values ----
+  { label: 'malformed thresholds shape (object with garbage keys is ignored)', config: {
+    extendedSensors: true, windSensors: true,
+    thresholds: { garbageKey: 999, windSpeedMph: 20 } as never,
+  } },
+  { label: 'malformed units shape (unknown unit falls back to plugin default)', config: {
+    extendedSensors: true, windSensors: true,
+    units: { windSpeed: 'furlongs-per-fortnight' as never },
+  } },
+  { label: 'includeOnly with empty string entry (ignored, not a match-all)', config: {
+    temperatureSensors: true,
+    includeOnly: ['', 'tempf'],
+  } },
 ];
 
 // ---- Payload matrix ----------------------------------------------
@@ -269,6 +310,128 @@ describe('migration equivalence — v1.6.0 vs v2 sensor map', () => {
       });
     }
   }
+});
+
+// ---- Finding #13: full-body equivalence for user-facing knobs ----
+//
+// The pair-set check above ensures both pipelines register the SAME
+// set of accessories. It says nothing about whether they configure
+// those accessories the SAME WAY. That's exactly how the
+// `pressureLowInHg` typo (finding #3) sat in the tree without CI
+// noticing.
+//
+// This block spot-checks the knobs users actually feel:
+//   - threshold value (both pipelines see the same threshold)
+//   - displayUnit  (both pipelines see the same unit)
+//   - batteryField presence (battery sub-service parity)
+//   - name         (embedded-name / prefixed-form parity)
+//
+// Full HAP-service-graph equivalence (instantiate both wrappers,
+// compare services + characteristics + subtypes + metadata) is a
+// bigger project and lives on the v2.0.0 GA task list; the spot
+// checks here catch the drift classes the review flagged.
+describe('migration equivalence — threshold/unit/battery/name body parity (finding #13)', () => {
+  function v2Row(config: LegacyConfig, station: RawStation, dataPoint: string) {
+    const overrides = compatToOverrides(
+      config,
+      [{ macAddress: station.macAddress, name: station.info?.name ?? '' }],
+    );
+    const result = buildEffectiveSensorMap({
+      userOverrides: overrides,
+      discovery: {
+        schemaVersion: 1,
+        entries: Object.keys(station.lastData).map(dp => ({
+          stationMac: station.macAddress,
+          stationName: station.info?.name ?? '',
+          dataPoint: dp,
+          firstSeen: '2026-07-10T00:00:00Z',
+          lastSeen: '2026-07-10T00:00:00Z',
+        })),
+      },
+      uiState: { schemaVersion: 1, dismissedNoticeIds: [], forgottenFields: [] },
+      stations: [{ macAddress: station.macAddress, name: station.info?.name ?? '' }],
+      configMode: 'legacy',
+    });
+    return result.rows.find(
+      r => r.dataPoint === dataPoint && r.stationMac.toUpperCase() === station.macAddress.toUpperCase(),
+    );
+  }
+
+  it('pressure: threshold flows from legacy config to v2 row (pressureInHg parity, finding #3)', () => {
+    // The pressureLowInHg typo (finding #3) meant compat was reading
+    // a phantom field; v2 rows had threshold undefined regardless of
+    // what the user set. This test guards the corrected access path.
+    const config: LegacyConfig = {
+      extendedSensors: true, pressureSensors: true,
+      thresholds: { pressureEnabled: true, pressureInHg: 29.6 },
+    };
+    const row = v2Row(config, OUTDOOR_STATION, 'baromabsin');
+    expect(row).toBeDefined();
+    if (row && row.kind !== 'unrecognized') {
+      expect(row.threshold).toBe(29.6);
+    }
+  });
+
+  it('wind: threshold flows from config to v2 row', () => {
+    const config: LegacyConfig = {
+      extendedSensors: true, windSensors: true,
+      thresholds: { windSpeedEnabled: true, windSpeedMph: 30 },
+    };
+    const row = v2Row(config, OUTDOOR_STATION, 'windspeedmph');
+    expect(row).toBeDefined();
+    if (row && row.kind !== 'unrecognized') {
+      expect(row.threshold).toBe(30);
+    }
+  });
+
+  it('rain: rate threshold flows from config to v2 row', () => {
+    const config: LegacyConfig = {
+      extendedSensors: true, rainSensors: true,
+      thresholds: { rainRateEnabled: true, rainRateInHr: 0.5 },
+    };
+    const row = v2Row(config, OUTDOOR_STATION, 'hourlyrainin');
+    expect(row).toBeDefined();
+    if (row && row.kind !== 'unrecognized') {
+      expect(row.threshold).toBe(0.5);
+    }
+  });
+
+  it('units: windSpeed override flows to v2 displayUnit', () => {
+    const config: LegacyConfig = {
+      extendedSensors: true, windSensors: true,
+      units: { windSpeed: 'kph' },
+    };
+    const row = v2Row(config, OUTDOOR_STATION, 'windspeedmph');
+    expect(row).toBeDefined();
+    if (row && row.measurement === 'wind-speed') {
+      expect(row.displayUnit).toBe('kph');
+    }
+  });
+
+  it('embed mode: extendedDisplayMode: embed sets embedName on extended rows', () => {
+    const config: LegacyConfig = {
+      extendedSensors: true, windSensors: true,
+      extendedDisplayMode: 'embed',
+    };
+    const row = v2Row(config, OUTDOOR_STATION, 'windspeedmph');
+    expect(row).toBeDefined();
+    if (row && row.kind !== 'unrecognized') {
+      expect(row.embedName).toBe(true);
+    }
+  });
+
+  it('battery suppression via `<sensor>-batt` clears batteryField on the canonical row', () => {
+    const config: LegacyConfig = {
+      temperatureSensors: true, humiditySensors: true, extendedSensors: true, windSensors: true,
+      excludeSensors: ['tempf-batt'],
+    };
+    const row = v2Row(config, OUTDOOR_STATION, 'tempf');
+    expect(row).toBeDefined();
+    if (row && row.kind !== 'unrecognized') {
+      expect(row.batteryField).toBeNull();
+      expect(row.hasBatterySubService).toBe(false);
+    }
+  });
 });
 
 describe('migration equivalence — battery-field suppression', () => {

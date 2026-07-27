@@ -28,6 +28,8 @@ import type {
   Measurement,
   SensorMapOverride,
   SensorUnit,
+  StationInventory,
+  StationRecord,
 } from './types.js';
 
 /**
@@ -65,7 +67,7 @@ export interface LegacyConfig {
     lightningDistanceEnabled?: boolean;
     lightningDistanceMi?: number;
     pressureEnabled?: boolean;
-    pressureLowInHg?: number;
+    pressureInHg?: number;
   };
 
   units?: {
@@ -84,27 +86,100 @@ export interface LegacyConfig {
 const BATTERY_FIELD_REGEX = /^(?:battout|battin|batt(?:[1-9]|10)|batt_co2|batt_lightning)$/;
 
 /**
- * Public entry point. Returns global overrides (no `stationMac`).
+ * Public entry point. Emits synthetic sensor-map overrides from a
+ * v1.6.0 legacy config. Result is stable across calls with equal
+ * input; safe to cache but cheap enough to recompute each boot.
  *
- * Result is stable across calls with equal input — safe to cache but
- * cheap enough to recompute each boot.
+ * `stations` is the current station inventory (from AWN device list
+ * or the accessory cache). If empty, the layer falls back to
+ * global-only match forms (`dataPoint`, `friendlyName`) — good enough
+ * for boot-before-fetch scenarios but does NOT preserve full v1
+ * semantics.
+ *
+ * Full v1 semantics require the inventory: v1's include/exclude
+ * matchers compare against SEVEN candidate forms per accessory —
+ * `uniqueId` (`MAC-sensorKey`), current displayName, prefixed form
+ * (`hapClean(stationName + friendlyName)`), sensorKey, friendly
+ * name, station MAC, station name — and the last five are
+ * station-specific. Without stations, entries like
+ * `excludeSensors: ["AA:BB:CC:DD:EE:01-tempf"]` or `"Backyard"`
+ * would be silently ignored (review finding #2 pre-fix).
+ *
+ * With inventory, the layer emits station-scoped overrides
+ * (`stationMac` set) for every (station, row) pair the include/
+ * exclude machinery would have disabled in v1; row-level knobs that
+ * don't depend on station (threshold, displayUnit, category
+ * toggles, embed mode) still flow through as global overrides.
  */
-export function compatToOverrides(legacy: LegacyConfig): SensorMapOverride[] {
+export function compatToOverrides(
+  legacy: LegacyConfig,
+  stations: StationInventory = [],
+): SensorMapOverride[] {
   const overrides: SensorMapOverride[] = [];
 
   const excludeSet = toMatcherSet(legacy.excludeSensors);
   const includeSet = toMatcherSet(legacy.includeOnly);
   const suppressedBatteries = buildSuppressedBatteries(legacy.excludeSensors);
+  const hasStations = stations.length > 0;
 
   for (const row of DEFAULT_SENSOR_MAP) {
-    const ov = compatRowOverride(row, legacy, excludeSet, includeSet, suppressedBatteries);
-    if (ov) {
-      overrides.push(ov);
+    if (!hasStations) {
+      // Boot-before-fetch fallback. Preserve the pre-station-aware
+      // behavior: include/exclude matching against global forms
+      // (sensorKey + friendly name) only. Correct for entries in
+      // those forms; incorrect for station-scoped entries, but
+      // there's nothing to bind them to yet. Once the platform
+      // hands us an inventory on the next tick, we take the branch
+      // below and get full v1 parity.
+      const ov = compatRowOverride(row, legacy, excludeSet, includeSet, suppressedBatteries);
+      if (ov) {
+        overrides.push(ov);
+      }
+      continue;
+    }
+
+    // Step 1: global-scope projection — category enable, threshold,
+    // displayUnit, embed, battery suppression. Include/exclude are
+    // handled per-station below and MUST be excluded here so a
+    // station-scoped-only match (like `MAC-tempf`) doesn't get
+    // promoted into a global disable that hides the row on
+    // stations where the user actually wanted it kept.
+    const globalOv = compatRowOverride(row, legacy, EMPTY_SET, EMPTY_SET, suppressedBatteries);
+    if (globalOv) {
+      overrides.push(globalOv);
+    }
+
+    // Step 2: station-scoped include/exclude. Skip if the row is
+    // already globally disabled by category/threshold — no accessory
+    // left to further scope down.
+    if (globalOv && globalOv.enabled === false) {
+      continue;
+    }
+    if (excludeSet.size === 0 && includeSet.size === 0) {
+      continue;
+    }
+
+    // For each (station, row) pair, build the full seven-candidate
+    // match list and re-evaluate. Emit a station-scoped `enabled:
+    // false` override for anything v1 would have dropped.
+    for (const station of stations) {
+      if (shouldStationScopeDisable(row, station, excludeSet, includeSet)) {
+        overrides.push({
+          dataPoint: row.dataPoint,
+          stationMac: station.macAddress.toUpperCase(),
+          enabled: false,
+        });
+      }
     }
   }
 
   return overrides;
 }
+
+// Sentinel for the with-stations branch — passed to compatRowOverride
+// to bypass its global-form include/exclude logic (which per-station
+// evaluation below replaces).
+const EMPTY_SET = new Set<string>();
 
 // ---- Per-row projection --------------------------------------------
 
@@ -258,7 +333,7 @@ function thresholdFor(row: DefaultSensorRow, legacy: LegacyConfig): number | und
     case 'uv':                 return t.uv;
     case 'lightning_distance': return t.lightningDistanceMi;
     case 'baromrelin':
-    case 'baromabsin':         return t.pressureLowInHg;
+    case 'baromabsin':         return t.pressureInHg;
     default:                   return undefined;
   }
 }
@@ -339,6 +414,74 @@ function matchesRow(row: DefaultSensorRow, matchers: Set<string>): boolean {
     if (f && matchers.has(f)) {
       return true;
     }
+  }
+  return false;
+}
+
+/**
+ * Compat-side mirror of the v1 hapClean function (`src/platform.ts`).
+ * Kept inline instead of imported so this module has no dependency
+ * back into platform.ts, which imports from other sensor-map modules
+ * — a cycle we don't want. If either implementation changes, the
+ * migration-equivalence test suite will catch drift.
+ */
+function hapCleanCompat(input: string): string {
+  return input
+    .replace(/[^A-Za-z0-9 ']/g, ' ')
+    .replace(/\s+/g, ' ')
+    .replace(/^[^A-Za-z0-9]+/, '')
+    .replace(/[^A-Za-z0-9]+$/, '')
+    .trim();
+}
+
+/**
+ * Full v1 match-form list for a (row, station) pair — the same seven
+ * candidates `platform.ts:661` builds at accessory-decision time.
+ * Every candidate is normalized (trimmed + lowercased) so the caller
+ * can do plain set membership checks.
+ */
+function stationScopedMatchForms(row: DefaultSensorRow, station: StationRecord): string[] {
+  const sensorKey = row.dataPoint;
+  const friendly = friendlySensorName(sensorKey);
+  const stationName = station.name;
+  const prefixedForm = stationName ? hapCleanCompat(`${stationName} ${friendly}`) : '';
+  const uniqueId = `${station.macAddress}-${sensorKey}`;
+  // v1 also checks the current `displayName`, which is either the
+  // clean short form (single-station setups) or the prefixed form
+  // (multi-station). We approximate the multi-station displayName
+  // with `prefixedForm` — same source recipe — and the single-station
+  // short form with `friendly`. Users targeting the current display
+  // name will therefore hit either the `friendly` or `prefixedForm`
+  // candidate, both of which are already in the list.
+  return [
+    uniqueId,
+    prefixedForm,
+    sensorKey,
+    friendly,
+    station.macAddress,
+    stationName,
+  ].map(normalizeMatchKey).filter((s) => s.length > 0);
+}
+
+/**
+ * True iff the (row, station) pair should be disabled by v1's
+ * include/exclude semantics — mirrored from `platform.ts:671-692`.
+ * Include-only (if non-empty) requires at least one match against
+ * the full candidate list; exclude drops the pair on any match.
+ * A pair that both included and excluded is dropped, matching v1.
+ */
+function shouldStationScopeDisable(
+  row: DefaultSensorRow,
+  station: StationRecord,
+  excludeSet: Set<string>,
+  includeSet: Set<string>,
+): boolean {
+  const forms = stationScopedMatchForms(row, station);
+  if (includeSet.size > 0 && !forms.some((c) => includeSet.has(c))) {
+    return true;
+  }
+  if (excludeSet.size > 0 && forms.some((c) => excludeSet.has(c))) {
+    return true;
   }
   return false;
 }

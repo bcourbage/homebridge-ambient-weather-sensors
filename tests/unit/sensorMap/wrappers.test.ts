@@ -55,4 +55,57 @@ describe('WrapperDescriptor registry', () => {
     expect(wrapperFor('motion', 'timestamp')?.id).toBe('last-rain');
     expect(wrapperFor('motion', 'count')?.id).toBe('lightning-day');
   });
+
+  // ---- Review finding #14: freeze the wrapper vocabulary ----
+
+  // A well-meaning rename or reorder of an `id` silently invalidates
+  // every user's HAP accessory cache because `id` is baked into
+  // `structuralSignature`. The block below pins the exact ordered
+  // list of (id, schemaVersion) pairs. Any change to this snapshot
+  // requires an explicit `structuralSignature` migration plan.
+  it('ALL_WRAPPERS ordered snapshot — DO NOT CHANGE without a cache-migration plan', () => {
+    const snapshot = ALL_WRAPPERS.map(w => ({ id: w.id, schemaVersion: w.schemaVersion }));
+    expect(snapshot).toEqual([
+      { id: 'temperature',           schemaVersion: 1 },
+      { id: 'humidity',              schemaVersion: 1 },
+      { id: 'solar-radiation',       schemaVersion: 1 },
+      { id: 'co2',                   schemaVersion: 1 },
+      { id: 'air-quality-pm25',      schemaVersion: 1 },
+      { id: 'air-quality-pm10',      schemaVersion: 1 },
+      { id: 'uv',                    schemaVersion: 1 },
+      { id: 'wind-speed',            schemaVersion: 1 },
+      { id: 'wind-gust',             schemaVersion: 1 },
+      { id: 'wind-max-daily-gust',   schemaVersion: 1 },
+      { id: 'wind-direction',        schemaVersion: 1 },
+      { id: 'wind-direction-10m',    schemaVersion: 1 },
+      { id: 'pressure-relative',     schemaVersion: 1 },
+      { id: 'pressure-absolute',     schemaVersion: 1 },
+      { id: 'rain-rate',             schemaVersion: 1 },
+      { id: 'rain-event',            schemaVersion: 1 },
+      { id: 'rain-daily',            schemaVersion: 1 },
+      { id: 'rain-weekly',           schemaVersion: 1 },
+      { id: 'rain-monthly',          schemaVersion: 1 },
+      { id: 'rain-yearly',           schemaVersion: 1 },
+      { id: 'last-rain',             schemaVersion: 1 },
+      { id: 'lightning-day',         schemaVersion: 1 },
+      { id: 'lightning-hour',        schemaVersion: 1 },
+      { id: 'lightning-distance',    schemaVersion: 1 },
+      { id: 'lightning-last-strike', schemaVersion: 1 },
+    ]);
+    expect(snapshot.length).toBe(25);
+  });
+
+  it('descriptors are frozen at runtime — id mutation throws in strict mode', () => {
+    // The `readonly` modifier is compile-time only; the runtime
+    // freeze covers untyped mutation attempts (dynamic lookups,
+    // Object.assign, etc.). vitest runs in strict mode by default,
+    // so assigning to a frozen field throws.
+    for (const w of ALL_WRAPPERS) {
+      expect(Object.isFrozen(w)).toBe(true);
+      expect(() => {
+        (w as { id: string }).id = 'mutated';
+      }).toThrow(TypeError);
+    }
+    expect(Object.isFrozen(ALL_WRAPPERS)).toBe(true);
+  });
 });

@@ -25,7 +25,7 @@ import * as path from 'path';
 
 import { buildEffectiveSensorMap } from './buildEffectiveMap.js';
 import { compatToOverrides, type LegacyConfig } from './compat.js';
-import { detectConfigMode, type ConfigInputShape } from './configMode.js';
+import { detectConfigMode, type ConfigInputShape, type ConfigMode } from './configMode.js';
 import { inferForCachedAccessory, type CachedAccessoryShape } from './bootstrap.js';
 import {
   cleanupStaleTempFiles,
@@ -123,6 +123,16 @@ export class ShadowMode {
   // Snapshot of config-mode detection at startup. Logged once.
   private modeLogged = false;
 
+  /**
+   * Detected config mode. Populated in `initialize()` and then used
+   * by every `onParseTick` to select the right override source
+   * (compat vs. real v2 sensorMap) and to short-circuit in safe mode.
+   * Defaults to 'legacy' before initialize runs so a stray tick
+   * before the first didFinishLaunching callback still gets a
+   * deterministic answer.
+   */
+  private configMode: ConfigMode = 'legacy';
+
   constructor(opts: ShadowModeOpts) {
     this.log = opts.log;
     this.config = opts.config;
@@ -155,6 +165,7 @@ export class ShadowMode {
 
     if (!this.modeLogged) {
       const result = detectConfigMode(this.config);
+      this.configMode = result.mode;
       this.log.info(`[sensor-map v2 shadow] config mode: ${result.mode}`);
       for (const w of result.warnings) {
         this.log.warn(`[sensor-map v2 shadow] ${w}`);
@@ -220,10 +231,35 @@ export class ShadowMode {
       this.tracker.flush().catch(() => { /* logged internally */ });
     }
 
-    // Build the sensor-map view.
-    const overrides = compatToOverrides(this.config as LegacyConfig);
+    // Build the sensor-map view. Path B: the observer must exercise
+    // whichever configuration path the plugin is actually running
+    // (compat for legacy, hand-authored `sensorMap` for v2), so the
+    // observed divergence lines match what would happen once the
+    // flag flips on-by-default. Safe mode short-circuits entirely
+    // per §5 — the map is empty and no divergences make sense.
+    let userOverrides: ReadonlyArray<unknown>;
+    if (this.configMode === 'safe-mode') {
+      // Safe mode: skip the parallel pipeline. There's no meaningful
+      // divergence to report and building an effective map would
+      // just surface synthetic errors from the malformed config.
+      return;
+    } else if (this.configMode === 'v2') {
+      // v2: read `sensorMap` as raw unknown[] and hand it to the
+      // effective-map layer — which will Phase-1/Phase-2 validate
+      // every entry (Group 1 finding #10). If the field is absent
+      // or the wrong type, the layer emits identity errors that
+      // shadow-mode surfaces below.
+      const raw = (this.config as { sensorMap?: unknown }).sensorMap;
+      userOverrides = Array.isArray(raw) ? (raw as unknown[]) : [];
+    } else {
+      // legacy: synthesize from v1.6.0 fields via the compat layer.
+      // Pass the station inventory so exclude/include matchers get
+      // their full seven-candidate v1 semantics (finding #2).
+      userOverrides = compatToOverrides(this.config as LegacyConfig, input.stations);
+    }
+
     const result = buildEffectiveSensorMap({
-      userOverrides: overrides,
+      userOverrides,
       discovery: { schemaVersion: 1, entries: input.observed.map(o => ({
         stationMac: o.stationMac,
         stationName: o.stationName,
@@ -233,7 +269,7 @@ export class ShadowMode {
       })) },
       uiState: { schemaVersion: 1, dismissedNoticeIds: [], forgottenFields: [] },
       stations: input.stations,
-      configMode: 'legacy',
+      configMode: this.configMode,
     });
 
     // Scope the comparison to (station, dataPoint) pairs AWN ACTUALLY

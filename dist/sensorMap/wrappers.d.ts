@@ -53,6 +53,20 @@ export declare const LIGHTNING_DAY_WRAPPER: WrapperDescriptor;
 export declare const LIGHTNING_HOUR_WRAPPER: WrapperDescriptor;
 export declare const LIGHTNING_DISTANCE_WRAPPER: WrapperDescriptor;
 export declare const LIGHTNING_LAST_STRIKE_WRAPPER: WrapperDescriptor;
+/**
+ * The frozen, ordered registry of every wrapper the plugin ships.
+ * Order is stable — the snapshot test in `wrappers.test.ts` locks
+ * both the exact set of (id, schemaVersion) pairs and their order,
+ * so a well-meaning rename or reorder breaks CI instead of silently
+ * invalidating user caches. See review finding #14.
+ *
+ * Runtime `Object.freeze` on the array + each descriptor (applied
+ * at module load, below) guards against accidental in-place
+ * mutation of descriptor fields — the `readonly` compile-time
+ * annotations already do most of the work; the freeze is
+ * belt-and-suspenders for anything reaching the registry through
+ * an untyped path.
+ */
 export declare const ALL_WRAPPERS: ReadonlyArray<WrapperDescriptor>;
 /**
  * Custom-sensor wrapper resolution: given a user-declared
