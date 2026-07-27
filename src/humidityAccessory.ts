@@ -31,10 +31,7 @@ export class HumidityAccessory implements SensorAccessory {
                 || this.accessory.addService(this.platform.Service.HumiditySensor);
 
     // set the service name, this is what is displayed as the default name on the Home app
-    this.service.setCharacteristic(
-      this.platform.Characteristic.Name,
-      row?.name ?? accessory.context.device.displayName,
-    );
+    this.service.setCharacteristic(this.platform.Characteristic.Name, accessory.context.device.displayName);
 
     this.batterySetter = setupBatteryService(
       this.platform, this.accessory, batteryOptionsFor(row, accessory),

@@ -62,20 +62,35 @@ describe('WindSpeedAccessory — row-driven (finding #4)', () => {
     expect(motionOf(accessory)).toBe(false);
   });
 
-  it('names Model + tile from row.name and attaches battery per row', () => {
+  it('keeps Model the platform-owned family label (not row.name) and attaches battery per row', () => {
+    // P2-D: the extended Model/tile label stays the hardcoded family
+    // label; the row does not rename it. Battery still follows the row.
     const platform = makeMockPlatform();
-    const accessory = makeMockAccessory({ uniqueId: 'MAC-w', displayName: 'STALE' });
+    const accessory = makeMockAccessory({ uniqueId: 'MAC-w', displayName: 'Rooftop Wind Speed' });
     new WindSpeedAccessory(
       platform as unknown as AmbientWeatherSensorsPlatform, accessory as never,
       makeNumericRow({
         kind: 'motion', measurement: 'wind-speed', wrapperId: 'wind-speed',
-        sourceUnit: 'mph', displayUnit: 'mph', name: 'Rooftop Wind',
+        sourceUnit: 'mph', displayUnit: 'mph', name: 'Wind Speed',
         hasBatterySubService: true, batteryField: 'battout',
       }),
     );
     const info = accessory.getService(MockServices.AccessoryInformation)!;
-    expect(info.readCharacteristic(MockCharacteristics.Model)).toBe('Rooftop Wind');
+    expect(info.readCharacteristic(MockCharacteristics.Model)).toBe('Wind Speed');
     expect(accessory.getService(MockServices.Battery)).toBeDefined();
+  });
+
+  it('row-driven build uses the canonical-annotated debug string (P2-B)', () => {
+    const platform = makeMockPlatform();
+    const accessory = makeMockAccessory({ uniqueId: 'MAC-w', displayName: 'Wind' });
+    new WindSpeedAccessory(
+      platform as unknown as AmbientWeatherSensorsPlatform, accessory as never,
+      makeNumericRow({
+        kind: 'motion', measurement: 'wind-speed', wrapperId: 'wind-speed',
+        sourceUnit: 'mph', displayUnit: 'mph', threshold: 25,
+      }),
+    ).setValue(14);
+    expect(platform.log.logs.some(l => l.message.includes('canonical='))).toBe(true);
   });
 
   it('triggerEnabled: false disables motion even with a finite threshold', () => {
@@ -146,23 +161,41 @@ describe('Rain — row-driven (finding #4)', () => {
     expect(motionOf(accessory)).toBe(true);
   });
 
-  it('rain accumulation keeps the 0.01 fires-by-default threshold when the row omits one', () => {
+  it('rain accumulation fires on any rain via the default-map 0.01 threshold the resolved row carries', () => {
+    // The 0.01 family default now lives on the KNOWN rain-accumulation
+    // rows in DEFAULT_SENSOR_MAP, so a resolved row carries it — the
+    // wrapper reads it off the row uniformly (finding-#4 review P1). A
+    // CUSTOM row that omits threshold is disabled (tested separately).
     const platform = makeMockPlatform();
     const accessory = makeMockAccessory({ uniqueId: 'MAC-rd', displayName: 'Rain Daily' });
     const wrapper = new RainDailyAccessory(
       platform as unknown as AmbientWeatherSensorsPlatform, accessory as never,
       makeNumericRow({
         kind: 'motion', measurement: 'rain-accumulation', wrapperId: 'rain-daily',
-        sourceUnit: 'in', displayUnit: 'in', name: 'Rain Today',   // no threshold
+        sourceUnit: 'in', displayUnit: 'in', threshold: 0.01,   // as DEFAULT_SENSOR_MAP supplies
       }),
     );
     wrapper.setValue(0.2);   // any measurable rain → motion
     expect(motionOf(accessory)).toBe(true);
     const info = accessory.getService(MockServices.AccessoryInformation)!;
-    expect(info.readCharacteristic(MockCharacteristics.Model)).toBe('Rain Today');
+    expect(info.readCharacteristic(MockCharacteristics.Model)).toBe('Rain Daily');   // platform-owned label
   });
 
-  it('last-rain reads name from a timestamp row and never triggers motion', () => {
+  it('rain accumulation with NO threshold on a custom row is disabled (frozen-schema contract)', () => {
+    const platform = makeMockPlatform();
+    const accessory = makeMockAccessory({ uniqueId: 'MAC-rd2', displayName: 'Barn Rain' });
+    const wrapper = new RainDailyAccessory(
+      platform as unknown as AmbientWeatherSensorsPlatform, accessory as never,
+      makeNumericRow({
+        kind: 'motion', measurement: 'rain-accumulation', wrapperId: 'rain-daily',
+        sourceUnit: 'in', displayUnit: 'in',   // no threshold → Infinity → disabled
+      }),
+    );
+    wrapper.setValue(0.2);
+    expect(motionOf(accessory)).toBe(false);
+  });
+
+  it('last-rain (timestamp row) never triggers motion; Model stays the platform-owned label', () => {
     const platform = makeMockPlatform();
     const accessory = makeMockAccessory({ uniqueId: 'MAC-lr', displayName: 'Last Rain' });
     const wrapper = new LastRainAccessory(
@@ -172,19 +205,19 @@ describe('Rain — row-driven (finding #4)', () => {
     wrapper.setValue(1_700_000_000_000);
     expect(motionOf(accessory)).toBe(false);
     const info = accessory.getService(MockServices.AccessoryInformation)!;
-    expect(info.readCharacteristic(MockCharacteristics.Model)).toBe('Since Rain');
+    expect(info.readCharacteristic(MockCharacteristics.Model)).toBe('Last Rain');
   });
 });
 
 describe('Lightning — row-driven (finding #4)', () => {
-  it('count keeps the fires-on-any-strike default when the row omits a threshold', () => {
+  it('count fires on any strike via the default-map threshold=1 the resolved row carries', () => {
     const platform = makeMockPlatform();
     const accessory = makeMockAccessory({ uniqueId: 'MAC-ld', displayName: 'Lightning' });
     const wrapper = new LightningDayAccessory(
       platform as unknown as AmbientWeatherSensorsPlatform, accessory as never,
       makeNumericRow({
         kind: 'motion', measurement: 'count', wrapperId: 'lightning-day',
-        sourceUnit: 'count', displayUnit: 'count',   // no threshold
+        sourceUnit: 'count', displayUnit: 'count', threshold: 1,   // as DEFAULT_SENSOR_MAP supplies
       }),
     );
     wrapper.setValue(1);
@@ -210,7 +243,7 @@ describe('Lightning — row-driven (finding #4)', () => {
     expect(motionOf(accessory)).toBe(false);
   });
 
-  it('last-strike reads name from a timestamp row', () => {
+  it('last-strike (timestamp row) keeps the platform-owned Model label', () => {
     const platform = makeMockPlatform();
     const accessory = makeMockAccessory({ uniqueId: 'MAC-ls', displayName: 'Last Strike' });
     new LightningLastStrikeAccessory(
@@ -218,6 +251,6 @@ describe('Lightning — row-driven (finding #4)', () => {
       makeTimestampRow({ kind: 'motion', wrapperId: 'lightning-last-strike', name: 'Last Bolt', dataPoint: 'lightning_time' }),
     );
     const info = accessory.getService(MockServices.AccessoryInformation)!;
-    expect(info.readCharacteristic(MockCharacteristics.Model)).toBe('Last Bolt');
+    expect(info.readCharacteristic(MockCharacteristics.Model)).toBe('Last Lightning Strike');
   });
 });

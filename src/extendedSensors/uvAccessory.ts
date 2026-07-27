@@ -28,7 +28,8 @@ export class UvAccessory extends ExtendedSensorBase {
     const threshold = typeof raw === 'number' ? raw : Infinity;
 
     super(platform, accessory, {
-      sensorLabel: row?.name ?? 'UV Index',
+      variant: 'numeric',
+      sensorLabel: 'UV Index',
       awnKey: row?.dataPoint ?? 'uv',
       threshold: thresholdFor(row, threshold),
       displayMode: extendedDisplayModeFor(platform, row),

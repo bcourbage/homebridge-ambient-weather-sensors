@@ -17,7 +17,7 @@ export class Co2Accessory {
             .setCharacteristic(this.platform.Characteristic.SerialNumber, accessory.context.device.uniqueId);
         this.service = this.accessory.getService(this.platform.Service.CarbonDioxideSensor)
             || this.accessory.addService(this.platform.Service.CarbonDioxideSensor);
-        this.service.setCharacteristic(this.platform.Characteristic.Name, row?.name ?? accessory.context.device.displayName);
+        this.service.setCharacteristic(this.platform.Characteristic.Name, accessory.context.device.displayName);
         this.batterySetter = setupBatteryService(this.platform, this.accessory, batteryOptionsFor(row, accessory));
         if (typeof accessory.context.device.value === 'number') {
             this.setValue(accessory.context.device.value);

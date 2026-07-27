@@ -69,6 +69,16 @@ const NATIVE_HAP_MEASUREMENTS: ReadonlyArray<Measurement> = [
 ];
 
 /**
+ * Measurements that are `kind: motion` but cannot cross a threshold —
+ * their wrappers hardcode `threshold: Infinity`. `validateOverrideBody`
+ * warn-strips threshold / triggerEnabled / triggerDirection on these so
+ * a user-supplied value isn't silently ignored. See finding-#4 review.
+ */
+const NON_TRIGGERING_MEASUREMENTS: ReadonlyArray<Measurement> = [
+  'direction', 'timestamp', 'boolean',
+];
+
+/**
  * The 13 fields users may set on a SensorMapOverride. Any key outside
  * this set on a hand-edited entry is a typo (e.g. `triggerEnabledd`)
  * or an attempt to control internal state we don't expose. Reject
@@ -534,6 +544,41 @@ export function validateOverrideBody(
         message: `embedName on non-motion row ${dp} ignored.`,
       });
       delete out.embedName;
+    }
+  }
+
+  // Non-triggering measurements (finding-#4 review): some measurements
+  // are `kind: motion` but cannot meaningfully cross a threshold — wind
+  // direction (a compass bearing) and the timestamp fields (last-rain,
+  // last-strike). Their wrappers hardcode `threshold: Infinity`, so a
+  // user-supplied threshold / triggerDirection / triggerEnabled would be
+  // SILENTLY ignored. Warn-and-strip them here — same contract as the
+  // non-motion block — so the schema never accepts an ineffective field.
+  // `embedName` stays valid (these tiles still show a value to embed).
+  if (effectiveMeasurement !== undefined && NON_TRIGGERING_MEASUREMENTS.includes(effectiveMeasurement)) {
+    if (out.threshold !== undefined) {
+      warnings.push({
+        code: 'ignored-non-triggering-threshold',
+        field: 'threshold',
+        message: `threshold on ${effectiveMeasurement} row ${dp} ignored: this measurement cannot trigger motion.`,
+      });
+      delete out.threshold;
+    }
+    if (out.triggerEnabled !== undefined) {
+      warnings.push({
+        code: 'ignored-non-triggering-triggerenabled',
+        field: 'triggerEnabled',
+        message: `triggerEnabled on ${effectiveMeasurement} row ${dp} ignored: this measurement cannot trigger motion.`,
+      });
+      delete out.triggerEnabled;
+    }
+    if (out.triggerDirection !== undefined) {
+      warnings.push({
+        code: 'ignored-non-triggering-triggerdirection',
+        field: 'triggerDirection',
+        message: `triggerDirection on ${effectiveMeasurement} row ${dp} ignored: this measurement cannot trigger motion.`,
+      });
+      delete out.triggerDirection;
     }
   }
 

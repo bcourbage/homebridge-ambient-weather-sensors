@@ -141,14 +141,25 @@ export const FACTORIES = {
  * return early — callers reject them before this point.
  */
 export function assertRowMatchesWrapperId(row) {
+    if (!rowMatchesWrapperId(row)) {
+        const spec = WRAPPER_SPEC[row.wrapperId];
+        throw new Error(`Wrapper '${row.wrapperId}' expects (${spec.kind}, ${spec.measurement}); `
+            + `row for ${row.stationMac}|${row.dataPoint} has (${row.kind}, `
+            + `${row.measurement}).`);
+    }
+}
+/**
+ * Non-throwing twin of `assertRowMatchesWrapperId`, used by
+ * `buildEffectiveSensorMap` to DROP a mismatched row (and push a
+ * `wrapper-mismatch` note) at map-construction time rather than throwing
+ * at registration. Unrecognized rows have no wrapper and vacuously match.
+ */
+export function rowMatchesWrapperId(row) {
     if (row.kind === 'unrecognized') {
-        return;
+        return true;
     }
     const spec = WRAPPER_SPEC[row.wrapperId];
-    if (row.kind !== spec.kind || row.measurement !== spec.measurement) {
-        throw new Error(`Wrapper '${row.wrapperId}' expects (${spec.kind}, ${spec.measurement}); `
-            + `row for ${row.stationMac}|${row.dataPoint} has (${row.kind}, ${row.measurement}).`);
-    }
+    return row.kind === spec.kind && row.measurement === spec.measurement;
 }
 /**
  * Turn a resolved row into its concrete wrapper instance. The single

@@ -83,6 +83,25 @@ describe('SolarRadiationAccessory — row-driven (finding #4)', () => {
     expect(svc.readCharacteristic(MockCharacteristics.CurrentAmbientLightLevel)).toBe(Math.round(500 / 0.0079));
   });
 
+  it('legacy (row-absent) build keeps the exact v1.7 "W/m² → lx" debug string', () => {
+    // P2-B: preserve flag-off log identity.
+    const platform = makeMockPlatform();
+    const accessory = makeMockAccessory({ uniqueId: 'MAC-solar', displayName: 'Solar Radiation' });
+    new SolarRadiationAccessory(platform as unknown as AmbientWeatherSensorsPlatform, accessory as never)
+      .setValue(500);
+    const expectedLux = Math.round(500 / 0.0079);
+    expect(platform.log.logs.some(l => l.message === `SET CurrentAmbientLightLevel: 500 W/m² → ${expectedLux} lx`)).toBe(true);
+  });
+
+  it('row-driven build uses the unit-neutral debug string (no "W/m²")', () => {
+    const platform = makeMockPlatform();
+    const accessory = makeMockAccessory({ uniqueId: 'MAC-solar', displayName: 'Solar Radiation' });
+    new SolarRadiationAccessory(
+      platform as unknown as AmbientWeatherSensorsPlatform, accessory as never, solarRow(),
+    ).setValue(500);
+    expect(platform.log.logs.some(l => l.message.includes('W/m²'))).toBe(false);
+  });
+
   it('skips the W/m²→lux conversion for a custom sensor reporting lux (sourceUnit: lux)', () => {
     const platform = makeMockPlatform();
     const accessory = makeMockAccessory({ uniqueId: 'MAC-lux', displayName: 'Greenhouse Light' });

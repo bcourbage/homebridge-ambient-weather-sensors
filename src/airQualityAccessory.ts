@@ -33,10 +33,7 @@ export class AirQualityAccessory implements SensorAccessory {
     this.service = this.accessory.getService(this.platform.Service.AirQualitySensor)
                 || this.accessory.addService(this.platform.Service.AirQualitySensor);
 
-    this.service.setCharacteristic(
-      this.platform.Characteristic.Name,
-      row?.name ?? accessory.context.device.displayName,
-    );
+    this.service.setCharacteristic(this.platform.Characteristic.Name, accessory.context.device.displayName);
 
     this.batterySetter = setupBatteryService(
       this.platform, this.accessory, batteryOptionsFor(row, accessory),

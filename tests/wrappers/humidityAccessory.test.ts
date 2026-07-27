@@ -76,17 +76,19 @@ describe('HumidityAccessory — row-driven (finding #4)', () => {
     wrapperId: 'humidity', dataPoint: 'humidity', name: 'Outdoor Humidity', ...overrides,
   });
 
-  it('names from row.name, passes the percent reading through unchanged', () => {
+  it('keeps Name platform-owned (displayName); passes the percent reading through unchanged', () => {
+    // P2-D: name is platform-owned — the row must not clobber the
+    // station-composed displayName.
     const platform = makeMockPlatform();
-    const accessory = makeMockAccessory({ uniqueId: 'MAC-hum', displayName: 'STALE' });
+    const accessory = makeMockAccessory({ uniqueId: 'MAC-hum', displayName: 'Backyard Humidity' });
     const wrapper = new HumidityAccessory(
       platform as unknown as AmbientWeatherSensorsPlatform,
       accessory as never,
-      humRow({ name: 'Basement RH' }),
+      humRow({ name: 'Humidity' }),
     );
     wrapper.setValue(55);
     const svc = accessory.getService(MockServices.HumiditySensor)!;
-    expect(svc.readCharacteristic(MockCharacteristics.Name)).toBe('Basement RH');
+    expect(svc.readCharacteristic(MockCharacteristics.Name)).toBe('Backyard Humidity');
     expect(svc.readCharacteristic(MockCharacteristics.CurrentRelativeHumidity)).toBe(55);
   });
 

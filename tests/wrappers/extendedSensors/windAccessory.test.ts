@@ -15,6 +15,20 @@ import {
   makeMockPlatform,
 } from '../../helpers/mockHomebridge';
 
+describe('ExtendedSensorBase — legacy log identity (finding #4 review, P2-B)', () => {
+  it('row-absent build keeps the exact v1.7 EXTENDED debug string (no canonical=)', () => {
+    const platform = makeMockPlatform({ thresholds: { windSpeedMph: 25 } });
+    const accessory = makeMockAccessory({ uniqueId: 'x-windspeedmph', displayName: 'Wind Speed' });
+    new WindSpeedAccessory(
+      platform as unknown as AmbientWeatherSensorsPlatform, accessory as never,
+    ).setValue(14);
+    const line = platform.log.logs.find(l => l.message.startsWith('EXTENDED windspeedmph:'));
+    expect(line).toBeDefined();
+    expect(line!.message).not.toContain('canonical=');
+    expect(line!.message).toContain('raw=14 threshold=25');
+  });
+});
+
 describe('WindSpeedAccessory', () => {
   it('constructs, attaches MotionSensor', () => {
     const platform = makeMockPlatform({ thresholds: { windSpeedMph: 25 } });

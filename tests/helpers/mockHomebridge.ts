@@ -39,6 +39,10 @@ export class MockCharacteristic {
   static readonly UUID: string;
   public displayName: string;
   public value: unknown = null;
+  // Props recorded from setProps() — used by the graph-parity serializer
+  // (finding-#4 review P1-C) to capture range/format overrides a wrapper
+  // applies (e.g. SolarRadiation's minValue/maxValue on the LightSensor).
+  public props: Record<string, unknown> | undefined;
   private listeners: Array<(v: unknown) => void> = [];
 
   constructor(displayName: string, _uuid?: string, _props?: Record<string, unknown>) {
@@ -63,7 +67,8 @@ export class MockCharacteristic {
    * the mock — tests don't assert on prop values. Add a stored-props
    * assertion here later if needed.
    */
-  setProps(_props: Record<string, unknown>): this {
+  setProps(props: Record<string, unknown>): this {
+    this.props = { ...(this.props ?? {}), ...props };
     return this;
   }
 
@@ -226,9 +231,18 @@ export class MockService {
    * exist), which is what drives HAP cache invalidation; live values are
    * asserted separately.
    */
-  characteristicShape(): Array<{ uuid: string; name: string }> {
+  characteristicShape(): Array<{ uuid: string; name: string; props?: Record<string, unknown>; value: unknown }> {
     return [...this.characteristics.entries()]
-      .map(([uuid, c]) => ({ uuid, name: c.displayName }))
+      .map(([uuid, c]) => ({
+        uuid,
+        name: c.displayName,
+        props: c.props,
+        // Volatile exclusion (finding-#4 review P1-C): the "Last Updated"
+        // characteristic carries an ISO timestamp; normalize it so parity
+        // fixtures don't diff on wall-clock. (It is unset at construction
+        // time regardless, since the platform seeds values post-construct.)
+        value: /last updated/i.test(c.displayName) ? '<volatile>' : c.value,
+      }))
       .sort((a, b) => a.uuid.localeCompare(b.uuid));
   }
 }

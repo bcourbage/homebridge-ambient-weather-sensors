@@ -158,16 +158,21 @@ describe('TemperatureAccessory — row-driven (finding #4)', () => {
     });
   }
 
-  it('names the service from row.name, not context.displayName', () => {
+  it('keeps the tile Name platform-owned (context.displayName), NOT row.name', () => {
+    // finding-#4 review (P2-D): station composition is platform-owned.
+    // The platform sets context.device.displayName (station-prefixed for
+    // multi-station); the wrapper renders THAT, so a row never silently
+    // renames an existing customer's accessory. `row.name` is the bare
+    // sensor label the platform composes INTO displayName elsewhere.
     const platform = makeMockPlatform();
-    const accessory = makeMockAccessory({ uniqueId: 'MAC-tempf', displayName: 'STALE CACHE NAME' });
+    const accessory = makeMockAccessory({ uniqueId: 'MAC-tempf', displayName: 'Backyard Outdoor Temperature' });
     new TemperatureAccessory(
       platform as unknown as AmbientWeatherSensorsPlatform,
       accessory as never,
-      tempRow({ name: 'Greenhouse Temp' }),
+      tempRow({ name: 'Outdoor Temperature' }),   // bare label — must NOT clobber the composed name
     );
     const svc = accessory.getService(MockServices.TemperatureSensor)!;
-    expect(svc.readCharacteristic(MockCharacteristics.Name)).toBe('Greenhouse Temp');
+    expect(svc.readCharacteristic(MockCharacteristics.Name)).toBe('Backyard Outdoor Temperature');
   });
 
   it('converts an AWN-native fahrenheit row exactly like the legacy F→C path', () => {
@@ -220,6 +225,25 @@ describe('TemperatureAccessory — row-driven (finding #4)', () => {
       tempRow({ hasBatterySubService: false }),
     );
     expect(accessory.getService(MockServices.Battery)).toBeUndefined();
+  });
+
+  it('legacy (row-absent) build keeps the exact v1.7 "°F → °C" debug string', () => {
+    // P2-B: preserve flag-off log identity.
+    const platform = makeMockPlatform();
+    const accessory = makeMockAccessory({ uniqueId: 'MAC-tempf', displayName: 'Outdoor' });
+    new TemperatureAccessory(platform as unknown as AmbientWeatherSensorsPlatform, accessory as never)
+      .setValue(68);
+    expect(platform.log.logs.some(l => l.message === 'SET CurrentTemperature: 68°F → 20.00°C')).toBe(true);
+  });
+
+  it('row-driven build uses the unit-neutral debug string (no "°F")', () => {
+    const platform = makeMockPlatform();
+    const accessory = makeMockAccessory({ uniqueId: 'MAC-tempf', displayName: 'Outdoor' });
+    new TemperatureAccessory(
+      platform as unknown as AmbientWeatherSensorsPlatform, accessory as never, tempRow(),
+    ).setValue(68);
+    expect(platform.log.logs.some(l => l.message === 'SET CurrentTemperature: 68 → 20.00°C')).toBe(true);
+    expect(platform.log.logs.some(l => l.message.includes('°F'))).toBe(false);
   });
 
   it('graph parity: row-driven build (native fahrenheit) matches the legacy build', () => {

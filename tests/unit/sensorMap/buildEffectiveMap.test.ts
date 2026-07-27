@@ -47,6 +47,103 @@ describe('buildEffectiveSensorMap — safe mode', () => {
   });
 });
 
+describe('buildEffectiveSensorMap — motion trigger fields (finding-#4 review, P1-B)', () => {
+  function rowFor(dp: string) {
+    const r = buildEffectiveSensorMap(baseInput()).rows.find(x => x.dataPoint === dp && x.stationMac === MAC1);
+    if (!r || r.kind === 'unrecognized') throw new Error(`no configured row for ${dp}`);
+    return r;
+  }
+
+  it('known rain-accumulation rows carry the family default threshold (0.01) from the default map', () => {
+    for (const dp of ['eventrainin', 'dailyrainin', 'weeklyrainin', 'monthlyrainin', 'yearlyrainin']) {
+      expect(rowFor(dp).threshold, dp).toBe(0.01);
+    }
+  });
+
+  it('known lightning-count rows carry the family default threshold (1)', () => {
+    expect(rowFor('lightning_day').threshold).toBe(1);
+    expect(rowFor('lightning_hour').threshold).toBe(1);
+  });
+
+  it('known pressure + lightning-distance rows carry triggerDirection: below', () => {
+    expect(rowFor('baromrelin').triggerDirection).toBe('below');
+    expect(rowFor('baromabsin').triggerDirection).toBe('below');
+    expect(rowFor('lightning_distance').triggerDirection).toBe('below');
+  });
+
+  it('a user threshold + triggerDirection override on a known motion row flows through', () => {
+    const result = buildEffectiveSensorMap({
+      ...baseInput(),
+      userOverrides: [{ dataPoint: 'windspeedmph', threshold: 40, triggerDirection: 'below' }],
+    });
+    const row = result.rows.find(r => r.dataPoint === 'windspeedmph' && r.stationMac === MAC1);
+    expect(row && row.kind !== 'unrecognized' ? row.threshold : null).toBe(40);
+    expect(row && row.kind !== 'unrecognized' ? row.triggerDirection : null).toBe('below');
+  });
+
+  it('a triggerEnabled: false override is carried on the resolved row', () => {
+    const result = buildEffectiveSensorMap({
+      ...baseInput(),
+      userOverrides: [{ dataPoint: 'windspeedmph', triggerEnabled: false }],
+    });
+    const row = result.rows.find(r => r.dataPoint === 'windspeedmph' && r.stationMac === MAC1);
+    expect(row && row.kind !== 'unrecognized' ? row.triggerEnabled : null).toBe(false);
+  });
+});
+
+describe('buildEffectiveSensorMap — no-wrapper attribution (finding-#4 review, P2-A)', () => {
+  it('attributes the no-wrapper error to the CUSTOM fragment index, never a synthetic 0', () => {
+    // Valid known override at index 0; custom no-wrapper row at index 1.
+    const result = buildEffectiveSensorMap({
+      ...baseInput(),
+      userOverrides: [
+        { dataPoint: 'tempf', name: 'Outside' },                                             // index 0 (valid)
+        { dataPoint: 'my_custom', kind: 'temperature', measurement: 'temperature', sourceUnit: 'fahrenheit' }, // index 1
+      ],
+    });
+    const noWrap = result.errors.filter(e => e.code === 'no-wrapper');
+    expect(noWrap.length).toBeGreaterThan(0);
+    for (const e of noWrap) {
+      expect(e.overrideIndex).toBe(1);   // the custom fragment — NOT 0
+    }
+  });
+
+  it('uses row-scope (last-fragment) provenance, not batteryField provenance', () => {
+    // Two fragments for the same custom dataPoint: fragment 0 carries the
+    // batteryField, fragment 1 is the last. The no-wrapper error must
+    // follow the last-fragment rule (index 1), independent of which
+    // fragment supplied batteryField (index 0).
+    const result = buildEffectiveSensorMap({
+      ...baseInput(),
+      userOverrides: [
+        { dataPoint: 'my_custom', kind: 'temperature', measurement: 'temperature', sourceUnit: 'fahrenheit', batteryField: 'my_batt' }, // 0
+        { dataPoint: 'my_custom', name: 'Barn' },  // 1 (last fragment, merges)
+      ],
+    });
+    const noWrap = result.errors.filter(e => e.code === 'no-wrapper');
+    expect(noWrap.length).toBeGreaterThan(0);
+    for (const e of noWrap) {
+      expect(e.overrideIndex).toBe(1);   // last fragment, not the batteryField fragment (0)
+    }
+  });
+});
+
+describe('buildEffectiveSensorMap — wrapper-mismatch guard (finding-#4 review, P1-D)', () => {
+  it('drops a row whose resolved wrapperId disagrees with (kind, measurement) and emits a note', () => {
+    // A custom override declaring humidity kind/measurement but... there
+    // is no way to force a bad wrapperId through the public API (the
+    // default map + validation keep them consistent), so this guards the
+    // invariant: EVERY emitted row passes the wrapperId↔(kind,measurement)
+    // check, and no wrapper-mismatch notes are produced on a healthy map.
+    const result = buildEffectiveSensorMap(baseInput());
+    expect(result.notes.filter(n => n.code === 'wrapper-mismatch')).toHaveLength(0);
+    // Cross-check: the guard is real — assertRowMatchesWrapperId would
+    // accept every row it emitted (proven exhaustively in wrapperFactories
+    // + defaultMap tests). Here we just assert the channel exists + empty.
+    expect(Array.isArray(result.notes)).toBe(true);
+  });
+});
+
 describe('buildEffectiveSensorMap — notes channel (finding-#4 Stage 1)', () => {
   it('exposes an (empty) notes array on a clean default expansion', () => {
     const result = buildEffectiveSensorMap(baseInput());

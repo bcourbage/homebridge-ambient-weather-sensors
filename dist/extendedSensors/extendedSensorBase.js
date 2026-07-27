@@ -43,10 +43,12 @@ export function thresholdFor(row, legacyThreshold) {
 export class ExtendedSensorBase {
     constructor(platform, accessory, options, 
     // Row-driven (finding #4): the resolved row drives battery ownership
-    // when present. Subclasses fold the row's name / threshold /
-    // sourceUnit / displayUnit / trigger direction into `options`; the
-    // battery decision is the one piece the base owns directly. Absent
-    // → legacy telemetry-gated battery, byte-identical to v1.6.0.
+    // when present. Subclasses fold the row's threshold / sourceUnit /
+    // displayUnit / trigger direction into `options`; the battery
+    // decision is the one piece the base owns directly. Absent → legacy
+    // telemetry-gated battery, byte-identical to v1.6.0. (The tile NAME
+    // stays platform-owned — see the native wrappers — so a row never
+    // silently renames a multi-station customer's accessory.)
     row) {
         this.platform = platform;
         this.accessory = accessory;
@@ -57,6 +59,7 @@ export class ExtendedSensorBase {
         // 1.6.0. Initialized to 0 so the first update after restart
         // always fires regardless of how recent the cached value was.
         this.lastNameUpdateAt = 0;
+        this.rowDriven = row !== undefined;
         this.customCharacteristics = registerCharacteristics(this.platform.api);
         this.accessory.getService(this.platform.Service.AccessoryInformation)
             .setCharacteristic(this.platform.Characteristic.Manufacturer, 'Ambient Weather')
@@ -130,8 +133,16 @@ export class ExtendedSensorBase {
         // different unit (kph, mm, hPa, km). The subclass formatters and
         // intensity buckets are all scale-anchored in canonical, so they
         // receive the canonical value.
-        const canonical = toCanonical(this.options.measurement, this.options.sourceUnit, rawValue);
-        const canonicalThreshold = toCanonical(this.options.measurement, this.options.sourceUnit, this.options.threshold);
+        // Dispatch on `variant`: numeric readings route through toCanonical
+        // (identity for AWN-native units); a timestamp is already Unix ms and
+        // passes straight through (its threshold is always Infinity, so it
+        // never triggers).
+        const canonical = this.options.variant === 'numeric'
+            ? toCanonical(this.options.measurement, this.options.sourceUnit, rawValue)
+            : rawValue;
+        const canonicalThreshold = this.options.variant === 'numeric'
+            ? toCanonical(this.options.measurement, this.options.sourceUnit, this.options.threshold)
+            : this.options.threshold;
         const valueStr = this.formatValue(canonical);
         const intensityStr = this.formatIntensity(canonical);
         const timestamp = new Date().toISOString();
@@ -140,8 +151,14 @@ export class ExtendedSensorBase {
             && (direction === 'above'
                 ? canonical >= canonicalThreshold
                 : canonical <= canonicalThreshold);
-        this.platform.log.debug(`EXTENDED ${this.options.awnKey}: value="${valueStr}" intensity="${intensityStr ?? '-'}" ` +
-            `raw=${rawValue} canonical=${canonical} threshold=${this.options.threshold} motion=${detected}`);
+        // Preserve flag-off log identity (finding-#4 review): the legacy
+        // (row-absent) path keeps its exact v1.7 debug string; the
+        // canonical-annotated form is used only for row-driven construction.
+        this.platform.log.debug(this.rowDriven
+            ? `EXTENDED ${this.options.awnKey}: value="${valueStr}" intensity="${intensityStr ?? '-'}" `
+                + `raw=${rawValue} canonical=${canonical} threshold=${this.options.threshold} motion=${detected}`
+            : `EXTENDED ${this.options.awnKey}: value="${valueStr}" intensity="${intensityStr ?? '-'}" `
+                + `raw=${rawValue} threshold=${this.options.threshold} motion=${detected}`);
         // Update the three custom characteristics via the cached instance
         // refs. Calling `.updateValue()` directly avoids HAP's broken
         // string-based getCharacteristic path (which matches by displayName,

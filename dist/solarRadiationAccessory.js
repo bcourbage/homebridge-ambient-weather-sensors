@@ -21,7 +21,7 @@ export class SolarRadiationAccessory {
         this.service = this.accessory.getService(this.platform.Service.LightSensor)
             || this.accessory.addService(this.platform.Service.LightSensor);
         // set the service name, this is what is displayed as the default name on the Home app
-        this.service.setCharacteristic(this.platform.Characteristic.Name, row?.name ?? accessory.context.device.displayName);
+        this.service.setCharacteristic(this.platform.Characteristic.Name, accessory.context.device.displayName);
         const char = this.service.getCharacteristic(this.platform.Characteristic.CurrentAmbientLightLevel);
         // allow setting lux to zero, because you know... it's dark at night
         char.setProps({
@@ -51,7 +51,12 @@ export class SolarRadiationAccessory {
         const lux = this.row
             ? toCanonical(this.row.measurement, this.row.sourceUnit, rawValue)
             : solarWm2ToLux(rawValue);
-        this.platform.log.debug(`SET CurrentAmbientLightLevel: ${rawValue} → ${lux} lx`);
+        // Preserve flag-off log identity (finding-#4 review): the legacy
+        // (row-absent) path keeps the exact v1.7 "W/m² → lx" string; the
+        // unit-neutral form is used only for row-driven construction.
+        this.platform.log.debug(this.row
+            ? `SET CurrentAmbientLightLevel: ${rawValue} → ${lux} lx`
+            : `SET CurrentAmbientLightLevel: ${rawValue} W/m² → ${lux} lx`);
         this.service.updateCharacteristic(this.platform.Characteristic.CurrentAmbientLightLevel, lux);
     }
 }

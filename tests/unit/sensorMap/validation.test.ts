@@ -11,6 +11,40 @@ import {
 
 const KNOWN = defaultRowFor('tempf')!;
 const KNOWN_WIND = defaultRowFor('windspeedmph')!;
+const KNOWN_DIR = defaultRowFor('winddir')!;
+const KNOWN_LASTRAIN = defaultRowFor('lastRain')!;
+
+describe('validateOverrideBody — non-triggering measurements (finding-#4 review, P1-B)', () => {
+  it('warn-strips threshold / triggerDirection / triggerEnabled on a direction row', () => {
+    const r = validateOverride(
+      { dataPoint: 'winddir', threshold: 90, triggerDirection: 'below', triggerEnabled: false },
+      KNOWN_DIR,
+    );
+    expect(r.status).toBe('ok');
+    expect(r.warnings.some(w => w.code === 'ignored-non-triggering-threshold')).toBe(true);
+    expect(r.warnings.some(w => w.code === 'ignored-non-triggering-triggerdirection')).toBe(true);
+    expect(r.warnings.some(w => w.code === 'ignored-non-triggering-triggerenabled')).toBe(true);
+    if (r.status === 'ok') {
+      expect(r.validated.threshold).toBeUndefined();
+      expect(r.validated.triggerDirection).toBeUndefined();
+      expect(r.validated.triggerEnabled).toBeUndefined();
+    }
+  });
+
+  it('warn-strips threshold on a timestamp row (last-rain)', () => {
+    const r = validateOverride({ dataPoint: 'lastRain', threshold: 5 }, KNOWN_LASTRAIN);
+    expect(r.status).toBe('ok');
+    expect(r.warnings.some(w => w.code === 'ignored-non-triggering-threshold')).toBe(true);
+    if (r.status === 'ok') expect(r.validated.threshold).toBeUndefined();
+  });
+
+  it('does NOT strip threshold on a triggering motion measurement (wind-speed)', () => {
+    const r = validateOverride({ dataPoint: 'windspeedmph', threshold: 30 }, KNOWN_WIND);
+    expect(r.status).toBe('ok');
+    expect(r.warnings.some(w => w.code.startsWith('ignored-non-triggering'))).toBe(false);
+    if (r.status === 'ok') expect(r.validated.threshold).toBe(30);
+  });
+});
 
 describe('STATION_MAC_REGEX', () => {
   it('accepts uppercase and lowercase MACs', () => {

@@ -30,7 +30,8 @@ class RainRateLikeAccessory extends ExtendedSensorBase {
     row) {
         const legacyUnit = platform.config.units?.rain || 'in';
         super(platform, accessory, {
-            sensorLabel: row?.name ?? sensorLabel,
+            variant: 'numeric',
+            sensorLabel,
             awnKey: row?.dataPoint ?? awnKey,
             threshold: thresholdFor(row, thresholdInHr), // in in/hr (canonical for AWN)
             displayMode: extendedDisplayModeFor(platform, row),
@@ -82,18 +83,18 @@ class RainAccumulationLikeAccessory extends ExtendedSensorBase {
     row) {
         const legacyUnit = platform.config.units?.rain || 'in';
         super(platform, accessory, {
-            sensorLabel: row?.name ?? sensorLabel,
+            variant: 'numeric',
+            sensorLabel,
             awnKey: row?.dataPoint ?? awnKey,
             // Trigger if there's *any* measurable accumulation since the last
-            // reset; threshold deliberately tiny so light drizzle counts. The
-            // family default (0.01 in) is the fallback for BOTH the legacy
-            // path and a row that carries no explicit threshold — unlike the
-            // other extended families (whose no-threshold state means
-            // "disabled"), accumulation motion fires by default. An explicit
-            // row threshold or `triggerEnabled: false` still wins.
-            threshold: row
-                ? (row.triggerEnabled === false ? Infinity : (row.threshold ?? 0.01))
-                : 0.01,
+            // reset; the family default (0.01 in) is set on the KNOWN
+            // rain-accumulation rows in DEFAULT_SENSOR_MAP, so a resolved
+            // known row carries it and `thresholdFor` reads it off the row —
+            // uniform with every other family. The legacy fallback (0.01) is
+            // used only on the row-absent path. A custom rain-accumulation row
+            // that omits `threshold` is disabled (Infinity), per the frozen
+            // schema.
+            threshold: thresholdFor(row, 0.01),
             displayMode: extendedDisplayModeFor(platform, row),
             measurement: 'rain-accumulation',
             sourceUnit: row?.sourceUnit ?? 'in',
@@ -135,7 +136,8 @@ export class RainYearlyAccessory extends RainAccumulationLikeAccessory {
 export class LastRainAccessory extends ExtendedSensorBase {
     constructor(platform, accessory, row) {
         super(platform, accessory, {
-            sensorLabel: row?.name ?? 'Last Rain',
+            variant: 'timestamp',
+            sensorLabel: 'Last Rain',
             awnKey: row?.dataPoint ?? 'lastRain',
             threshold: Infinity,
             displayMode: extendedDisplayModeFor(platform, row),

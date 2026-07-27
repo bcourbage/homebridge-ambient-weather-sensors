@@ -40,7 +40,8 @@ abstract class WindSpeedLikeAccessory extends ExtendedSensorBase {
       : ((platform.config.units?.windSpeed as SpeedUnit) || 'mph');
 
     super(platform, accessory, {
-      sensorLabel: row?.name ?? sensorLabel,
+      variant: 'numeric',
+      sensorLabel,
       awnKey: row?.dataPoint ?? awnKey,
       threshold: thresholdFor(row, thresholdMph),  // in mph (canonical for AWN)
       displayMode: extendedDisplayModeFor(platform, row),
@@ -132,7 +133,8 @@ abstract class WindDirectionLikeAccessory extends ExtendedSensorBase {
     row?: NumericSensorRow,
   ) {
     super(platform, accessory, {
-      sensorLabel: row?.name ?? sensorLabel,
+      variant: 'numeric',
+      sensorLabel,
       awnKey: row?.dataPoint ?? awnKey,
       threshold: Infinity,  // never triggers MotionDetected
       displayMode: extendedDisplayModeFor(platform, row),

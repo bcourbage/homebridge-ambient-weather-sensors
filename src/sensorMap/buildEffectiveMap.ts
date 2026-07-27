@@ -49,6 +49,7 @@ import {
   validateOverrideIdentity,
 } from './validation.js';
 import { WRAPPER_FOR_KIND_AND_MEASUREMENT } from './wrappers.js';
+import { WRAPPER_SPEC } from './wrapperFactories.js';
 
 export interface BuildInput {
   /**
@@ -129,6 +130,16 @@ export function buildEffectiveSensorMap(input: BuildInput): EffectiveSensorMap {
   // violates the Group 1 provenance contract.
   const batteryFieldProvenance = new Map<string, number>();
 
+  // Row-scope provenance side-table — keyed by
+  // `${stationMac ?? '*'}|${dataPoint}`, value is the LAST merge
+  // fragment's originalIndex (the documented row-scope / last-fragment
+  // attribution rule). Distinct from `batteryFieldProvenance`: a
+  // row-scope failure (e.g. `no-wrapper` on a custom row) must NOT be
+  // attributed to whichever fragment happened to carry `batteryField`,
+  // and must never fall back to a synthetic index 0. See finding-#4
+  // review (P2 — no-wrapper attribution).
+  const rowScopeProvenance = new Map<string, number>();
+
   for (const { key, fragments } of pendingMerges.values()) {
     // Merge fragments field-by-field, later wins on conflict. Record
     // which fragment provided each field's final value.
@@ -170,6 +181,7 @@ export function buildEffectiveSensorMap(input: BuildInput): EffectiveSensorMap {
     // has no field (whole-row warning), fall back to the last
     // fragment.
     const lastFragmentIndex = fragments[fragments.length - 1].originalIndex;
+    rowScopeProvenance.set(`${key.stationMac ?? '*'}|${key.dataPoint}`, lastFragmentIndex);
     for (const w of result.warnings) {
       const attributionIndex = w.field !== undefined && provenance[w.field] !== undefined
         ? provenance[w.field]
@@ -394,6 +406,10 @@ export function buildEffectiveSensorMap(input: BuildInput): EffectiveSensorMap {
     // over global (the same precedence mergeOverrides applies).
     const overrideIndex = batteryFieldProvenance.get(`${mac}|${dataPoint}`)
       ?? batteryFieldProvenance.get(`*|${dataPoint}`);
+    // Row-scope (last-fragment) provenance — used for row-scope failures
+    // like `no-wrapper`, independent of batteryField provenance.
+    const rowScopeIndex = rowScopeProvenance.get(`${mac}|${dataPoint}`)
+      ?? rowScopeProvenance.get(`*|${dataPoint}`);
 
     const row = resolveRow({
       stationMac: mac,
@@ -404,14 +420,39 @@ export function buildEffectiveSensorMap(input: BuildInput): EffectiveSensorMap {
       overrideIndex,
       batteryOwnership,
       onNoWrapper: (kind, measurement) => {
+        // A custom (no-default) row is authored entirely by overrides, so
+        // rowScopeProvenance always has its last-fragment index. Attribute
+        // the error there — NEVER a synthetic index 0 (finding-#4 review).
+        if (rowScopeIndex === undefined) {
+          // Unreachable: reaching no-wrapper requires a configured custom
+          // override, which always populates rowScopeProvenance.
+          return;
+        }
         errors.push({
-          overrideIndex: overrideIndex ?? 0,
+          overrideIndex: rowScopeIndex,
           code: 'no-wrapper',
           dataPoint,
           stationMac: mac,
           message: `Custom dataPoint '${dataPoint}' has no wrapper for `
             + `(${kind}, ${measurement}). Custom sensors are not available in this `
             + 'plugin version.',
+        });
+      },
+      onWrapperMismatch: (wrapperId, kind, measurement, fromDefaultMap) => {
+        // The row's resolved wrapperId disagrees with its (kind,
+        // measurement) — a plugin bug when it comes from the default map,
+        // an impossible-if-validation-is-correct belt-and-suspenders when
+        // from an override. Route through the attribution-free `notes`
+        // channel (no config to blame for a default-map bug) and DROP the
+        // row so a mis-typed accessory is never registered.
+        notes.push({
+          code: 'wrapper-mismatch',
+          source: fromDefaultMap ? 'default-map' : 'override',
+          overrideIndex: fromDefaultMap ? undefined : rowScopeIndex,
+          dataPoint,
+          stationMac: mac,
+          message: `Row ${mac}|${dataPoint} resolved wrapper '${wrapperId}', but its `
+            + `(${kind}, ${measurement}) does not match that wrapper's spec. Row dropped.`,
         });
       },
     });
@@ -506,6 +547,17 @@ interface ResolveInput {
    * (their wrapper comes from `defaultRow.wrapper`).
    */
   onNoWrapper: (kind: string, measurement: string) => void;
+  /**
+   * Called when a resolved row's `wrapperId` disagrees with its
+   * `(kind, measurement)` per `WRAPPER_SPEC` (finding-#4 review P1 —
+   * enforce wrapper compatibility at map construction). The row is
+   * DROPPED and the loop pushes a `wrapper-mismatch` note.
+   * `fromDefaultMap` is true when the row's kind/measurement came from
+   * the built-in default map (a plugin bug, no config to blame).
+   */
+  onWrapperMismatch: (
+    wrapperId: string, kind: string, measurement: string, fromDefaultMap: boolean,
+  ) => void;
 }
 
 /**
@@ -561,7 +613,10 @@ interface BatteryOwnershipContext {
 }
 
 function resolveRow(inp: ResolveInput): EffectiveSensorRow | null {
-  const { stationMac, dataPoint, defaultRow, override, discovered, batteryOwnership, onNoWrapper } = inp;
+  const {
+    stationMac, dataPoint, defaultRow, override, discovered, batteryOwnership,
+    onNoWrapper, onWrapperMismatch,
+  } = inp;
 
   // ---- Unrecognized: no default, no user override with kind+measurement.
   if (!defaultRow && !hasKindAndMeasurement(override)) {
@@ -638,6 +693,24 @@ function resolveRow(inp: ResolveInput): EffectiveSensorRow | null {
     : false;
 
   const wrapperId = wrapper.id;
+
+  // ---- Enforce wrapper compatibility at map construction (finding-#4
+  //       review P1). The resolved wrapperId must agree with this row's
+  //       (kind, measurement) per WRAPPER_SPEC. On mismatch, DROP the row
+  //       and push a `wrapper-mismatch` note rather than signing a row
+  //       that would throw at `instantiateWrapper` (the registration-time
+  //       assertion stays as defense-in-depth). A known row's kind/
+  //       measurement come from the default map (a plugin bug → no config
+  //       to blame); a custom row's from the override.
+  const spec = WRAPPER_SPEC[wrapperId];
+  // Cast to string so the comparison doesn't narrow `measurement` in the
+  // outer scope (which would make the future-proof `boolean` branch below
+  // unreachable — no WrapperId maps to a boolean measurement today).
+  if ((kind as string) !== spec.kind || (measurement as string) !== spec.measurement) {
+    onWrapperMismatch(wrapperId, kind, measurement, defaultRow !== undefined);
+    return null;
+  }
+
   const structuralSignature = computeStructuralSignature(kind, measurement, hasBatterySubService, wrapper);
 
   const base = {

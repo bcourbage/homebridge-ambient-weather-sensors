@@ -29,15 +29,16 @@ class LightningCountLikeAccessory extends ExtendedSensorBase {
     // Row-driven (finding #4). count is canonical for strike counts.
     row) {
         super(platform, accessory, {
-            sensorLabel: row?.name ?? sensorLabel,
+            variant: 'numeric',
+            sensorLabel,
             awnKey: row?.dataPoint ?? awnKey,
-            // Any strike at all is noteworthy — the family default is 1. Like
-            // rain accumulation, a row with no explicit threshold keeps the
-            // fires-by-default behavior; an explicit threshold or
-            // `triggerEnabled: false` still wins.
-            threshold: row
-                ? (row.triggerEnabled === false ? Infinity : (row.threshold ?? 1))
-                : 1,
+            // Any strike at all is noteworthy — the family default is 1, set on
+            // the KNOWN lightning-count rows in DEFAULT_SENSOR_MAP so a resolved
+            // known row carries it and `thresholdFor` reads it off the row
+            // (uniform with every other family). The legacy fallback (1) is used
+            // only on the row-absent path. A custom count row that omits
+            // `threshold` is disabled (Infinity), per the frozen schema.
+            threshold: thresholdFor(row, 1),
             displayMode: extendedDisplayModeFor(platform, row),
             measurement: 'count',
             sourceUnit: 'count',
@@ -87,7 +88,8 @@ export class LightningDistanceAccessory extends ExtendedSensorBase {
         const raw = platform.config.thresholds?.lightningDistanceMi;
         const thresholdMi = typeof raw === 'number' ? raw : Infinity;
         super(platform, accessory, {
-            sensorLabel: row?.name ?? 'Lightning Distance',
+            variant: 'numeric',
+            sensorLabel: 'Lightning Distance',
             awnKey: row?.dataPoint ?? 'lightning_distance',
             threshold: thresholdFor(row, thresholdMi), // in mi (canonical for AWN)
             triggerDirection: row?.triggerDirection ?? 'below', // close = alarming, opposite of most sensors
@@ -114,7 +116,8 @@ export class LightningDistanceAccessory extends ExtendedSensorBase {
 export class LightningLastStrikeAccessory extends ExtendedSensorBase {
     constructor(platform, accessory, row) {
         super(platform, accessory, {
-            sensorLabel: row?.name ?? 'Last Lightning Strike',
+            variant: 'timestamp',
+            sensorLabel: 'Last Lightning Strike',
             awnKey: row?.dataPoint ?? 'lightning_time',
             threshold: Infinity, // informational, never triggers motion
             displayMode: extendedDisplayModeFor(platform, row),

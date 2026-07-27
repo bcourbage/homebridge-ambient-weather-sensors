@@ -5,11 +5,13 @@ import { toCanonical } from './sensorMap/unitConversions.js';
 export class TemperatureAccessory {
     constructor(platform, accessory, 
     // Row-driven (finding #4): when the platform's v2 path constructs
-    // this wrapper it passes the resolved row, and every runtime knob
-    // (name, source unit) is read from it. When absent (the v1.6.0
-    // live construction path, still gated behind `_sensorMapV2`), the
-    // wrapper falls back to the legacy config/context behavior so the
-    // shipping path stays byte-identical.
+    // this wrapper it passes the resolved row, and the source-unit /
+    // battery knobs are read from it. When absent (the v1.6.0 live
+    // construction path, still gated behind `_sensorMapV2`), the wrapper
+    // falls back to the legacy config/context behavior so the shipping
+    // path stays byte-identical. NOTE: the tile Name stays platform-owned
+    // (context.device.displayName) so a row never silently renames a
+    // multi-station customer's accessory (finding-#4 review P2-D).
     row) {
         this.platform = platform;
         this.accessory = accessory;
@@ -23,7 +25,7 @@ export class TemperatureAccessory {
         this.service = this.accessory.getService(this.platform.Service.TemperatureSensor)
             || this.accessory.addService(this.platform.Service.TemperatureSensor);
         // set the service name, this is what is displayed as the default name on the Home app
-        this.service.setCharacteristic(this.platform.Characteristic.Name, row?.name ?? accessory.context.device.displayName);
+        this.service.setCharacteristic(this.platform.Characteristic.Name, accessory.context.device.displayName);
         // Attach a Battery sub-service driven by the corresponding batt*
         // field for this sensor's physical probe. Returns undefined (and
         // skips the sub-service) when AWN doesn't report a battery for
@@ -51,7 +53,13 @@ export class TemperatureAccessory {
         const celsius = this.row
             ? toCanonical(this.row.measurement, this.row.sourceUnit, rawValue)
             : fahrenheitToCelsius(rawValue);
-        this.platform.log.debug(`SET CurrentTemperature: ${rawValue} → ${celsius.toFixed(2)}°C`);
+        // Preserve flag-off log identity (finding-#4 review): the legacy
+        // (row-absent) path keeps the exact v1.7 "°F → °C" string; the
+        // unit-neutral form is used only for row-driven construction (where
+        // the source unit may not be fahrenheit).
+        this.platform.log.debug(this.row
+            ? `SET CurrentTemperature: ${rawValue} → ${celsius.toFixed(2)}°C`
+            : `SET CurrentTemperature: ${rawValue}°F → ${celsius.toFixed(2)}°C`);
         this.service.updateCharacteristic(this.platform.Characteristic.CurrentTemperature, celsius);
     }
 }

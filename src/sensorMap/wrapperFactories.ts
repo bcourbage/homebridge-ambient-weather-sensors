@@ -195,16 +195,28 @@ export const FACTORIES: { [K in WrapperId]: Factory<RowForWrapperId[K]> } = {
  * return early — callers reject them before this point.
  */
 export function assertRowMatchesWrapperId(row: EffectiveSensorRow): void {
-  if (row.kind === 'unrecognized') {
-    return;
-  }
-  const spec = WRAPPER_SPEC[row.wrapperId];
-  if (row.kind !== spec.kind || row.measurement !== spec.measurement) {
+  if (!rowMatchesWrapperId(row)) {
+    const spec = WRAPPER_SPEC[(row as { wrapperId: WrapperId }).wrapperId];
     throw new Error(
-      `Wrapper '${row.wrapperId}' expects (${spec.kind}, ${spec.measurement}); `
-      + `row for ${row.stationMac}|${row.dataPoint} has (${row.kind}, ${row.measurement}).`,
+      `Wrapper '${(row as { wrapperId: WrapperId }).wrapperId}' expects (${spec.kind}, ${spec.measurement}); `
+      + `row for ${row.stationMac}|${row.dataPoint} has (${(row as { kind: string }).kind}, `
+      + `${(row as { measurement: string }).measurement}).`,
     );
   }
+}
+
+/**
+ * Non-throwing twin of `assertRowMatchesWrapperId`, used by
+ * `buildEffectiveSensorMap` to DROP a mismatched row (and push a
+ * `wrapper-mismatch` note) at map-construction time rather than throwing
+ * at registration. Unrecognized rows have no wrapper and vacuously match.
+ */
+export function rowMatchesWrapperId(row: EffectiveSensorRow): boolean {
+  if (row.kind === 'unrecognized') {
+    return true;
+  }
+  const spec = WRAPPER_SPEC[row.wrapperId];
+  return row.kind === spec.kind && row.measurement === spec.measurement;
 }
 
 /**

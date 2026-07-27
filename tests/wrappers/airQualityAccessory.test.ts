@@ -144,16 +144,16 @@ describe('AirQualityAccessory — row-driven (finding #4)', () => {
     expect(info.readCharacteristic(MockCharacteristics.Model)).toBe('PM10 Sensor');
   });
 
-  it('names the service from row.name and attaches battery per row', () => {
+  it('keeps Name platform-owned (displayName) and attaches battery per row', () => {
     const platform = makeMockPlatform();
-    const accessory = makeMockAccessory({ uniqueId: 'MAC-pm25', displayName: 'STALE' });
+    const accessory = makeMockAccessory({ uniqueId: 'MAC-pm25', displayName: 'Indoor Air Quality' });
     new AirQualityAccessory(
       platform as unknown as AmbientWeatherSensorsPlatform,
       accessory as never,
-      pmRow('pm25', { name: 'Indoor Air', hasBatterySubService: true, batteryField: 'batt_25' }),
+      pmRow('pm25', { name: 'Air Quality', hasBatterySubService: true, batteryField: 'batt_25' }),
     );
     const svc = accessory.getService(MockServices.AirQualitySensor)!;
-    expect(svc.readCharacteristic(MockCharacteristics.Name)).toBe('Indoor Air');
+    expect(svc.readCharacteristic(MockCharacteristics.Name)).toBe('Indoor Air Quality');
     expect(accessory.getService(MockServices.Battery)).toBeDefined();
   });
 });

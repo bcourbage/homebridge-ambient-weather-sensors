@@ -3,25 +3,32 @@ import { describe, expect, it } from 'vitest';
 import {
   buildWrapperRouting,
   distributeViaRouting,
-} from '../../src/sensorMap/routing';
-import { AmbientWeatherSensorsPlatform } from '../../src/platform';
-import type { EffectiveSensorMap } from '../../src/sensorMap/types';
+} from '../../../src/sensorMap/routing';
+import { AmbientWeatherSensorsPlatform } from '../../../src/platform';
+import type { EffectiveSensorMap } from '../../../src/sensorMap/types';
 import {
   MockCharacteristics,
   MockServices,
   makeMockAccessory,
   makeMockPlatform,
-} from '../helpers/mockHomebridge';
-import { makeNumericRow, makeTimestampRow } from '../helpers/effectiveRow';
+} from '../../helpers/mockHomebridge';
+import { makeNumericRow, makeTimestampRow } from '../../helpers/effectiveRow';
 
 /**
- * finding-#4 Stage 3 — platform-boundary integration test. Proves the
+ * finding-#4 — value-routing MECHANISM tests (unit).
+ *
+ * NOTE (review P1-A): these exercise the routing FUNCTIONS in isolation
+ * — `buildWrapperRouting` / `distributeViaRouting` — NOT the platform
+ * lifecycle. There is no v2 construction branch in `platform.ts` yet
+ * (construction is always `createSensorWrapper`; shadow mode registers
+ * nothing), so the real platform-boundary integration is deferred to the
+ * Stage 4 PR, where it lands as the FIRST step — wiring routing into the
+ * flag-gated v2 path and exercising it through the lifecycle — BEFORE the
+ * resolution table is restored. These unit tests prove the
  * `station.lastData → routing map → coerceValue → wrapper.setValue`
- * wire directly, bypassing buildEffectiveSensorMap (the resolution
- * table is empty until Stage 4, so a custom row can't survive
- * validation yet — but the router still routes it once it exists).
+ * arithmetic the platform will call.
  */
-describe('value routing (Stage 3 boundary)', () => {
+describe('value routing mechanism (unit)', () => {
   const MAC_UPPER = 'AA:BB:CC:DD:EE:01';
   const MAC_LOWER = 'aa:bb:cc:dd:ee:01';
   const F_TO_C = (f: number) => (f - 32) * 5 / 9;

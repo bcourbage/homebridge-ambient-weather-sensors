@@ -81,13 +81,13 @@ describe('Co2Accessory — row-driven (finding #4)', () => {
     wrapperId: 'co2', dataPoint: 'co2_in_aqin', name: 'CO2', ...overrides,
   });
 
-  it('names from row.name; ppm passes through with the hardcoded 1000-ppm alert intact', () => {
+  it('keeps Name platform-owned (displayName); ppm passes through with the hardcoded 1000-ppm alert intact', () => {
     const platform = makeMockPlatform();
-    const accessory = makeMockAccessory({ uniqueId: 'MAC-co2', displayName: 'STALE' });
+    const accessory = makeMockAccessory({ uniqueId: 'MAC-co2', displayName: 'Office CO2' });
     const wrapper = new Co2Accessory(
       platform as unknown as AmbientWeatherSensorsPlatform,
       accessory as never,
-      co2Row({ name: 'Office CO2' }),
+      co2Row({ name: 'CO2' }),
     );
     const svc = accessory.getService(MockServices.CarbonDioxideSensor)!;
     expect(svc.readCharacteristic(MockCharacteristics.Name)).toBe('Office CO2');
