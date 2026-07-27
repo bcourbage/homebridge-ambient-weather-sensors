@@ -547,24 +547,34 @@ Full lifecycle spelled out below across four coordinated pieces
 (each replaces or extends PR #20's interim implementation):
 
 **1. Effective-map resolution.** Ownership is a two-tier rule that
-preserves v1.6.0 behavior EXACTLY for default-map rows and only
-introduces new logic for user-authored custom rows:
+preserves v1.6.0 behavior EXACTLY for unchanged default-map rows,
+and introduces new logic for user-authored battery-field claims —
+including both custom rows AND known rows whose `batteryField` was
+overridden away from its default (see the "User claimants" bullet
+for all three cases):
 
 - **Reserved owner** — every AWN battery field is contractually
   owned by the default-map row with `canonicalForBattery: true`
   for that field (battout → tempf, batt_co2 → co2_in_aqin, and so
   on, per `DEFAULT_SENSOR_MAP`). Reservation is UNCONDITIONAL and
   static: `assertCanonicalBatteryOwnersUnique` at module load
-  guarantees exactly one row per field. The "canonical" status
-  applies only when the row's RESOLVED `batteryField` equals its
-  `defaultRow.batteryField` — if the user overrides the field to a
-  different value, the row loses canonical status for that field
-  and enters the user-claimant path below (see next bullet).
-  Non-canonical default rows that keep their default batteryField
-  (intentional plugin-side sharing — e.g. every outdoor sensor
-  references `battout`) get `hasBatterySubService: false` without
-  warning; the sharing is by design and users shouldn't see noise
-  about it.
+  enforces that every distinct non-null default `batteryField` has
+  EXACTLY ONE canonical owner — both no-more-than-one (two canonical
+  owners is a bug) AND at-least-one (a field referenced by
+  non-canonical rows with zero canonical owner is also a bug,
+  since a runtime collision on those rows would have no honest
+  fragment to attribute to). PR #20 shipped the no-more-than-one
+  half; the at-least-one completeness check is the Stage 2
+  strengthening. The "canonical" status applies only when the
+  row's RESOLVED `batteryField` equals its `defaultRow.batteryField`
+  — if the user overrides the field to a different value, the row
+  loses canonical status for that field and enters the
+  user-claimant path below (see next bullet). Non-canonical default
+  rows that keep their default batteryField (intentional plugin-side
+  sharing — most extended outdoor sensors reference their family's
+  canonical field, e.g. `battout`) get `hasBatterySubService: false`
+  without warning; the sharing is by design and users shouldn't see
+  noise about it.
 
 - **User claimants** — any row whose RESOLVED `batteryField` was
   authored or altered by a user override enters the claimant path.
@@ -577,9 +587,14 @@ introduces new logic for user-authored custom rows:
      loses canonical status because the resolved field ('my_barn_batt')
      doesn't match the default ('battout'), and enters claims like
      a custom row would.
-  3. A **non-canonical known row with an explicit `batteryField`**
-     that differs from its default (rare — most non-canonical
-     defaults don't set `batteryField` themselves).
+  3. A **non-canonical known row whose `batteryField` was
+     overridden away from its default value.** (Most non-canonical
+     default rows DO carry a `batteryField` — they share their
+     family's canonical field, e.g. every outdoor extended sensor
+     references `battout`. The claimant case here is specifically
+     when a user overrides that shared field to a different value,
+     not the common shared-default state, which stays a reserved
+     non-owner.)
 
   Eligibility is a STATIC test against `DEFAULT_SENSOR_MAP`: the
   claimant's resolved `batteryField` must NOT appear in the
