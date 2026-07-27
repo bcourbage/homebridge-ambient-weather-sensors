@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { buildEffectiveSensorMap } from '../../../src/sensorMap/buildEffectiveMap';
 import { compatToOverrides, type LegacyConfig } from '../../../src/sensorMap/compat';
 import { DEFAULT_SENSOR_MAP } from '../../../src/sensorMap/defaultMap';
+import { composeDisplayName } from '../../../src/sensorMap/displayName';
 import type {
   DiscoveryStore,
   StationInventory,
@@ -185,11 +186,11 @@ describe('compatToOverrides — threshold values', () => {
     if (maxGust?.kind !== 'unrecognized') expect(maxGust?.threshold).toBe(40);
   });
 
-  it('pressureLowInHg applies to both pressure rows', () => {
+  it('pressureInHg applies to both pressure rows', () => {
     const legacy: LegacyConfig = {
       extendedSensors: true,
       pressureSensors: true,
-      thresholds: { pressureLowInHg: 29.5 },
+      thresholds: { pressureInHg: 29.5 },
     };
     const rel = rowFor('baromrelin', compatToOverrides(legacy));
     if (rel?.kind !== 'unrecognized') expect(rel?.threshold).toBe(29.5);
@@ -366,5 +367,207 @@ describe('compatToOverrides — determinism', () => {
     const a = compatToOverrides(legacy);
     const b = compatToOverrides(legacy);
     expect(JSON.stringify(a)).toBe(JSON.stringify(b));
+  });
+});
+
+// ---- Review finding #2: v1 include/exclude matcher parity ----
+//
+// v1's platform.ts:661 builds SEVEN candidate forms per accessory
+// (uniqueId, current displayName, prefixed form, sensorKey, friendly
+// name, station MAC, station name); an exclude/include entry can
+// target any of them. Pre-fix, compat only compared against sensorKey
+// + friendly name — the four station-scoped forms were silently
+// ignored, breaking migration parity for anyone using them.
+describe('compatToOverrides — station-scoped exclude/include (finding #2)', () => {
+  const MAC_1 = 'AA:BB:CC:DD:EE:01';
+  const MAC_2 = 'AA:BB:CC:DD:EE:02';
+  const TWO_STATIONS: StationInventory = [
+    { macAddress: MAC_1, name: 'Home' },
+    { macAddress: MAC_2, name: 'Cabin' },
+  ];
+
+  function findOverride(overrides: ReturnType<typeof compatToOverrides>, dp: string, stationMac?: string) {
+    return overrides.find(o => o.dataPoint === dp && o.stationMac === stationMac);
+  }
+
+  it('uniqueId (`MAC-sensorKey`) drops that accessory on that station only', () => {
+    const legacy: LegacyConfig = {
+      temperatureSensors: true,
+      excludeSensors: [`${MAC_1}-tempf`],
+    };
+    const overrides = compatToOverrides(legacy, TWO_STATIONS);
+    // Station 1 has a station-scoped disable override.
+    const s1 = findOverride(overrides, 'tempf', MAC_1);
+    expect(s1?.enabled).toBe(false);
+    // Station 2 has NO station-scoped override — tempf is still enabled there.
+    const s2 = findOverride(overrides, 'tempf', MAC_2);
+    expect(s2).toBeUndefined();
+  });
+
+  it('station MAC alone excludes every row on that station', () => {
+    const legacy: LegacyConfig = {
+      temperatureSensors: true,
+      humiditySensors: true,
+      excludeSensors: [MAC_1],
+    };
+    const overrides = compatToOverrides(legacy, TWO_STATIONS);
+    // Every default-map row on MAC_1 gets a station-scoped disable.
+    // We sample the two we enabled: tempf + humidity.
+    expect(findOverride(overrides, 'tempf', MAC_1)?.enabled).toBe(false);
+    expect(findOverride(overrides, 'humidity', MAC_1)?.enabled).toBe(false);
+    // Nothing on MAC_2.
+    expect(findOverride(overrides, 'tempf', MAC_2)).toBeUndefined();
+    expect(findOverride(overrides, 'humidity', MAC_2)).toBeUndefined();
+  });
+
+  it('station name (as user typed it) drops every row on that station', () => {
+    const legacy: LegacyConfig = {
+      temperatureSensors: true,
+      excludeSensors: ['Cabin'],
+    };
+    const overrides = compatToOverrides(legacy, TWO_STATIONS);
+    expect(findOverride(overrides, 'tempf', MAC_2)?.enabled).toBe(false);
+    expect(findOverride(overrides, 'tempf', MAC_1)).toBeUndefined();
+  });
+
+  it('prefixed form ("<station> <friendly>") drops that row on that station only', () => {
+    // v1 also matches on hapClean(stationName + " " + friendly).
+    const legacy: LegacyConfig = {
+      temperatureSensors: true,
+      excludeSensors: ['Cabin Outdoor Temperature'],
+    };
+    const overrides = compatToOverrides(legacy, TWO_STATIONS);
+    expect(findOverride(overrides, 'tempf', MAC_2)?.enabled).toBe(false);
+    expect(findOverride(overrides, 'tempf', MAC_1)).toBeUndefined();
+  });
+
+  it('includeOnly with a uniqueId keeps only that one accessory', () => {
+    const legacy: LegacyConfig = {
+      temperatureSensors: true,
+      humiditySensors: true,
+      includeOnly: [`${MAC_1}-tempf`],
+    };
+    const overrides = compatToOverrides(legacy, TWO_STATIONS);
+    // tempf on MAC_1 kept (no station-scoped disable).
+    expect(findOverride(overrides, 'tempf', MAC_1)).toBeUndefined();
+    // humidity on MAC_1 dropped (not in includeOnly list).
+    expect(findOverride(overrides, 'humidity', MAC_1)?.enabled).toBe(false);
+    // tempf on MAC_2 dropped (not in includeOnly list — MAC differs).
+    expect(findOverride(overrides, 'tempf', MAC_2)?.enabled).toBe(false);
+    // humidity on MAC_2 dropped.
+    expect(findOverride(overrides, 'humidity', MAC_2)?.enabled).toBe(false);
+  });
+
+  it('includeOnly with a station MAC keeps every row on that station', () => {
+    const legacy: LegacyConfig = {
+      temperatureSensors: true,
+      humiditySensors: true,
+      includeOnly: [MAC_1],
+    };
+    const overrides = compatToOverrides(legacy, TWO_STATIONS);
+    // Everything on MAC_1 kept.
+    expect(findOverride(overrides, 'tempf', MAC_1)).toBeUndefined();
+    expect(findOverride(overrides, 'humidity', MAC_1)).toBeUndefined();
+    // Everything on MAC_2 dropped.
+    expect(findOverride(overrides, 'tempf', MAC_2)?.enabled).toBe(false);
+    expect(findOverride(overrides, 'humidity', MAC_2)?.enabled).toBe(false);
+  });
+
+  it('sensorKey-only entries disable the row on every station', () => {
+    // A global-form entry (sensorKey or friendly name) matches every
+    // station because the seven-candidate list per (row, station)
+    // always includes those forms. Emission is per-station (verbose
+    // but semantically equivalent to a single global disable) so
+    // the station-scoped code path stays uniform. Tests below just
+    // check the effective result — tempf is off on both stations.
+    const legacy: LegacyConfig = {
+      temperatureSensors: true,
+      excludeSensors: ['tempf'],
+    };
+    const overrides = compatToOverrides(legacy, TWO_STATIONS);
+    expect(findOverride(overrides, 'tempf', MAC_1)?.enabled).toBe(false);
+    expect(findOverride(overrides, 'tempf', MAC_2)?.enabled).toBe(false);
+  });
+
+  it('empty station inventory falls back to global-only forms (no crash)', () => {
+    // Boot-before-fetch path: no stations yet. Global forms still
+    // work; station-scoped entries produce nothing (they can't
+    // match without an inventory).
+    const legacy: LegacyConfig = {
+      temperatureSensors: true,
+      excludeSensors: [`${MAC_1}-tempf`, 'tempf'],
+    };
+    const overrides = compatToOverrides(legacy, []);
+    // Global-form entry still applies.
+    expect(findOverride(overrides, 'tempf', undefined)?.enabled).toBe(false);
+  });
+
+  // ---- Follow-up: the 7th candidate is the actual v1 displayName,
+  // computed via the shared composeDisplayName helper. This block
+  // pins the two divergences the reviewer reproduced.
+
+  it('single-station: HAP-cleaned displayName ("Outdoor PM2 5") drops that row', () => {
+    // Single-station setups have no station prefix, so v1's
+    // displayName is `hapClean(friendly)`. `friendlySensorName('pm25')`
+    // includes a period that hapClean strips to a space, and the
+    // digit-adjacent whitespace collapses — the resulting
+    // displayName is "Outdoor PM2 5". Pre-fix, compat only checked
+    // sensorKey + raw friendly name, so this entry silently
+    // matched nothing.
+    const legacy: LegacyConfig = {
+      airQualitySensors: true,
+      excludeSensors: ['Outdoor PM2 5'],
+    };
+    // Single-station: exactly one entry in the inventory.
+    const overrides = compatToOverrides(legacy, [{ macAddress: MAC_1, name: 'Home' }]);
+    expect(findOverride(overrides, 'pm25', MAC_1)?.enabled).toBe(false);
+  });
+
+  it('multi-station with an unnamed station: MAC-fallback displayName drops that row', () => {
+    // v1 falls back to the colon-stripped MAC when a station has
+    // no name. `composeDisplayName` for tempf on an unnamed
+    // station is therefore `hapClean("AABBCCDDEE01 Outdoor Temperature")`.
+    // Pre-fix, compat missed this — an unnamed station's tempf
+    // couldn't be excluded by its displayName.
+    const overrides = compatToOverrides(
+      { temperatureSensors: true, excludeSensors: ['AABBCCDDEE01 Outdoor Temperature'] },
+      [
+        { macAddress: MAC_1, name: '' },
+        { macAddress: MAC_2, name: 'Cabin' },
+      ],
+    );
+    expect(findOverride(overrides, 'tempf', MAC_1)?.enabled).toBe(false);
+    // The named station is unaffected.
+    expect(findOverride(overrides, 'tempf', MAC_2)).toBeUndefined();
+  });
+
+  it('long station name: truncated 64-char displayName drops the row', () => {
+    // v1's composeDisplayName truncates to HAP_NAME_MAX (64) from
+    // the right. A user targeting the truncated form must still
+    // hit — otherwise long station names break migration.
+    const LONG_NAME = 'A very long station name that exceeds sixty four characters after prefixing';
+    const overrides = compatToOverrides(
+      { temperatureSensors: true, excludeSensors: [] },
+      [{ macAddress: MAC_1, name: LONG_NAME }, { macAddress: MAC_2, name: 'Cabin' }],
+    );
+    // Baseline: nothing disabled.
+    expect(findOverride(overrides, 'tempf', MAC_1)).toBeUndefined();
+
+    // Now exclude by the exact truncated displayName v1 would
+    // produce. Compute it via the shared helper the compat layer
+    // uses — the test's point is that a user copy-pasting the
+    // truncated form from HomeKit MUST match under compat.
+    // (`isMultiStation: true` because inventory.length > 1.)
+    const truncatedName = composeDisplayName(
+      { macAddress: MAC_1, name: LONG_NAME }, 'tempf', true,
+    );
+    // Sanity: the truncated form really is at the HAP 64-char cap.
+    expect(truncatedName.length).toBe(64);
+    const overridesWith = compatToOverrides(
+      { temperatureSensors: true, excludeSensors: [truncatedName] },
+      [{ macAddress: MAC_1, name: LONG_NAME }, { macAddress: MAC_2, name: 'Cabin' }],
+    );
+    expect(findOverride(overridesWith, 'tempf', MAC_1)?.enabled).toBe(false);
+    expect(findOverride(overridesWith, 'tempf', MAC_2)).toBeUndefined();
   });
 });

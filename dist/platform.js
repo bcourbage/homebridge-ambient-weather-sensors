@@ -13,30 +13,19 @@ import { UvAccessory } from './extendedSensors/uvAccessory.js';
 import { WindDirection10mAccessory, WindDirectionAccessory, WindGustAccessory, WindMaxDailyGustAccessory, WindSpeedAccessory, } from './extendedSensors/windAccessory.js';
 import { HumidityAccessory } from './humidityAccessory.js';
 import { RealtimeSource } from './realtimeSource.js';
+import { composeDisplayName as sharedComposeDisplayName, hapClean as sharedHapClean, } from './sensorMap/displayName.js';
 import { createShadowMode } from './sensorMap/shadowMode.js';
 import { friendlySensorName, sensorKeyByFriendlyName } from './sensorNames.js';
 import { PLATFORM_NAME, PLUGIN_NAME } from './settings.js';
 import { SolarRadiationAccessory } from './solarRadiationAccessory.js';
 import { TemperatureAccessory } from './temperatureAccessory.js';
 /**
- * Sanitize a string for use in a HAP `Name` characteristic, per Apple's
- * documented rule (alphanumeric, space, and apostrophe only; must start
- * and end with an alphanumeric). HAP 2.x emits warnings for any value
- * that doesn't comply.
- *
- * Exported for test coverage — the function is only used inside this
- * module in production.
+ * Re-export of the HAP Name sanitizer. Kept exported here for tests
+ * that were written against `platform.hapClean` before the helper
+ * moved to `sensorMap/displayName.ts`. The compat layer uses the
+ * shared module directly.
  */
-export function hapClean(input) {
-    return input
-        .replace(/[^A-Za-z0-9 ']/g, ' ')
-        .replace(/\s+/g, ' ')
-        .replace(/^[^A-Za-z0-9]+/, '')
-        .replace(/[^A-Za-z0-9]+$/, '')
-        .trim();
-}
-// HAP 2.x enforces a 64-character limit on the `Name` characteristic.
-const HAP_NAME_MAX = 64;
+export const hapClean = sharedHapClean;
 /**
  * Normalize a string the user might have typed in their config for
  * matching against sensor identifiers. Trims whitespace and lowercases.
@@ -329,15 +318,7 @@ export class AmbientWeatherSensorsPlatform {
      * Truncates from the right to HAP 2.x's 64-character `Name` limit.
      */
     composeDisplayName(obj, sensorKey, isMultiStation) {
-        const sensorLabel = friendlySensorName(sensorKey);
-        if (!isMultiStation) {
-            return hapClean(sensorLabel);
-        }
-        const stationName = hapClean(obj.info?.name ?? '');
-        const macFallback = obj.macAddress.replaceAll(':', '');
-        const baseName = stationName || macFallback;
-        const composed = hapClean(`${baseName} ${sensorLabel}`);
-        return composed.length <= HAP_NAME_MAX ? composed : composed.slice(0, HAP_NAME_MAX).trim();
+        return sharedComposeDisplayName({ macAddress: obj.macAddress, name: obj.info?.name ?? '' }, sensorKey, isMultiStation);
     }
     /**
      * Parse `excludeSensors` entries that target battery sub-services

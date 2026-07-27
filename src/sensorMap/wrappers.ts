@@ -221,6 +221,20 @@ export const LIGHTNING_LAST_STRIKE_WRAPPER: WrapperDescriptor = {
   constructor: LightningLastStrikeAccessory,
 };
 
+/**
+ * The frozen, ordered registry of every wrapper the plugin ships.
+ * Order is stable — the snapshot test in `wrappers.test.ts` locks
+ * both the exact set of (id, schemaVersion) pairs and their order,
+ * so a well-meaning rename or reorder breaks CI instead of silently
+ * invalidating user caches. See review finding #14.
+ *
+ * Runtime `Object.freeze` on the array + each descriptor (applied
+ * at module load, below) guards against accidental in-place
+ * mutation of descriptor fields — the `readonly` compile-time
+ * annotations already do most of the work; the freeze is
+ * belt-and-suspenders for anything reaching the registry through
+ * an untyped path.
+ */
 export const ALL_WRAPPERS: ReadonlyArray<WrapperDescriptor> = [
   TEMPERATURE_WRAPPER,
   HUMIDITY_WRAPPER,
@@ -286,3 +300,13 @@ export const WRAPPER_FOR_KIND_AND_MEASUREMENT: Readonly<Partial<Record<`${Exclud
 export function wrapperFor(kind: Exclude<SensorKind, 'unrecognized'>, measurement: Measurement): WrapperDescriptor | undefined {
   return WRAPPER_FOR_KIND_AND_MEASUREMENT[`${kind}|${measurement}`];
 }
+
+// Deep-freeze the registry so any code path that receives a
+// descriptor (including untyped MCP boundaries or future dynamic
+// lookups) cannot mutate `id` or `schemaVersion`. Applied once at
+// module load. See review finding #14.
+for (const w of ALL_WRAPPERS) {
+  Object.freeze(w);
+}
+Object.freeze(ALL_WRAPPERS);
+Object.freeze(WRAPPER_FOR_KIND_AND_MEASUREMENT);

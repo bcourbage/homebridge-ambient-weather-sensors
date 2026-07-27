@@ -19,7 +19,7 @@
  * Tested by the migration-equivalence property tests (§12.7),
  * scheduled for Stage 9.
  */
-import type { SensorMapOverride, SensorUnit } from './types.js';
+import type { SensorMapOverride, SensorUnit, StationInventory } from './types.js';
 /**
  * v1.6.0 config shape — union of every field the compat layer inspects.
  * Fields the compat layer doesn't consume (stationFilter, dataSource,
@@ -52,7 +52,7 @@ export interface LegacyConfig {
         lightningDistanceEnabled?: boolean;
         lightningDistanceMi?: number;
         pressureEnabled?: boolean;
-        pressureLowInHg?: number;
+        pressureInHg?: number;
     };
     units?: {
         windSpeed?: SensorUnit;
@@ -64,10 +64,30 @@ export interface LegacyConfig {
     includeOnly?: string[];
 }
 /**
- * Public entry point. Returns global overrides (no `stationMac`).
+ * Public entry point. Emits synthetic sensor-map overrides from a
+ * v1.6.0 legacy config. Result is stable across calls with equal
+ * input; safe to cache but cheap enough to recompute each boot.
  *
- * Result is stable across calls with equal input — safe to cache but
- * cheap enough to recompute each boot.
+ * `stations` is the current station inventory (from AWN device list
+ * or the accessory cache). If empty, the layer falls back to
+ * global-only match forms (`dataPoint`, `friendlyName`) — good enough
+ * for boot-before-fetch scenarios but does NOT preserve full v1
+ * semantics.
+ *
+ * Full v1 semantics require the inventory: v1's include/exclude
+ * matchers compare against SEVEN candidate forms per accessory —
+ * `uniqueId` (`MAC-sensorKey`), current displayName, prefixed form
+ * (`hapClean(stationName + friendlyName)`), sensorKey, friendly
+ * name, station MAC, station name — and the last five are
+ * station-specific. Without stations, entries like
+ * `excludeSensors: ["AA:BB:CC:DD:EE:01-tempf"]` or `"Backyard"`
+ * would be silently ignored (review finding #2 pre-fix).
+ *
+ * With inventory, the layer emits station-scoped overrides
+ * (`stationMac` set) for every (station, row) pair the include/
+ * exclude machinery would have disabled in v1; row-level knobs that
+ * don't depend on station (threshold, displayUnit, category
+ * toggles, embed mode) still flow through as global overrides.
  */
-export declare function compatToOverrides(legacy: LegacyConfig): SensorMapOverride[];
+export declare function compatToOverrides(legacy: LegacyConfig, stations?: StationInventory): SensorMapOverride[];
 //# sourceMappingURL=compat.d.ts.map

@@ -80,6 +80,15 @@ export declare class ShadowMode {
     private readonly loggedCacheInference;
     private readonly loggedDivergences;
     private modeLogged;
+    /**
+     * Detected config mode. Populated in `initialize()` and then used
+     * by every `onParseTick` to select the right override source
+     * (compat vs. real v2 sensorMap) and to short-circuit in safe mode.
+     * Defaults to 'legacy' before initialize runs so a stray tick
+     * before the first didFinishLaunching callback still gets a
+     * deterministic answer.
+     */
+    private configMode;
     constructor(opts: ShadowModeOpts);
     /**
      * Called once from platform.ts's didFinishLaunching handler. Loads

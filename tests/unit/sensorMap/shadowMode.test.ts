@@ -369,3 +369,121 @@ describe('ShadowMode — HAP storage collision regression (beta.1 EISDIR)', () =
     await expect(fs.access(bad)).rejects.toBeTruthy();
   });
 });
+
+// ---- Review finding #5: observer must exercise real config mode ----
+
+describe('ShadowMode — config mode drives the parallel pipeline (finding #5)', () => {
+  it('v2 mode: reads `sensorMap` as unknown[] and validates it, not compat output', async () => {
+    // A malformed sensorMap entry (name: 42) MUST surface as a
+    // validation error under v2 mode. Under legacy mode this
+    // entry would never be reached (compat emits well-formed
+    // synthetic overrides only), so the error surfacing here is
+    // a positive signal that v2 is actually being exercised.
+    const { log, captured } = makeLog();
+    const s = new ShadowMode({
+      log,
+      config: {
+        _sensorMapV2: true,
+        configVersion: 2,
+        sensorMap: [{ dataPoint: 'tempf', name: 42 }],
+      } as never,
+      api: { user: { storagePath: () => tmpRoot } },
+    });
+    await s.initialize();
+    s.onParseTick({
+      stations: [{ macAddress: 'AA:BB:CC:DD:EE:01', name: 'Home' }],
+      observed: [{ stationMac: 'AA:BB:CC:DD:EE:01', stationName: 'Home', dataPoint: 'tempf' }],
+      v1Decisions: [{ stationMac: 'AA:BB:CC:DD:EE:01', dataPoint: 'tempf', type: 'Temperature' }],
+    });
+    expect(captured.info.some(l => /config mode: v2/.test(l))).toBe(true);
+    expect(captured.info.some(l => /v2 override validation error/.test(l) && /name/i.test(l))).toBe(true);
+    await s.shutdown();
+  });
+
+  it('v2 mode: non-array `sensorMap` surfaces a divergence line, not a silent empty', async () => {
+    // A malformed sensorMap (string, object, number, null) MUST
+    // announce itself in the observer log — silently treating it
+    // as empty means the observer validates the default-exposure
+    // layout instead of the config the user wrote. The observer
+    // logs a "sensormap-not-array" divergence and then falls back
+    // to an empty override list so the parallel pipeline stays up.
+    const { log, captured } = makeLog();
+    const s = new ShadowMode({
+      log,
+      config: {
+        _sensorMapV2: true,
+        configVersion: 2,
+        sensorMap: 'oops',
+      } as never,
+      api: { user: { storagePath: () => tmpRoot } },
+    });
+    try {
+      await s.initialize();
+      expect(() =>
+        s.onParseTick({
+          stations: [{ macAddress: 'AA:BB:CC:DD:EE:01', name: 'Home' }],
+          observed: [],
+          v1Decisions: [],
+        }),
+      ).not.toThrow();
+      expect(captured.info.some(l => /sensorMap must be an array.*got string/.test(l))).toBe(true);
+    } finally {
+      await s.shutdown();
+    }
+  });
+
+  it('safe mode: onParseTick short-circuits (no divergence lines, no errors)', async () => {
+    // configVersion > CURRENT enters safe mode. The observer must
+    // NOT run its parallel pipeline — the config is uninterpretable
+    // and any effective-map output would be noise.
+    const { log, captured } = makeLog();
+    const s = new ShadowMode({
+      log,
+      config: {
+        _sensorMapV2: true,
+        configVersion: 999,
+      } as never,
+      api: { user: { storagePath: () => tmpRoot } },
+    });
+    await s.initialize();
+    s.onParseTick({
+      stations: [{ macAddress: 'AA:BB:CC:DD:EE:01', name: 'Home' }],
+      observed: [{ stationMac: 'AA:BB:CC:DD:EE:01', stationName: 'Home', dataPoint: 'tempf' }],
+      v1Decisions: [{ stationMac: 'AA:BB:CC:DD:EE:01', dataPoint: 'tempf', type: 'Temperature' }],
+    });
+    // Safe mode was logged at initialize.
+    expect(captured.info.some(l => /config mode: safe-mode/.test(l))).toBe(true);
+    // (1) No divergence lines from parseTick — the pipeline never ran.
+    expect(captured.info.filter(l => /would DROP|would register|validation (error|warning)/.test(l))).toHaveLength(0);
+    // (2) Safe mode is contractually read-only per §5: the plugin
+    // must NOT create the persist tree or write discovery.json.
+    // Regression guard for the review finding that safe mode
+    // still wrote discovery state.
+    const persistDir = path.join(tmpRoot, 'plugin-data', 'ambient-weather');
+    await expect(fs.access(persistDir)).rejects.toBeTruthy();
+    await s.shutdown();
+    // After shutdown too — shutdown() has no tracker to flush.
+    await expect(fs.access(persistDir)).rejects.toBeTruthy();
+  });
+
+  it('legacy mode: falls through to compat (unchanged behavior)', async () => {
+    // Sanity that the routing change didn't regress the legacy
+    // path. temperatureSensors=true + observed tempf + v1 registered
+    // it → no divergence (both agree).
+    const { log, captured } = makeLog();
+    const s = new ShadowMode({
+      log,
+      config: { _sensorMapV2: true, temperatureSensors: true } as never,
+      api: { user: { storagePath: () => tmpRoot } },
+    });
+    await s.initialize();
+    s.onParseTick({
+      stations: [{ macAddress: 'AA:BB:CC:DD:EE:01', name: 'Home' }],
+      observed: [{ stationMac: 'AA:BB:CC:DD:EE:01', stationName: 'Home', dataPoint: 'tempf' }],
+      v1Decisions: [{ stationMac: 'AA:BB:CC:DD:EE:01', dataPoint: 'tempf', type: 'Temperature' }],
+    });
+    expect(captured.info.some(l => /config mode: legacy/.test(l))).toBe(true);
+    expect(captured.info.filter(l => /would/.test(l))).toHaveLength(0);
+    await s.shutdown();
+  });
+});

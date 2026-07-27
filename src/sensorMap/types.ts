@@ -235,25 +235,68 @@ export interface DefaultSensorRow {
  * consumer (createSensorWrapper in the platform, added in a later
  * stage) uses the row's `wrapper` to pick the right ctor.
  */
+/**
+ * The 25 wrapper ids that ship in v2.0. Frozen at GA — renaming any
+ * of these silently invalidates every user's HAP accessory cache
+ * because the id is baked into `structuralSignature`. The registry
+ * itself lives in `wrappers.ts`; the union here exists so
+ * `WrapperDescriptor.id` is a specific literal rather than an open
+ * `string` (which would let a well-meaning rename slip through
+ * without a test failure — see review finding #14).
+ *
+ * Adding a wrapper id (v2.1+) is safe: extend this union in the same
+ * commit as the descriptor. Removing or renaming one is a breaking
+ * change and must bump the plugin major.
+ */
+export type WrapperId =
+  | 'temperature'
+  | 'humidity'
+  | 'solar-radiation'
+  | 'co2'
+  | 'air-quality-pm25'
+  | 'air-quality-pm10'
+  | 'uv'
+  | 'wind-speed'
+  | 'wind-gust'
+  | 'wind-max-daily-gust'
+  | 'wind-direction'
+  | 'wind-direction-10m'
+  | 'pressure-relative'
+  | 'pressure-absolute'
+  | 'rain-rate'
+  | 'rain-event'
+  | 'rain-daily'
+  | 'rain-weekly'
+  | 'rain-monthly'
+  | 'rain-yearly'
+  | 'last-rain'
+  | 'lightning-day'
+  | 'lightning-hour'
+  | 'lightning-distance'
+  | 'lightning-last-strike';
+
 export interface WrapperDescriptor {
   /**
    * Stable identifier. Refactor-safe (a class rename does NOT change
-   * this). Kebab-case string. Baked into `structuralSignature`.
+   * this). Kebab-case, drawn from the frozen `WrapperId` union.
+   * Baked into `structuralSignature`. `readonly` prevents an
+   * accidental in-place mutation from silently invalidating caches.
    */
-  id: string;
+  readonly id: WrapperId;
 
   /**
    * Version of the wrapper's HAP service graph. Bump when a wrapper's
    * characteristics change in a way that would invalidate an existing
-   * cached accessory's service graph.
+   * cached accessory's service graph. Readonly for the same reason
+   * `id` is.
    */
-  schemaVersion: number;
+  readonly schemaVersion: number;
 
   /**
    * Reference to the accessory-wrapper class. Concrete classes have
    * divergent constructor signatures; the runtime consumer narrows.
    */
-  constructor: unknown;
+  readonly constructor: unknown;
 }
 
 /**
@@ -311,10 +354,13 @@ interface ConfiguredRowBase extends CommonMeta {
   structuralSignature: string;
   /**
    * Stable id of the wrapper descriptor this row resolves to.
-   * Redundant with `structuralSignature` but explicit for consumers
-   * that need the wrapper without re-parsing the signature.
+   * Drawn from the frozen `WrapperId` union so TypeScript rejects
+   * any assignment of an unregistered id — the same closure the
+   * descriptor registry itself has. Redundant with
+   * `structuralSignature` but explicit for consumers that need the
+   * wrapper without re-parsing the signature.
    */
-  wrapperId: string;
+  wrapperId: WrapperId;
 }
 
 export interface NumericSensorRow extends ConfiguredRowBase {

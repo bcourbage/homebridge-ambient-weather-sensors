@@ -25,7 +25,7 @@ import * as path from 'path';
 
 import { buildEffectiveSensorMap } from './buildEffectiveMap.js';
 import { compatToOverrides, type LegacyConfig } from './compat.js';
-import { detectConfigMode, type ConfigInputShape } from './configMode.js';
+import { detectConfigMode, type ConfigInputShape, type ConfigMode } from './configMode.js';
 import { inferForCachedAccessory, type CachedAccessoryShape } from './bootstrap.js';
 import {
   cleanupStaleTempFiles,
@@ -123,6 +123,16 @@ export class ShadowMode {
   // Snapshot of config-mode detection at startup. Logged once.
   private modeLogged = false;
 
+  /**
+   * Detected config mode. Populated in `initialize()` and then used
+   * by every `onParseTick` to select the right override source
+   * (compat vs. real v2 sensorMap) and to short-circuit in safe mode.
+   * Defaults to 'legacy' before initialize runs so a stray tick
+   * before the first didFinishLaunching callback still gets a
+   * deterministic answer.
+   */
+  private configMode: ConfigMode = 'legacy';
+
   constructor(opts: ShadowModeOpts) {
     this.log = opts.log;
     this.config = opts.config;
@@ -139,6 +149,30 @@ export class ShadowMode {
    */
   async initialize(): Promise<void> {
     const persistLog = persistLogger(this.log);
+
+    // Detect config mode FIRST, before touching any plugin
+    // persistence. Safe mode is contractually read-only per §5 — it
+    // must NOT create the persist directory, scan / quarantine /
+    // clean anything under it, or open the discovery tracker. Doing
+    // so would let a downgraded plugin still mutate discovery.json
+    // (review finding: safe mode still writes discovery state).
+    if (!this.modeLogged) {
+      const result = detectConfigMode(this.config);
+      this.configMode = result.mode;
+      this.log.info(`[sensor-map v2 shadow] config mode: ${result.mode}`);
+      for (const w of result.warnings) {
+        this.log.warn(`[sensor-map v2 shadow] ${w}`);
+      }
+      if (result.safeModeBanner) {
+        this.log.warn(`[sensor-map v2 shadow] SAFE MODE: ${result.safeModeBanner}`);
+      }
+      this.modeLogged = true;
+    }
+    if (this.configMode === 'safe-mode') {
+      // Tracker stays undefined; onParseTick sees this and no-ops.
+      return;
+    }
+
     // v2.0.0-beta.1 wrote plugin data under <storagePath>/persist/plugin-data/
     // which crashed HAP-NodeJS's node-persist scan with EISDIR. Detect
     // and warn if that leftover directory is still present — the user
@@ -152,18 +186,6 @@ export class ShadowMode {
       log: persistLog,
       initial,
     });
-
-    if (!this.modeLogged) {
-      const result = detectConfigMode(this.config);
-      this.log.info(`[sensor-map v2 shadow] config mode: ${result.mode}`);
-      for (const w of result.warnings) {
-        this.log.warn(`[sensor-map v2 shadow] ${w}`);
-      }
-      if (result.safeModeBanner) {
-        this.log.warn(`[sensor-map v2 shadow] SAFE MODE: ${result.safeModeBanner}`);
-      }
-      this.modeLogged = true;
-    }
   }
 
   /**
@@ -210,6 +232,14 @@ export class ShadowMode {
      */
     v1Decisions: Array<{ stationMac: string; dataPoint: string; type: string }>;
   }): void {
+    // Safe mode is contractually read-only per §5. Short-circuit
+    // BEFORE touching persistence so a downgraded plugin can't
+    // create, update, or scan discovery.json. This runs first
+    // because the tracker feed below writes to disk.
+    if (this.configMode === 'safe-mode') {
+      return;
+    }
+
     // Feed the tracker regardless of shadow comparison — this lets
     // discovery.json accumulate real data while the flag is on.
     if (this.tracker) {
@@ -220,10 +250,39 @@ export class ShadowMode {
       this.tracker.flush().catch(() => { /* logged internally */ });
     }
 
-    // Build the sensor-map view.
-    const overrides = compatToOverrides(this.config as LegacyConfig);
+    // Build the sensor-map view. Path B: the observer must exercise
+    // whichever configuration path the plugin is actually running
+    // (compat for legacy, hand-authored `sensorMap` for v2), so the
+    // observed divergence lines match what would happen once the
+    // flag flips on-by-default.
+    let userOverrides: ReadonlyArray<unknown>;
+    if (this.configMode === 'v2') {
+      // v2: read `sensorMap` as raw unknown[]. Only real arrays are
+      // accepted — a non-array value (string, object, number, null)
+      // is a hand-edit mistake we surface loudly rather than
+      // silently coercing to `[]` (which would validate the
+      // default-exposure layout, not the config the user wrote).
+      const raw = (this.config as { sensorMap?: unknown }).sensorMap;
+      if (raw !== undefined && !Array.isArray(raw)) {
+        this.logDivergenceOnce(
+          'sensormap-not-array',
+          `v2 sensorMap must be an array; got ${describeType(raw)}. `
+          + 'The observer is treating it as empty; the plugin will do the same once the flag flips. '
+          + 'Fix or remove the sensorMap field.',
+        );
+        userOverrides = [];
+      } else {
+        userOverrides = Array.isArray(raw) ? (raw as unknown[]) : [];
+      }
+    } else {
+      // legacy: synthesize from v1.6.0 fields via the compat layer.
+      // Pass the station inventory so exclude/include matchers get
+      // their full seven-candidate v1 semantics (finding #2).
+      userOverrides = compatToOverrides(this.config as LegacyConfig, input.stations);
+    }
+
     const result = buildEffectiveSensorMap({
-      userOverrides: overrides,
+      userOverrides,
       discovery: { schemaVersion: 1, entries: input.observed.map(o => ({
         stationMac: o.stationMac,
         stationName: o.stationName,
@@ -233,7 +292,7 @@ export class ShadowMode {
       })) },
       uiState: { schemaVersion: 1, dismissedNoticeIds: [], forgottenFields: [] },
       stations: input.stations,
-      configMode: 'legacy',
+      configMode: this.configMode,
     });
 
     // Scope the comparison to (station, dataPoint) pairs AWN ACTUALLY
@@ -336,6 +395,16 @@ export class ShadowMode {
       // Doesn't exist. Fresh install or already cleaned up. All good.
     }
   }
+}
+
+function describeType(v: unknown): string {
+  if (v === null) {
+    return 'null';
+  }
+  if (Array.isArray(v)) {
+    return 'array';
+  }
+  return typeof v;
 }
 
 /**
