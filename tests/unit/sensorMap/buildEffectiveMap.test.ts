@@ -43,6 +43,19 @@ describe('buildEffectiveSensorMap — safe mode', () => {
     });
     expect(result.rows).toHaveLength(0);
     expect(result.errors).toHaveLength(0);
+    expect(result.notes).toHaveLength(0);
+  });
+});
+
+describe('buildEffectiveSensorMap — notes channel (finding-#4 Stage 1)', () => {
+  it('exposes an (empty) notes array on a clean default expansion', () => {
+    const result = buildEffectiveSensorMap(baseInput());
+    // The attribution-free `notes` channel exists on every result. On a
+    // healthy default map with no colliding canonical battery owners it
+    // stays empty — the only Stage-1 producer is the unreachable
+    // both-sides-default battery collision (guarded at module load).
+    expect(Array.isArray(result.notes)).toBe(true);
+    expect(result.notes).toHaveLength(0);
   });
 });
 

@@ -306,6 +306,16 @@ export class ShadowMode {
                 this.logDivergenceOnce(key, `v2 override validation warning: ${w.message}`);
             }
         }
+        // Internal-invariant notes — attribution-free diagnostics with no
+        // user config to blame (a default-map wrapper drift, an unreachable
+        // both-sides-default battery collision). Surfaced so a plugin bug
+        // doesn't hide behind an empty errors/warnings list.
+        if (result.notes.length > 0) {
+            for (const n of result.notes) {
+                const key = `note|${n.code}|${n.source}|${n.dataPoint ?? ''}|${n.stationMac ?? ''}`;
+                this.logDivergenceOnce(key, `v2 internal-invariant note (${n.source}): ${n.message}`);
+            }
+        }
     }
     logDivergenceOnce(key, message) {
         if (this.loggedDivergences.has(key)) {

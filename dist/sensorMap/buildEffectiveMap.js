@@ -25,10 +25,11 @@ import { validateOverrideBody, validateOverrideIdentity, } from './validation.js
 import { WRAPPER_FOR_KIND_AND_MEASUREMENT } from './wrappers.js';
 export function buildEffectiveSensorMap(input) {
     if (input.configMode === 'safe-mode') {
-        return { rows: [], errors: [], warnings: [] };
+        return { rows: [], errors: [], warnings: [], notes: [] };
     }
     const errors = [];
     const warnings = [];
+    const notes = [];
     const pendingMerges = new Map();
     input.userOverrides.forEach((raw, i) => {
         const idResult = validateOverrideIdentity(raw);
@@ -259,13 +260,24 @@ export function buildEffectiveSensorMap(input) {
                 ?? batteryFieldProvenance.get(`*|${winner}`);
             const attribution = loserOverrideIndex ?? winnerIndex;
             if (attribution === undefined) {
-                // No config authorship on either side — see comment above.
-                // The RowValidationWarning shape requires overrideIndex,
-                // so skipping the push is the only way to avoid inventing a
-                // bogus one. A follow-up PR (per the reviewer, aligned with
-                // PR #19's `EffectiveSensorMap.notes` design) will route
-                // attribution-free collisions through an internal-invariant
-                // channel instead. Until then, silently drop.
+                // No config authorship on either side — both colliding rows
+                // came from the default map. That's a plugin bug (two canonical
+                // owners for one field), which `assertCanonicalBatteryOwnersUnique()`
+                // catches at module load, so this branch is unreachable in
+                // shipping code. Rather than manufacture a bogus `overrideIndex: 0`
+                // on a `RowValidationWarning` (which would make the UI highlight
+                // an unrelated config entry), route it through the attribution-free
+                // `notes` channel with `source: 'default-map'`. See
+                // `docs/future/wrapper-parameterization.md` §"InternalInvariantNote".
+                notes.push({
+                    code: 'duplicate-battery-owner',
+                    source: 'default-map',
+                    dataPoint: loser,
+                    stationMac: mac,
+                    message: `Row '${loser}' on ${mac} declares batteryField '${batteryField}', `
+                        + `but '${winner}' already owns that field's Battery sub-service on this station. `
+                        + 'Both rows originate from the built-in default map (a plugin bug).',
+                });
                 return;
             }
             warnings.push({
@@ -319,7 +331,7 @@ export function buildEffectiveSensorMap(input) {
             rows.push(row);
         }
     }
-    return { rows, errors, warnings };
+    return { rows, errors, warnings, notes };
 }
 // ---- Helpers ------------------------------------------------------
 /**

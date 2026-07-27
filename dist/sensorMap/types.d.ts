@@ -388,10 +388,40 @@ export interface RowValidationWarning {
     stationMac?: string;
     message: string;
 }
+/**
+ * Internal-invariant / attribution-free diagnostic. Distinct from
+ * `RowValidationError` and `RowValidationWarning`, both of which REQUIRE
+ * an `overrideIndex` pointing at a user-authored config fragment. Some
+ * diagnostics have no such fragment to blame:
+ *
+ *   - a wrapper whose `(kind, measurement)` drifted from the built-in
+ *     default map (a plugin bug, not a user's config);
+ *   - an attribution-free battery-owner collision where BOTH colliding
+ *     rows came from the default map (no override on either side).
+ *
+ * Inventing an `overrideIndex: 0` for these would make the UI highlight
+ * an unrelated config entry the user never wrote. This third channel
+ * carries them with an explicit `source` instead, so the UI can surface
+ * them in a separate "plugin health" section and never mis-attribute.
+ *
+ * See `docs/future/wrapper-parameterization.md` §"InternalInvariantNote".
+ */
+export interface InternalInvariantNote {
+    /** Stable machine-readable identifier for the note class. */
+    code: string;
+    /** Where the note originated. `override` is the only value that carries a meaningful `overrideIndex`. */
+    source: 'default-map' | 'override';
+    /** Only meaningful when `source === 'override'`. */
+    overrideIndex?: number;
+    dataPoint?: string;
+    stationMac?: string;
+    message: string;
+}
 export interface EffectiveSensorMap {
     rows: EffectiveSensorRow[];
     errors: RowValidationError[];
     warnings: RowValidationWarning[];
+    notes: InternalInvariantNote[];
 }
 export {};
 //# sourceMappingURL=types.d.ts.map
