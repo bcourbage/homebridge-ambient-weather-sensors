@@ -40,7 +40,6 @@ import { RealtimeSource } from './realtimeSource.js';
 import {
   composeDisplayName as sharedComposeDisplayName,
   hapClean as sharedHapClean,
-  HAP_NAME_MAX,
 } from './sensorMap/displayName.js';
 import { createShadowMode, type ShadowMode } from './sensorMap/shadowMode.js';
 import { friendlySensorName, sensorKeyByFriendlyName } from './sensorNames.js';
