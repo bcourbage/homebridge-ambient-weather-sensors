@@ -69,7 +69,7 @@ export declare class AmbientWeatherSensorsPlatform implements DynamicPlatformPlu
     private configMode;
     constructor(log: Logger, config: PlatformConfig, api: API);
     configureAccessory(accessory: PlatformAccessory): void;
-    determineSensorType(sensor: string): "PM2.5" | "PM10" | "Temperature" | "Humidity" | "Solar Radiation" | "CO2" | "NOT_SUPPORTED" | "WindSpeed" | "WindGust" | "WindMaxDailyGust" | "WindDirection" | "WindDirection10m" | "RainRate" | "RainEvent" | "RainDaily" | "RainWeekly" | "RainMonthly" | "RainYearly" | "LastRain" | "PressureRelative" | "PressureAbsolute" | "UV" | "LightningDay" | "LightningHour" | "LightningDistance" | "LightningLastStrike";
+    determineSensorType(sensor: string): "PM2.5" | "PM10" | "Solar Radiation" | "CO2" | "Temperature" | "Humidity" | "NOT_SUPPORTED" | "WindSpeed" | "WindGust" | "WindMaxDailyGust" | "WindDirection" | "WindDirection10m" | "RainRate" | "RainEvent" | "RainDaily" | "RainWeekly" | "RainMonthly" | "RainYearly" | "LastRain" | "PressureRelative" | "PressureAbsolute" | "UV" | "LightningDay" | "LightningHour" | "LightningDistance" | "LightningLastStrike";
     /**
      * Compose a HAP-clean accessory displayName from station + sensor
      * metadata.

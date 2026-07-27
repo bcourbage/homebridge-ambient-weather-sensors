@@ -1073,7 +1073,16 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
         }
       }
     }
-    this.log.info(`Safe-mode bound ${this.safeModeBindings.size} cached accessor${this.safeModeBindings.size === 1 ? 'y' : 'ies'} for value updates.`);
+    const bound = this.safeModeBindings.size;
+    const frozen = this.accessories.length - bound;
+    this.log.info(`Safe-mode bound ${bound} cached accessor${bound === 1 ? 'y' : 'ies'} for value updates.`);
+    if (frozen > 0) {
+      this.log.warn(
+        `Safe-mode: ${frozen} cached accessor${frozen === 1 ? 'y' : 'ies'} will stay frozen at last-known values `
+        + '(extended-sensor types, unrecognized cached types, or missing HAP characteristics — safe mode does not '
+        + 'attempt value updates on these to avoid interpreting the unsupported config).',
+      );
+    }
 
     // Safe-mode transport is polling only. Realtime would require
     // us to trust the user's apiKey/applicationKey + interpret
@@ -1145,27 +1154,38 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
       if (typeof s.macAddress !== 'string') {continue;}
       if (!s.lastData || typeof s.lastData !== 'object') {continue;}
       const mac = s.macAddress.toUpperCase();
-      for (const [dp, rawValue] of Object.entries(s.lastData as Record<string, unknown>)) {
-        const binding = this.safeModeBindings.get(`${mac}-${dp}`);
-        if (!binding) {continue;}
-        // Value fields → setValue(number). Battery fields → setBatteryLow(0=low).
-        // AWN uses batt* naming for battery fields; readBatteryLow
-        // is the v1.6.0 helper we already import.
-        if (dp.startsWith('batt')) {
-          binding.setBatteryLow(rawValue === 0);
-          continue;
-        }
+      const lastData = s.lastData as Record<string, unknown>;
+      // Iterate BOUND sensor uniqueIds only, not every raw field.
+      // For each bound (mac, dataPoint) sensor: push its value AND
+      // (if the sensor's probe reports battery) push battery-low
+      // from the corresponding batt* field on the same payload.
+      for (const [uniqueId, binding] of this.safeModeBindings) {
+        if (!uniqueId.startsWith(`${mac}-`)) {continue;}
+        const dp = uniqueId.slice(mac.length + 1);
+
+        // Sensor value.
+        const rawValue = lastData[dp];
         if (typeof rawValue === 'number' && Number.isFinite(rawValue)) {
           try {
             binding.setValue(rawValue);
           } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
-            this.log.debug(`safe-mode setValue failed for ${mac}-${dp}: ${message}`);
+            this.log.debug(`safe-mode setValue failed for ${uniqueId}: ${message}`);
           }
         }
-        // Non-numeric values (lastRain ISO strings, dateutc, etc.)
-        // are silently ignored in safe mode — we don't have the
-        // per-row coercion the normal path uses.
+
+        // Battery. Look up the AWN battery field for this sensor's
+        // probe via v1.6.0's `batteryFieldForSensor` (safe because
+        // it's a static lookup by sensorKey, not a config-driven
+        // decision). Read that field off the same payload and push
+        // AWN's `0 = low` convention through as a boolean.
+        const batteryField = batteryFieldForSensor(dp);
+        if (batteryField !== undefined) {
+          const battRaw = lastData[batteryField];
+          if (typeof battRaw === 'number') {
+            binding.setBatteryLow(battRaw === 0);
+          }
+        }
       }
     }
   }

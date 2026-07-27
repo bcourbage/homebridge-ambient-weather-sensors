@@ -7,7 +7,6 @@ export declare class TemperatureAccessory implements SensorAccessory {
     private readonly batterySetter?;
     constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory);
     setBatteryLow(batteryLow: boolean): void;
-    private fahrenheitToCelsius;
     /**
      * Push a fresh raw AWN reading (in °F) into the HomeKit characteristic
      * after converting to °C. Called by the platform's poll tick — wrappers

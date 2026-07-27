@@ -10,37 +10,39 @@
  * primary service isn't present. Either behavior is a structural
  * change safe mode forbids.
  *
- * The alternative is this module: given a cached PlatformAccessory,
- * `bindSafeMode(accessory)` looks at the services THAT ALREADY EXIST
- * on the accessory, resolves the appropriate HAP characteristic
- * bindings, and returns a small object that pushes values via
- * `updateCharacteristic` — never `addService` / `removeService`.
- * Accessories whose expected primary service is absent get skipped
- * (they keep their cached HAP values; polling simply doesn't touch
- * them).
+ * `bindSafeMode(accessory)` binds ONLY to services and characteristics
+ * that ALREADY EXIST on the cached accessory. It uses `getService()`
+ * for the service check and `testCharacteristic()` + `getCharacteristic()`
+ * for each characteristic — retaining the `Characteristic` instance
+ * so subsequent updates go through `.updateValue()` directly. HAP's
+ * `updateCharacteristic()` would attach a missing characteristic
+ * on demand, which is a graph mutation safe mode forbids. Any
+ * missing service or missing characteristic → return undefined and
+ * skip the accessory (its cached HAP values stay in place).
  *
- * The mapping table matches what `platform.createSensorWrapper()`
- * does for each `context.device.type`, but without the mutation.
- * Only the FIVE native HomeKit sensor types are supported today
- * (Temperature, Humidity, Solar Radiation, CO2, PM2.5 / PM10);
- * extended-sensor accessories (Wind, Rain, Pressure, UV, Lightning)
- * skip value updates in safe mode and stay at their cached values.
- * That's an intentional Group 4 scope reduction: extended sensors
- * store their live values in custom characteristics whose semantics
- * (thresholds, intensity buckets, embed-mode name updates) depend
- * on config we can't safely interpret in safe mode. Native sensors
- * have a fixed HAP unit and a single characteristic, so binding is
- * unambiguous.
+ * We further restrict binding to KNOWN default-map dataPoints:
+ * `bindSafeMode(accessory)` extracts the dataPoint from the
+ * accessory's uniqueId (`${mac}-${dataPoint}`) and rejects anything
+ * not in `DEFAULT_SENSOR_MAP`. That's the "no unknown config
+ * interpretation" guarantee — a cached custom sensor (whose
+ * sourceUnit and semantic depend on config we can't trust) never
+ * receives a value update in safe mode. Its cached HAP value
+ * persists via Homebridge's normal accessory restore.
+ *
+ * Native types supported today: Temperature, Humidity, Solar
+ * Radiation, CO2, PM2.5 / PM10. Extended-sensor accessories (Wind,
+ * Rain, Pressure, UV, Lightning) fall through — same reason (their
+ * live-value semantics depend on config-driven thresholds and
+ * display modes we can't interpret in safe mode).
  */
 import type { PlatformAccessory } from 'homebridge';
 /**
  * Minimal platform surface `bindSafeMode` needs — matches the real
  * `AmbientWeatherSensorsPlatform` shape. Homebridge's `Service` and
  * `Characteristic` are both extendable classes AND namespaces with
- * static named members (`Service.TemperatureSensor`,
- * `Characteristic.CurrentTemperature`, etc.); the interface is
- * intentionally loose so both the real platform and the test mocks
- * fit without wrestling with tight index signatures.
+ * static named members; the interface is intentionally loose so both
+ * the real platform and the test mocks fit without wrestling with
+ * tight index signatures.
  */
 export type SafeModeBindingPlatform = {
     Service: any;
@@ -50,21 +52,28 @@ export type SafeModeBindingPlatform = {
     };
 };
 export interface SafeModeBinding {
-    /** Push a raw AWN value into the accessory's HAP characteristic. */
+    /** Push a raw AWN value into the accessory's HAP characteristic(s). */
     setValue(rawValue: number): void;
     /**
      * Push a battery-low reading, iff the accessory already has an
-     * attached BatteryService. When absent, this is a no-op — safe
-     * mode never creates a BatteryService.
+     * attached BatteryService whose `StatusLowBattery` characteristic
+     * is present. When absent, this is a no-op — safe mode never
+     * creates a BatteryService or attaches a missing characteristic.
      */
     setBatteryLow(low: boolean): void;
 }
 /**
  * Build a safe-mode binding for a cached accessory. Returns
- * undefined when the accessory's cached `context.device.type` isn't
- * a supported native type OR the expected primary service isn't
- * already attached. The caller (`platform.safeModeStart`) skips
- * unmatched accessories, leaving them at their cached HAP values.
+ * undefined when:
+ *   - the accessory's uniqueId doesn't parse, OR
+ *   - the dataPoint isn't in `DEFAULT_SENSOR_MAP`, OR
+ *   - the cached `context.device.type` isn't one of the five
+ *     supported native types, OR
+ *   - the expected primary service or its value characteristic(s)
+ *     aren't already attached to the accessory.
+ *
+ * Caller (`platform.safeModeStart`) skips unmatched accessories,
+ * leaving them at their cached HAP values.
  */
 export declare function bindSafeMode(platform: SafeModeBindingPlatform, accessory: PlatformAccessory): SafeModeBinding | undefined;
 //# sourceMappingURL=safeModeBinding.d.ts.map

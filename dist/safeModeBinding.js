@@ -10,109 +10,117 @@
  * primary service isn't present. Either behavior is a structural
  * change safe mode forbids.
  *
- * The alternative is this module: given a cached PlatformAccessory,
- * `bindSafeMode(accessory)` looks at the services THAT ALREADY EXIST
- * on the accessory, resolves the appropriate HAP characteristic
- * bindings, and returns a small object that pushes values via
- * `updateCharacteristic` — never `addService` / `removeService`.
- * Accessories whose expected primary service is absent get skipped
- * (they keep their cached HAP values; polling simply doesn't touch
- * them).
+ * `bindSafeMode(accessory)` binds ONLY to services and characteristics
+ * that ALREADY EXIST on the cached accessory. It uses `getService()`
+ * for the service check and `testCharacteristic()` + `getCharacteristic()`
+ * for each characteristic — retaining the `Characteristic` instance
+ * so subsequent updates go through `.updateValue()` directly. HAP's
+ * `updateCharacteristic()` would attach a missing characteristic
+ * on demand, which is a graph mutation safe mode forbids. Any
+ * missing service or missing characteristic → return undefined and
+ * skip the accessory (its cached HAP values stay in place).
  *
- * The mapping table matches what `platform.createSensorWrapper()`
- * does for each `context.device.type`, but without the mutation.
- * Only the FIVE native HomeKit sensor types are supported today
- * (Temperature, Humidity, Solar Radiation, CO2, PM2.5 / PM10);
- * extended-sensor accessories (Wind, Rain, Pressure, UV, Lightning)
- * skip value updates in safe mode and stay at their cached values.
- * That's an intentional Group 4 scope reduction: extended sensors
- * store their live values in custom characteristics whose semantics
- * (thresholds, intensity buckets, embed-mode name updates) depend
- * on config we can't safely interpret in safe mode. Native sensors
- * have a fixed HAP unit and a single characteristic, so binding is
- * unambiguous.
+ * We further restrict binding to KNOWN default-map dataPoints:
+ * `bindSafeMode(accessory)` extracts the dataPoint from the
+ * accessory's uniqueId (`${mac}-${dataPoint}`) and rejects anything
+ * not in `DEFAULT_SENSOR_MAP`. That's the "no unknown config
+ * interpretation" guarantee — a cached custom sensor (whose
+ * sourceUnit and semantic depend on config we can't trust) never
+ * receives a value update in safe mode. Its cached HAP value
+ * persists via Homebridge's normal accessory restore.
+ *
+ * Native types supported today: Temperature, Humidity, Solar
+ * Radiation, CO2, PM2.5 / PM10. Extended-sensor accessories (Wind,
+ * Rain, Pressure, UV, Lightning) fall through — same reason (their
+ * live-value semantics depend on config-driven thresholds and
+ * display modes we can't interpret in safe mode).
  */
+import { CO2_DETECTED_PPM, airQualityReading, co2Reading, fahrenheitToCelsius, solarWm2ToLux, } from './nativeConversions.js';
+import { defaultRowFor } from './sensorMap/defaultMap.js';
 /**
- * Fahrenheit → Celsius, matching TemperatureAccessory. HAP's
- * `CurrentTemperature` is in Celsius; AWN reports Fahrenheit.
+ * Extract the sensor `dataPoint` from a uniqueId of the form
+ * `${macAddress}-${dataPoint}`. Anchored on the first hyphen after
+ * a valid-looking MAC prefix so sensorKeys that themselves contain
+ * hyphens survive (`co2_in_aqin`, `pm25_in_24h_aqin`, etc.).
+ * Returns undefined for malformed ids.
  */
-function fToC(f) {
-    return (f - 32) * 5 / 9;
+function extractDataPoint(uniqueId) {
+    // MAC form is `HH:HH:HH:HH:HH:HH` (17 chars). uniqueId is
+    // `${mac}-${dataPoint}`, so the dataPoint starts at index 18.
+    if (uniqueId.length <= 18 || uniqueId[17] !== '-') {
+        return undefined;
+    }
+    return uniqueId.slice(18);
 }
 /**
- * W/m² → lux, matching SolarRadiationAccessory. The 126 multiplier
- * is the same constant the wrapper class uses.
+ * Attach a battery-low updater IF the accessory already has both a
+ * BatteryService AND a StatusLowBattery characteristic attached to
+ * it. Never creates either — safe mode forbids graph mutation.
  */
-function wm2ToLux(wm2) {
-    return Math.round(wm2 * 126);
-}
-/**
- * Air-quality index buckets, matching AirQualityAccessory (WHO
- * short-term guidelines). Values in μg/m³.
- */
-function aqIndex(density, kind) {
-    // 1..5 (Excellent..Poor); matches the wrapper.
-    if (kind === 'PM2.5') {
-        if (density <= 12) {
-            return 1;
-        }
-        if (density <= 35) {
-            return 2;
-        }
-        if (density <= 55) {
-            return 3;
-        }
-        if (density <= 150) {
-            return 4;
-        }
-        return 5;
-    }
-    // PM10
-    if (density <= 20) {
-        return 1;
-    }
-    if (density <= 50) {
-        return 2;
-    }
-    if (density <= 100) {
-        return 3;
-    }
-    if (density <= 200) {
-        return 4;
-    }
-    return 5;
-}
-/**
- * Optionally attach a battery-low updater IF the accessory already
- * has a BatteryService. Never creates one — that would be a
- * structural change safe mode forbids.
- */
-function bindBattery(platform, accessory) {
+function bindBatteryChar(platform, accessory) {
     const svcCtor = platform.Service.Battery;
     const existing = accessory.getService(svcCtor);
     if (!existing) {
         return () => { };
     }
+    // HAP-NodeJS types testCharacteristic + getCharacteristic against
+    // the class-form ctor, but the actual runtime accepts either the
+    // ctor or its UUID. We cast broadly here to avoid wrestling with
+    // the type gymnastics — both mock and real HAP accept it.
     const charCtor = platform.Characteristic.StatusLowBattery;
+    if (!existing.testCharacteristic(charCtor)) {
+        return () => { };
+    }
+    const characteristic = existing.getCharacteristic(charCtor);
     return (low) => {
-        existing.updateCharacteristic(charCtor, low ? 1 : 0);
+        characteristic.updateValue(low ? 1 : 0);
     };
 }
 /**
  * Look up an existing service on the accessory (never adds one).
- * Returns undefined if the expected primary service isn't present.
+ * Returns undefined if absent.
  */
-function requireExistingService(accessory, ctor) {
+function requireService(accessory, ctor) {
     return accessory.getService(ctor);
 }
 /**
+ * Look up an existing characteristic on the given service (never
+ * attaches one). Returns undefined if absent; safe mode skips
+ * updates to the missing characteristic silently.
+ */
+function requireCharacteristic(svc, ctor) {
+    // Same rationale as bindBatteryChar's cast: HAP accepts ctor form
+    // at runtime; the strict TS type wants a specific ctor.
+    const c = ctor;
+    if (!svc.testCharacteristic(c)) {
+        return undefined;
+    }
+    return svc.getCharacteristic(c);
+}
+/**
  * Build a safe-mode binding for a cached accessory. Returns
- * undefined when the accessory's cached `context.device.type` isn't
- * a supported native type OR the expected primary service isn't
- * already attached. The caller (`platform.safeModeStart`) skips
- * unmatched accessories, leaving them at their cached HAP values.
+ * undefined when:
+ *   - the accessory's uniqueId doesn't parse, OR
+ *   - the dataPoint isn't in `DEFAULT_SENSOR_MAP`, OR
+ *   - the cached `context.device.type` isn't one of the five
+ *     supported native types, OR
+ *   - the expected primary service or its value characteristic(s)
+ *     aren't already attached to the accessory.
+ *
+ * Caller (`platform.safeModeStart`) skips unmatched accessories,
+ * leaving them at their cached HAP values.
  */
 export function bindSafeMode(platform, accessory) {
+    const uniqueId = accessory.context?.device?.uniqueId;
+    if (typeof uniqueId !== 'string' || uniqueId.length === 0) {
+        return undefined;
+    }
+    const dataPoint = extractDataPoint(uniqueId);
+    if (!dataPoint || !defaultRowFor(dataPoint)) {
+        // Custom / unknown dataPoint — we can't safely infer the
+        // source unit, so no value updates. Cached HAP value stays.
+        return undefined;
+    }
     const type = accessory.context?.device?.type;
     if (typeof type !== 'string') {
         return undefined;
@@ -121,92 +129,110 @@ export function bindSafeMode(platform, accessory) {
     const S = platform.Service;
     switch (type) {
         case 'Temperature': {
-            const svc = requireExistingService(accessory, S.TemperatureSensor);
+            const svc = requireService(accessory, S.TemperatureSensor);
             if (!svc) {
                 return undefined;
             }
-            const setBatteryLow = bindBattery(platform, accessory);
+            const currentTemp = requireCharacteristic(svc, P.CurrentTemperature);
+            if (!currentTemp) {
+                return undefined;
+            }
+            const setBatteryLow = bindBatteryChar(platform, accessory);
             return {
                 setValue: (raw) => {
-                    const celsius = fToC(raw);
-                    svc.updateCharacteristic(P.CurrentTemperature, celsius);
+                    const celsius = fahrenheitToCelsius(raw);
+                    currentTemp.updateValue(celsius);
                     platform.log.debug(`safe-mode: CurrentTemperature ${raw}°F → ${celsius.toFixed(2)}°C`);
                 },
                 setBatteryLow,
             };
         }
         case 'Humidity': {
-            const svc = requireExistingService(accessory, S.HumiditySensor);
+            const svc = requireService(accessory, S.HumiditySensor);
             if (!svc) {
                 return undefined;
             }
-            const setBatteryLow = bindBattery(platform, accessory);
+            const humidityChar = requireCharacteristic(svc, P.CurrentRelativeHumidity);
+            if (!humidityChar) {
+                return undefined;
+            }
+            const setBatteryLow = bindBatteryChar(platform, accessory);
             return {
                 setValue: (raw) => {
-                    svc.updateCharacteristic(P.CurrentRelativeHumidity, raw);
+                    humidityChar.updateValue(raw);
                     platform.log.debug(`safe-mode: CurrentRelativeHumidity ${raw}%`);
                 },
                 setBatteryLow,
             };
         }
         case 'Solar Radiation': {
-            const svc = requireExistingService(accessory, S.LightSensor);
+            const svc = requireService(accessory, S.LightSensor);
             if (!svc) {
                 return undefined;
             }
-            const setBatteryLow = bindBattery(platform, accessory);
+            const luxChar = requireCharacteristic(svc, P.CurrentAmbientLightLevel);
+            if (!luxChar) {
+                return undefined;
+            }
+            const setBatteryLow = bindBatteryChar(platform, accessory);
             return {
                 setValue: (raw) => {
-                    const lux = Math.max(0.0001, wm2ToLux(raw)); // HAP LightSensor min is 0.0001
-                    svc.updateCharacteristic(P.CurrentAmbientLightLevel, lux);
+                    const lux = Math.max(0.0001, solarWm2ToLux(raw));
+                    luxChar.updateValue(lux);
                     platform.log.debug(`safe-mode: CurrentAmbientLightLevel ${raw} W/m² → ${lux} lx`);
                 },
                 setBatteryLow,
             };
         }
         case 'CO2': {
-            const svc = requireExistingService(accessory, S.CarbonDioxideSensor);
+            const svc = requireService(accessory, S.CarbonDioxideSensor);
             if (!svc) {
                 return undefined;
             }
-            const setBatteryLow = bindBattery(platform, accessory);
-            const CO2_DETECTED_PPM = 1000; // matches Co2Accessory
+            const co2Level = requireCharacteristic(svc, P.CarbonDioxideLevel);
+            const co2Detected = requireCharacteristic(svc, P.CarbonDioxideDetected);
+            if (!co2Level || !co2Detected) {
+                return undefined;
+            }
+            const setBatteryLow = bindBatteryChar(platform, accessory);
             return {
                 setValue: (raw) => {
-                    svc.updateCharacteristic(P.CarbonDioxideLevel, raw);
-                    svc.updateCharacteristic(P.CarbonDioxideDetected, raw >= CO2_DETECTED_PPM ? 1 : 0);
-                    platform.log.debug(`safe-mode: CarbonDioxideLevel ${raw} ppm`);
+                    const { ppm, detected } = co2Reading(raw);
+                    co2Level.updateValue(ppm);
+                    co2Detected.updateValue(detected ? 1 : 0);
+                    platform.log.debug(`safe-mode: CarbonDioxideLevel ${ppm} ppm (${detected ? 'abnormal' : 'normal'}; threshold ${CO2_DETECTED_PPM})`);
                 },
                 setBatteryLow,
             };
         }
         case 'PM2.5':
         case 'PM10': {
-            const svc = requireExistingService(accessory, S.AirQualitySensor);
+            const svc = requireService(accessory, S.AirQualitySensor);
             if (!svc) {
                 return undefined;
             }
-            const setBatteryLow = bindBattery(platform, accessory);
             const kind = type;
+            const densityCtor = kind === 'PM10' ? P.PM10Density : P.PM2_5Density;
+            const densityChar = requireCharacteristic(svc, densityCtor);
+            const aqChar = requireCharacteristic(svc, P.AirQuality);
+            if (!densityChar || !aqChar) {
+                return undefined;
+            }
+            const setBatteryLow = bindBatteryChar(platform, accessory);
             return {
                 setValue: (raw) => {
-                    if (kind === 'PM10') {
-                        svc.updateCharacteristic(P.PM10Density, raw);
-                    }
-                    else {
-                        svc.updateCharacteristic(P.PM2_5Density, raw);
-                    }
-                    svc.updateCharacteristic(P.AirQuality, aqIndex(raw, kind));
-                    platform.log.debug(`safe-mode: ${kind}Density ${raw} µg/m³`);
+                    const value = Math.max(0, raw);
+                    const { density, level } = airQualityReading(value, kind);
+                    densityChar.updateValue(density);
+                    aqChar.updateValue(level);
+                    platform.log.debug(`safe-mode: ${kind}Density ${density} µg/m³ → AirQuality level ${level}`);
                 },
                 setBatteryLow,
             };
         }
         default:
-            // Extended-sensor types (Wind Speed, Rain Rate, Pressure, UV,
-            // Lightning*, etc.) fall through: their live-value semantics
-            // depend on config-driven thresholds and display modes we can't
-            // interpret in safe mode. Cached HAP values stay in place.
+            // Extended-sensor types + unrecognized cached types: cached
+            // HAP values remain, no updates pushed.
             return undefined;
     }
 }

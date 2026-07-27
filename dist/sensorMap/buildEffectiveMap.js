@@ -488,32 +488,52 @@ const RESERVED_BATTERY_FIELDS = new Set(DEFAULT_SENSOR_MAP
     .filter(r => r.canonicalForBattery && r.batteryField !== null)
     .map(r => r.batteryField));
 /**
- * Startup invariant: every non-null `batteryField` in
- * `DEFAULT_SENSOR_MAP` has AT MOST ONE row with
- * `canonicalForBattery: true`. Violating this would produce a
- * duplicate-battery-owner collision on rows that have no
- * user-authored `overrideIndex` — i.e. both sides come from the
- * default map — and the warning would have no honest fragment to
- * attribute to. Failing fast at module load is preferable to
- * silently degrading to a debug-log-and-drop path at runtime.
+ * Startup invariant: every distinct non-null `batteryField` in
+ * `DEFAULT_SENSOR_MAP` has EXACTLY ONE row with
+ * `canonicalForBattery: true`.
  *
- * Executed unconditionally on import; if it ever throws in CI, the
- * offending DEFAULT_SENSOR_MAP entries need to be reconciled.
+ * Two failure modes we protect against:
+ *   1. Two canonical owners for the same field — would produce a
+ *      duplicate-battery-owner collision between default-map rows
+ *      that have no user-authored `overrideIndex`, so the warning
+ *      would have no honest fragment to attribute to.
+ *   2. Zero canonical owners for a field that IS referenced by
+ *      non-canonical default rows — same problem the moment those
+ *      rows try to claim the field: no default row has canonical
+ *      authority, and a runtime collision on two non-canonical
+ *      defaults sharing the field would also be attribution-free.
+ *
+ * Failing fast at module load is preferable to silently degrading
+ * to a debug-log-and-drop path at runtime. Executed unconditionally
+ * on import; if it ever throws in CI, the offending
+ * DEFAULT_SENSOR_MAP entries need to be reconciled.
  */
 function assertCanonicalBatteryOwnersUnique() {
-    const owners = new Map();
+    const canonicalOwners = new Map(); // batteryField → dataPoint
+    const referencedFields = new Set();
     for (const row of DEFAULT_SENSOR_MAP) {
-        if (!row.canonicalForBattery || row.batteryField === null) {
+        if (row.batteryField === null) {
             continue;
         }
-        const existing = owners.get(row.batteryField);
+        referencedFields.add(row.batteryField);
+        if (!row.canonicalForBattery) {
+            continue;
+        }
+        const existing = canonicalOwners.get(row.batteryField);
         if (existing !== undefined) {
             throw new Error(`DEFAULT_SENSOR_MAP invariant violation: batteryField '${row.batteryField}' `
                 + `has two canonical owners ('${existing}' and '${row.dataPoint}'). `
                 + 'A batteryField may be shared by many rows but must have exactly one '
                 + 'row with canonicalForBattery: true.');
         }
-        owners.set(row.batteryField, row.dataPoint);
+        canonicalOwners.set(row.batteryField, row.dataPoint);
+    }
+    for (const field of referencedFields) {
+        if (!canonicalOwners.has(field)) {
+            throw new Error(`DEFAULT_SENSOR_MAP invariant violation: batteryField '${field}' is referenced `
+                + 'by one or more rows but has NO row with canonicalForBattery: true. Every '
+                + 'referenced batteryField needs exactly one canonical owner.');
+        }
     }
 }
 assertCanonicalBatteryOwnersUnique();

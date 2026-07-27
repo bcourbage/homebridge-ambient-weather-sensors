@@ -48,12 +48,22 @@ function makePlatform(config: Record<string, unknown>): { platform: AmbientWeath
  */
 function addCached(platform: AmbientWeatherSensorsPlatform, uniqueId: string, type: string): MockPlatformAccessory {
   const a = makeMockAccessory({ uniqueId, type, displayName: 'Cached ' + uniqueId, value: 20 });
-  // Attach the primary service that a real cached accessory of
-  // this type would have. Homebridge's cache restore does this
-  // automatically in production; the mock is agnostic.
+  // Attach the primary service AND its value characteristic that a
+  // real cached accessory of this type would have. Homebridge's
+  // cache restore does this automatically in production;
+  // bindSafeMode requires BOTH to be present (it never attaches a
+  // missing characteristic).
   switch (type) {
-    case 'Temperature': a.addService(MockServices.TemperatureSensor); break;
-    case 'Humidity':    a.addService(MockServices.HumiditySensor); break;
+    case 'Temperature': {
+      const svc = a.addService(MockServices.TemperatureSensor);
+      svc.addCharacteristic(MockCharacteristics.CurrentTemperature);
+      break;
+    }
+    case 'Humidity': {
+      const svc = a.addService(MockServices.HumiditySensor);
+      svc.addCharacteristic(MockCharacteristics.CurrentRelativeHumidity);
+      break;
+    }
   }
   platform.configureAccessory(a as never);
   return a;
@@ -138,16 +148,95 @@ describe('platform safe-mode (finding #1 / §17.2)', () => {
     // undefined on this cached accessory).
     a.addService(MockServices.Battery);
 
-    const before = (a as unknown as { services: Map<string, unknown> }).services;
-    const beforeUuids = Array.from(before.keys()).sort();
+    // Snapshot BOTH the service UUID set AND every service's
+    // characteristic UUID set. `updateCharacteristic` on the real
+    // HAP would attach a missing characteristic — this test would
+    // catch that graph mutation, which the service-only snapshot
+    // missed (reviewer's finding #3).
+    const services = (a as unknown as { services: Map<string, { characteristics: Map<string, unknown> }> }).services;
+    const snapshot = () => {
+      const out: Record<string, string[]> = {};
+      for (const [svcUuid, svc] of services) {
+        out[svcUuid] = Array.from(svc.characteristics.keys()).sort();
+      }
+      return out;
+    };
+    const before = snapshot();
 
     vi.spyOn(global, 'setInterval').mockImplementation(() => 0 as unknown as ReturnType<typeof setInterval>);
     api.emit('didFinishLaunching');
 
-    const afterUuids = Array.from(before.keys()).sort();
-    expect(afterUuids).toEqual(beforeUuids);   // byte-for-byte, no add/remove
+    // Full graph — services AND their characteristics — unchanged.
+    expect(snapshot()).toEqual(before);
     // BatteryService still present.
     expect(a.getService(MockServices.Battery)).toBeDefined();
+
+    vi.restoreAllMocks();
+  });
+
+  it('safe mode: battery-low flows from the batt* field to the sensor binding', async () => {
+    // Reviewer finding #2: bindings are keyed by sensor uniqueId
+    // (MAC-tempf), so the old MAC-battout lookup never matched.
+    // The fix derives the battery field via batteryFieldForSensor(dp)
+    // and reads it off the same payload. Prove setBatteryLow fires.
+    const { platform, api } = makePlatform({
+      configVersion: 999,
+      apiKey: 'test',
+      applicationKey: 'test',
+    });
+    const a = addCached(platform, 'AA:BB:CC:DD:EE:01-tempf', 'Temperature');
+    // Attach a Battery service with StatusLowBattery so the binding
+    // can push to it.
+    const battSvc = a.addService(MockServices.Battery);
+    battSvc.addCharacteristic(MockCharacteristics.StatusLowBattery);
+
+    // AWN payload: tempf value + battout === 0 (AWN's "low" signal).
+    const awnPayload = [{
+      macAddress: 'AA:BB:CC:DD:EE:01',
+      info: { name: 'Home' },
+      lastData: { tempf: 70, battout: 0 },
+    }];
+    vi.spyOn(global, 'fetch').mockImplementation(async () => new Response(JSON.stringify(awnPayload), {
+      status: 200, headers: { 'content-type': 'application/json' },
+    }));
+    vi.spyOn(global, 'setInterval').mockImplementation(() => 0 as unknown as ReturnType<typeof setInterval>);
+    api.emit('didFinishLaunching');
+    await (platform as unknown as { safeModePollAndDistribute(): Promise<void> }).safeModePollAndDistribute();
+
+    // StatusLowBattery characteristic reads 1 (low) after the poll.
+    const lowBattChar = battSvc.getCharacteristic(MockCharacteristics.StatusLowBattery);
+    expect(lowBattChar.value).toBe(1);
+
+    vi.restoreAllMocks();
+  });
+
+  it('safe mode: a cached CUSTOM dataPoint is NOT value-updated (no unit interpretation)', async () => {
+    // Reviewer finding #4: bindSafeMode restricts to known
+    // default-map dataPoints. A custom sensor's source unit isn't
+    // trustworthy without the config we can't interpret, so it
+    // stays frozen. Prove no binding is created for a custom dp.
+    const { platform, api } = makePlatform({
+      configVersion: 999,
+      apiKey: 'test',
+      applicationKey: 'test',
+    });
+    // Cached custom-datapoint accessory typed as Temperature but
+    // with a dataPoint outside DEFAULT_SENSOR_MAP.
+    const a = makeMockAccessory({
+      uniqueId: 'AA:BB:CC:DD:EE:01-my_custom_temp',
+      type: 'Temperature',
+      displayName: 'Custom Temp',
+      value: 20,
+    });
+    const svc = a.addService(MockServices.TemperatureSensor);
+    svc.addCharacteristic(MockCharacteristics.CurrentTemperature);
+    platform.configureAccessory(a as never);
+
+    vi.spyOn(global, 'setInterval').mockImplementation(() => 0 as unknown as ReturnType<typeof setInterval>);
+    api.emit('didFinishLaunching');
+
+    const bindings = (platform as unknown as { safeModeBindings: Map<string, unknown> }).safeModeBindings;
+    expect(bindings.has('AA:BB:CC:DD:EE:01-my_custom_temp')).toBe(false);
 
     vi.restoreAllMocks();
   });

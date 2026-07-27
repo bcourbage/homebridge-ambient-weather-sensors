@@ -1,4 +1,5 @@
 import { setupBatteryService } from './batteryService.js';
+import { fahrenheitToCelsius } from './nativeConversions.js';
 export class TemperatureAccessory {
     constructor(platform, accessory) {
         this.platform = platform;
@@ -27,16 +28,13 @@ export class TemperatureAccessory {
     setBatteryLow(batteryLow) {
         this.batterySetter?.(batteryLow);
     }
-    fahrenheitToCelsius(temperature) {
-        return (temperature - 32) * 5 / 9;
-    }
     /**
      * Push a fresh raw AWN reading (in °F) into the HomeKit characteristic
      * after converting to °C. Called by the platform's poll tick — wrappers
      * no longer poll on their own.
      */
     setValue(rawValue) {
-        const celsius = this.fahrenheitToCelsius(rawValue);
+        const celsius = fahrenheitToCelsius(rawValue);
         this.platform.log.debug(`SET CurrentTemperature: ${rawValue}°F → ${celsius.toFixed(2)}°C`);
         this.service.updateCharacteristic(this.platform.Characteristic.CurrentTemperature, celsius);
     }
