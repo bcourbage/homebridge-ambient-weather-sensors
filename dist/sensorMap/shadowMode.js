@@ -84,6 +84,28 @@ export class ShadowMode {
      */
     async initialize() {
         const persistLog = persistLogger(this.log);
+        // Detect config mode FIRST, before touching any plugin
+        // persistence. Safe mode is contractually read-only per §5 — it
+        // must NOT create the persist directory, scan / quarantine /
+        // clean anything under it, or open the discovery tracker. Doing
+        // so would let a downgraded plugin still mutate discovery.json
+        // (review finding: safe mode still writes discovery state).
+        if (!this.modeLogged) {
+            const result = detectConfigMode(this.config);
+            this.configMode = result.mode;
+            this.log.info(`[sensor-map v2 shadow] config mode: ${result.mode}`);
+            for (const w of result.warnings) {
+                this.log.warn(`[sensor-map v2 shadow] ${w}`);
+            }
+            if (result.safeModeBanner) {
+                this.log.warn(`[sensor-map v2 shadow] SAFE MODE: ${result.safeModeBanner}`);
+            }
+            this.modeLogged = true;
+        }
+        if (this.configMode === 'safe-mode') {
+            // Tracker stays undefined; onParseTick sees this and no-ops.
+            return;
+        }
         // v2.0.0-beta.1 wrote plugin data under <storagePath>/persist/plugin-data/
         // which crashed HAP-NodeJS's node-persist scan with EISDIR. Detect
         // and warn if that leftover directory is still present — the user
@@ -97,18 +119,6 @@ export class ShadowMode {
             log: persistLog,
             initial,
         });
-        if (!this.modeLogged) {
-            const result = detectConfigMode(this.config);
-            this.configMode = result.mode;
-            this.log.info(`[sensor-map v2 shadow] config mode: ${result.mode}`);
-            for (const w of result.warnings) {
-                this.log.warn(`[sensor-map v2 shadow] ${w}`);
-            }
-            if (result.safeModeBanner) {
-                this.log.warn(`[sensor-map v2 shadow] SAFE MODE: ${result.safeModeBanner}`);
-            }
-            this.modeLogged = true;
-        }
     }
     /**
      * Called from platform.configureAccessory. Runs inference against
@@ -140,6 +150,13 @@ export class ShadowMode {
      * "extra"/"missing" line so we can hunt why.
      */
     onParseTick(input) {
+        // Safe mode is contractually read-only per §5. Short-circuit
+        // BEFORE touching persistence so a downgraded plugin can't
+        // create, update, or scan discovery.json. This runs first
+        // because the tracker feed below writes to disk.
+        if (this.configMode === 'safe-mode') {
+            return;
+        }
         // Feed the tracker regardless of shadow comparison — this lets
         // discovery.json accumulate real data while the flag is on.
         if (this.tracker) {
@@ -153,23 +170,24 @@ export class ShadowMode {
         // whichever configuration path the plugin is actually running
         // (compat for legacy, hand-authored `sensorMap` for v2), so the
         // observed divergence lines match what would happen once the
-        // flag flips on-by-default. Safe mode short-circuits entirely
-        // per §5 — the map is empty and no divergences make sense.
+        // flag flips on-by-default.
         let userOverrides;
-        if (this.configMode === 'safe-mode') {
-            // Safe mode: skip the parallel pipeline. There's no meaningful
-            // divergence to report and building an effective map would
-            // just surface synthetic errors from the malformed config.
-            return;
-        }
-        else if (this.configMode === 'v2') {
-            // v2: read `sensorMap` as raw unknown[] and hand it to the
-            // effective-map layer — which will Phase-1/Phase-2 validate
-            // every entry (Group 1 finding #10). If the field is absent
-            // or the wrong type, the layer emits identity errors that
-            // shadow-mode surfaces below.
+        if (this.configMode === 'v2') {
+            // v2: read `sensorMap` as raw unknown[]. Only real arrays are
+            // accepted — a non-array value (string, object, number, null)
+            // is a hand-edit mistake we surface loudly rather than
+            // silently coercing to `[]` (which would validate the
+            // default-exposure layout, not the config the user wrote).
             const raw = this.config.sensorMap;
-            userOverrides = Array.isArray(raw) ? raw : [];
+            if (raw !== undefined && !Array.isArray(raw)) {
+                this.logDivergenceOnce('sensormap-not-array', `v2 sensorMap must be an array; got ${describeType(raw)}. `
+                    + 'The observer is treating it as empty; the plugin will do the same once the flag flips. '
+                    + 'Fix or remove the sensorMap field.');
+                userOverrides = [];
+            }
+            else {
+                userOverrides = Array.isArray(raw) ? raw : [];
+            }
         }
         else {
             // legacy: synthesize from v1.6.0 fields via the compat layer.
@@ -281,6 +299,15 @@ export class ShadowMode {
             // Doesn't exist. Fresh install or already cleaned up. All good.
         }
     }
+}
+function describeType(v) {
+    if (v === null) {
+        return 'null';
+    }
+    if (Array.isArray(v)) {
+        return 'array';
+    }
+    return typeof v;
 }
 /**
  * Factory. Returns undefined when the flag is off — platform.ts uses

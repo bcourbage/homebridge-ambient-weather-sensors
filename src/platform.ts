@@ -37,6 +37,11 @@ import {
 } from './extendedSensors/windAccessory.js';
 import { HumidityAccessory } from './humidityAccessory.js';
 import { RealtimeSource } from './realtimeSource.js';
+import {
+  composeDisplayName as sharedComposeDisplayName,
+  hapClean as sharedHapClean,
+  HAP_NAME_MAX,
+} from './sensorMap/displayName.js';
 import { createShadowMode, type ShadowMode } from './sensorMap/shadowMode.js';
 import { friendlySensorName, sensorKeyByFriendlyName } from './sensorNames.js';
 import { PLATFORM_NAME, PLUGIN_NAME } from './settings.js';
@@ -45,25 +50,12 @@ import { TemperatureAccessory } from './temperatureAccessory.js';
 import { DEVICE } from './types.js';
 
 /**
- * Sanitize a string for use in a HAP `Name` characteristic, per Apple's
- * documented rule (alphanumeric, space, and apostrophe only; must start
- * and end with an alphanumeric). HAP 2.x emits warnings for any value
- * that doesn't comply.
- *
- * Exported for test coverage — the function is only used inside this
- * module in production.
+ * Re-export of the HAP Name sanitizer. Kept exported here for tests
+ * that were written against `platform.hapClean` before the helper
+ * moved to `sensorMap/displayName.ts`. The compat layer uses the
+ * shared module directly.
  */
-export function hapClean(input: string): string {
-  return input
-    .replace(/[^A-Za-z0-9 ']/g, ' ')
-    .replace(/\s+/g, ' ')
-    .replace(/^[^A-Za-z0-9]+/, '')
-    .replace(/[^A-Za-z0-9]+$/, '')
-    .trim();
-}
-
-// HAP 2.x enforces a 64-character limit on the `Name` characteristic.
-const HAP_NAME_MAX = 64;
+export const hapClean = sharedHapClean;
 
 /**
  * Normalize a string the user might have typed in their config for
@@ -421,18 +413,11 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
     sensorKey: string,
     isMultiStation: boolean,
   ): string {
-    const sensorLabel = friendlySensorName(sensorKey);
-
-    if (!isMultiStation) {
-      return hapClean(sensorLabel);
-    }
-
-    const stationName = hapClean(obj.info?.name ?? '');
-    const macFallback = obj.macAddress.replaceAll(':', '');
-    const baseName = stationName || macFallback;
-    const composed = hapClean(`${baseName} ${sensorLabel}`);
-
-    return composed.length <= HAP_NAME_MAX ? composed : composed.slice(0, HAP_NAME_MAX).trim();
+    return sharedComposeDisplayName(
+      { macAddress: obj.macAddress, name: obj.info?.name ?? '' },
+      sensorKey,
+      isMultiStation,
+    );
   }
 
   /**

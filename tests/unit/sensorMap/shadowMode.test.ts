@@ -400,11 +400,14 @@ describe('ShadowMode — config mode drives the parallel pipeline (finding #5)',
     await s.shutdown();
   });
 
-  it('v2 mode: non-array `sensorMap` yields no override entries (no crash)', async () => {
-    // A stringly-typed sensorMap is malformed but not fatal — we
-    // treat it as an empty override list and let the caller/UI
-    // surface a config-level warning through a separate channel.
-    const { log } = makeLog();
+  it('v2 mode: non-array `sensorMap` surfaces a divergence line, not a silent empty', async () => {
+    // A malformed sensorMap (string, object, number, null) MUST
+    // announce itself in the observer log — silently treating it
+    // as empty means the observer validates the default-exposure
+    // layout instead of the config the user wrote. The observer
+    // logs a "sensormap-not-array" divergence and then falls back
+    // to an empty override list so the parallel pipeline stays up.
+    const { log, captured } = makeLog();
     const s = new ShadowMode({
       log,
       config: {
@@ -414,14 +417,19 @@ describe('ShadowMode — config mode drives the parallel pipeline (finding #5)',
       } as never,
       api: { user: { storagePath: () => tmpRoot } },
     });
-    await s.initialize();
-    expect(() =>
-      s.onParseTick({
-        stations: [{ macAddress: 'AA:BB:CC:DD:EE:01', name: 'Home' }],
-        observed: [],
-        v1Decisions: [],
-      }),
-    ).not.toThrow();
+    try {
+      await s.initialize();
+      expect(() =>
+        s.onParseTick({
+          stations: [{ macAddress: 'AA:BB:CC:DD:EE:01', name: 'Home' }],
+          observed: [],
+          v1Decisions: [],
+        }),
+      ).not.toThrow();
+      expect(captured.info.some(l => /sensorMap must be an array.*got string/.test(l))).toBe(true);
+    } finally {
+      await s.shutdown();
+    }
   });
 
   it('safe mode: onParseTick short-circuits (no divergence lines, no errors)', async () => {
@@ -445,9 +453,17 @@ describe('ShadowMode — config mode drives the parallel pipeline (finding #5)',
     });
     // Safe mode was logged at initialize.
     expect(captured.info.some(l => /config mode: safe-mode/.test(l))).toBe(true);
-    // No divergence lines from parseTick — the pipeline never ran.
+    // (1) No divergence lines from parseTick — the pipeline never ran.
     expect(captured.info.filter(l => /would DROP|would register|validation (error|warning)/.test(l))).toHaveLength(0);
+    // (2) Safe mode is contractually read-only per §5: the plugin
+    // must NOT create the persist tree or write discovery.json.
+    // Regression guard for the review finding that safe mode
+    // still wrote discovery state.
+    const persistDir = path.join(tmpRoot, 'plugin-data', 'ambient-weather');
+    await expect(fs.access(persistDir)).rejects.toBeTruthy();
     await s.shutdown();
+    // After shutdown too — shutdown() has no tracker to flush.
+    await expect(fs.access(persistDir)).rejects.toBeTruthy();
   });
 
   it('legacy mode: falls through to compat (unchanged behavior)', async () => {

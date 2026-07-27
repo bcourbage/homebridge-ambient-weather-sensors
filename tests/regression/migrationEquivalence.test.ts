@@ -282,6 +282,15 @@ const CONFIG_MATRIX: Array<{ label: string; config: LegacyConfig }> = [
     temperatureSensors: true,
     includeOnly: ['', 'tempf'],
   } },
+  // ---- Follow-up: displayName-form entries (the 7th candidate) ----
+  { label: 'excludeSensors by single-station HAP-cleaned displayName ("Outdoor PM2 5")', config: {
+    airQualitySensors: true,
+    excludeSensors: ['Outdoor PM2 5'],
+  } },
+  { label: 'excludeSensors by prefixed HAP-cleaned displayName (multi-station "Backyard Outdoor Temperature")', config: {
+    temperatureSensors: true,
+    excludeSensors: ['Backyard Outdoor Temperature'],
+  } },
 ];
 
 // ---- Payload matrix ----------------------------------------------

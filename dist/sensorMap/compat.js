@@ -22,6 +22,7 @@
 import { batteryFieldForSensor } from '../batteryFields.js';
 import { friendlySensorName, sensorKeyByFriendlyName } from '../sensorNames.js';
 import { DEFAULT_SENSOR_MAP } from './defaultMap.js';
+import { composeDisplayName, hapClean } from './displayName.js';
 // AWN battery field names that can appear directly in excludeSensors
 // (form 3 of the `-batt` matchers — see platform.buildSuppressedBatteries).
 const BATTERY_FIELD_REGEX = /^(?:battout|battin|batt(?:[1-9]|10)|batt_co2|batt_lightning)$/;
@@ -94,8 +95,11 @@ export function compatToOverrides(legacy, stations = []) {
         // For each (station, row) pair, build the full seven-candidate
         // match list and re-evaluate. Emit a station-scoped `enabled:
         // false` override for anything v1 would have dropped.
+        // `isMultiStation` mirrors v1's decision at `platform.ts:615` —
+        // it controls the displayName recipe (bare vs prefixed).
+        const isMultiStation = stations.length > 1;
         for (const station of stations) {
-            if (shouldStationScopeDisable(row, station, excludeSet, includeSet)) {
+            if (shouldStationScopeDisable(row, station, isMultiStation, excludeSet, includeSet)) {
                 overrides.push({
                     dataPoint: row.dataPoint,
                     stationMac: station.macAddress.toUpperCase(),
@@ -322,46 +326,43 @@ function matchesRow(row, matchers) {
     return false;
 }
 /**
- * Compat-side mirror of the v1 hapClean function (`src/platform.ts`).
- * Kept inline instead of imported so this module has no dependency
- * back into platform.ts, which imports from other sensor-map modules
- * — a cycle we don't want. If either implementation changes, the
- * migration-equivalence test suite will catch drift.
- */
-function hapCleanCompat(input) {
-    return input
-        .replace(/[^A-Za-z0-9 ']/g, ' ')
-        .replace(/\s+/g, ' ')
-        .replace(/^[^A-Za-z0-9]+/, '')
-        .replace(/[^A-Za-z0-9]+$/, '')
-        .trim();
-}
-/**
  * Full v1 match-form list for a (row, station) pair — the same seven
  * candidates `platform.ts:661` builds at accessory-decision time.
- * Every candidate is normalized (trimmed + lowercased) so the caller
- * can do plain set membership checks.
+ * `isMultiStation` decides which recipe `composeDisplayName` uses
+ * (single-station keeps the bare label; multi-station prefixes with
+ * station name or MAC-fallback for unnamed stations, then truncates
+ * to `HAP_NAME_MAX`). Every candidate is normalized (trimmed +
+ * lowercased) so the caller can do plain set membership checks.
+ *
+ * The 7 candidates:
+ *   1. uniqueId              — `MAC-sensorKey`
+ *   2. displayName           — v1's actual composed HAP name for
+ *                              this (station, sensorKey) pair.
+ *                              Includes the MAC-fallback +
+ *                              64-char-truncation edge cases.
+ *   3. prefixedForm          — `hapClean(stationName + " " + friendly)`,
+ *                              back-compat form (matches pre-beta.15
+ *                              user configs even in single-station
+ *                              layouts).
+ *   4. sensorKey             — raw AWN key.
+ *   5. friendly              — friendly sensor name.
+ *   6. station.macAddress    — station MAC (colon form).
+ *   7. station.name          — station name as user typed in AWN.
  */
-function stationScopedMatchForms(row, station) {
+function stationScopedMatchForms(row, station, isMultiStation) {
     const sensorKey = row.dataPoint;
     const friendly = friendlySensorName(sensorKey);
-    const stationName = station.name;
-    const prefixedForm = stationName ? hapCleanCompat(`${stationName} ${friendly}`) : '';
+    const displayName = composeDisplayName(station, sensorKey, isMultiStation);
+    const prefixedForm = station.name ? hapClean(`${station.name} ${friendly}`) : '';
     const uniqueId = `${station.macAddress}-${sensorKey}`;
-    // v1 also checks the current `displayName`, which is either the
-    // clean short form (single-station setups) or the prefixed form
-    // (multi-station). We approximate the multi-station displayName
-    // with `prefixedForm` — same source recipe — and the single-station
-    // short form with `friendly`. Users targeting the current display
-    // name will therefore hit either the `friendly` or `prefixedForm`
-    // candidate, both of which are already in the list.
     return [
         uniqueId,
+        displayName,
         prefixedForm,
         sensorKey,
         friendly,
         station.macAddress,
-        stationName,
+        station.name,
     ].map(normalizeMatchKey).filter((s) => s.length > 0);
 }
 /**
@@ -371,8 +372,8 @@ function stationScopedMatchForms(row, station) {
  * the full candidate list; exclude drops the pair on any match.
  * A pair that both included and excluded is dropped, matching v1.
  */
-function shouldStationScopeDisable(row, station, excludeSet, includeSet) {
-    const forms = stationScopedMatchForms(row, station);
+function shouldStationScopeDisable(row, station, isMultiStation, excludeSet, includeSet) {
+    const forms = stationScopedMatchForms(row, station, isMultiStation);
     if (includeSet.size > 0 && !forms.some((c) => includeSet.has(c))) {
         return true;
     }

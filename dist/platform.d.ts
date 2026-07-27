@@ -1,15 +1,13 @@
 import { API, Characteristic, DynamicPlatformPlugin, Logger, PlatformAccessory, PlatformConfig, Service } from 'homebridge';
+import { hapClean as sharedHapClean } from './sensorMap/displayName.js';
 import { DEVICE } from './types.js';
 /**
- * Sanitize a string for use in a HAP `Name` characteristic, per Apple's
- * documented rule (alphanumeric, space, and apostrophe only; must start
- * and end with an alphanumeric). HAP 2.x emits warnings for any value
- * that doesn't comply.
- *
- * Exported for test coverage — the function is only used inside this
- * module in production.
+ * Re-export of the HAP Name sanitizer. Kept exported here for tests
+ * that were written against `platform.hapClean` before the helper
+ * moved to `sensorMap/displayName.ts`. The compat layer uses the
+ * shared module directly.
  */
-export declare function hapClean(input: string): string;
+export declare const hapClean: typeof sharedHapClean;
 /**
  * Normalize a string the user might have typed in their config for
  * matching against sensor identifiers. Trims whitespace and lowercases.

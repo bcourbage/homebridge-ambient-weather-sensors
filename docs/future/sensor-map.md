@@ -341,7 +341,7 @@ const LIGHTNING_DISTANCE_WRAPPER: WrapperDescriptor = { id: 'lightning-distance'
 const LIGHTNING_TIME_WRAPPER: WrapperDescriptor     = { id: 'lightning-last-strike', schemaVersion: 1, constructor: LightningLastStrikeAccessory };
 ```
 
-24 descriptors, exactly matching v1.6.0's 24 wrapper classes. No consolidation.
+25 descriptors — one for every accessory wrapper class the plugin ships. The `ALL_WRAPPERS` ordered array in `src/sensorMap/wrappers.ts` and the snapshot test in `tests/unit/sensorMap/wrappers.test.ts` are the authoritative list; this section mirrors it. No consolidation from v1.6.0.
 
 Each entry in `DEFAULT_SENSOR_MAP` references its wrapper directly:
 
@@ -1160,7 +1160,7 @@ Tests: for every non-motion kind, submit an override with each of these fields; 
 - **2026-07-11**: Third review. Revision incorporated three separate single-writer files (`discovery.json`, `notices.json`, `ui-state.json`); measurement participation in wrapper selection AND structural signature; known-datapoint remapping rule; strict MAC validation; discovery write throttling; corrupt-file quarantine; optional observation timestamps; multi-process + structural-identity tests.
 - **2026-07-12**: Fourth review. This revision incorporates:
   - **Blocking**: measurement-discriminated union for `EffectiveSensorRow` (`NumericRow` / `TimestampRow` / `BooleanRow`) — boolean and timestamp measurements no longer require inapplicable units at the type level. Uniqueness invariant: at most one override per `(dataPoint, stationMac?)`; canonical UI serialization; hand-edited duplicates merge with warn.
-  - **Important**: `configVersion` handling refined — unsupported positive versions and malformed values enter **safe mode** (keep cached accessories, don't attempt structural changes, prominent upgrade-plugin error) instead of silently entering legacy mode. Wrapper consolidation removed from v2.0 scope — every v1.6.0 wrapper stays 1-to-1 in the default map via 24 `WrapperDescriptor` constants. Structural signature uses stable `WrapperDescriptor.id`, not `class.name`. Atomic write implementation details specified (§8.6).
+  - **Important**: `configVersion` handling refined — unsupported positive versions and malformed values enter **safe mode** (keep cached accessories, don't attempt structural changes, prominent upgrade-plugin error) instead of silently entering legacy mode. Wrapper consolidation removed from v2.0 scope — every v1.6.0 wrapper stays 1-to-1 in the default map via 25 `WrapperDescriptor` constants (the count includes `AIR_QUALITY_PM25_WRAPPER` and `AIR_QUALITY_PM10_WRAPPER`, which share the AirQualityAccessory ctor but need distinct ids because their HAP characteristic set differs). Structural signature uses stable `WrapperDescriptor.id`, not `class.name`. Atomic write implementation details specified (§8.6).
   - **Testing additions**: unit-shape tests (§12.5), override-key tests (§12.6), migration-equivalence tests upgraded to full HAP-graph equivalence (§12.7).
 - **2026-07-13**: Fifth review. This revision incorporates:
   - **Blocking**: `wrapperId` removed from the design entirely — it was mentioned in prose but absent from `SensorMapOverride`. Rather than add it (with all the validation, canonicalization, UI, and test surface that entails), removed from v2.0 scope. Custom-sensor wrapper selection uses a canonical `(kind, measurement)` → descriptor table in §3.9 as the sole path. If a real user need surfaces, a user-facing `wrapperId` override becomes a v2.1+ project.

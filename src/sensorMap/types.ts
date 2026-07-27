@@ -354,10 +354,13 @@ interface ConfiguredRowBase extends CommonMeta {
   structuralSignature: string;
   /**
    * Stable id of the wrapper descriptor this row resolves to.
-   * Redundant with `structuralSignature` but explicit for consumers
-   * that need the wrapper without re-parsing the signature.
+   * Drawn from the frozen `WrapperId` union so TypeScript rejects
+   * any assignment of an unregistered id — the same closure the
+   * descriptor registry itself has. Redundant with
+   * `structuralSignature` but explicit for consumers that need the
+   * wrapper without re-parsing the signature.
    */
-  wrapperId: string;
+  wrapperId: WrapperId;
 }
 
 export interface NumericSensorRow extends ConfiguredRowBase {
