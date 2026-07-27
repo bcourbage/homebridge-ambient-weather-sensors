@@ -508,18 +508,43 @@ with the same rigor as extended wrappers.
 
 ### Custom-row battery attachment — full lifecycle
 
-The effective-map-side portion of this ships as part of Group 4
-(PR #20): custom rows with a novel `batteryField` now get
-`hasBatterySubService: true` through an explicit ownership pass in
-`resolveHasBatterySubService`, and the collision case emits a
-`duplicate-battery-owner` warning with real `overrideIndex`
-attribution via a `batteryFieldProvenance` side-table. What's still
-outstanding — and lands with #4's Stage 2 battery-family PR — is
-the runtime side: wrappers consuming `row.batteryField` and
-`row.hasBatterySubService`, the shared `resolveBatteryField(effectiveMap,
-mac, dp)` reader shared by polling + realtime, and the
-`setupBatteryService({ attach, initialLow })` contract change. Full
-lifecycle spelled out below across four coordinated pieces:
+An INTERIM subset of the effective-map ownership pass ships as part
+of Group 4 (PR #20): custom rows with a novel `batteryField` now
+get `hasBatterySubService: true` through a `resolveHasBatterySubService`
+helper, `duplicate-battery-owner` warnings fire with real
+`overrideIndex` attribution via a `batteryFieldProvenance`
+side-table, and a startup invariant
+(`assertCanonicalBatteryOwnersUnique`) guards against a default map
+that ever grows two canonical owners for the same field.
+
+**PR #20 is not the final ownership contract.** It still uses
+resolution iteration order (defaults × stations → discovery → station
+overrides → global custom) as its custom-vs-custom tie-break. The
+Stage 2 replacement machinery, described below in full, is a
+BEHAVIORAL CHANGE on top of PR #20:
+
+- `earliestOverrideIndex` from `RowResolutionMeta` becomes the
+  primary ordering, with `(stationMac, dataPoint)` lexicographic
+  as the final tie-break — replacing the first-resolved rule.
+- `duplicate-battery-owner` and `orphan-battery-field` route
+  through `EffectiveSensorMap.notes` (`source: 'default-map' |
+  'override'`) instead of the shipping RowValidationWarning
+  channel — that channel keeps carrying config-attributable
+  warnings; internal-invariant + attribution-free notes move to
+  the new channel.
+- Disabled reserved-owner rows produce an `orphan-battery-field`
+  info-level note when other rows still reference the field
+  (PR #20 leaves the field silently sub-serviceless).
+
+Runtime-side work is additive to those effective-map changes:
+wrappers consuming `row.batteryField` and `row.hasBatterySubService`,
+the shared `resolveBatteryField(effectiveMap, mac, dp)` reader
+plumbed through polling + realtime, and the
+`setupBatteryService({ attach, initialLow })` contract change so
+the HAP graph no longer depends on transient telemetry.
+
+Full lifecycle spelled out below across four coordinated pieces
+(each replaces or extends PR #20's interim implementation):
 
 **1. Effective-map resolution.** Ownership is a two-tier rule that
 preserves v1.6.0 behavior EXACTLY for default-map rows and only
@@ -528,36 +553,54 @@ introduces new logic for user-authored custom rows:
 - **Reserved owner** — every AWN battery field is contractually
   owned by the default-map row with `canonicalForBattery: true`
   for that field (battout → tempf, batt_co2 → co2_in_aqin, and so
-  on, per `DEFAULT_SENSOR_MAP`). This is the v1.6.0 rule and it
-  stays authoritative when the reserved row is present AND
-  enabled. Non-canonical default rows that name the same
-  batteryField (intentional plugin-side sharing — e.g. every
-  outdoor sensor references `battout`) get `hasBatterySubService:
-  false` without warning; the sharing is by design and users
-  shouldn't see noise about it.
+  on, per `DEFAULT_SENSOR_MAP`). Reservation is UNCONDITIONAL and
+  static: `assertCanonicalBatteryOwnersUnique` at module load
+  guarantees exactly one row per field. The "canonical" status
+  applies only when the row's RESOLVED `batteryField` equals its
+  `defaultRow.batteryField` — if the user overrides the field to a
+  different value, the row loses canonical status for that field
+  and enters the user-claimant path below (see next bullet).
+  Non-canonical default rows that keep their default batteryField
+  (intentional plugin-side sharing — e.g. every outdoor sensor
+  references `battout`) get `hasBatterySubService: false` without
+  warning; the sharing is by design and users shouldn't see noise
+  about it.
 
-- **Custom claimants** — a user-authored row (not in the default
-  map) may claim a batteryField ONLY when the field is not
-  reserved by ANY canonical default row anywhere in
-  `DEFAULT_SENSOR_MAP`. This is a STATIC eligibility test against
-  the default map, not against the current-boot effective map:
-  `buildEffectiveSensorMap` materializes every default row × every
-  station regardless of what the station reports, so a canonical
-  reservation is always present in the current effective map
-  whenever the corresponding default row exists. Making ownership
-  depend on transient telemetry ("did this station report tempf
-  this tick?") would let a signature flip the first time a field
-  arrived. Custom sensors owning fields the plugin already reserves
-  (like `battout`) is deferred to post-2.0 — for now, the reservation
-  is unconditional and users targeting reserved AWN fields with a
-  custom row get `hasBatterySubService: false` (their `batteryField`
-  is still read, just not attached).
+- **User claimants** — any row whose RESOLVED `batteryField` was
+  authored or altered by a user override enters the claimant path.
+  Three concrete cases, all handled the same way:
 
-  If two user rows claim the same NOVEL field, the earliest by
-  resolution metadata (see below) wins and a
-  `duplicate-battery-owner` warning surfaces naming the winner so
-  the UI can present the choice. Warnings fire ONLY on
-  user-authored conflicts — never on the default-map sharing.
+  1. A **custom row** (no `defaultRow`) with a novel `batteryField`.
+  2. A **known row with an overridden `batteryField`** whose
+     resolved value differs from `defaultRow.batteryField`. Example:
+     `{ dataPoint: 'tempf', batteryField: 'my_barn_batt' }` — tempf
+     loses canonical status because the resolved field ('my_barn_batt')
+     doesn't match the default ('battout'), and enters claims like
+     a custom row would.
+  3. A **non-canonical known row with an explicit `batteryField`**
+     that differs from its default (rare — most non-canonical
+     defaults don't set `batteryField` themselves).
+
+  Eligibility is a STATIC test against `DEFAULT_SENSOR_MAP`: the
+  claimant's resolved `batteryField` must NOT appear in the
+  reserved set (any canonical default's `batteryField`). This
+  protects users' muscle memory: `battout`, `batt_co2`, and every
+  other reserved AWN field stays exclusively owned by its
+  canonical default row. A claimant targeting a reserved field
+  gets `hasBatterySubService: false` (the field is still read for
+  battery-low display, just not attached).
+
+  Making ownership depend on transient telemetry ("did this station
+  report tempf this tick?") would let a signature flip the first
+  time a field arrived; the static test rules that out.
+
+  When two claimants target the same novel field on the same
+  station, priority is `RowResolutionMeta.earliestOverrideIndex`
+  (which fragment authored the batteryField first), with
+  `(stationMac, dataPoint)` lexicographic order as the final
+  tie-break. The `duplicate-battery-owner` warning surfaces naming
+  the winner. Warnings fire ONLY on user-authored conflicts —
+  never on default-map sharing.
 
 - **Disabled rows** — disabled rows do not participate in
   ownership. Disabling the reserved canonical owner does NOT roll
