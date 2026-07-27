@@ -331,6 +331,82 @@ describe('platform safe-mode (finding #1 / §17.2)', () => {
     expect(platform).toBeDefined();
   });
 
+  it('safe mode: a LOWERCASE cached MAC still receives value updates (finding #3)', async () => {
+    // Legacy registration preserved the AWN API's original MAC
+    // casing. If the cache stored a lower-case MAC, the old code
+    // (which uppercased only the response MAC) would count the
+    // accessory as bound but never match it in distribute. The fix
+    // normalizes the binding key. Prove a lower-case cached tempf
+    // receives its value.
+    const { platform, api } = makePlatform({
+      configVersion: 999,
+      apiKey: 'test',
+      applicationKey: 'test',
+    });
+    // Cached with a LOWER-case MAC prefix.
+    const a = makeMockAccessory({
+      uniqueId: 'aa:bb:cc:dd:ee:01-tempf',
+      type: 'Temperature',
+      displayName: 'Cached lower',
+      value: 20,
+    });
+    const svc = a.addService(MockServices.TemperatureSensor);
+    svc.addCharacteristic(MockCharacteristics.CurrentTemperature);
+    platform.configureAccessory(a as never);
+
+    // AWN returns the MAC in upper case (as it does in practice).
+    const awnPayload = [{
+      macAddress: 'AA:BB:CC:DD:EE:01',
+      info: { name: 'Home' },
+      lastData: { tempf: 50 },
+    }];
+    vi.spyOn(global, 'fetch').mockImplementation(async () => new Response(JSON.stringify(awnPayload), {
+      status: 200, headers: { 'content-type': 'application/json' },
+    }));
+    vi.spyOn(global, 'setInterval').mockImplementation(() => 0 as unknown as ReturnType<typeof setInterval>);
+    api.emit('didFinishLaunching');
+    await (platform as unknown as { safeModePollAndDistribute(): Promise<void> }).safeModePollAndDistribute();
+
+    // 50°F = 10°C reached the characteristic.
+    expect(svc.getCharacteristic(MockCharacteristics.CurrentTemperature).value).toBeCloseTo(10, 4);
+
+    vi.restoreAllMocks();
+  });
+
+  it('safe mode: solar 0 W/m² pushes 0 lux (no 0.0001 clamp; matches wrapper, finding #2)', async () => {
+    const { platform, api } = makePlatform({
+      configVersion: 999,
+      apiKey: 'test',
+      applicationKey: 'test',
+    });
+    const a = makeMockAccessory({
+      uniqueId: 'AA:BB:CC:DD:EE:01-solarradiation',
+      type: 'Solar Radiation',
+      displayName: 'Solar',
+      value: 100,
+    });
+    const svc = a.addService(MockServices.LightSensor);
+    svc.addCharacteristic(MockCharacteristics.CurrentAmbientLightLevel);
+    platform.configureAccessory(a as never);
+
+    const awnPayload = [{
+      macAddress: 'AA:BB:CC:DD:EE:01',
+      info: { name: 'Home' },
+      lastData: { solarradiation: 0 },
+    }];
+    vi.spyOn(global, 'fetch').mockImplementation(async () => new Response(JSON.stringify(awnPayload), {
+      status: 200, headers: { 'content-type': 'application/json' },
+    }));
+    vi.spyOn(global, 'setInterval').mockImplementation(() => 0 as unknown as ReturnType<typeof setInterval>);
+    api.emit('didFinishLaunching');
+    await (platform as unknown as { safeModePollAndDistribute(): Promise<void> }).safeModePollAndDistribute();
+
+    // 0 W/m² → 0 lux exactly (the wrapper allows 0; no safe-mode-only clamp).
+    expect(svc.getCharacteristic(MockCharacteristics.CurrentAmbientLightLevel).value).toBe(0);
+
+    vi.restoreAllMocks();
+  });
+
   it('normal mode (no configVersion) does NOT enter safe mode', () => {
     const { platform, api, log } = makePlatform({
       apiKey: 'test',

@@ -223,7 +223,11 @@ export function bindSafeMode(
       const setBatteryLow = bindBatteryChar(platform, accessory);
       return {
         setValue: (raw) => {
-          const lux = Math.max(0.0001, solarWm2ToLux(raw));
+          // No lower clamp — the SolarRadiationAccessory wrapper sets
+          // the CurrentAmbientLightLevel characteristic's minValue to
+          // 0 ("dark at night") and pushes lux straight through.
+          // A safe-mode-only clamp to 0.0001 would diverge from that.
+          const lux = solarWm2ToLux(raw);
           luxChar.updateValue(lux);
           platform.log.debug(`safe-mode: CurrentAmbientLightLevel ${raw} W/m² → ${lux} lx`);
         },

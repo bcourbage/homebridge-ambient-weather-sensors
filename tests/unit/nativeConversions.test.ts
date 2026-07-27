@@ -81,9 +81,36 @@ describe('airQualityLevel — EPA buckets, PM10 boundary the review flagged', ()
   });
 });
 
-describe('airQualityReading — density rounded to 1 decimal', () => {
+describe('airQualityReading — density rounded, level from UNROUNDED value', () => {
   it('rounds density to one decimal place', () => {
     expect(airQualityReading(12.34, 'PM2.5').density).toBe(12.3);
     expect(airQualityReading(12.36, 'PM2.5').density).toBe(12.4);
+  });
+
+  it('PM2.5 12.04 → density 12.0 but level 2 (bucketed from UNROUNDED, matches original wrapper)', () => {
+    // The original AirQualityAccessory bucketed the clamped-but-
+    // UNROUNDED value. 12.04 is above the 12.0 breakpoint → level 2,
+    // even though the displayed density rounds down to 12.0.
+    // Bucketing the rounded density would wrongly give level 1.
+    const r = airQualityReading(12.04, 'PM2.5');
+    expect(r.density).toBe(12.0);
+    expect(r.level).toBe(2);
+  });
+
+  it('PM10 54.04 → density 54.0 but level 2 (unrounded above breakpoint)', () => {
+    const r = airQualityReading(54.04, 'PM10');
+    expect(r.density).toBe(54.0);
+    expect(r.level).toBe(2);
+  });
+
+  it('exactly at breakpoint stays in the lower bucket', () => {
+    // 12.0 exactly → level 1 (≤ 12.0). No rounding ambiguity here.
+    expect(airQualityReading(12.0, 'PM2.5').level).toBe(1);
+    expect(airQualityReading(54, 'PM10').level).toBe(1);
+  });
+
+  it('clamps negatives to 0', () => {
+    expect(airQualityReading(-3, 'PM2.5').density).toBe(0);
+    expect(airQualityReading(-3, 'PM2.5').level).toBe(1);
   });
 });

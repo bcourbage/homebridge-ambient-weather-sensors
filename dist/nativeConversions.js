@@ -69,11 +69,21 @@ export function airQualityLevel(density, variant) {
     return 5;
 }
 /**
- * AWN raw PM density → HAP-ready {density, level} pair matching the
- * wrapper's rounding (1 decimal place).
+ * AWN raw PM density → HAP-ready {density, level} pair.
+ *
+ * IMPORTANT — matches AirQualityAccessory's ORIGINAL behavior
+ * exactly: the displayed `density` is rounded to 1 decimal place,
+ * but the AirQuality `level` is bucketed from the CLAMPED, UNROUNDED
+ * value. Bucketing the rounded value would flip levels for readings
+ * just above a boundary (e.g. PM2.5 12.04 → rounds to 12.0 → level 1,
+ * but the unrounded 12.04 is above the 12.0 breakpoint → level 2).
+ * Callers should pass the raw (or clamped-raw) value; this function
+ * does the clamp + both derivations internally.
  */
 export function airQualityReading(rawValue, variant) {
-    const density = Math.round(rawValue * 10) / 10;
-    return { density, level: airQualityLevel(density, variant) };
+    const clamped = Math.max(0, rawValue);
+    const density = Math.round(clamped * 10) / 10;
+    const level = airQualityLevel(clamped, variant); // UNROUNDED — do not use `density` here.
+    return { density, level };
 }
 //# sourceMappingURL=nativeConversions.js.map

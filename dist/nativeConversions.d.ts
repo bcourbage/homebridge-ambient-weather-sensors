@@ -35,8 +35,16 @@ export declare function co2Reading(rawValue: number): {
 /** Which HAP AirQuality level (1..5) for a given particulate density. */
 export declare function airQualityLevel(density: number, variant: 'PM2.5' | 'PM10'): number;
 /**
- * AWN raw PM density → HAP-ready {density, level} pair matching the
- * wrapper's rounding (1 decimal place).
+ * AWN raw PM density → HAP-ready {density, level} pair.
+ *
+ * IMPORTANT — matches AirQualityAccessory's ORIGINAL behavior
+ * exactly: the displayed `density` is rounded to 1 decimal place,
+ * but the AirQuality `level` is bucketed from the CLAMPED, UNROUNDED
+ * value. Bucketing the rounded value would flip levels for readings
+ * just above a boundary (e.g. PM2.5 12.04 → rounds to 12.0 → level 1,
+ * but the unrounded 12.04 is above the 12.0 breakpoint → level 2).
+ * Callers should pass the raw (or clamped-raw) value; this function
+ * does the clamp + both derivations internally.
  */
 export declare function airQualityReading(rawValue: number, variant: 'PM2.5' | 'PM10'): {
     density: number;

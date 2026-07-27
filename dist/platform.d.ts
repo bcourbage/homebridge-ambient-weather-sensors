@@ -153,23 +153,38 @@ export declare class AmbientWeatherSensorsPlatform implements DynamicPlatformPlu
      * Safe-mode entrypoint — the reduced pipeline for
      * `configMode === 'safe-mode'` per sensor-map.md §17.2. Reads
      * cached accessories that HAP already restored (via
-     * `configureAccessory`), constructs a wrapper for each based on
-     * its cached `context.device.type`, indexes them by uniqueId so
-     * polling and realtime can push values, and starts the
-     * fetch/distribute loop.
+     * `configureAccessory`), and for each KNOWN native default-map
+     * accessory whose primary service + value characteristic(s) are
+     * already attached, builds a `SafeModeBinding` (see
+     * `src/safeModeBinding.ts`) that pushes fresh values through the
+     * RETAINED `Characteristic` instance's `updateValue()`. It does
+     * NOT construct v1.6.0 wrapper objects — those mutate the HAP
+     * graph via `addService` / `removeService` in their constructors.
+     * Bindings are keyed by normalized uniqueId (MAC uppercased) so
+     * the value-distribution lookup matches regardless of cache
+     * casing.
      *
      * What safe mode explicitly does NOT do:
+     *   - construct wrapper objects or otherwise mutate the HAP graph
+     *     (no `addService` / `removeService`; no attaching a missing
+     *     characteristic via `updateCharacteristic`);
      *   - call `registerPlatformAccessories` / `unregisterPlatformAccessories`;
      *   - call `updatePlatformAccessories` (no displayName rewrites);
      *   - write to any plugin persistence file (the shadowMode observer
      *     has its own safe-mode short-circuit for its persist tree);
-     *   - reconcile against `parseDevices`'s "orphan" set (that would
-     *     unregister cached accessories the AWN response happens to
-     *     omit on the first fetch).
+     *   - reconcile against `parseDevices`'s "orphan" set;
+     *   - run realtime — transport is polling ONLY (realtime would
+     *     require interpreting apiKey/applicationKey semantics from the
+     *     unsupported config).
      *
-     * Distribute() looks up each polled value's wrapper by uniqueId;
-     * cached uniqueId matches produce a `setValue()` call, everything
-     * else is ignored. That's the "updates continue" half of §17.2.
+     * Value distribution runs through `safeModePollAndDistribute()`
+     * (NOT the normal `distribute()` / `parseDevices()` path — those
+     * apply config-derived sensor toggles / include-exclude / station
+     * filters we can't safely interpret in safe mode). It reads the
+     * raw AWN JSON and pushes each bound sensor's value + battery by
+     * uniqueId. Accessories that couldn't be bound — extended-sensor
+     * types, unrecognized cached types, custom dataPoints, or missing
+     * characteristics — stay frozen at their cached HAP values.
      */
     private safeModeStart;
     /**
