@@ -112,42 +112,91 @@ adapters that assert the row type and instantiate.
 ```typescript
 // src/sensorMap/wrapperFactories.ts (new)
 
-type NumericFactory = (
-  platform: AmbientWeatherSensorsPlatform,
-  accessory: PlatformAccessory,
-  row: NumericSensorRow,
-) => SensorAccessory;
-
-type TimestampFactory = (
-  platform: AmbientWeatherSensorsPlatform,
-  accessory: PlatformAccessory,
-  row: TimestampSensorRow,
-) => SensorAccessory;
-
-export type WrapperFactory = NumericFactory | TimestampFactory;
-
-export const FACTORIES: Readonly<Record<WrapperId, WrapperFactory>> = {
-  'temperature':           (p, a, r) => new TemperatureAccessory(p, a, r),
-  'wind-speed':            (p, a, r) => new WindSpeedAccessory(p, a, r),
-  'last-rain':             (p, a, r) => new LastRainAccessory(p, a, r),
-  ...
+// A compile-time mapping from wrapper id to the concrete row shape
+// that wrapper's constructor accepts. Every mapped-type entry
+// narrows to a measurement literal, so `Factory<RowForWrapperId[K]>`
+// below refuses to accept a factory whose row type is broader than
+// its wrapper.
+type RowForWrapperId = {
+  'temperature':           NumericSensorRow & { measurement: 'temperature' };
+  'humidity':              NumericSensorRow & { measurement: 'humidity' };
+  'solar-radiation':       NumericSensorRow & { measurement: 'illuminance' };
+  'co2':                   NumericSensorRow & { measurement: 'co2' };
+  'air-quality-pm25':      NumericSensorRow & { measurement: 'pm25' };
+  'air-quality-pm10':      NumericSensorRow & { measurement: 'pm10' };
+  'uv':                    NumericSensorRow & { measurement: 'uv-index' };
+  'wind-speed':            NumericSensorRow & { measurement: 'wind-speed' };
+  'wind-gust':             NumericSensorRow & { measurement: 'wind-speed' };
+  'wind-max-daily-gust':   NumericSensorRow & { measurement: 'wind-speed' };
+  'wind-direction':        NumericSensorRow & { measurement: 'direction' };
+  'wind-direction-10m':    NumericSensorRow & { measurement: 'direction' };
+  'pressure-relative':     NumericSensorRow & { measurement: 'pressure' };
+  'pressure-absolute':     NumericSensorRow & { measurement: 'pressure' };
+  'rain-rate':             NumericSensorRow & { measurement: 'rain-rate' };
+  'rain-event':            NumericSensorRow & { measurement: 'rain-accumulation' };
+  'rain-daily':            NumericSensorRow & { measurement: 'rain-accumulation' };
+  'rain-weekly':           NumericSensorRow & { measurement: 'rain-accumulation' };
+  'rain-monthly':          NumericSensorRow & { measurement: 'rain-accumulation' };
+  'rain-yearly':           NumericSensorRow & { measurement: 'rain-accumulation' };
+  'last-rain':             TimestampSensorRow;
+  'lightning-day':         NumericSensorRow & { measurement: 'count' };
+  'lightning-hour':        NumericSensorRow & { measurement: 'count' };
+  'lightning-distance':    NumericSensorRow & { measurement: 'distance' };
+  'lightning-last-strike': TimestampSensorRow;
 };
 
+type Factory<R> = (
+  platform: AmbientWeatherSensorsPlatform,
+  accessory: PlatformAccessory,
+  row: R,
+) => SensorAccessory;
+
+// The registry itself is a MAPPED type. Each entry's factory is
+// obligated to accept exactly the row shape declared above — nothing
+// broader, nothing narrower. A wind factory typed against
+// NumericSensorRow (not narrowed to wind-speed) fails to type-check.
+export const FACTORIES: { [K in WrapperId]: Factory<RowForWrapperId[K]> } = {
+  'temperature':        (p, a, r) => new TemperatureAccessory(p, a, r),
+  'wind-speed':         (p, a, r) => new WindSpeedAccessory(p, a, r),
+  'last-rain':          (p, a, r) => new LastRainAccessory(p, a, r),
+  // ...one entry per WrapperId; TypeScript enforces exhaustive coverage.
+};
+
+// The dispatch boundary is where the compile-time <K, RowForWrapperId[K]>
+// correlation gets erased by the `EffectiveSensorRow` we happen to be
+// holding. Runtime asserts that the row's `wrapperId` matches its
+// `kind × measurement` shape before calling the factory.
 export function instantiateWrapper(
-  platform, accessory, row: EffectiveSensorRow,
+  platform: AmbientWeatherSensorsPlatform,
+  accessory: PlatformAccessory,
+  row: EffectiveSensorRow,
 ): SensorAccessory {
-  if (row.kind === 'unrecognized') { throw ... }  // guarded upstream
-  const factory = FACTORIES[row.wrapperId];
-  return factory(platform, accessory, row as never);  // narrowed by wrapperId
+  if (row.kind === 'unrecognized') {
+    throw new Error(`Cannot instantiate wrapper for unrecognized row ${row.dataPoint}`);
+  }
+  assertRowMatchesWrapperId(row);  // throws if measurement drifted from wrapperId
+  const factory = FACTORIES[row.wrapperId] as Factory<EffectiveSensorRow>;
+  return factory(platform, accessory, row);
 }
 ```
 
-Type discipline: each factory's row parameter is the exact measurement
-type the wrapper's `NumericSensorRow.measurement` union (or
-`TimestampSensorRow`) narrows to. `air-quality-pm25` and
-`air-quality-pm10` are the reason we need distinct `WrapperId`s that
-share a class — the factory names the variant explicitly. The lookup
-key IS the variant.
+The runtime `assertRowMatchesWrapperId` uses the same
+`RowForWrapperId` table (mirrored as a runtime object) to check that
+a row's `measurement` (and, for timestamp wrappers, its `kind`)
+matches the declared shape for the wrapper's id. Two independent
+producers of `EffectiveSensorRow` exist today — the default map (row
+literals in `defaultMap.ts`) and `buildEffectiveSensorMap` (which
+resolves the wrapperId based on kind + measurement lookup) — so the
+runtime check is what keeps a bug in either producer from routing a
+pressure row through the wind factory. The check throws immediately;
+buildEffectiveSensorMap catches it and demotes the row to a
+validation error rather than crashing the plugin.
+
+`air-quality-pm25` and `air-quality-pm10` are the reason we need
+distinct `WrapperId`s that share a class — the factory names the
+variant explicitly. The wrapper receives the variant as an implicit
+input via which factory instantiated it, not from
+`accessory.context.device.type`.
 
 Every entry in `WRAPPER_FOR_KIND_AND_MEASUREMENT` requires a matching
 `FACTORIES` entry; the snapshot test locks both.
@@ -219,31 +268,54 @@ unit for its internal comparisons (thresholding, intensity bucketing):
 The chain is:
 
 ```
-AWN raw value (in row.sourceUnit)
-  → wrapper.formatIntensity(canonical)  // needs canonical for scale-anchored buckets
-  → wrapper.compareThreshold(canonical)  // threshold on the row is ALSO in canonical
-  → wrapper.formatValue(canonical → row.displayUnit)  // user-facing string
-  → HAP characteristic value (in the characteristic's fixed unit)
+raw AWN value      (in row.sourceUnit)  ─┐
+                                          ├─→ toCanonical(measurement, sourceUnit, x)
+row.threshold      (in row.sourceUnit)  ─┘        │
+                                                  ▼
+                                    canonical value + canonical threshold
+                                                  │
+                                                  ├─→ formatIntensity(canonical)  // scale-anchored buckets
+                                                  ├─→ compareThreshold(canonical) // MotionDetected transition
+                                                  └─→ toDisplayUnit(canonical, row.displayUnit)
+                                                             │
+                                                             └─→ formatValue(displayValue)  // user-facing string
+                                                                     │
+                                                                     └─→ HAP characteristic (characteristic's fixed unit)
 ```
 
 Two units-related invariants:
 
-1. `row.threshold` is always in the family's canonical unit. Compat
-   preserves this by not re-scaling legacy threshold values (they were
-   already stored in canonical form under
-   `platform.config.thresholds.windSpeedMph` etc.). Custom rows must
-   supply thresholds in canonical too; validation rejects any
-   `threshold` that isn't in the row's `sourceUnit`-vs-canonical
-   compatibility set.
+1. `row.threshold` is stored in `row.sourceUnit`, matching the schema
+   frozen in `docs/future/sensor-map.md` §3.7 and `types.ts` — the
+   existing contract validation and the UI currently enforce. A row
+   `{ sourceUnit: 'kph', threshold: 40 }` means "40 kph." The wrapper
+   converts BOTH the incoming raw value AND the threshold to canonical
+   via the same `toCanonical(measurement, sourceUnit, x)` helper
+   before comparing. That way the comparison always happens in the
+   family's canonical unit — needed because the intensity-bucket
+   functions (`beaufort`, `bucketRainRate`, etc.) are scale-anchored
+   there — without ever asking validation to guess "what unit is this
+   bare number written in?"
 
 2. `row.sourceUnit` may be any legal unit for the row's measurement
    (per `LEGAL_UNITS_FOR_MEASUREMENT` in `units.ts`). The wrapper
-   converts to canonical on receipt via a shared `toCanonical(measurement,
-   sourceUnit, value)` helper that lives next to `LEGAL_UNITS_FOR_MEASUREMENT`;
-   the identity case (sourceUnit === canonical) is a no-op. Non-identity
-   cases: `celsius → fahrenheit` inside temperature is now moot because
-   canonical is celsius; but `kph → mph` for a custom wind sensor
-   reporting in kph is a real conversion at read time.
+   converts to canonical on every read via `toCanonical`; the
+   identity case (`sourceUnit === canonical`) is a no-op. Non-identity
+   cases are real conversions: `kph → mph` for a custom wind sensor
+   reporting in kph, `celsius → fahrenheit`… no, wait: because
+   canonical for temperature is Celsius, an AWN-native
+   `sourceUnit: 'fahrenheit'` gets converted to Celsius at the
+   boundary, not the other way around. This is a departure from
+   today's code (which does the F→C conversion inside
+   TemperatureAccessory) but the ARITHMETIC is identical — only the
+   layer that owns the conversion moves.
+
+   Compat produces overrides whose `threshold` field matches the
+   legacy `platform.config.thresholds.*` values verbatim, in whatever
+   unit the user had them in (v1.6.0's config schema stored them in
+   AWN-native units — mph, in/hr, inHg, mi). The corresponding
+   `sourceUnit` on the emitted row is the AWN-native unit for that
+   measurement, so the pair is self-consistent.
 
 ### Native wrappers are NOT the small case
 
@@ -256,8 +328,16 @@ wrong. Every native wrapper hardcodes structural or unit choices:
 - `SolarRadiationAccessory`: always converts `W/m² → lux` (via a
   hardcoded multiplier). Under the row model, if `row.sourceUnit ===
   'lux'` the conversion is skipped.
-- `Co2Accessory`: fixed unit but a hardcoded 1000-ppm alert threshold;
-  becomes `row.threshold` for custom sensors.
+- `Co2Accessory`: fixed unit + fixed 1000-ppm alert threshold. The
+  threshold stays hardcoded in the wrapper for v2.0 — CO₂ isn't a
+  motion kind, and `row.threshold` is contractually motion-only per
+  the sensor-map v2.0 schema (validation strips it from non-motion
+  rows; `resolveRow` only carries it when `kind === 'motion'`).
+  Making CO₂'s trigger point row-driven is a schema change (touching
+  types, validation, sensor-map.md, and migration tests) that we
+  deliberately defer to post-2.0. Same applies to any other native
+  wrapper that today hardcodes an alert threshold outside the motion
+  family — it stays hardcoded.
 - `AirQualityAccessory`: today reads
   `accessory.context.device.type === 'PM25'` vs `'PM10'` to decide
   which characteristic to attach. Under the row model, the factory
@@ -272,44 +352,94 @@ wrong. Every native wrapper hardcodes structural or unit choices:
 All five native wrappers therefore need row-driven parameterization
 with the same rigor as extended wrappers.
 
-### Custom-row battery attachment
+### Custom-row battery attachment — full lifecycle
 
 Current effective-map resolution sets `hasBatterySubService = batteryField !== null && (defaultRow?.canonicalForBattery ?? false)`.
 For a custom row there is no `defaultRow`, so `hasBatterySubService`
 is always `false` and `batteryField` might be truthy but is never
 consumed. That means the current design's "custom row Battery
-sub-service" is unreachable.
+sub-service" is unreachable end-to-end. Fixing it requires changes
+at four points:
 
-Change the resolver:
+**1. Effective-map resolution.** `buildEffectiveSensorMap` gains an
+explicit ownership pass AFTER the per-row loop. The pass:
 
-```typescript
-// resolveBatteryField + resolveHasBatterySubService in buildEffectiveMap
-if (isCustom) {
-  const explicit = override?.batteryField ?? null;
-  return {
-    batteryField: explicit,
-    hasBatterySubService: explicit !== null,   // custom row IS canonical for its own battery
-  };
-} else {
-  // Existing known-row logic (default map's canonicalForBattery).
-}
-```
+- Iterates rows in a stable priority order (documented + tested,
+  see below).
+- Maintains a `Map<stationMac + batteryField, ownedByDataPoint>`.
+- For each ENABLED row with a non-null `batteryField`: if the
+  (station, batteryField) key is unclaimed, this row wins
+  ownership; otherwise the row keeps `batteryField` (for reading —
+  polling still needs the field name) but gets
+  `hasBatterySubService: false`. `buildEffectiveMap` emits a
+  `duplicate-battery-owner` warning naming the winning row so the
+  UI can surface the choice.
 
-Collision (two rows on the same station sharing a batteryField): the
-first row to resolve keeps `hasBatterySubService: true`; subsequent
-rows keep `batteryField` for reading but get `hasBatterySubService:
-false`. Order is default-map first (preserving v1 canonical
-ownership), then user-declared rows in file order. `buildEffectiveSensorMap`
-emits a `duplicate-battery-owner` warning on collisions.
+  Disabled rows (`enabled: false`) don't participate — they
+  wouldn't get a HAP accessory to attach a sub-service to. If a
+  user disables the winning row, ownership does NOT roll over to
+  the next candidate automatically; a warning suggests removing
+  `batteryField` from disabled rows.
 
-`setupBatteryService` already reads
-`accessory.context.device.batteryLow` and writes it through the HAP
-BatteryService characteristic — no probe lookup involved. The
-platform's parse pipeline is what fills
-`accessory.context.device.batteryLow` from `stations[i].lastData[batteryField]`.
-That path stays; parameterization only affects whether the wrapper
-attaches the sub-service (`hasBatterySubService`) and which field the
-platform reads (`row.batteryField`).
+  **Stable priority order** for the ownership pass:
+
+  1. Rows whose `dataPoint` matches a `DefaultSensorRow` with
+     `canonicalForBattery: true` — preserves v1.6.0 ownership
+     verbatim (battout → tempf, batt_co2 → co2_in_aqin, etc.).
+  2. Remaining default-map rows (non-canonical) in the fixed
+     `DEFAULT_SENSOR_MAP` iteration order.
+  3. User-authored custom rows, ordered by the earliest
+     `overrideIndex` any of their contributing merge fragments
+     carried. Provenance already flows through
+     buildEffectiveSensorMap (Group 1 Finding #5); the ownership
+     pass reads it directly. Ties (a row with no override at all,
+     or two rows tied on overrideIndex) resolve on the fixed
+     iteration order of the effective map.
+
+  Ownership is a function only of the effective sensor map's
+  input, so it's stable across restarts as long as the input is
+  stable. It feeds `structuralSignature` (the sub-service presence
+  is already in the signature via `hasBatterySubService`), and the
+  documented priority is what keeps that signature stable across
+  boots.
+
+**2. Platform parse pipeline** (unchanged for known dataPoints,
+extended for custom). Today's `parseDevices` calls
+`batteryFieldForSensor(sensorKey)` to look up which AWN battery
+field goes with a known sensor and reads that field off
+`station.lastData`. For custom rows the answer isn't in the built-in
+map — instead, parseDevices reads `row.batteryField` from the
+effective-map entry for the (station, dataPoint) pair. `batteryLow`
+is derived the same way (`readBatteryLow`); the resulting boolean
+is stamped into `accessory.context.device.batteryLow` BEFORE the
+wrapper constructor runs, so `setupBatteryService`'s existing
+initial-value seeding still works.
+
+**3. Wrapper construction.** `setupBatteryService` today attaches
+the BatteryService when `context.device.batteryLow !== undefined`.
+Under the row model that gate becomes explicit: attach iff
+`row.hasBatterySubService`. This decouples "we saw a battery value"
+from "this wrapper OWNS the sub-service" — a non-owner row can
+have `batteryField` set (for reading) and correctly NOT get the
+sub-service.
+
+**4. Runtime updates** (both polling and realtime). Today the
+distribute pipeline calls `wrapper.setBatteryLow(low)` on every
+poll for wrappers that carry the setter. Same path stays: the
+routing map (see next section) resolves `(mac, dp)` to the wrapper
+instance, and the parse pipeline hands it the new battery value.
+The only new wire is that a custom row's `batteryField` is read
+from `row.batteryField` instead of `batteryFieldForSensor(dp)`.
+Realtime uses the same code path today via
+`platform.distributeRealtime` — it flows through the same reader,
+so the fix is a single point.
+
+Stage 2's battery-family PR includes an integration test that
+seeds a custom row with `batteryField: 'my_barn_batt'`, feeds an
+AWN payload containing a non-2.6V value on that field, and asserts
+`setBatteryLow(true)` fired on the wrapper AND the initial context
+was seeded before the constructor ran (so the sub-service exists
+on the first tick, not on the second).
 
 ### Value distribution — the routing that makes custom sensors receive readings
 
@@ -355,95 +485,175 @@ window-dressing.
 
 ### Migration order (staged, with the call site done FIRST)
 
-The previous draft had families landing before the platform passed
-the row — that would break compilation (constructors gaining a
-required argument that the call site doesn't supply). Reordered:
+Design (this PR, #19) is docs-only. Every following stage is its own
+code PR, blocking the next one until it merges green.
 
-- **Stage 0 — Interim safety.** Empty `WRAPPER_FOR_KIND_AND_MEASUREMENT`
-  entirely; every custom `(kind, measurement)` row fails
-  buildEffectiveSensorMap validation. Adds a regression test proving
-  the table is empty. Lands with the merge of this design doc.
+- **Stage 0 — Interim safety.** Empty the 15 entries in
+  `WRAPPER_FOR_KIND_AND_MEASUREMENT` and add a regression test
+  proving the table is empty (so a future well-meaning restore
+  without the underlying wiring can't slip in unnoticed). Every
+  custom `(kind, measurement)` row starts failing
+  buildEffectiveSensorMap validation with "no wrapper for (kind,
+  measurement)." Compat-generated overrides against known
+  dataPoints keep working because those route via
+  `defaultMap.wrapper` (direct reference), not through the
+  resolution table.
 
-- **Stage 1 — Factory registry + platform routing.** Adds the
-  `FACTORIES` map (indexed by `WrapperId`) with entries for every
-  wrapper. Adds the routing-map plumbing in platform. Existing
-  wrapper constructors are UNCHANGED in this stage — the factory
-  passes a `row` argument that the constructor accepts but
-  DEFAULT-VALUES (via a shim that reads the same
-  `platform.config.*` fields it always did if the row's field is
-  undefined). This shim keeps every existing test and the v1.6.0
-  code path green while giving the platform something to call with
-  a row. No behavioral change. No table restoration.
+  This stage lands as a follow-up PR immediately after PR #19
+  merges. The design doc itself does not empty the table — a
+  docs-only PR would leave the promised safety measure unshipped.
+  Any Group-3 code PR that would restore an entry earlier is
+  blocked on Stage 4.
 
-- **Stage 2 — Native + extended family constructors, family by
-  family.** Each family (temperature; humidity; solar; co2; air
-  quality; wind; rain; pressure; UV; lightning) removes its
-  `platform.config.*` fallbacks and reads exclusively from the row.
-  Each family lands as its own PR with:
-  - `test_custom_<family>` covering every measurement variant with
-    non-default row values (name, threshold, sourceUnit, displayUnit,
-    triggerDirection, triggerEnabled: false, embedName, batteryField).
-  - HAP graph-parity fixture: default-row instantiation produces
-    byte-identical services + characteristics + subtypes as the
-    pre-refactor snapshot for every WrapperId in the family. This is
-    what prevents constructor refactoring from silently changing the
-    graph without a `structuralSignature` bump.
-  - Fixture format: `{ serviceUuids: [...], characteristics:
-    { <ServiceUuid>: [<CharUuid>, ...] }, subtypes: {...},
-    initialValues: {...} }`, snapshotted once against main just
-    before Stage 2 starts and asserted after each family's changes.
-  - Zero table entries restored in this stage.
+- **Stage 1 — Factory registry + platform routing (adapter form).**
+  Adds the typed `FACTORIES: { [K in WrapperId]: Factory<RowForWrapperId[K]> }`
+  registry AND the platform-side `(mac, dp) → wrapper` routing map.
+  Existing wrapper constructors are UNCHANGED — they still take
+  `(platform, accessory)` only. Each factory entry is an ADAPTER
+  that accepts the row and DISCARDS it, then invokes the legacy
+  two-argument constructor:
 
-- **Stage 3 — Value routing goes live.** Platform's `distribute`
-  routes via the `(mac, dp) → wrapper` map. Includes an integration
-  test at the platform level that seeds a custom row, feeds an AWN
-  payload containing its dataPoint, and asserts the wrapper's
-  `setValue` was called with the expected number. This is where
-  `test_custom_*`'s "reads from row.dataPoint" claim is actually
-  validated — wrappers don't fetch, so the assertion has to sit at
-  the platform layer.
+  ```typescript
+  // Stage 1 factories — every entry looks like this.
+  'wind-speed': (p, a, _row) => new WindSpeedAccessory(p, a),
+  ```
 
-- **Stage 4 — Restore `WRAPPER_FOR_KIND_AND_MEASUREMENT`.** Only
-  after Stages 1–3 all merge and go green in CI. Restoration is
-  ALL-OR-NOTHING: the entire table comes back in one PR alongside
-  its `test_custom_<entry>` for all 15 entries plus a
-  platform-integration test proving each custom row actually
-  routes. No incremental restoration — the reviewer correctly
-  flagged that as premature safety-defeat.
+  This keeps every existing test and the v1.6.0 code path green
+  while giving the platform something to call with a row. No
+  behavioral change. No table restoration.
 
-- **Stage 5 — Retire the Stage-1 shim.** With every family
-  parameterized, remove the fallback-to-`platform.config` code paths
-  the shim leaned on. This is the point where the
-  `platform.config.thresholds.*` / `platform.config.units.*` fields
-  become read-only inputs to compat — they still exist for legacy-
-  config parsing but no wrapper reads them.
+- **Stage 2 — Family-by-family constructor migration.** Each of the
+  ten wrapper families (temperature; humidity; solar; co2; air
+  quality; wind; rain; pressure; UV; lightning) lands as its own
+  PR. That PR:
+  - Adds a third parameter (the family-specific row) to the
+    wrapper's constructor(s) and reads every runtime knob from the
+    row.
+  - Replaces that family's Stage-1 adapter with the row-aware form:
+    `'wind-speed': (p, a, r) => new WindSpeedAccessory(p, a, r)`.
+  - Ships `test_custom_<family>` covering every measurement variant
+    in the family with non-default row values (name, threshold,
+    sourceUnit, displayUnit, triggerDirection, triggerEnabled:
+    false, embedName, batteryField where applicable). These tests
+    call `wrapper.setValue(raw)` directly with an
+    EXPLICITLY-CONSTRUCTED row; they do NOT go through
+    buildEffectiveSensorMap (the resolution table is still empty).
+  - Ships graph-parity fixtures for every WrapperId in the family
+    (see Testing below).
+  - Does NOT restore any resolution-table entry.
 
-Task #65's flag-flip gate does not lift until Stage 5's PR merges
+- **Stage 3 — Value routing goes live (adapter-boundary test).**
+  Platform's `distribute` routes via the `(mac, dp) → wrapper` map
+  built from the effective map. Ships a platform-boundary
+  integration test that constructs an `EffectiveSensorRow`
+  explicitly (bypassing buildEffectiveSensorMap so the still-empty
+  resolution table doesn't reject the custom row), registers it in
+  the routing map, feeds an AWN payload containing its
+  `dataPoint`, and asserts `wrapper.setValue(expected)` fired.
+
+  This is deliberately a boundary test: it proves the
+  `station.lastData → routing map → wrapper.setValue` wire, not
+  the `config.sensorMap → buildEffectiveSensorMap → row → routing
+  map` flow. The full config-to-value integration is Stage 4's job
+  because only Stage 4 restores the table entries that let a
+  custom row survive validation.
+
+- **Stage 4 — Restore `WRAPPER_FOR_KIND_AND_MEASUREMENT` +
+  full-flow integration tests.** Only after Stages 1–3 all merge
+  and go green in CI. Restoration is ALL-OR-NOTHING: the entire
+  15-entry table comes back in one PR alongside:
+  - `test_custom_<entry>` for all 15 entries, this time going
+    through the full `config.sensorMap → buildEffectiveSensorMap →
+    routing → wrapper` pipeline;
+  - platform-integration test proving each custom row actually
+    routes end-to-end from raw AWN payload to HAP characteristic
+    value.
+
+- **Stage 5 — Retire the Stage-1 adapter form.** Every factory
+  entry is now row-aware, so the "Stage 1 adapter" description in
+  the code comments gets tightened and any unused legacy fallback
+  paths (a compat helper still reading from `platform.config.*`
+  where the row already carries the answer) get removed. Mostly
+  documentation + dead-code cleanup at this point.
+
+Task #65's flag-flip gate does not lift until Stage 4's PR merges
 with `WRAPPER_FOR_KIND_AND_MEASUREMENT` fully populated and
 `test_custom_*` + graph-parity + platform-integration all green.
+Stage 5 is optional cleanup and does not block the flag flip.
 
 ## Testing
 
 ### Graph-parity fixtures (Stage 2 gate)
 
-Before Stage 2 begins, snapshot the HAP service graph produced by
-every WrapperId against a canonical default-row input. Format:
+Before Stage 2 begins, capture a normalized snapshot of every
+WrapperId's HAP service graph against a canonical default-row input.
+The snapshot must cover every field that can change HomeKit behavior
+on a client, not just the field names — the earlier draft's format
+missed characteristic props, permissions, ranges, and primary/hidden
+flags, all of which can shift accessory behavior invisibly.
+
+Normalized snapshot shape:
 
 ```typescript
 interface GraphSnapshot {
   wrapperId: WrapperId;
-  services: Array<{ uuid: string; subtype?: string; }>;
-  characteristics: Record<string /* serviceUuid#subtype */, string[]>;
-  initialValues: Record<string, number | string | boolean>;
+  services: Array<{
+    uuid: string;
+    subtype?: string;
+    isPrimary: boolean;
+    isHidden: boolean;
+    linkedTo: string[];              // subtypes of linked services, sorted
+    characteristics: CharSnapshot[]; // sorted by UUID; see below
+    optionalCharacteristics: string[]; // UUIDs actually attached, sorted
+  }>;
+}
+
+interface CharSnapshot {
+  uuid: string;                      // HAP characteristic UUID
+  perms: string[];                   // sorted: pr/pw/ev/hidden/etc.
+  format: string;                    // int / uint8 / float / bool / string / …
+  units?: string;                    // celsius / percentage / lux / seconds / …
+  minValue?: number;
+  maxValue?: number;
+  minStep?: number;
+  validValues?: number[];            // for enum characteristics
+  validValueRanges?: [number, number][];
+  initialValue: unknown;             // seeded value; volatile-value list below
 }
 ```
 
-Every Stage-2 family PR must produce a byte-identical snapshot
-against its wrappers when instantiated with a row that matches
-today's defaults. Any drift is a bug — either the refactor changed
-the graph unintentionally, or the change was intentional and needs a
-`schemaVersion` bump on the affected wrapper descriptor with a
-migration note.
+Excluded from the snapshot as EXPLICITLY VOLATILE:
+
+- Any characteristic value that reflects live sensor state
+  (`CurrentTemperature`, `MotionDetected`, `StatusLowBattery`, etc.)
+  once the wrapper has been fed a value. `initialValue` captures the
+  seeded value at construction time — the same "0" or default the
+  wrapper writes before any AWN payload arrives — but not later
+  updates.
+- HAP UUIDs generated per-boot (accessory `UUID`, `iid`s). Every
+  characteristic and service in the snapshot is keyed by its HAP
+  type UUID (stable) plus subtype (also stable), never `iid`.
+- Presentation strings that Homebridge itself owns (e.g.
+  Manufacturer / Model / SerialNumber under
+  `AccessoryInformation`). The snapshot pins the presence of those
+  characteristics on the AccessoryInformation service but not their
+  string contents, which are already row-driven (`row.name` etc.)
+  and covered by `test_custom_*`.
+
+Serializer implementation lives in
+`tests/helpers/graphSnapshot.ts`. It runs against Homebridge's mock
+HAP objects (already used by the existing wrapper tests). Both the
+"before Stage 2" baseline and each family's post-refactor assertions
+call the same serializer — the two snapshots are then compared with
+strict deep equality.
+
+Every Stage-2 family PR asserts byte-identical output against its
+wrappers when instantiated with a row matching today's defaults. A
+diff is a bug — either the refactor changed the graph
+unintentionally, or the change was intentional and requires a
+`schemaVersion` bump on the affected `WrapperDescriptor` with a
+migration note (which itself invalidates caches — a real event, not
+a snapshot update).
 
 ### `test_custom_*` per resolution-table entry (Stage 4 gate)
 
@@ -495,14 +705,18 @@ Assertions run at BOTH layers:
 
 ## Rollout
 
-Stage 0 lands with the merge of this design doc.
+This PR (#19) is docs-only.
 
-Stages 1–5 open in strict order (each stage's PR blocks its
-successor). No user-visible change lands until Stage 4's resolution-
-table restoration. Shadow mode continues to run over compat-generated
-overrides — those target known dataPoints and always resolve via the
-default map's direct wrapper reference, never through the resolution
-table Stage 0 emptied.
+Stage 0 opens as a follow-up code PR immediately after this design
+merges, emptying `WRAPPER_FOR_KIND_AND_MEASUREMENT` and adding the
+regression test. Every subsequent stage's PR blocks its successor.
+No user-visible change lands until Stage 4's resolution-table
+restoration.
+
+Shadow mode continues to run over compat-generated overrides during
+every stage — those target known dataPoints and always resolve via
+the default map's direct wrapper reference, never through the
+resolution table Stage 0 empties.
 
 ## Alternatives considered
 
