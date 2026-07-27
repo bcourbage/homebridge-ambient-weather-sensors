@@ -118,6 +118,15 @@ export function buildEffectiveSensorMap(input: BuildInput): EffectiveSensorMap {
   const globalOverrides = new Map<string, SensorMapOverride>();
   const stationOverrides = new Map<string, Map<string, SensorMapOverride>>();
 
+  // batteryField provenance side-table — keyed by
+  // `${stationMac ?? '*'}|${dataPoint}`, value is the originalIndex
+  // of the merge fragment that supplied the winning `batteryField`.
+  // The ownership pass (in resolveRow) reads this to attribute
+  // `duplicate-battery-owner` warnings to the loser's actual
+  // config-authored fragment, not a synthetic -1 sentinel that
+  // violates the Group 1 provenance contract.
+  const batteryFieldProvenance = new Map<string, number>();
+
   for (const { key, fragments } of pendingMerges.values()) {
     // Merge fragments field-by-field, later wins on conflict. Record
     // which fragment provided each field's final value.
@@ -130,6 +139,12 @@ export function buildEffectiveSensorMap(input: BuildInput): EffectiveSensorMap {
           provenance[k] = frag.originalIndex;
         }
       }
+    }
+    if (provenance.batteryField !== undefined) {
+      batteryFieldProvenance.set(
+        `${key.stationMac ?? '*'}|${key.dataPoint}`,
+        provenance.batteryField,
+      );
     }
 
     // Warn once per duplicated key, per §3.3.2. Whole-row warning —
@@ -307,14 +322,27 @@ export function buildEffectiveSensorMap(input: BuildInput): EffectiveSensorMap {
   const batteryOwnership: BatteryOwnershipContext = {
     reservedFields: RESERVED_BATTERY_FIELDS,
     claims: new Map(),
-    onDuplicate: (mac, batteryField, winner, loser) => {
+    onDuplicate: (mac, batteryField, winner, loser, loserOverrideIndex) => {
+      // Attribute the warning to the fragment that supplied the
+      // losing row's `batteryField` (the row currently being
+      // resolved; provenance already threaded via `overrideIndex`).
+      // Fallback chain if the loser had no config-authored
+      // batteryField (its field came from a default row):
+      //   1. winner's batteryField provenance (station-scoped first, then global);
+      //   2. -1 sentinel is DISALLOWED — the Group 1 provenance
+      //      contract requires a real index. If we somehow have
+      //      neither, drop to 0 as a "safe" attribution that at
+      //      least points at a real config row instead of nowhere.
+      const winnerIndex = batteryFieldProvenance.get(`${mac}|${winner}`)
+        ?? batteryFieldProvenance.get(`*|${winner}`);
+      const attribution = loserOverrideIndex ?? winnerIndex ?? 0;
       warnings.push({
-        overrideIndex: -1,
+        overrideIndex: attribution,
         code: 'duplicate-battery-owner',
         field: 'batteryField',
         dataPoint: loser,
         stationMac: mac,
-        message: `Custom row '${loser}' on ${mac} declares batteryField '${batteryField}', `
+        message: `Row '${loser}' on ${mac} declares batteryField '${batteryField}', `
           + `but '${winner}' already owns that field's Battery sub-service on this station. `
           + `'${loser}' will report the battery value but not host the HAP BatteryService.`,
       });
@@ -334,12 +362,18 @@ export function buildEffectiveSensorMap(input: BuildInput): EffectiveSensorMap {
     const merged = mergeOverrides(globalOv, stationOv);
     const discovered = discoveryByStationDp.get(key);
 
+    // Provenance for THIS row's batteryField: station-scoped wins
+    // over global (the same precedence mergeOverrides applies).
+    const overrideIndex = batteryFieldProvenance.get(`${mac}|${dataPoint}`)
+      ?? batteryFieldProvenance.get(`*|${dataPoint}`);
+
     const row = resolveRow({
       stationMac: mac,
       dataPoint,
       defaultRow,
       override: merged,
       discovered,
+      overrideIndex,
       batteryOwnership,
     });
     if (row) {
@@ -414,6 +448,15 @@ interface ResolveInput {
   defaultRow: DefaultSensorRow | undefined;
   override: SensorMapOverride | undefined;
   discovered: DiscoveredFieldRecord | undefined;
+  /**
+   * originalIndex of the merge fragment that supplied this row's
+   * `batteryField`. Undefined when the row's batteryField came from
+   * the default map (no override authored it). The ownership pass
+   * threads this through to attribute `duplicate-battery-owner`
+   * warnings to the actual user-authored fragment when this row
+   * loses a collision.
+   */
+  overrideIndex: number | undefined;
   batteryOwnership: BatteryOwnershipContext;
 }
 
@@ -452,8 +495,21 @@ interface BatteryOwnershipContext {
   readonly reservedFields: ReadonlySet<string>;
   /** (mac|batteryField) → dataPoint that already claimed it this pass. */
   readonly claims: Map<string, string>;
-  /** Push to append a duplicate-battery-owner warning. */
-  readonly onDuplicate: (mac: string, batteryField: string, winner: string, loser: string) => void;
+  /**
+   * Push to append a duplicate-battery-owner warning.
+   * `loserOverrideIndex` is the merge fragment that supplied the
+   * loser's `batteryField`, or undefined if the field came from
+   * the default map (no user override authored it — a rare fallback
+   * scenario since claim-path rows almost always come from an
+   * override).
+   */
+  readonly onDuplicate: (
+    mac: string,
+    batteryField: string,
+    winner: string,
+    loser: string,
+    loserOverrideIndex: number | undefined,
+  ) => void;
 }
 
 function resolveRow(inp: ResolveInput): EffectiveSensorRow | null {
@@ -489,10 +545,21 @@ function resolveRow(inp: ResolveInput): EffectiveSensorRow | null {
   const displayUnit: SensorUnit | undefined =
     override?.displayUnit ?? defaultRow?.displayUnit ?? sourceUnit;
 
+  // ---- Resolve enabled BEFORE battery ownership. A disabled row
+  //       must never consume a claim slot; see the
+  //       `resolveHasBatterySubService` doc-comment for why.
+  const enabled = override?.enabled !== false;
+
   // ---- Resolve battery attachment.
   const batteryField = resolveBatteryField(defaultRow, override);
   const hasBatterySubService = resolveHasBatterySubService(
-    stationMac, dataPoint, batteryField, defaultRow, batteryOwnership,
+    stationMac,
+    dataPoint,
+    batteryField,
+    defaultRow,
+    enabled,
+    inp.overrideIndex,
+    batteryOwnership,
   );
 
   // ---- Resolve name.
@@ -516,8 +583,6 @@ function resolveRow(inp: ResolveInput): EffectiveSensorRow | null {
   const embedName = isMotion
     ? (override?.embedName ?? defaultRow?.embedName ?? false)
     : false;
-
-  const enabled = override?.enabled !== false;
 
   const wrapperId = wrapper.id;
   const structuralSignature = computeStructuralSignature(kind, measurement, hasBatterySubService, wrapper);
@@ -615,34 +680,65 @@ const RESERVED_BATTERY_FIELDS: ReadonlySet<string> = new Set(
  * for the full rule; this function is where those rules are executed
  * per row and where `claims` gets mutated on a successful custom
  * attachment.
+ *
+ * Order of operations, per Group 4 follow-up review:
+ *
+ *   1. If the row's effective batteryField is null → no sub-service.
+ *   2. If the row is DISABLED (`enabled: false`) → no sub-service AND
+ *      no claim recorded. A disabled row must never block an enabled
+ *      row from taking ownership of the same batteryField.
+ *   3. Canonical-owner fast path: a default-map row whose resolved
+ *      batteryField still equals `defaultRow.batteryField` and
+ *      `canonicalForBattery: true` — reserved forever, no need to
+ *      touch claims (the reservation is static across resolveRow
+ *      calls; other rows check RESERVED_BATTERY_FIELDS below).
+ *   4. Any other row (custom OR default-with-overridden-batteryField
+ *      OR non-canonical default with explicit user-set batteryField):
+ *      go through the CLAIMS path. Reject if RESERVED_BATTERY_FIELDS
+ *      says the field is default-owned. Otherwise first-writer wins
+ *      via ownership.claims.
  */
 function resolveHasBatterySubService(
   stationMac: string,
   dataPoint: string,
   batteryField: string | null,
   defaultRow: DefaultSensorRow | undefined,
+  enabled: boolean,
+  overrideIndex: number | undefined,
   ownership: BatteryOwnershipContext,
 ): boolean {
   if (batteryField === null) {
     return false;
   }
-  if (defaultRow) {
-    // Default-map row — attachment is authorized only when this row
-    // is the canonical owner. Non-canonical default rows share the
-    // batteryField intentionally (every outdoor sensor references
-    // battout) and stay `false` without warning.
-    return defaultRow.canonicalForBattery;
+  if (!enabled) {
+    // Disabled rows never own a sub-service and never consume a
+    // claim slot. This is the fix for the "disabled row wins over
+    // enabled row" bug flagged in the Group 4 follow-up.
+    return false;
   }
-  // Custom row. Can attach only if the batteryField isn't reserved
-  // by any default canonical row anywhere in DEFAULT_SENSOR_MAP.
+
+  const isCanonicalDefault = defaultRow !== undefined
+    && defaultRow.canonicalForBattery
+    && defaultRow.batteryField === batteryField;
+
+  if (isCanonicalDefault) {
+    // Canonical owner keeps ownership. Reserved by DEFAULT_SENSOR_MAP
+    // (see RESERVED_BATTERY_FIELDS); no need to record in claims
+    // because reservation is checked statically below.
+    return true;
+  }
+
+  // Any other row wanting a sub-service — including a default row
+  // whose batteryField was OVERRIDDEN to something novel, or a
+  // non-canonical default with an explicit user batteryField, or a
+  // custom row — must go through the reserved-set + claims path.
   if (RESERVED_BATTERY_FIELDS.has(batteryField)) {
     return false;
   }
-  // Collision with another custom row on the same station?
   const key = `${stationMac}|${batteryField}`;
   const priorClaim = ownership.claims.get(key);
   if (priorClaim !== undefined) {
-    ownership.onDuplicate(stationMac, batteryField, priorClaim, dataPoint);
+    ownership.onDuplicate(stationMac, batteryField, priorClaim, dataPoint, overrideIndex);
     return false;
   }
   ownership.claims.set(key, dataPoint);

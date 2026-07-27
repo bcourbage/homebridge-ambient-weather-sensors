@@ -149,6 +149,29 @@ export declare class AmbientWeatherSensorsPlatform implements DynamicPlatformPlu
     deregisterAccessories(Devices: DEVICE[]): void;
     discoverDevices(): any;
     /**
+     * Safe-mode entrypoint — the reduced pipeline for
+     * `configMode === 'safe-mode'` per sensor-map.md §17.2. Reads
+     * cached accessories that HAP already restored (via
+     * `configureAccessory`), constructs a wrapper for each based on
+     * its cached `context.device.type`, indexes them by uniqueId so
+     * polling and realtime can push values, and starts the
+     * fetch/distribute loop.
+     *
+     * What safe mode explicitly does NOT do:
+     *   - call `registerPlatformAccessories` / `unregisterPlatformAccessories`;
+     *   - call `updatePlatformAccessories` (no displayName rewrites);
+     *   - write to any plugin persistence file (the shadowMode observer
+     *     has its own safe-mode short-circuit for its persist tree);
+     *   - reconcile against `parseDevices`'s "orphan" set (that would
+     *     unregister cached accessories the AWN response happens to
+     *     omit on the first fetch).
+     *
+     * Distribute() looks up each polled value's wrapper by uniqueId;
+     * cached uniqueId matches produce a `setValue()` call, everything
+     * else is ignored. That's the "updates continue" half of §17.2.
+     */
+    private safeModeStart;
+    /**
      * Construct the right sensor-type wrapper for an accessory based on
      * the cached context.device.type. Returns the wrapper so the platform
      * can index it by uniqueId for the poll-and-distribute loop.

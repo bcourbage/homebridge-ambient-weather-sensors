@@ -631,6 +631,134 @@ describe('buildEffectiveSensorMap — custom-row battery ownership (finding #6)'
       expect(tempf.batteryField).toBe('battout');
     }
   });
+
+  // ---- Group 4 follow-up review regressions ----
+
+  it('a DISABLED custom row does not consume the claim slot; the enabled row still wins', () => {
+    // Group 4 review finding #1: enable-state was resolved AFTER
+    // battery ownership, letting `{ custom_disabled, enabled: false }`
+    // block `{ custom_enabled, enabled: true }` from ever attaching.
+    // Fix: resolve enabled first, disabled rows return false + do
+    // NOT touch ownership.claims.
+    const result = buildEffectiveSensorMap({
+      ...baseInput(),
+      userOverrides: [
+        {
+          dataPoint: 'custom_disabled',
+          kind: 'motion',
+          measurement: 'wind-speed',
+          sourceUnit: 'mph',
+          batteryField: 'my_barn_batt',
+          enabled: false,
+        },
+        {
+          dataPoint: 'custom_enabled',
+          kind: 'temperature',
+          measurement: 'temperature',
+          sourceUnit: 'fahrenheit',
+          batteryField: 'my_barn_batt',
+        },
+      ],
+    });
+    const disabled = result.rows.find(r => r.dataPoint === 'custom_disabled');
+    const enabledRow = result.rows.find(r => r.dataPoint === 'custom_enabled');
+    if (disabled && disabled.kind !== 'unrecognized') {
+      expect(disabled.hasBatterySubService).toBe(false);
+    }
+    if (enabledRow && enabledRow.kind !== 'unrecognized') {
+      expect(enabledRow.hasBatterySubService).toBe(true);
+    }
+    // No collision warning fires — disabled rows don't count as a
+    // claimant, so this isn't a two-row collision at all.
+    expect(result.warnings.filter(w => w.code === 'duplicate-battery-owner')).toHaveLength(0);
+  });
+
+  it('a KNOWN row with overridden batteryField participates in claims (does NOT keep canonical status)', () => {
+    // Group 4 review finding #2: rows with defaultRow bypassed the
+    // ownership pass, so a canonical known row whose batteryField
+    // was overridden to a NOVEL value + a custom row using the same
+    // novel field both received hasBatterySubService: true.
+    // Fix: canonical status only holds when the RESOLVED batteryField
+    // equals the default. Overridden fields go through claims.
+    //
+    // Test constrained to MAC1 via station-scoped overrides so the
+    // assertion focuses on one station's collision, not both.
+    const result = buildEffectiveSensorMap({
+      ...baseInput(),
+      userOverrides: [
+        // tempf on MAC1: default batteryField 'battout' overridden
+        // to 'my_barn_batt'. It's no longer canonical for its
+        // resolved field, so it must go through claims.
+        { dataPoint: 'tempf', stationMac: MAC1, batteryField: 'my_barn_batt' },
+        // Custom row on MAC1 with the same novel field.
+        {
+          dataPoint: 'custom_second',
+          stationMac: MAC1,
+          kind: 'temperature',
+          measurement: 'temperature',
+          sourceUnit: 'fahrenheit',
+          batteryField: 'my_barn_batt',
+        },
+      ],
+    });
+    // On MAC1: tempf resolves first (defaults × stations pass) so it
+    // wins the claim; custom_second collides.
+    const tempfMac1 = result.rows.find(r => r.dataPoint === 'tempf' && r.stationMac === MAC1);
+    const customMac1 = result.rows.find(r => r.dataPoint === 'custom_second' && r.stationMac === MAC1);
+    const owned = [tempfMac1, customMac1].filter((r): r is Exclude<typeof r, undefined> =>
+      r !== undefined && r.kind !== 'unrecognized' && r.hasBatterySubService === true);
+    expect(owned).toHaveLength(1);
+    // The loser retains the batteryField for reading.
+    const loser = [tempfMac1, customMac1].find(r =>
+      r !== undefined && r.kind !== 'unrecognized' && r.hasBatterySubService === false);
+    expect(loser).toBeDefined();
+    if (loser && loser.kind !== 'unrecognized') {
+      expect(loser.batteryField).toBe('my_barn_batt');
+    }
+    // Duplicate warning fires for MAC1 only (MAC2's tempf still uses
+    // the default 'battout' — no collision there).
+    const dupes = result.warnings.filter(w => w.code === 'duplicate-battery-owner');
+    expect(dupes).toHaveLength(1);
+    expect(dupes[0].stationMac).toBe(MAC1);
+  });
+
+  it('duplicate-battery-owner warning attributes to a REAL overrideIndex (never -1)', () => {
+    // Group 4 review finding #3: the warning used a `-1` sentinel
+    // for overrideIndex, violating the Group 1 provenance contract.
+    // Fix: attribute to the loser's batteryField-supplying fragment
+    // (or fall back to the winner's provenance — never -1).
+    const result = buildEffectiveSensorMap({
+      ...baseInput(),
+      userOverrides: [
+        // Index 0: the WINNER — claims the novel field first.
+        {
+          dataPoint: 'custom_first',
+          kind: 'motion',
+          measurement: 'wind-speed',
+          sourceUnit: 'mph',
+          batteryField: 'my_shared_batt',
+        },
+        // Index 1: the LOSER — same novel field on the same station.
+        {
+          dataPoint: 'custom_second',
+          kind: 'temperature',
+          measurement: 'temperature',
+          sourceUnit: 'fahrenheit',
+          batteryField: 'my_shared_batt',
+        },
+      ],
+    });
+    const dupe = result.warnings.find(w => w.code === 'duplicate-battery-owner');
+    expect(dupe).toBeDefined();
+    // MUST NOT be -1 — that would violate Group 1's contract that
+    // every warning attributes to a real fragment.
+    expect(dupe?.overrideIndex).not.toBe(-1);
+    // The loser's batteryField came from index 1, so that's the
+    // config entry the UI should highlight.
+    expect(dupe?.overrideIndex).toBe(1);
+    expect(dupe?.field).toBe('batteryField');
+    expect(dupe?.dataPoint).toBe('custom_second');
+  });
 });
 
 // ---- Review finding #8: global custom rows × known stations ----------

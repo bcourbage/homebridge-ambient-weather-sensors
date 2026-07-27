@@ -164,14 +164,16 @@ export class AmbientWeatherSensorsPlatform {
             // never prevents the plugin from starting.
             this.shadow?.initialize().catch(e => this.log.warn(`[sensor-map v2 shadow] initialize failed: ${e.message}`));
             if (this.configMode === 'safe-mode') {
-                // Cached accessories were restored via configureAccessory; HAP
-                // will keep serving their last-known characteristic values.
-                // We skip discoverDevices entirely — no fetch, no reconcile,
-                // no polling, no realtime. The user must fix their config
-                // and restart Homebridge to leave safe mode.
-                this.log.error('Skipping device discovery: configVersion is unsupported. '
-                    + `${this.accessories.length} cached accessor${this.accessories.length === 1 ? 'y stays' : 'ies stay'} `
-                    + 'available with last-known values. Fix your config and restart Homebridge to resume.');
+                // Per docs/future/sensor-map.md §17.2, safe mode is not a
+                // hard freeze — it's "reconciliation skipped, updates
+                // continue." Cached accessories keep running, polling /
+                // realtime keeps pushing fresh values to their wrappers,
+                // but there is NO register / deregister / rename /
+                // updatePlatformAccessories / persistence write.
+                // safeModeStart() runs that reduced pipeline; the full
+                // register-and-reconcile discoverDevices() path is
+                // deliberately not called.
+                this.safeModeStart();
                 return;
             }
             // run the method to discover / register your devices as accessories
@@ -863,6 +865,73 @@ export class AmbientWeatherSensorsPlatform {
                 message = String(error);
             }
             this.log.error('ERROR:', message);
+        }
+    }
+    /**
+     * Safe-mode entrypoint — the reduced pipeline for
+     * `configMode === 'safe-mode'` per sensor-map.md §17.2. Reads
+     * cached accessories that HAP already restored (via
+     * `configureAccessory`), constructs a wrapper for each based on
+     * its cached `context.device.type`, indexes them by uniqueId so
+     * polling and realtime can push values, and starts the
+     * fetch/distribute loop.
+     *
+     * What safe mode explicitly does NOT do:
+     *   - call `registerPlatformAccessories` / `unregisterPlatformAccessories`;
+     *   - call `updatePlatformAccessories` (no displayName rewrites);
+     *   - write to any plugin persistence file (the shadowMode observer
+     *     has its own safe-mode short-circuit for its persist tree);
+     *   - reconcile against `parseDevices`'s "orphan" set (that would
+     *     unregister cached accessories the AWN response happens to
+     *     omit on the first fetch).
+     *
+     * Distribute() looks up each polled value's wrapper by uniqueId;
+     * cached uniqueId matches produce a `setValue()` call, everything
+     * else is ignored. That's the "updates continue" half of §17.2.
+     */
+    safeModeStart() {
+        this.log.error(`SAFE MODE ACTIVE: reconciliation disabled. ${this.accessories.length} cached `
+            + `accessor${this.accessories.length === 1 ? 'y stays' : 'ies stay'} available; polling continues `
+            + 'to push fresh values. Fix your config and restart Homebridge to resume normal operation.');
+        for (const accessory of this.accessories) {
+            const wrapper = this.createSensorWrapper(accessory);
+            if (!wrapper) {
+                // Cached type is unknown to this plugin version — leave it
+                // in HomeKit with its last-known HAP characteristic value
+                // (Homebridge does that automatically) and skip the wrapper.
+                continue;
+            }
+            const uniqueId = accessory.context?.device?.uniqueId;
+            if (typeof uniqueId !== 'string' || uniqueId.length === 0) {
+                continue;
+            }
+            this.wrappers.set(uniqueId, wrapper);
+            // Seed the wrapper from cached context so the first-tick
+            // reading has something to display until AWN's next payload.
+            const value = accessory.context?.device?.value;
+            if (typeof value === 'number') {
+                try {
+                    wrapper.setValue(value);
+                }
+                catch (error) {
+                    const message = error instanceof Error ? error.message : String(error);
+                    this.log.debug(`safe-mode seed failed for ${accessory.displayName}: ${message}`);
+                }
+            }
+        }
+        // Choose transport the same way discoverDevices does. Safe mode
+        // never changes the transport (respect the user's dataSource
+        // choice), only the reconciliation path.
+        let dataSource = this.config.dataSource === 'realtime' ? 'realtime' : 'polling';
+        if (dataSource === 'realtime' && this.config.extendedDisplayMode === 'embed') {
+            dataSource = 'polling';
+        }
+        this.log.info(`Safe-mode data source: ${dataSource}`);
+        if (dataSource === 'realtime') {
+            this.startRealtime();
+        }
+        else {
+            this.startPolling();
         }
     }
     /**
