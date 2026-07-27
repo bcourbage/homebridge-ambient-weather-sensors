@@ -165,7 +165,18 @@ export interface SensorMapOverride {
    */
   triggerDirection?: 'above' | 'below';
 
-  /** Display unit override. Must be legal for the row's measurement. */
+  /**
+   * Display unit override. Must be legal for the row's measurement.
+   *
+   * Presentation-only, and ONLY the extended (motion-family) wrappers
+   * consume it — they render the reading as a custom string in the unit
+   * the user picks. On NATIVE-HAP measurements (temperature, humidity,
+   * illuminance, co2, pm25, pm10) the wrapper writes the canonical value
+   * into a fixed-unit HomeKit characteristic and ignores displayUnit, so
+   * validation warn-and-strips it there (`ignored-native-displayunit`)
+   * rather than letting a silently-ineffective field ship. See
+   * finding-#4 wrapper parameterization.
+   */
   displayUnit?: SensorUnit;
 
   /**

@@ -81,16 +81,29 @@ describe('validateOverride — known dataPoint', () => {
     expect(r.status).toBe('ok');
   });
 
-  it('rejects illegal displayUnit', () => {
-    const o: SensorMapOverride = { dataPoint: 'tempf', displayUnit: 'percent' };
-    const r = validateOverride(o, KNOWN);
+  it('rejects illegal displayUnit on an extended (motion-family) dataPoint', () => {
+    // wind-speed's displayUnit IS consumed by the wrapper, so an
+    // illegal value is a hard error.
+    const o: SensorMapOverride = { dataPoint: 'windspeedmph', displayUnit: 'percent' };
+    const r = validateOverride(o, KNOWN_WIND);
     expect(r.status).toBe('error');
   });
 
-  it('accepts legal displayUnit', () => {
+  it('accepts legal displayUnit on an extended dataPoint', () => {
+    const o: SensorMapOverride = { dataPoint: 'windspeedmph', displayUnit: 'kph' };
+    const r = validateOverride(o, KNOWN_WIND);
+    expect(r.status).toBe('ok');
+    // Extended displayUnit is meaningful — NOT stripped.
+    expect(r.warnings.some(w => w.code === 'ignored-native-displayunit')).toBe(false);
+  });
+
+  it('warn-strips displayUnit on a native-HAP dataPoint (finding #4)', () => {
+    // temperature renders in a fixed HomeKit unit (°C); displayUnit is
+    // ignored regardless of whether the value is otherwise legal.
     const o: SensorMapOverride = { dataPoint: 'tempf', displayUnit: 'celsius' };
     const r = validateOverride(o, KNOWN);
     expect(r.status).toBe('ok');
+    expect(r.warnings.some(w => w.code === 'ignored-native-displayunit')).toBe(true);
   });
 
   it('warns on sourceUnit override for known datapoints', () => {

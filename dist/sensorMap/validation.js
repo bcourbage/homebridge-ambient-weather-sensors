@@ -46,6 +46,17 @@ const KNOWN_UNITS = new Set([
 ]);
 const TRIGGER_DIRECTIONS = new Set(['above', 'below']);
 /**
+ * Measurements whose wrapper is a NATIVE HAP sensor — it writes the
+ * canonical value into a fixed-unit HomeKit characteristic and ignores
+ * `displayUnit`. `validateOverrideBody` warn-and-strips `displayUnit`
+ * on these so a shipped schema doesn't silently accept an ineffective
+ * field. `displayUnit` remains meaningful only for the extended
+ * (motion-family) measurements. See finding-#4 wrapper parameterization.
+ */
+const NATIVE_HAP_MEASUREMENTS = [
+    'temperature', 'humidity', 'illuminance', 'co2', 'pm25', 'pm10',
+];
+/**
  * The 13 fields users may set on a SensorMapOverride. Any key outside
  * this set on a hand-edited entry is a typo (e.g. `triggerEnabledd`)
  * or an attempt to control internal state we don't expose. Reject
@@ -269,6 +280,28 @@ export function validateOverrideBody(merged, identity, defaultRow) {
             });
             delete out.displayUnit;
         }
+    }
+    // displayUnit is presentation-only and ONLY the extended
+    // (motion-family) wrappers consume it. Native HAP wrappers write the
+    // canonical value into a fixed-unit HomeKit characteristic
+    // (CurrentTemperature = °C, CurrentRelativeHumidity = %,
+    // CurrentAmbientLightLevel = lux, CarbonDioxideLevel = ppm,
+    // PM2_5Density / PM10Density = µg/m³) and MUST ignore displayUnit —
+    // writing e.g. fahrenheit into CurrentTemperature would make HomeKit
+    // report 68 °C. Warn-and-strip on those measurements so a shipped
+    // schema doesn't silently accept an ineffective field (matching how
+    // motion-only fields are handled on non-motion rows). Done before the
+    // legality checks so a native row never errors on displayUnit.
+    // See docs/future/wrapper-parameterization.md §"Unit conversion chain".
+    if (out.displayUnit !== undefined
+        && effectiveMeasurement !== undefined
+        && NATIVE_HAP_MEASUREMENTS.includes(effectiveMeasurement)) {
+        warnings.push({
+            code: 'ignored-native-displayunit',
+            field: 'displayUnit',
+            message: `displayUnit on ${dp} is ignored: ${effectiveMeasurement} renders in a fixed HomeKit unit.`,
+        });
+        delete out.displayUnit;
     }
     if (isCustom) {
         // Custom sensor: kind + measurement required.
