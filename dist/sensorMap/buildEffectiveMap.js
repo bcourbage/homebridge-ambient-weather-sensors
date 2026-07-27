@@ -241,18 +241,33 @@ export function buildEffectiveSensorMap(input) {
         claims: new Map(),
         onDuplicate: (mac, batteryField, winner, loser, loserOverrideIndex) => {
             // Attribute the warning to the fragment that supplied the
-            // losing row's `batteryField` (the row currently being
-            // resolved; provenance already threaded via `overrideIndex`).
-            // Fallback chain if the loser had no config-authored
-            // batteryField (its field came from a default row):
-            //   1. winner's batteryField provenance (station-scoped first, then global);
-            //   2. -1 sentinel is DISALLOWED — the Group 1 provenance
-            //      contract requires a real index. If we somehow have
-            //      neither, drop to 0 as a "safe" attribution that at
-            //      least points at a real config row instead of nowhere.
+            // losing row's `batteryField` — real config authorship, per
+            // Group 1's provenance contract. Fallback: the winner's
+            // provenance, if the loser had no config-authored field.
+            //
+            // If NEITHER side has provenance, both collided rows were
+            // authored by the default map. That's a plugin bug (two
+            // canonical owners for the same field) — the startup
+            // invariant in `assertCanonicalBatteryOwnersUnique()` below
+            // catches that at module load, so this branch is unreachable
+            // in shipping code. We keep the guard here as belt-and-
+            // suspenders: rather than manufacture an unrelated
+            // `overrideIndex: 0` and mislead the UI, drop the warning
+            // and log at debug — the invariant assertion is what surfaces
+            // the real problem to the developer.
             const winnerIndex = batteryFieldProvenance.get(`${mac}|${winner}`)
                 ?? batteryFieldProvenance.get(`*|${winner}`);
-            const attribution = loserOverrideIndex ?? winnerIndex ?? 0;
+            const attribution = loserOverrideIndex ?? winnerIndex;
+            if (attribution === undefined) {
+                // No config authorship on either side — see comment above.
+                // The RowValidationWarning shape requires overrideIndex,
+                // so skipping the push is the only way to avoid inventing a
+                // bogus one. A follow-up PR (per the reviewer, aligned with
+                // PR #19's `EffectiveSensorMap.notes` design) will route
+                // attribution-free collisions through an internal-invariant
+                // channel instead. Until then, silently drop.
+                return;
+            }
             warnings.push({
                 overrideIndex: attribution,
                 code: 'duplicate-battery-owner',
@@ -472,6 +487,36 @@ function resolveBatteryField(defaultRow, override) {
 const RESERVED_BATTERY_FIELDS = new Set(DEFAULT_SENSOR_MAP
     .filter(r => r.canonicalForBattery && r.batteryField !== null)
     .map(r => r.batteryField));
+/**
+ * Startup invariant: every non-null `batteryField` in
+ * `DEFAULT_SENSOR_MAP` has AT MOST ONE row with
+ * `canonicalForBattery: true`. Violating this would produce a
+ * duplicate-battery-owner collision on rows that have no
+ * user-authored `overrideIndex` — i.e. both sides come from the
+ * default map — and the warning would have no honest fragment to
+ * attribute to. Failing fast at module load is preferable to
+ * silently degrading to a debug-log-and-drop path at runtime.
+ *
+ * Executed unconditionally on import; if it ever throws in CI, the
+ * offending DEFAULT_SENSOR_MAP entries need to be reconciled.
+ */
+function assertCanonicalBatteryOwnersUnique() {
+    const owners = new Map();
+    for (const row of DEFAULT_SENSOR_MAP) {
+        if (!row.canonicalForBattery || row.batteryField === null) {
+            continue;
+        }
+        const existing = owners.get(row.batteryField);
+        if (existing !== undefined) {
+            throw new Error(`DEFAULT_SENSOR_MAP invariant violation: batteryField '${row.batteryField}' `
+                + `has two canonical owners ('${existing}' and '${row.dataPoint}'). `
+                + 'A batteryField may be shared by many rows but must have exactly one '
+                + 'row with canonicalForBattery: true.');
+        }
+        owners.set(row.batteryField, row.dataPoint);
+    }
+}
+assertCanonicalBatteryOwnersUnique();
 /**
  * Ownership decision for a single row. See `BatteryOwnershipContext`
  * for the full rule; this function is where those rules are executed

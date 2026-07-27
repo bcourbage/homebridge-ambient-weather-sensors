@@ -27,7 +27,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { AmbientWeatherSensorsPlatform } from '../../src/platform';
-import { MockAPI, MockLogger, MockPlatformAccessory, makeMockAccessory } from '../helpers/mockHomebridge';
+import { MockAPI, MockLogger, MockPlatformAccessory, MockServices, MockCharacteristics, makeMockAccessory } from '../helpers/mockHomebridge';
 
 function makePlatform(config: Record<string, unknown>): { platform: AmbientWeatherSensorsPlatform; api: MockAPI; log: MockLogger } {
   const api = new MockAPI();
@@ -40,9 +40,21 @@ function makePlatform(config: Record<string, unknown>): { platform: AmbientWeath
   return { platform, api, log };
 }
 
-/** Seed a cached accessory into the platform's `accessories` array. */
+/**
+ * Seed a cached accessory into the platform's `accessories` array,
+ * pre-populated with the primary HAP service so `bindSafeMode` can
+ * find it (safe mode never adds services — it only binds to what
+ * HAP already restored).
+ */
 function addCached(platform: AmbientWeatherSensorsPlatform, uniqueId: string, type: string): MockPlatformAccessory {
   const a = makeMockAccessory({ uniqueId, type, displayName: 'Cached ' + uniqueId, value: 20 });
+  // Attach the primary service that a real cached accessory of
+  // this type would have. Homebridge's cache restore does this
+  // automatically in production; the mock is agnostic.
+  switch (type) {
+    case 'Temperature': a.addService(MockServices.TemperatureSensor); break;
+    case 'Humidity':    a.addService(MockServices.HumiditySensor); break;
+  }
   platform.configureAccessory(a as never);
   return a;
 }
@@ -82,7 +94,7 @@ describe('platform safe-mode (finding #1 / §17.2)', () => {
     vi.restoreAllMocks();
   });
 
-  it('safe mode still wires up cached wrappers so polling can update them', () => {
+  it('safe mode binds cached accessories (via bindSafeMode) so polling can update them', () => {
     const { platform, api } = makePlatform({
       configVersion: 999,
       apiKey: 'test',
@@ -93,13 +105,49 @@ describe('platform safe-mode (finding #1 / §17.2)', () => {
     vi.spyOn(global, 'setInterval').mockImplementation(() => 0 as unknown as ReturnType<typeof setInterval>);
     api.emit('didFinishLaunching');
 
-    // The wrapper for the cached uniqueId must exist so
-    // distribute() can push values to it on the next poll tick.
-    // Accessing the private field via a cast is acceptable in a
-    // regression test — the alternative would be exposing a getter
-    // just for the test.
+    // Safe mode uses `safeModeBindings`, NOT `this.wrappers` — the
+    // latter would go through wrapper constructors that mutate the
+    // HAP graph (addService / removeService). Accessing the private
+    // field via cast is fine for a regression test.
+    const bindings = (platform as unknown as { safeModeBindings: Map<string, unknown> }).safeModeBindings;
+    expect(bindings.has('AA:BB:CC:DD:EE:01-tempf')).toBe(true);
+    // The v1.6.0 wrappers map stays empty in safe mode.
     const wrappers = (platform as unknown as { wrappers: Map<string, unknown> }).wrappers;
-    expect(wrappers.has('AA:BB:CC:DD:EE:01-tempf')).toBe(true);
+    expect(wrappers.size).toBe(0);
+
+    vi.restoreAllMocks();
+  });
+
+  it('safe mode: bindSafeMode never adds or removes services (graph parity)', () => {
+    // Before/after service-graph assertion, per the reviewer's
+    // Group 4 follow-up requirement. Snapshot the accessory's
+    // service set before safe-mode start; expect it unchanged
+    // after. bindSafeMode looks up existing services only, never
+    // addService / removeService. A wrapper constructor path (the
+    // pre-fix code) would have removed the BatteryService when
+    // context.device.batteryLow was undefined — this test would
+    // catch that regression.
+    const { platform, api } = makePlatform({
+      configVersion: 999,
+      apiKey: 'test',
+      applicationKey: 'test',
+    });
+    const a = addCached(platform, 'AA:BB:CC:DD:EE:01-tempf', 'Temperature');
+    // Add a Battery sub-service that a pre-fix wrapper constructor
+    // would have REMOVED (because context.device.batteryLow is
+    // undefined on this cached accessory).
+    a.addService(MockServices.Battery);
+
+    const before = (a as unknown as { services: Map<string, unknown> }).services;
+    const beforeUuids = Array.from(before.keys()).sort();
+
+    vi.spyOn(global, 'setInterval').mockImplementation(() => 0 as unknown as ReturnType<typeof setInterval>);
+    api.emit('didFinishLaunching');
+
+    const afterUuids = Array.from(before.keys()).sort();
+    expect(afterUuids).toEqual(beforeUuids);   // byte-for-byte, no add/remove
+    // BatteryService still present.
+    expect(a.getService(MockServices.Battery)).toBeDefined();
 
     vi.restoreAllMocks();
   });
@@ -141,21 +189,32 @@ describe('platform safe-mode (finding #1 / §17.2)', () => {
 
     api.emit('didFinishLaunching');
 
-    // Grab the wrapper the safe-mode path constructed and spy on
-    // its setValue.
-    const wrappers = (platform as unknown as { wrappers: Map<string, { setValue: (v: number) => void }> }).wrappers;
-    const wrapper = wrappers.get('AA:BB:CC:DD:EE:01-tempf');
-    expect(wrapper).toBeDefined();
-    const setValueSpy = vi.spyOn(wrapper!, 'setValue');
+    // Grab the safe-mode binding the platform installed for our
+    // cached tempf and spy on its setValue. This proves the
+    // fetch → distribute wire pushes the raw AWN value all the way
+    // through to the binding, WITHOUT going through parseDevices
+    // (which would filter based on the unsupported config).
+    const bindings = (platform as unknown as { safeModeBindings: Map<string, { setValue: (v: number) => void }> }).safeModeBindings;
+    const binding = bindings.get('AA:BB:CC:DD:EE:01-tempf');
+    expect(binding).toBeDefined();
+    const setValueSpy = vi.spyOn(binding!, 'setValue');
 
-    // Trigger one poll cycle manually (the interval is mocked).
-    // pollAndDistribute is private; call it via the same cast the
-    // other tests use.
-    await (platform as unknown as { pollAndDistribute(): Promise<void> }).pollAndDistribute();
+    // Trigger one safe-mode poll cycle manually (the interval is mocked).
+    await (platform as unknown as { safeModePollAndDistribute(): Promise<void> }).safeModePollAndDistribute();
 
-    // Fahrenheit → Celsius conversion happens inside TemperatureAccessory,
-    // so setValue receives the raw AWN value (72°F).
+    // Binding receives the raw Fahrenheit value; the F→C conversion
+    // happens inside the binding (matching TemperatureAccessory).
     expect(setValueSpy).toHaveBeenCalledWith(72);
+
+    // Confirm the value reached the HAP characteristic too, in Celsius.
+    const svc = (bindings.get('AA:BB:CC:DD:EE:01-tempf') as unknown as { setValue: (v: number) => void });
+    void svc;   // silence unused
+    // Look at the accessory's TemperatureSensor service directly.
+    const accessory = (platform.accessories[0] as unknown as {
+      getService(ctor: unknown): { readCharacteristic(c: unknown): unknown };
+    });
+    const tempSvc = accessory.getService(MockServices.TemperatureSensor);
+    expect(tempSvc.readCharacteristic(MockCharacteristics.CurrentTemperature)).toBeCloseTo(22.22, 1);   // 72°F = 22.22°C
 
     // Still no reconciliation calls.
     expect(api.registered).toHaveLength(0);

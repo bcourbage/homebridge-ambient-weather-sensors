@@ -64,11 +64,12 @@ export declare class AmbientWeatherSensorsPlatform implements DynamicPlatformPlu
     private readonly loggedDiscoveredStations;
     private pollTimer;
     private realtimeSource;
+    private readonly safeModeBindings;
     private readonly shadow;
     private configMode;
     constructor(log: Logger, config: PlatformConfig, api: API);
     configureAccessory(accessory: PlatformAccessory): void;
-    determineSensorType(sensor: string): "Solar Radiation" | "CO2" | "Temperature" | "Humidity" | "PM2.5" | "PM10" | "NOT_SUPPORTED" | "WindSpeed" | "WindGust" | "WindMaxDailyGust" | "WindDirection" | "WindDirection10m" | "RainRate" | "RainEvent" | "RainDaily" | "RainWeekly" | "RainMonthly" | "RainYearly" | "LastRain" | "PressureRelative" | "PressureAbsolute" | "UV" | "LightningDay" | "LightningHour" | "LightningDistance" | "LightningLastStrike";
+    determineSensorType(sensor: string): "PM2.5" | "PM10" | "Temperature" | "Humidity" | "Solar Radiation" | "CO2" | "NOT_SUPPORTED" | "WindSpeed" | "WindGust" | "WindMaxDailyGust" | "WindDirection" | "WindDirection10m" | "RainRate" | "RainEvent" | "RainDaily" | "RainWeekly" | "RainMonthly" | "RainYearly" | "LastRain" | "PressureRelative" | "PressureAbsolute" | "UV" | "LightningDay" | "LightningHour" | "LightningDistance" | "LightningLastStrike";
     /**
      * Compose a HAP-clean accessory displayName from station + sensor
      * metadata.
@@ -171,6 +172,21 @@ export declare class AmbientWeatherSensorsPlatform implements DynamicPlatformPlu
      * else is ignored. That's the "updates continue" half of §17.2.
      */
     private safeModeStart;
+    /**
+     * Fetch the raw AWN payload and push each (station, dataPoint)
+     * value directly to the matching safe-mode binding — bypassing
+     * `parseDevices()` entirely so config filters (sensor toggles,
+     * include/exclude lists, station filters) never touch the flow.
+     *
+     * Safe mode's contract: the config version is unsupported, so we
+     * cannot interpret its filters safely. We CAN still identify
+     * cached accessories by their uniqueId (`${mac}-${dataPoint}`),
+     * so this path just looks each AWN field up in the binding map
+     * and pushes if we recognize it. Anything else — including
+     * fields that the config's filters would have dropped in normal
+     * mode — is silently ignored.
+     */
+    private safeModePollAndDistribute;
     /**
      * Construct the right sensor-type wrapper for an accessory based on
      * the cached context.device.type. Returns the wrapper so the platform
