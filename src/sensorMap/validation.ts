@@ -85,26 +85,20 @@ export interface OverrideWarning {
 }
 
 /**
- * Structured error — code + optional field + message. `field` is set
- * for field-scoped rejections (a specific SensorMapOverride field
- * failed a type or semantic check) so buildEffectiveMap can attribute
- * to the fragment that sourced its value via the same per-field
- * provenance map used for warnings. Row-scope failures (missing
- * required field, unknown key, incompatible kind × measurement)
- * carry `field: undefined`.
- */
-export interface OverrideError {
-  code: string;
-  field?: string;
-  message: string;
-}
-
-/**
  * ValidationResult's error variant is FLAT: `code`, `field`, `message`
  * live directly on the result. This preserves the pre-refactor
  * `result.message` API (tests + docs still read it) while giving
  * callers the structured `code` + `field` they need for per-field
  * error attribution.
+ *
+ * `field` is set for field-scoped rejections and identifies the
+ * fragment whose value caused the rejection via the merge provenance
+ * map. For row-scope failures (missing required field, kind ×
+ * measurement incompatibility) it's undefined. For the unknown-key
+ * cases (`unknown-key`, `wrapper-id-forbidden`) it holds the
+ * offending input key even though that key is outside the
+ * SensorMapOverride vocabulary — the merge provenance map records
+ * every input key, so this still routes attribution correctly.
  */
 export type ValidationResult =
   | { status: 'ok'; validated: SensorMapOverride; warnings: OverrideWarning[] }
@@ -193,25 +187,35 @@ export function validateOverrideBody(
 
   // `wrapperId` is not part of the public schema (§3.7). Reject
   // ahead of the general unknown-key check because it has a
-  // dedicated, actionable error message.
+  // dedicated, actionable error message. Pass the offending key
+  // as `field` so buildEffectiveMap's per-fragment provenance can
+  // attribute the error to the fragment that actually contained
+  // `wrapperId`, not the last fragment. `field` here means "the
+  // input key responsible for the rejection" — that includes keys
+  // outside the SensorMapOverride vocabulary.
   if ('wrapperId' in merged) {
-    return err('wrapper-id-forbidden', `wrapperId is not a valid override field on ${dp}.`, warnings);
+    return err(
+      'wrapper-id-forbidden',
+      `wrapperId is not a valid override field on ${dp}.`,
+      warnings,
+      'wrapperId',
+    );
   }
 
   // Reject any other unknown key. Hand-edited configs typo field
   // names (`triggerEnabledd`, `embed_name`, etc.) and JSON schema
   // won't catch it. Better to fail loudly than silently discard.
   //
-  // Row-scope failure — `field` deliberately unset because there is
-  // no known SensorMapOverride field this belongs to; the offending
-  // key IS the failure, and per-field provenance attribution doesn't
-  // apply (though the user-visible message names it).
+  // The offending key is passed as `field` so the fragment that
+  // introduced it (recorded in the merge provenance map) gets the
+  // blame, not the merge-winning last fragment.
   for (const key of Object.keys(merged)) {
     if (!ALLOWED_KEYS.has(key)) {
       return err(
         'unknown-key',
         `Unknown override field '${key}' on ${dp}. Check for typos.`,
         warnings,
+        key,
       );
     }
   }

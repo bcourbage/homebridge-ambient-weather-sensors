@@ -39,25 +39,20 @@ export interface OverrideWarning {
     message: string;
 }
 /**
- * Structured error — code + optional field + message. `field` is set
- * for field-scoped rejections (a specific SensorMapOverride field
- * failed a type or semantic check) so buildEffectiveMap can attribute
- * to the fragment that sourced its value via the same per-field
- * provenance map used for warnings. Row-scope failures (missing
- * required field, unknown key, incompatible kind × measurement)
- * carry `field: undefined`.
- */
-export interface OverrideError {
-    code: string;
-    field?: string;
-    message: string;
-}
-/**
  * ValidationResult's error variant is FLAT: `code`, `field`, `message`
  * live directly on the result. This preserves the pre-refactor
  * `result.message` API (tests + docs still read it) while giving
  * callers the structured `code` + `field` they need for per-field
  * error attribution.
+ *
+ * `field` is set for field-scoped rejections and identifies the
+ * fragment whose value caused the rejection via the merge provenance
+ * map. For row-scope failures (missing required field, kind ×
+ * measurement incompatibility) it's undefined. For the unknown-key
+ * cases (`unknown-key`, `wrapper-id-forbidden`) it holds the
+ * offending input key even though that key is outside the
+ * SensorMapOverride vocabulary — the merge provenance map records
+ * every input key, so this still routes attribution correctly.
  */
 export type ValidationResult = {
     status: 'ok';

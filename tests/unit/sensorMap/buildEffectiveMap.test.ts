@@ -435,18 +435,55 @@ describe('buildEffectiveSensorMap — per-field warning attribution', () => {
     expect(e?.field).toBe('name');
   });
 
-  it('attributes a row-scope ERROR (unknown key) to the last fragment', () => {
-    // Row-scope failures don't name a field via provenance because
-    // the OFFENDING key is by definition not in the SensorMapOverride
-    // vocabulary. Attribution falls back to the last fragment.
+  it('attributes an unknown-key ERROR to the fragment that CONTAINED the bad key', () => {
+    // The offending key `triggerEnabledd` is in fragment 0.
+    // Fragment 1 supplies an unrelated valid `enabled: true`.
+    // Attribution must point at fragment 0 — the merge provenance
+    // map records every input key, so unknown keys route through it
+    // the same way SensorMapOverride fields do. If we fell back to
+    // the last fragment, the UI would highlight the wrong entry.
     const result = buildEffectiveSensorMap({
       ...baseInput(),
       userOverrides: [
-        { dataPoint: 'tempf', name: 'A' },
         { dataPoint: 'tempf', triggerEnabledd: true },
+        { dataPoint: 'tempf', enabled: true },
       ] as never,
     });
     const e = result.errors.find(e => e.code === 'unknown-key');
+    expect(e).toBeDefined();
+    expect(e?.overrideIndex).toBe(0);
+    expect(e?.field).toBe('triggerEnabledd');
+  });
+
+  it('attributes a wrapper-id-forbidden ERROR to the fragment that CONTAINED wrapperId', () => {
+    // Same shape as the unknown-key case but for the specific
+    // wrapperId rejection path (§3.7 forbids setting it manually).
+    const result = buildEffectiveSensorMap({
+      ...baseInput(),
+      userOverrides: [
+        { dataPoint: 'tempf', wrapperId: 'temperature' },
+        { dataPoint: 'tempf', enabled: true },
+      ] as never,
+    });
+    const e = result.errors.find(e => e.code === 'wrapper-id-forbidden');
+    expect(e).toBeDefined();
+    expect(e?.overrideIndex).toBe(0);
+    expect(e?.field).toBe('wrapperId');
+  });
+
+  it('attributes a truly row-scope ERROR (kind × measurement incompatibility) to the last fragment', () => {
+    // No single field is "wrong" in isolation — kind and measurement
+    // are both individually valid, but the combination isn't. This
+    // is a genuine row-scope failure: `field` is undefined and
+    // attribution falls back to the last fragment.
+    const result = buildEffectiveSensorMap({
+      ...baseInput(),
+      userOverrides: [
+        { dataPoint: 'custom_x', kind: 'temperature' },
+        { dataPoint: 'custom_x', measurement: 'humidity', sourceUnit: 'percent' },
+      ],
+    });
+    const e = result.errors.find(e => e.code === 'incompatible-kind-measurement');
     expect(e).toBeDefined();
     expect(e?.overrideIndex).toBe(1);
     expect(e?.field).toBeUndefined();

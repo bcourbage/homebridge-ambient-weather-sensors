@@ -405,15 +405,23 @@ export interface NoticeStore {
  * so the UI can surface these in the "needs attention" group per
  * §3.7. Never fails the plugin as a whole.
  *
- * `code` is a stable machine-readable identifier (see the OverrideErrorCode
- * union at the validation layer for the canonical list). `field` names
- * the offending SensorMapOverride field when the failure is about a
- * specific field — the same per-field merge provenance used for
- * warnings applies, so `overrideIndex` points at the fragment whose
- * value for THAT field triggered the rejection, not just the last
- * fragment. Row-scope failures (missing required field, unknown key,
- * etc.) fall back to the last fragment because the whole merged
- * entry is rejected.
+ * `code` is a stable machine-readable identifier — required, so UI
+ * consumers can group / filter / dedup without parsing `message`.
+ * The set of codes is defined by validation.ts's `err()` call sites;
+ * kept as `string` here (not a union) to keep the type simple, but
+ * every producing site is required to set one.
+ *
+ * `field` names the offending key when the failure is field-scoped —
+ * usually a SensorMapOverride field, but for `unknown-key` /
+ * `wrapper-id-forbidden` it's the offending input key even though
+ * it's outside the vocabulary. Attribution flows through the same
+ * per-field merge provenance used for warnings, so `overrideIndex`
+ * points at the fragment that actually contained the bad key /
+ * value, not just the last-merge-wins fragment.
+ *
+ * Truly row-scope failures — kind × measurement incompatibility, a
+ * required field missing after merge — leave `field` unset and fall
+ * back to the last fragment.
  */
 export interface RowValidationError {
   /**
@@ -424,8 +432,8 @@ export interface RowValidationError {
    */
   overrideIndex: number;
   /** Stable machine-readable identifier for the failure class. */
-  code?: string;
-  /** The offending SensorMapOverride field, when the failure is field-scoped. */
+  code: string;
+  /** The offending key, when the failure is field-scoped. */
   field?: string;
   /** dataPoint of the offending entry, or undefined if the entry has none. */
   dataPoint?: string;

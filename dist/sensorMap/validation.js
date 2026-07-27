@@ -111,21 +111,25 @@ export function validateOverrideBody(merged, identity, defaultRow) {
     const dp = identity.dataPoint;
     // `wrapperId` is not part of the public schema (§3.7). Reject
     // ahead of the general unknown-key check because it has a
-    // dedicated, actionable error message.
+    // dedicated, actionable error message. Pass the offending key
+    // as `field` so buildEffectiveMap's per-fragment provenance can
+    // attribute the error to the fragment that actually contained
+    // `wrapperId`, not the last fragment. `field` here means "the
+    // input key responsible for the rejection" — that includes keys
+    // outside the SensorMapOverride vocabulary.
     if ('wrapperId' in merged) {
-        return err('wrapper-id-forbidden', `wrapperId is not a valid override field on ${dp}.`, warnings);
+        return err('wrapper-id-forbidden', `wrapperId is not a valid override field on ${dp}.`, warnings, 'wrapperId');
     }
     // Reject any other unknown key. Hand-edited configs typo field
     // names (`triggerEnabledd`, `embed_name`, etc.) and JSON schema
     // won't catch it. Better to fail loudly than silently discard.
     //
-    // Row-scope failure — `field` deliberately unset because there is
-    // no known SensorMapOverride field this belongs to; the offending
-    // key IS the failure, and per-field provenance attribution doesn't
-    // apply (though the user-visible message names it).
+    // The offending key is passed as `field` so the fragment that
+    // introduced it (recorded in the merge provenance map) gets the
+    // blame, not the merge-winning last fragment.
     for (const key of Object.keys(merged)) {
         if (!ALLOWED_KEYS.has(key)) {
-            return err('unknown-key', `Unknown override field '${key}' on ${dp}. Check for typos.`, warnings);
+            return err('unknown-key', `Unknown override field '${key}' on ${dp}. Check for typos.`, warnings, key);
         }
     }
     // Runtime type checks. Build the typed override incrementally as
