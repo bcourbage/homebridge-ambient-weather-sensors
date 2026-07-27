@@ -1,5 +1,6 @@
 import { PlatformAccessory } from 'homebridge';
 import { AmbientWeatherSensorsPlatform } from '../platform.js';
+import type { NumericSensorRow, TimestampSensorRow } from '../sensorMap/types.js';
 import { ExtendedSensorBase } from './extendedSensorBase.js';
 /**
  * Rain-rate accessory. AWN's `hourlyrainin` is inches-per-hour — the
@@ -14,8 +15,8 @@ import { ExtendedSensorBase } from './extendedSensorBase.js';
  */
 declare abstract class RainRateLikeAccessory extends ExtendedSensorBase {
     private readonly rainUnit;
-    constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory, sensorLabel: string, awnKey: string, thresholdInHr: number);
-    protected formatValue(rawInHr: number): string;
+    constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory, sensorLabel: string, awnKey: string, thresholdInHr: number, row?: NumericSensorRow);
+    protected formatValue(canonicalInHr: number): string;
     protected formatIntensity(rawInHr: number): string | undefined;
 }
 /**
@@ -24,7 +25,7 @@ declare abstract class RainRateLikeAccessory extends ExtendedSensorBase {
  * every poll/realtime tick.
  */
 export declare class RainRateAccessory extends RainRateLikeAccessory {
-    constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory);
+    constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory, row?: NumericSensorRow);
 }
 /**
  * Accumulation totals (event, daily, weekly, monthly, yearly). Unlike
@@ -39,23 +40,23 @@ export declare class RainRateAccessory extends RainRateLikeAccessory {
  */
 declare abstract class RainAccumulationLikeAccessory extends ExtendedSensorBase {
     private readonly rainUnit;
-    constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory, sensorLabel: string, awnKey: string);
-    protected formatValue(rawIn: number): string;
+    constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory, sensorLabel: string, awnKey: string, row?: NumericSensorRow);
+    protected formatValue(canonicalIn: number): string;
 }
 export declare class RainEventAccessory extends RainAccumulationLikeAccessory {
-    constructor(p: AmbientWeatherSensorsPlatform, a: PlatformAccessory);
+    constructor(p: AmbientWeatherSensorsPlatform, a: PlatformAccessory, row?: NumericSensorRow);
 }
 export declare class RainDailyAccessory extends RainAccumulationLikeAccessory {
-    constructor(p: AmbientWeatherSensorsPlatform, a: PlatformAccessory);
+    constructor(p: AmbientWeatherSensorsPlatform, a: PlatformAccessory, row?: NumericSensorRow);
 }
 export declare class RainWeeklyAccessory extends RainAccumulationLikeAccessory {
-    constructor(p: AmbientWeatherSensorsPlatform, a: PlatformAccessory);
+    constructor(p: AmbientWeatherSensorsPlatform, a: PlatformAccessory, row?: NumericSensorRow);
 }
 export declare class RainMonthlyAccessory extends RainAccumulationLikeAccessory {
-    constructor(p: AmbientWeatherSensorsPlatform, a: PlatformAccessory);
+    constructor(p: AmbientWeatherSensorsPlatform, a: PlatformAccessory, row?: NumericSensorRow);
 }
 export declare class RainYearlyAccessory extends RainAccumulationLikeAccessory {
-    constructor(p: AmbientWeatherSensorsPlatform, a: PlatformAccessory);
+    constructor(p: AmbientWeatherSensorsPlatform, a: PlatformAccessory, row?: NumericSensorRow);
 }
 /**
  * AWN: `lastRain` — ISO timestamp string of the last detected rain
@@ -68,7 +69,7 @@ export declare class RainYearlyAccessory extends RainAccumulationLikeAccessory {
  * threshold against a timestamp; we leave it always false.
  */
 export declare class LastRainAccessory extends ExtendedSensorBase {
-    constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory);
+    constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory, row?: TimestampSensorRow);
     protected formatValue(rawMs: number): string;
 }
 export {};

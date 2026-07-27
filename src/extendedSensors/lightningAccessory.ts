@@ -1,7 +1,12 @@
 import { PlatformAccessory } from 'homebridge';
 
 import { AmbientWeatherSensorsPlatform } from '../platform.js';
-import { ExtendedDisplayMode, ExtendedSensorBase } from './extendedSensorBase.js';
+import type { NumericSensorRow, TimestampSensorRow } from '../sensorMap/types.js';
+import {
+  ExtendedSensorBase,
+  extendedDisplayModeFor,
+  thresholdFor,
+} from './extendedSensorBase.js';
 import { timeSince } from './intensityBuckets.js';
 import { convertDistance, DistanceUnit } from './unitConversions.js';
 
@@ -35,18 +40,23 @@ abstract class LightningCountLikeAccessory extends ExtendedSensorBase {
     accessory: PlatformAccessory,
     sensorLabel: string,
     awnKey: string,
+    // Row-driven (finding #4). count is canonical for strike counts.
+    row?: NumericSensorRow,
   ) {
-    const displayMode: ExtendedDisplayMode =
-      platform.config.extendedDisplayMode === 'embed' ? 'embed' : 'static';
-
     super(platform, accessory, {
-      sensorLabel,
-      awnKey,
-      // Any strike at all is noteworthy; users can raise this in
-      // config if they get false positives or want a higher signal.
-      threshold: 1,
-      displayMode,
-    });
+      sensorLabel: row?.name ?? sensorLabel,
+      awnKey: row?.dataPoint ?? awnKey,
+      // Any strike at all is noteworthy — the family default is 1. Like
+      // rain accumulation, a row with no explicit threshold keeps the
+      // fires-by-default behavior; an explicit threshold or
+      // `triggerEnabled: false` still wins.
+      threshold: row
+        ? (row.triggerEnabled === false ? Infinity : (row.threshold ?? 1))
+        : 1,
+      displayMode: extendedDisplayModeFor(platform, row),
+      measurement: 'count',
+      sourceUnit: 'count',
+    }, row);
   }
 
   protected formatValue(rawCount: number): string {
@@ -62,8 +72,8 @@ abstract class LightningCountLikeAccessory extends ExtendedSensorBase {
  * midnight in the station's configured timezone.
  */
 export class LightningDayAccessory extends LightningCountLikeAccessory {
-  constructor(p: AmbientWeatherSensorsPlatform, a: PlatformAccessory) {
-    super(p, a, 'Lightning Strikes Today', 'lightning_day');
+  constructor(p: AmbientWeatherSensorsPlatform, a: PlatformAccessory, row?: NumericSensorRow) {
+    super(p, a, 'Lightning Strikes Today', 'lightning_day', row);
   }
 }
 
@@ -72,8 +82,8 @@ export class LightningDayAccessory extends LightningCountLikeAccessory {
  * Sliding window, not aligned to clock hours.
  */
 export class LightningHourAccessory extends LightningCountLikeAccessory {
-  constructor(p: AmbientWeatherSensorsPlatform, a: PlatformAccessory) {
-    super(p, a, 'Lightning Strikes This Hour', 'lightning_hour');
+  constructor(p: AmbientWeatherSensorsPlatform, a: PlatformAccessory, row?: NumericSensorRow) {
+    super(p, a, 'Lightning Strikes This Hour', 'lightning_hour', row);
   }
 }
 
@@ -90,10 +100,10 @@ export class LightningHourAccessory extends LightningCountLikeAccessory {
 export class LightningDistanceAccessory extends ExtendedSensorBase {
   private readonly distanceUnit: DistanceUnit;
 
-  constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory) {
-    const displayMode: ExtendedDisplayMode =
-      platform.config.extendedDisplayMode === 'embed' ? 'embed' : 'static';
-    const distanceUnit: DistanceUnit = (platform.config.units?.distance as DistanceUnit) || 'mi';
+  constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory, row?: NumericSensorRow) {
+    const distanceUnit: DistanceUnit = row
+      ? (row.displayUnit as DistanceUnit)
+      : ((platform.config.units?.distance as DistanceUnit) || 'mi');
     // Blank in HB UI form → undefined → Infinity → Number.isFinite check
     // in the base class returns false → MotionDetected never fires.
     // Accessory still appears so distance is visible in Eve.
@@ -101,18 +111,20 @@ export class LightningDistanceAccessory extends ExtendedSensorBase {
     const thresholdMi = typeof raw === 'number' ? raw : Infinity;
 
     super(platform, accessory, {
-      sensorLabel: 'Lightning Distance',
-      awnKey: 'lightning_distance',
-      threshold: thresholdMi,
-      triggerDirection: 'below',  // close = alarming, opposite of most sensors
-      displayMode,
-    });
+      sensorLabel: row?.name ?? 'Lightning Distance',
+      awnKey: row?.dataPoint ?? 'lightning_distance',
+      threshold: thresholdFor(row, thresholdMi),  // in mi (canonical for AWN)
+      triggerDirection: row?.triggerDirection ?? 'below',  // close = alarming, opposite of most sensors
+      displayMode: extendedDisplayModeFor(platform, row),
+      measurement: 'distance',
+      sourceUnit: row?.sourceUnit ?? 'mi',
+    }, row);
 
     this.distanceUnit = distanceUnit;
   }
 
-  protected formatValue(rawMi: number): string {
-    const converted = convertDistance(rawMi, this.distanceUnit);
+  protected formatValue(canonicalMi: number): string {
+    const converted = convertDistance(canonicalMi, this.distanceUnit);
     const precision = converted < 10 ? 1 : 0;
     const unitLabel = this.distanceUnit;
     return `${converted.toFixed(precision)} ${unitLabel}`;
@@ -127,16 +139,15 @@ export class LightningDistanceAccessory extends ExtendedSensorBase {
  * relative time string ("2 minutes ago", "never").
  */
 export class LightningLastStrikeAccessory extends ExtendedSensorBase {
-  constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory) {
-    const displayMode: ExtendedDisplayMode =
-      platform.config.extendedDisplayMode === 'embed' ? 'embed' : 'static';
-
+  constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory, row?: TimestampSensorRow) {
     super(platform, accessory, {
-      sensorLabel: 'Last Lightning Strike',
-      awnKey: 'lightning_time',
+      sensorLabel: row?.name ?? 'Last Lightning Strike',
+      awnKey: row?.dataPoint ?? 'lightning_time',
       threshold: Infinity,  // informational, never triggers motion
-      displayMode,
-    });
+      displayMode: extendedDisplayModeFor(platform, row),
+      measurement: 'timestamp',
+      sourceUnit: 'ms',
+    }, row);
   }
 
   protected formatValue(rawMs: number): string {

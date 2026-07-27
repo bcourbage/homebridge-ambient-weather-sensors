@@ -1,5 +1,6 @@
 import { PlatformAccessory, Service } from 'homebridge';
 import { AmbientWeatherSensorsPlatform, SensorAccessory } from '../platform.js';
+import type { EffectiveSensorRow, Measurement, NumericSensorRow, SensorUnit, TimestampSensorRow } from '../sensorMap/types.js';
 /**
  * Display mode for the extended-sensor tile in Apple's Home app.
  *
@@ -15,6 +16,25 @@ import { AmbientWeatherSensorsPlatform, SensorAccessory } from '../platform.js';
  *   config setting.
  */
 export type ExtendedDisplayMode = 'static' | 'embed';
+/**
+ * The configured row shapes an extended wrapper can be handed. Both
+ * carry the knobs (`name`, `threshold`, `triggerEnabled`, `embedName`,
+ * `sourceUnit`, `triggerDirection`) the row-driven constructors read;
+ * unrecognized rows never reach a wrapper.
+ */
+export type ConfiguredExtendedRow = NumericSensorRow | TimestampSensorRow;
+/**
+ * Display mode from the row (`embedName`) when present, else from the
+ * legacy `platform.config.extendedDisplayMode`. Finding-#4 Stage 2.
+ */
+export declare function extendedDisplayModeFor(platform: AmbientWeatherSensorsPlatform, row: ConfiguredExtendedRow | undefined): ExtendedDisplayMode;
+/**
+ * Threshold (in the row's source unit) from the row when present, else
+ * the legacy config-derived value. `triggerEnabled: false` and a blank
+ * threshold both collapse to `Infinity`, which the base's
+ * `Number.isFinite` gate reads as "motion trigger disabled".
+ */
+export declare function thresholdFor(row: ConfiguredExtendedRow | undefined, legacyThreshold: number): number;
 /**
  * Inputs threaded through the constructor — keeps the public surface
  * small even as subclasses grow. Each extended-sensor subclass passes
@@ -47,6 +67,18 @@ export interface ExtendedSensorOptions {
     triggerDirection?: 'above' | 'below';
     /** Display mode chosen by the user in config. */
     displayMode: ExtendedDisplayMode;
+    /**
+     * Physical measurement (finding-#4 Stage 2). Together with
+     * `sourceUnit` it lets the base convert the raw reading — and the
+     * threshold — to the family's canonical unit before comparing /
+     * bucketing, so a custom sensor reporting a non-AWN unit (kph, mm,
+     * hPa, km) thresholds correctly. For every AWN-native known dataPoint
+     * `sourceUnit` already equals the canonical unit, so `toCanonical` is
+     * the identity and behavior is byte-identical to v1.6.0.
+     */
+    measurement: Measurement;
+    /** The unit the raw reading (and `threshold`) arrive in. Canonical for AWN-native rows. */
+    sourceUnit: SensorUnit;
 }
 /**
  * Base class for every extended (non-native) sensor type. Wraps a
@@ -75,7 +107,7 @@ export declare abstract class ExtendedSensorBase implements SensorAccessory {
     private readonly valueChar;
     private readonly lastUpdatedChar;
     private readonly intensityChar;
-    constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory, options: ExtendedSensorOptions);
+    constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory, options: ExtendedSensorOptions, row?: EffectiveSensorRow);
     setBatteryLow(batteryLow: boolean): void;
     /**
      * Polling/realtime loop entry point — same signature as every other

@@ -1,5 +1,6 @@
 import { PlatformAccessory } from 'homebridge';
 import { AmbientWeatherSensorsPlatform } from '../platform.js';
+import type { NumericSensorRow } from '../sensorMap/types.js';
 import { ExtendedSensorBase } from './extendedSensorBase.js';
 /**
  * UV index accessory. AWN's `uv` field is the integer UV index
@@ -12,8 +13,8 @@ import { ExtendedSensorBase } from './extendedSensorBase.js';
  * we display the raw integer plus the EPA bucket label.
  */
 export declare class UvAccessory extends ExtendedSensorBase {
-    constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory);
-    protected formatValue(rawUv: number): string;
-    protected formatIntensity(rawUv: number): string | undefined;
+    constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory, row?: NumericSensorRow);
+    protected formatValue(canonicalUv: number): string;
+    protected formatIntensity(canonicalUv: number): string | undefined;
 }
 //# sourceMappingURL=uvAccessory.d.ts.map

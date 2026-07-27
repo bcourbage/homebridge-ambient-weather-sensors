@@ -1,4 +1,4 @@
-import { ExtendedSensorBase } from './extendedSensorBase.js';
+import { ExtendedSensorBase, extendedDisplayModeFor, thresholdFor, } from './extendedSensorBase.js';
 import { timeSince } from './intensityBuckets.js';
 import { convertDistance } from './unitConversions.js';
 /**
@@ -25,16 +25,23 @@ import { convertDistance } from './unitConversions.js';
  * a raw number before passing into setValue().
  */
 class LightningCountLikeAccessory extends ExtendedSensorBase {
-    constructor(platform, accessory, sensorLabel, awnKey) {
-        const displayMode = platform.config.extendedDisplayMode === 'embed' ? 'embed' : 'static';
+    constructor(platform, accessory, sensorLabel, awnKey, 
+    // Row-driven (finding #4). count is canonical for strike counts.
+    row) {
         super(platform, accessory, {
-            sensorLabel,
-            awnKey,
-            // Any strike at all is noteworthy; users can raise this in
-            // config if they get false positives or want a higher signal.
-            threshold: 1,
-            displayMode,
-        });
+            sensorLabel: row?.name ?? sensorLabel,
+            awnKey: row?.dataPoint ?? awnKey,
+            // Any strike at all is noteworthy — the family default is 1. Like
+            // rain accumulation, a row with no explicit threshold keeps the
+            // fires-by-default behavior; an explicit threshold or
+            // `triggerEnabled: false` still wins.
+            threshold: row
+                ? (row.triggerEnabled === false ? Infinity : (row.threshold ?? 1))
+                : 1,
+            displayMode: extendedDisplayModeFor(platform, row),
+            measurement: 'count',
+            sourceUnit: 'count',
+        }, row);
     }
     formatValue(rawCount) {
         const n = Math.max(0, Math.round(rawCount));
@@ -46,8 +53,8 @@ class LightningCountLikeAccessory extends ExtendedSensorBase {
  * midnight in the station's configured timezone.
  */
 export class LightningDayAccessory extends LightningCountLikeAccessory {
-    constructor(p, a) {
-        super(p, a, 'Lightning Strikes Today', 'lightning_day');
+    constructor(p, a, row) {
+        super(p, a, 'Lightning Strikes Today', 'lightning_day', row);
     }
 }
 /**
@@ -55,8 +62,8 @@ export class LightningDayAccessory extends LightningCountLikeAccessory {
  * Sliding window, not aligned to clock hours.
  */
 export class LightningHourAccessory extends LightningCountLikeAccessory {
-    constructor(p, a) {
-        super(p, a, 'Lightning Strikes This Hour', 'lightning_hour');
+    constructor(p, a, row) {
+        super(p, a, 'Lightning Strikes This Hour', 'lightning_hour', row);
     }
 }
 /**
@@ -70,25 +77,28 @@ export class LightningHourAccessory extends LightningCountLikeAccessory {
  * the reading is.
  */
 export class LightningDistanceAccessory extends ExtendedSensorBase {
-    constructor(platform, accessory) {
-        const displayMode = platform.config.extendedDisplayMode === 'embed' ? 'embed' : 'static';
-        const distanceUnit = platform.config.units?.distance || 'mi';
+    constructor(platform, accessory, row) {
+        const distanceUnit = row
+            ? row.displayUnit
+            : (platform.config.units?.distance || 'mi');
         // Blank in HB UI form → undefined → Infinity → Number.isFinite check
         // in the base class returns false → MotionDetected never fires.
         // Accessory still appears so distance is visible in Eve.
         const raw = platform.config.thresholds?.lightningDistanceMi;
         const thresholdMi = typeof raw === 'number' ? raw : Infinity;
         super(platform, accessory, {
-            sensorLabel: 'Lightning Distance',
-            awnKey: 'lightning_distance',
-            threshold: thresholdMi,
-            triggerDirection: 'below', // close = alarming, opposite of most sensors
-            displayMode,
-        });
+            sensorLabel: row?.name ?? 'Lightning Distance',
+            awnKey: row?.dataPoint ?? 'lightning_distance',
+            threshold: thresholdFor(row, thresholdMi), // in mi (canonical for AWN)
+            triggerDirection: row?.triggerDirection ?? 'below', // close = alarming, opposite of most sensors
+            displayMode: extendedDisplayModeFor(platform, row),
+            measurement: 'distance',
+            sourceUnit: row?.sourceUnit ?? 'mi',
+        }, row);
         this.distanceUnit = distanceUnit;
     }
-    formatValue(rawMi) {
-        const converted = convertDistance(rawMi, this.distanceUnit);
+    formatValue(canonicalMi) {
+        const converted = convertDistance(canonicalMi, this.distanceUnit);
         const precision = converted < 10 ? 1 : 0;
         const unitLabel = this.distanceUnit;
         return `${converted.toFixed(precision)} ${unitLabel}`;
@@ -102,14 +112,15 @@ export class LightningDistanceAccessory extends ExtendedSensorBase {
  * relative time string ("2 minutes ago", "never").
  */
 export class LightningLastStrikeAccessory extends ExtendedSensorBase {
-    constructor(platform, accessory) {
-        const displayMode = platform.config.extendedDisplayMode === 'embed' ? 'embed' : 'static';
+    constructor(platform, accessory, row) {
         super(platform, accessory, {
-            sensorLabel: 'Last Lightning Strike',
-            awnKey: 'lightning_time',
+            sensorLabel: row?.name ?? 'Last Lightning Strike',
+            awnKey: row?.dataPoint ?? 'lightning_time',
             threshold: Infinity, // informational, never triggers motion
-            displayMode,
-        });
+            displayMode: extendedDisplayModeFor(platform, row),
+            measurement: 'timestamp',
+            sourceUnit: 'ms',
+        }, row);
     }
     formatValue(rawMs) {
         return timeSince(rawMs);

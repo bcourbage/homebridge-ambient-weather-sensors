@@ -2,6 +2,15 @@ import { Characteristic, PlatformAccessory, Service, WithUUID } from 'homebridge
 
 import { setupBatteryService } from '../batteryService.js';
 import { AmbientWeatherSensorsPlatform, SensorAccessory } from '../platform.js';
+import { batteryOptionsFor } from '../sensorMap/batterySeed.js';
+import { toCanonical } from '../sensorMap/unitConversions.js';
+import type {
+  EffectiveSensorRow,
+  Measurement,
+  NumericSensorRow,
+  SensorUnit,
+  TimestampSensorRow,
+} from '../sensorMap/types.js';
 import { register as registerCharacteristics } from './customCharacteristics.js';
 import { composeStaticName, composeEmbeddedName, isUserRenamed } from './nameComposer.js';
 
@@ -20,6 +29,41 @@ import { composeStaticName, composeEmbeddedName, isUserRenamed } from './nameCom
  *   config setting.
  */
 export type ExtendedDisplayMode = 'static' | 'embed';
+
+/**
+ * The configured row shapes an extended wrapper can be handed. Both
+ * carry the knobs (`name`, `threshold`, `triggerEnabled`, `embedName`,
+ * `sourceUnit`, `triggerDirection`) the row-driven constructors read;
+ * unrecognized rows never reach a wrapper.
+ */
+export type ConfiguredExtendedRow = NumericSensorRow | TimestampSensorRow;
+
+/**
+ * Display mode from the row (`embedName`) when present, else from the
+ * legacy `platform.config.extendedDisplayMode`. Finding-#4 Stage 2.
+ */
+export function extendedDisplayModeFor(
+  platform: AmbientWeatherSensorsPlatform,
+  row: ConfiguredExtendedRow | undefined,
+): ExtendedDisplayMode {
+  if (row) {
+    return row.embedName ? 'embed' : 'static';
+  }
+  return platform.config.extendedDisplayMode === 'embed' ? 'embed' : 'static';
+}
+
+/**
+ * Threshold (in the row's source unit) from the row when present, else
+ * the legacy config-derived value. `triggerEnabled: false` and a blank
+ * threshold both collapse to `Infinity`, which the base's
+ * `Number.isFinite` gate reads as "motion trigger disabled".
+ */
+export function thresholdFor(row: ConfiguredExtendedRow | undefined, legacyThreshold: number): number {
+  if (!row) {
+    return legacyThreshold;
+  }
+  return row.triggerEnabled === false ? Infinity : (row.threshold ?? Infinity);
+}
 
 /**
  * Inputs threaded through the constructor — keeps the public surface
@@ -53,6 +97,18 @@ export interface ExtendedSensorOptions {
   triggerDirection?: 'above' | 'below';
   /** Display mode chosen by the user in config. */
   displayMode: ExtendedDisplayMode;
+  /**
+   * Physical measurement (finding-#4 Stage 2). Together with
+   * `sourceUnit` it lets the base convert the raw reading — and the
+   * threshold — to the family's canonical unit before comparing /
+   * bucketing, so a custom sensor reporting a non-AWN unit (kph, mm,
+   * hPa, km) thresholds correctly. For every AWN-native known dataPoint
+   * `sourceUnit` already equals the canonical unit, so `toCanonical` is
+   * the identity and behavior is byte-identical to v1.6.0.
+   */
+  measurement: Measurement;
+  /** The unit the raw reading (and `threshold`) arrive in. Canonical for AWN-native rows. */
+  sourceUnit: SensorUnit;
 }
 
 /**
@@ -98,6 +154,12 @@ export abstract class ExtendedSensorBase implements SensorAccessory {
     protected readonly platform: AmbientWeatherSensorsPlatform,
     protected readonly accessory: PlatformAccessory,
     protected readonly options: ExtendedSensorOptions,
+    // Row-driven (finding #4): the resolved row drives battery ownership
+    // when present. Subclasses fold the row's name / threshold /
+    // sourceUnit / displayUnit / trigger direction into `options`; the
+    // battery decision is the one piece the base owns directly. Absent
+    // → legacy telemetry-gated battery, byte-identical to v1.6.0.
+    row?: EffectiveSensorRow,
   ) {
     this.customCharacteristics = registerCharacteristics(this.platform.api);
 
@@ -143,7 +205,9 @@ export abstract class ExtendedSensorBase implements SensorAccessory {
     // that AWN does report batteries for, so in practice this will
     // attach a Battery sub-service for every extended sensor on a
     // typical station.
-    this.batterySetter = setupBatteryService(this.platform, this.accessory);
+    this.batterySetter = setupBatteryService(
+      this.platform, this.accessory, batteryOptionsFor(row, accessory),
+    );
 
     // NOTE: Don't call setValue() from this constructor. Subclasses
     // assign their unit-conversion / formatter state AFTER super()
@@ -172,18 +236,29 @@ export abstract class ExtendedSensorBase implements SensorAccessory {
    * renames).
    */
   setValue(rawValue: number): void {
-    const valueStr = this.formatValue(rawValue);
-    const intensityStr = this.formatIntensity(rawValue);
+    // Convert the raw reading — and the threshold — to the family's
+    // canonical unit before formatting / bucketing / comparing. For an
+    // AWN-native known dataPoint `sourceUnit` IS the canonical unit, so
+    // both conversions are the identity and this is byte-identical to
+    // v1.6.0; the non-identity case is a custom sensor reporting a
+    // different unit (kph, mm, hPa, km). The subclass formatters and
+    // intensity buckets are all scale-anchored in canonical, so they
+    // receive the canonical value.
+    const canonical = toCanonical(this.options.measurement, this.options.sourceUnit, rawValue);
+    const canonicalThreshold = toCanonical(this.options.measurement, this.options.sourceUnit, this.options.threshold);
+
+    const valueStr = this.formatValue(canonical);
+    const intensityStr = this.formatIntensity(canonical);
     const timestamp = new Date().toISOString();
     const direction = this.options.triggerDirection ?? 'above';
     const detected = Number.isFinite(this.options.threshold)
       && (direction === 'above'
-        ? rawValue >= this.options.threshold
-        : rawValue <= this.options.threshold);
+        ? canonical >= canonicalThreshold
+        : canonical <= canonicalThreshold);
 
     this.platform.log.debug(
       `EXTENDED ${this.options.awnKey}: value="${valueStr}" intensity="${intensityStr ?? '-'}" ` +
-      `raw=${rawValue} threshold=${this.options.threshold} motion=${detected}`,
+      `raw=${rawValue} canonical=${canonical} threshold=${this.options.threshold} motion=${detected}`,
     );
 
     // Update the three custom characteristics via the cached instance
