@@ -415,6 +415,42 @@ describe('buildEffectiveSensorMap — per-field warning attribution', () => {
     expect(w?.overrideIndex).toBe(0);
     expect(w?.field).toBeUndefined();
   });
+
+  it('attributes a field-scoped ERROR to the fragment whose value survived merge, not the last one', () => {
+    // Fragment 0 supplies the bad `name: 42`.
+    // Fragment 1 supplies `enabled: true` — merge-wins on `enabled`
+    // but doesn't touch `name`.
+    // The error must point at index 0 (the fragment that owns the
+    // offending name), not index 1.
+    const result = buildEffectiveSensorMap({
+      ...baseInput(),
+      userOverrides: [
+        { dataPoint: 'tempf', name: 42 },
+        { dataPoint: 'tempf', enabled: true },
+      ] as never,
+    });
+    const e = result.errors.find(e => e.code === 'invalid-name');
+    expect(e).toBeDefined();
+    expect(e?.overrideIndex).toBe(0);
+    expect(e?.field).toBe('name');
+  });
+
+  it('attributes a row-scope ERROR (unknown key) to the last fragment', () => {
+    // Row-scope failures don't name a field via provenance because
+    // the OFFENDING key is by definition not in the SensorMapOverride
+    // vocabulary. Attribution falls back to the last fragment.
+    const result = buildEffectiveSensorMap({
+      ...baseInput(),
+      userOverrides: [
+        { dataPoint: 'tempf', name: 'A' },
+        { dataPoint: 'tempf', triggerEnabledd: true },
+      ] as never,
+    });
+    const e = result.errors.find(e => e.code === 'unknown-key');
+    expect(e).toBeDefined();
+    expect(e?.overrideIndex).toBe(1);
+    expect(e?.field).toBeUndefined();
+  });
 });
 
 // ---- Review finding #10: JSON-boundary type validation --------------

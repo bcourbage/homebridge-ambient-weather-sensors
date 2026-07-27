@@ -188,7 +188,7 @@ export class ShadowMode {
         }
         if (result.errors.length > 0) {
             for (const err of result.errors) {
-                const key = `err|${err.overrideIndex}|${err.dataPoint ?? ''}`;
+                const key = `err|${err.code ?? 'unknown'}|${err.field ?? ''}|${err.dataPoint ?? ''}|${err.stationMac ?? ''}`;
                 this.logDivergenceOnce(key, `v2 override validation error: ${err.message}`);
             }
         }

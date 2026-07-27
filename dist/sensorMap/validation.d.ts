@@ -38,12 +38,35 @@ export interface OverrideWarning {
     field?: string;
     message: string;
 }
+/**
+ * Structured error — code + optional field + message. `field` is set
+ * for field-scoped rejections (a specific SensorMapOverride field
+ * failed a type or semantic check) so buildEffectiveMap can attribute
+ * to the fragment that sourced its value via the same per-field
+ * provenance map used for warnings. Row-scope failures (missing
+ * required field, unknown key, incompatible kind × measurement)
+ * carry `field: undefined`.
+ */
+export interface OverrideError {
+    code: string;
+    field?: string;
+    message: string;
+}
+/**
+ * ValidationResult's error variant is FLAT: `code`, `field`, `message`
+ * live directly on the result. This preserves the pre-refactor
+ * `result.message` API (tests + docs still read it) while giving
+ * callers the structured `code` + `field` they need for per-field
+ * error attribution.
+ */
 export type ValidationResult = {
     status: 'ok';
     validated: SensorMapOverride;
     warnings: OverrideWarning[];
 } | {
     status: 'error';
+    code: string;
+    field?: string;
     message: string;
     warnings: OverrideWarning[];
 };

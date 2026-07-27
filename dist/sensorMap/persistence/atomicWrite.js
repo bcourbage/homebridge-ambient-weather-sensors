@@ -65,12 +65,18 @@ export async function readJsonStore(filePath, validator, log, clock = REAL_CLOCK
 }
 /**
  * Write a JSON store atomically. The temp file is closed and renamed
- * over the target path in one step (on POSIX + modern Windows).
+ * over the target path in one step (POSIX + modern Windows both
+ * support atomic replace).
  *
- * On unsupported platforms the fallback is unlink + rename with a
- * warn; a brief window of "file absent" is visible to concurrent
- * readers. The stores are single-writer per §8 so cross-process
- * races are outside this function's remit.
+ * If the rename step fails (out of disk, permissions, cross-device
+ * link), the destination file is left untouched, the orphan temp file
+ * is unlinked on a best-effort basis, a warn is logged, and the
+ * original error is re-thrown so the caller (e.g. DiscoveryTracker.flush)
+ * can skip advancing its flush watermarks. There is NO unlink+rename
+ * fallback — see the throw at the bottom of the function.
+ *
+ * The stores are single-writer per §8 so cross-process races are
+ * outside this function's remit.
  */
 export async function writeJsonStore(filePath, data, log) {
     const dir = path.dirname(filePath);

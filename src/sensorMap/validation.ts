@@ -84,9 +84,37 @@ export interface OverrideWarning {
   message: string;
 }
 
+/**
+ * Structured error — code + optional field + message. `field` is set
+ * for field-scoped rejections (a specific SensorMapOverride field
+ * failed a type or semantic check) so buildEffectiveMap can attribute
+ * to the fragment that sourced its value via the same per-field
+ * provenance map used for warnings. Row-scope failures (missing
+ * required field, unknown key, incompatible kind × measurement)
+ * carry `field: undefined`.
+ */
+export interface OverrideError {
+  code: string;
+  field?: string;
+  message: string;
+}
+
+/**
+ * ValidationResult's error variant is FLAT: `code`, `field`, `message`
+ * live directly on the result. This preserves the pre-refactor
+ * `result.message` API (tests + docs still read it) while giving
+ * callers the structured `code` + `field` they need for per-field
+ * error attribution.
+ */
 export type ValidationResult =
   | { status: 'ok'; validated: SensorMapOverride; warnings: OverrideWarning[] }
-  | { status: 'error'; message: string; warnings: OverrideWarning[] };
+  | {
+      status: 'error';
+      code: string;
+      field?: string;
+      message: string;
+      warnings: OverrideWarning[];
+    };
 
 /** Identity extracted from Phase 1 validation. `stationMac` is uppercased if present. */
 export interface OverrideIdentity {
@@ -97,6 +125,23 @@ export interface OverrideIdentity {
 export type IdentityResult =
   | { status: 'ok'; identity: OverrideIdentity }
   | { status: 'error'; message: string };
+
+/**
+ * Small helper: build a field-scoped or row-scope error return in one
+ * expression. `field` is the SensorMapOverride field the failure is
+ * about (undefined for row-scope failures like a missing required
+ * field or an unknown key). `warnings` is the ValidateResult's
+ * warnings accumulator, threaded through so pre-error warnings still
+ * surface on rejection.
+ */
+function err(
+  code: string,
+  message: string,
+  warnings: OverrideWarning[],
+  field?: string,
+): ValidationResult {
+  return { status: 'error', code, field, message, warnings };
+}
 
 /**
  * Phase 1: identity-only validation. Accepts raw `unknown` (from
@@ -150,19 +195,24 @@ export function validateOverrideBody(
   // ahead of the general unknown-key check because it has a
   // dedicated, actionable error message.
   if ('wrapperId' in merged) {
-    return { status: 'error', message: `wrapperId is not a valid override field on ${dp}.`, warnings };
+    return err('wrapper-id-forbidden', `wrapperId is not a valid override field on ${dp}.`, warnings);
   }
 
   // Reject any other unknown key. Hand-edited configs typo field
   // names (`triggerEnabledd`, `embed_name`, etc.) and JSON schema
   // won't catch it. Better to fail loudly than silently discard.
+  //
+  // Row-scope failure — `field` deliberately unset because there is
+  // no known SensorMapOverride field this belongs to; the offending
+  // key IS the failure, and per-field provenance attribution doesn't
+  // apply (though the user-visible message names it).
   for (const key of Object.keys(merged)) {
     if (!ALLOWED_KEYS.has(key)) {
-      return {
-        status: 'error',
-        message: `Unknown override field '${key}' on ${dp}. Check for typos.`,
+      return err(
+        'unknown-key',
+        `Unknown override field '${key}' on ${dp}. Check for typos.`,
         warnings,
-      };
+      );
     }
   }
 
@@ -177,7 +227,7 @@ export function validateOverrideBody(
   // kind: SensorKind enum value.
   if (merged.kind !== undefined) {
     if (typeof merged.kind !== 'string' || !KNOWN_KINDS.has(merged.kind as SensorKind)) {
-      return { status: 'error', message: `kind '${describe(merged.kind)}' is not a valid SensorKind on ${dp}.`, warnings };
+      return err('invalid-kind', `kind '${describe(merged.kind)}' is not a valid SensorKind on ${dp}.`, warnings, 'kind');
     }
     if (merged.kind === 'unrecognized') {
       warnings.push({
@@ -193,7 +243,7 @@ export function validateOverrideBody(
   // measurement: Measurement enum value.
   if (merged.measurement !== undefined) {
     if (typeof merged.measurement !== 'string' || !KNOWN_MEASUREMENTS.has(merged.measurement as Measurement)) {
-      return { status: 'error', message: `measurement '${describe(merged.measurement)}' is not a valid Measurement on ${dp}.`, warnings };
+      return err('invalid-measurement', `measurement '${describe(merged.measurement)}' is not a valid Measurement on ${dp}.`, warnings, 'measurement');
     }
     out.measurement = merged.measurement as Measurement;
   }
@@ -201,13 +251,13 @@ export function validateOverrideBody(
   // sourceUnit / displayUnit: SensorUnit enum values.
   if (merged.sourceUnit !== undefined) {
     if (typeof merged.sourceUnit !== 'string' || !KNOWN_UNITS.has(merged.sourceUnit as SensorUnit)) {
-      return { status: 'error', message: `sourceUnit '${describe(merged.sourceUnit)}' is not a valid unit on ${dp}.`, warnings };
+      return err('invalid-sourceunit', `sourceUnit '${describe(merged.sourceUnit)}' is not a valid unit on ${dp}.`, warnings, 'sourceUnit');
     }
     out.sourceUnit = merged.sourceUnit as SensorUnit;
   }
   if (merged.displayUnit !== undefined) {
     if (typeof merged.displayUnit !== 'string' || !KNOWN_UNITS.has(merged.displayUnit as SensorUnit)) {
-      return { status: 'error', message: `displayUnit '${describe(merged.displayUnit)}' is not a valid unit on ${dp}.`, warnings };
+      return err('invalid-displayunit', `displayUnit '${describe(merged.displayUnit)}' is not a valid unit on ${dp}.`, warnings, 'displayUnit');
     }
     out.displayUnit = merged.displayUnit as SensorUnit;
   }
@@ -215,7 +265,7 @@ export function validateOverrideBody(
   // name: non-empty string.
   if (merged.name !== undefined) {
     if (typeof merged.name !== 'string' || merged.name.length === 0) {
-      return { status: 'error', message: `name on ${dp} must be a non-empty string.`, warnings };
+      return err('invalid-name', `name on ${dp} must be a non-empty string.`, warnings, 'name');
     }
     out.name = merged.name;
   }
@@ -223,7 +273,7 @@ export function validateOverrideBody(
   // threshold: number.
   if (merged.threshold !== undefined) {
     if (typeof merged.threshold !== 'number' || !Number.isFinite(merged.threshold)) {
-      return { status: 'error', message: `threshold on ${dp} must be a finite number.`, warnings };
+      return err('invalid-threshold', `threshold on ${dp} must be a finite number.`, warnings, 'threshold');
     }
     out.threshold = merged.threshold;
   }
@@ -231,7 +281,7 @@ export function validateOverrideBody(
   // triggerEnabled: boolean.
   if (merged.triggerEnabled !== undefined) {
     if (typeof merged.triggerEnabled !== 'boolean') {
-      return { status: 'error', message: `triggerEnabled on ${dp} must be a boolean.`, warnings };
+      return err('invalid-triggerenabled', `triggerEnabled on ${dp} must be a boolean.`, warnings, 'triggerEnabled');
     }
     out.triggerEnabled = merged.triggerEnabled;
   }
@@ -239,7 +289,7 @@ export function validateOverrideBody(
   // triggerDirection: 'above' | 'below'.
   if (merged.triggerDirection !== undefined) {
     if (typeof merged.triggerDirection !== 'string' || !TRIGGER_DIRECTIONS.has(merged.triggerDirection as 'above' | 'below')) {
-      return { status: 'error', message: `triggerDirection on ${dp} must be 'above' or 'below'.`, warnings };
+      return err('invalid-triggerdirection', `triggerDirection on ${dp} must be 'above' or 'below'.`, warnings, 'triggerDirection');
     }
     out.triggerDirection = merged.triggerDirection as 'above' | 'below';
   }
@@ -247,7 +297,7 @@ export function validateOverrideBody(
   // batteryField: string | null.
   if ('batteryField' in merged) {
     if (merged.batteryField !== null && (typeof merged.batteryField !== 'string' || merged.batteryField.length === 0)) {
-      return { status: 'error', message: `batteryField on ${dp} must be a non-empty string or null.`, warnings };
+      return err('invalid-batteryfield', `batteryField on ${dp} must be a non-empty string or null.`, warnings, 'batteryField');
     }
     out.batteryField = merged.batteryField as string | null;
   }
@@ -255,7 +305,7 @@ export function validateOverrideBody(
   // embedName: boolean.
   if (merged.embedName !== undefined) {
     if (typeof merged.embedName !== 'boolean') {
-      return { status: 'error', message: `embedName on ${dp} must be a boolean.`, warnings };
+      return err('invalid-embedname', `embedName on ${dp} must be a boolean.`, warnings, 'embedName');
     }
     out.embedName = merged.embedName;
   }
@@ -263,7 +313,7 @@ export function validateOverrideBody(
   // enabled: boolean.
   if (merged.enabled !== undefined) {
     if (typeof merged.enabled !== 'boolean') {
-      return { status: 'error', message: `enabled on ${dp} must be a boolean.`, warnings };
+      return err('invalid-enabled', `enabled on ${dp} must be a boolean.`, warnings, 'enabled');
     }
     out.enabled = merged.enabled;
   }
@@ -305,11 +355,12 @@ export function validateOverrideBody(
     }
   } else if (effectiveMeasurement === 'timestamp') {
     if (out.sourceUnit !== undefined && out.sourceUnit !== 'ms') {
-      return {
-        status: 'error',
-        message: `sourceUnit on timestamp row ${dp} must be 'ms'.`,
+      return err(
+        'invalid-timestamp-sourceunit',
+        `sourceUnit on timestamp row ${dp} must be 'ms'.`,
         warnings,
-      };
+        'sourceUnit',
+      );
     }
     if (out.displayUnit !== undefined) {
       warnings.push({
@@ -324,39 +375,44 @@ export function validateOverrideBody(
   if (isCustom) {
     // Custom sensor: kind + measurement required.
     if (!out.kind) {
-      return { status: 'error', message: `Custom dataPoint '${dp}' requires 'kind'.`, warnings };
+      return err('custom-missing-kind', `Custom dataPoint '${dp}' requires 'kind'.`, warnings, 'kind');
     }
     if (!out.measurement) {
-      return { status: 'error', message: `Custom dataPoint '${dp}' requires 'measurement'.`, warnings };
+      return err('custom-missing-measurement', `Custom dataPoint '${dp}' requires 'measurement'.`, warnings, 'measurement');
     }
     if (!isCompatibleKind(out.measurement, out.kind as Exclude<SensorKind, 'unrecognized'>)) {
-      return {
-        status: 'error',
-        message: `kind '${out.kind}' is not compatible with measurement '${out.measurement}' on ${dp}.`,
+      // Kind × measurement incompatibility — row-scope failure. Both
+      // fields are consistent within themselves; the row is rejected
+      // as a unit.
+      return err(
+        'incompatible-kind-measurement',
+        `kind '${out.kind}' is not compatible with measurement '${out.measurement}' on ${dp}.`,
         warnings,
-      };
+      );
     }
 
     // Numeric measurements need a sourceUnit; already-normalized
     // boolean/timestamp above don't fall through here.
     if (out.measurement !== 'boolean' && out.measurement !== 'timestamp') {
       if (!out.sourceUnit) {
-        return { status: 'error', message: `Custom numeric dataPoint '${dp}' requires 'sourceUnit'.`, warnings };
+        return err('custom-missing-sourceunit', `Custom numeric dataPoint '${dp}' requires 'sourceUnit'.`, warnings, 'sourceUnit');
       }
       const legal = LEGAL_UNITS_FOR_MEASUREMENT[out.measurement];
       if (!legal.includes(out.sourceUnit)) {
-        return {
-          status: 'error',
-          message: `sourceUnit '${out.sourceUnit}' is not legal for measurement '${out.measurement}'.`,
+        return err(
+          'illegal-sourceunit-for-measurement',
+          `sourceUnit '${out.sourceUnit}' is not legal for measurement '${out.measurement}'.`,
           warnings,
-        };
+          'sourceUnit',
+        );
       }
       if (out.displayUnit !== undefined && !legal.includes(out.displayUnit)) {
-        return {
-          status: 'error',
-          message: `displayUnit '${out.displayUnit}' is not legal for measurement '${out.measurement}'.`,
+        return err(
+          'illegal-displayunit-for-measurement',
+          `displayUnit '${out.displayUnit}' is not legal for measurement '${out.measurement}'.`,
           warnings,
-        };
+          'displayUnit',
+        );
       }
     }
   } else {
@@ -371,11 +427,12 @@ export function validateOverrideBody(
     }
     if (out.kind !== undefined) {
       if (!isCompatibleKind(defaultRow.measurement, out.kind as Exclude<SensorKind, 'unrecognized'>)) {
-        return {
-          status: 'error',
-          message: `kind '${out.kind}' is not compatible with the built-in measurement '${defaultRow.measurement}' on ${dp}.`,
+        return err(
+          'incompatible-kind-for-known-measurement',
+          `kind '${out.kind}' is not compatible with the built-in measurement '${defaultRow.measurement}' on ${dp}.`,
           warnings,
-        };
+          'kind',
+        );
       }
     }
     if (out.sourceUnit !== undefined && out.sourceUnit !== defaultRow.sourceUnit) {
@@ -389,11 +446,12 @@ export function validateOverrideBody(
     if (out.displayUnit !== undefined) {
       const legal = LEGAL_UNITS_FOR_MEASUREMENT[defaultRow.measurement];
       if (!legal.includes(out.displayUnit)) {
-        return {
-          status: 'error',
-          message: `displayUnit '${out.displayUnit}' is not legal for measurement '${defaultRow.measurement}' on ${dp}.`,
+        return err(
+          'illegal-displayunit-for-known-measurement',
+          `displayUnit '${out.displayUnit}' is not legal for measurement '${defaultRow.measurement}' on ${dp}.`,
           warnings,
-        };
+          'displayUnit',
+        );
       }
     }
   }
@@ -452,7 +510,9 @@ export function validateOverride(
 ): ValidationResult {
   const identity = validateOverrideIdentity(input);
   if (identity.status === 'error') {
-    return { status: 'error', message: identity.message, warnings: [] };
+    // Identity failures are row-scope by definition (the entry has
+    // no valid identity to hang a field-scoped error on).
+    return { status: 'error', code: 'invalid-identity', message: identity.message, warnings: [] };
   }
   return validateOverrideBody(input as Record<string, unknown>, identity.identity, defaultRow);
 }

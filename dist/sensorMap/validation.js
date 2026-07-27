@@ -61,6 +61,17 @@ const ALLOWED_KEYS = new Set([
     'batteryField', 'embedName', 'enabled',
 ]);
 /**
+ * Small helper: build a field-scoped or row-scope error return in one
+ * expression. `field` is the SensorMapOverride field the failure is
+ * about (undefined for row-scope failures like a missing required
+ * field or an unknown key). `warnings` is the ValidateResult's
+ * warnings accumulator, threaded through so pre-error warnings still
+ * surface on rejection.
+ */
+function err(code, message, warnings, field) {
+    return { status: 'error', code, field, message, warnings };
+}
+/**
  * Phase 1: identity-only validation. Accepts raw `unknown` (from
  * JSON) and produces the identity key that buildEffectiveMap uses
  * for dedup. Does NOT validate the body — a duplicate entry that's
@@ -102,18 +113,19 @@ export function validateOverrideBody(merged, identity, defaultRow) {
     // ahead of the general unknown-key check because it has a
     // dedicated, actionable error message.
     if ('wrapperId' in merged) {
-        return { status: 'error', message: `wrapperId is not a valid override field on ${dp}.`, warnings };
+        return err('wrapper-id-forbidden', `wrapperId is not a valid override field on ${dp}.`, warnings);
     }
     // Reject any other unknown key. Hand-edited configs typo field
     // names (`triggerEnabledd`, `embed_name`, etc.) and JSON schema
     // won't catch it. Better to fail loudly than silently discard.
+    //
+    // Row-scope failure — `field` deliberately unset because there is
+    // no known SensorMapOverride field this belongs to; the offending
+    // key IS the failure, and per-field provenance attribution doesn't
+    // apply (though the user-visible message names it).
     for (const key of Object.keys(merged)) {
         if (!ALLOWED_KEYS.has(key)) {
-            return {
-                status: 'error',
-                message: `Unknown override field '${key}' on ${dp}. Check for typos.`,
-                warnings,
-            };
+            return err('unknown-key', `Unknown override field '${key}' on ${dp}. Check for typos.`, warnings);
         }
     }
     // Runtime type checks. Build the typed override incrementally as
@@ -126,7 +138,7 @@ export function validateOverrideBody(merged, identity, defaultRow) {
     // kind: SensorKind enum value.
     if (merged.kind !== undefined) {
         if (typeof merged.kind !== 'string' || !KNOWN_KINDS.has(merged.kind)) {
-            return { status: 'error', message: `kind '${describe(merged.kind)}' is not a valid SensorKind on ${dp}.`, warnings };
+            return err('invalid-kind', `kind '${describe(merged.kind)}' is not a valid SensorKind on ${dp}.`, warnings, 'kind');
         }
         if (merged.kind === 'unrecognized') {
             warnings.push({
@@ -142,69 +154,69 @@ export function validateOverrideBody(merged, identity, defaultRow) {
     // measurement: Measurement enum value.
     if (merged.measurement !== undefined) {
         if (typeof merged.measurement !== 'string' || !KNOWN_MEASUREMENTS.has(merged.measurement)) {
-            return { status: 'error', message: `measurement '${describe(merged.measurement)}' is not a valid Measurement on ${dp}.`, warnings };
+            return err('invalid-measurement', `measurement '${describe(merged.measurement)}' is not a valid Measurement on ${dp}.`, warnings, 'measurement');
         }
         out.measurement = merged.measurement;
     }
     // sourceUnit / displayUnit: SensorUnit enum values.
     if (merged.sourceUnit !== undefined) {
         if (typeof merged.sourceUnit !== 'string' || !KNOWN_UNITS.has(merged.sourceUnit)) {
-            return { status: 'error', message: `sourceUnit '${describe(merged.sourceUnit)}' is not a valid unit on ${dp}.`, warnings };
+            return err('invalid-sourceunit', `sourceUnit '${describe(merged.sourceUnit)}' is not a valid unit on ${dp}.`, warnings, 'sourceUnit');
         }
         out.sourceUnit = merged.sourceUnit;
     }
     if (merged.displayUnit !== undefined) {
         if (typeof merged.displayUnit !== 'string' || !KNOWN_UNITS.has(merged.displayUnit)) {
-            return { status: 'error', message: `displayUnit '${describe(merged.displayUnit)}' is not a valid unit on ${dp}.`, warnings };
+            return err('invalid-displayunit', `displayUnit '${describe(merged.displayUnit)}' is not a valid unit on ${dp}.`, warnings, 'displayUnit');
         }
         out.displayUnit = merged.displayUnit;
     }
     // name: non-empty string.
     if (merged.name !== undefined) {
         if (typeof merged.name !== 'string' || merged.name.length === 0) {
-            return { status: 'error', message: `name on ${dp} must be a non-empty string.`, warnings };
+            return err('invalid-name', `name on ${dp} must be a non-empty string.`, warnings, 'name');
         }
         out.name = merged.name;
     }
     // threshold: number.
     if (merged.threshold !== undefined) {
         if (typeof merged.threshold !== 'number' || !Number.isFinite(merged.threshold)) {
-            return { status: 'error', message: `threshold on ${dp} must be a finite number.`, warnings };
+            return err('invalid-threshold', `threshold on ${dp} must be a finite number.`, warnings, 'threshold');
         }
         out.threshold = merged.threshold;
     }
     // triggerEnabled: boolean.
     if (merged.triggerEnabled !== undefined) {
         if (typeof merged.triggerEnabled !== 'boolean') {
-            return { status: 'error', message: `triggerEnabled on ${dp} must be a boolean.`, warnings };
+            return err('invalid-triggerenabled', `triggerEnabled on ${dp} must be a boolean.`, warnings, 'triggerEnabled');
         }
         out.triggerEnabled = merged.triggerEnabled;
     }
     // triggerDirection: 'above' | 'below'.
     if (merged.triggerDirection !== undefined) {
         if (typeof merged.triggerDirection !== 'string' || !TRIGGER_DIRECTIONS.has(merged.triggerDirection)) {
-            return { status: 'error', message: `triggerDirection on ${dp} must be 'above' or 'below'.`, warnings };
+            return err('invalid-triggerdirection', `triggerDirection on ${dp} must be 'above' or 'below'.`, warnings, 'triggerDirection');
         }
         out.triggerDirection = merged.triggerDirection;
     }
     // batteryField: string | null.
     if ('batteryField' in merged) {
         if (merged.batteryField !== null && (typeof merged.batteryField !== 'string' || merged.batteryField.length === 0)) {
-            return { status: 'error', message: `batteryField on ${dp} must be a non-empty string or null.`, warnings };
+            return err('invalid-batteryfield', `batteryField on ${dp} must be a non-empty string or null.`, warnings, 'batteryField');
         }
         out.batteryField = merged.batteryField;
     }
     // embedName: boolean.
     if (merged.embedName !== undefined) {
         if (typeof merged.embedName !== 'boolean') {
-            return { status: 'error', message: `embedName on ${dp} must be a boolean.`, warnings };
+            return err('invalid-embedname', `embedName on ${dp} must be a boolean.`, warnings, 'embedName');
         }
         out.embedName = merged.embedName;
     }
     // enabled: boolean.
     if (merged.enabled !== undefined) {
         if (typeof merged.enabled !== 'boolean') {
-            return { status: 'error', message: `enabled on ${dp} must be a boolean.`, warnings };
+            return err('invalid-enabled', `enabled on ${dp} must be a boolean.`, warnings, 'enabled');
         }
         out.enabled = merged.enabled;
     }
@@ -243,11 +255,7 @@ export function validateOverrideBody(merged, identity, defaultRow) {
     }
     else if (effectiveMeasurement === 'timestamp') {
         if (out.sourceUnit !== undefined && out.sourceUnit !== 'ms') {
-            return {
-                status: 'error',
-                message: `sourceUnit on timestamp row ${dp} must be 'ms'.`,
-                warnings,
-            };
+            return err('invalid-timestamp-sourceunit', `sourceUnit on timestamp row ${dp} must be 'ms'.`, warnings, 'sourceUnit');
         }
         if (out.displayUnit !== undefined) {
             warnings.push({
@@ -261,38 +269,29 @@ export function validateOverrideBody(merged, identity, defaultRow) {
     if (isCustom) {
         // Custom sensor: kind + measurement required.
         if (!out.kind) {
-            return { status: 'error', message: `Custom dataPoint '${dp}' requires 'kind'.`, warnings };
+            return err('custom-missing-kind', `Custom dataPoint '${dp}' requires 'kind'.`, warnings, 'kind');
         }
         if (!out.measurement) {
-            return { status: 'error', message: `Custom dataPoint '${dp}' requires 'measurement'.`, warnings };
+            return err('custom-missing-measurement', `Custom dataPoint '${dp}' requires 'measurement'.`, warnings, 'measurement');
         }
         if (!isCompatibleKind(out.measurement, out.kind)) {
-            return {
-                status: 'error',
-                message: `kind '${out.kind}' is not compatible with measurement '${out.measurement}' on ${dp}.`,
-                warnings,
-            };
+            // Kind × measurement incompatibility — row-scope failure. Both
+            // fields are consistent within themselves; the row is rejected
+            // as a unit.
+            return err('incompatible-kind-measurement', `kind '${out.kind}' is not compatible with measurement '${out.measurement}' on ${dp}.`, warnings);
         }
         // Numeric measurements need a sourceUnit; already-normalized
         // boolean/timestamp above don't fall through here.
         if (out.measurement !== 'boolean' && out.measurement !== 'timestamp') {
             if (!out.sourceUnit) {
-                return { status: 'error', message: `Custom numeric dataPoint '${dp}' requires 'sourceUnit'.`, warnings };
+                return err('custom-missing-sourceunit', `Custom numeric dataPoint '${dp}' requires 'sourceUnit'.`, warnings, 'sourceUnit');
             }
             const legal = LEGAL_UNITS_FOR_MEASUREMENT[out.measurement];
             if (!legal.includes(out.sourceUnit)) {
-                return {
-                    status: 'error',
-                    message: `sourceUnit '${out.sourceUnit}' is not legal for measurement '${out.measurement}'.`,
-                    warnings,
-                };
+                return err('illegal-sourceunit-for-measurement', `sourceUnit '${out.sourceUnit}' is not legal for measurement '${out.measurement}'.`, warnings, 'sourceUnit');
             }
             if (out.displayUnit !== undefined && !legal.includes(out.displayUnit)) {
-                return {
-                    status: 'error',
-                    message: `displayUnit '${out.displayUnit}' is not legal for measurement '${out.measurement}'.`,
-                    warnings,
-                };
+                return err('illegal-displayunit-for-measurement', `displayUnit '${out.displayUnit}' is not legal for measurement '${out.measurement}'.`, warnings, 'displayUnit');
             }
         }
     }
@@ -308,11 +307,7 @@ export function validateOverrideBody(merged, identity, defaultRow) {
         }
         if (out.kind !== undefined) {
             if (!isCompatibleKind(defaultRow.measurement, out.kind)) {
-                return {
-                    status: 'error',
-                    message: `kind '${out.kind}' is not compatible with the built-in measurement '${defaultRow.measurement}' on ${dp}.`,
-                    warnings,
-                };
+                return err('incompatible-kind-for-known-measurement', `kind '${out.kind}' is not compatible with the built-in measurement '${defaultRow.measurement}' on ${dp}.`, warnings, 'kind');
             }
         }
         if (out.sourceUnit !== undefined && out.sourceUnit !== defaultRow.sourceUnit) {
@@ -326,11 +321,7 @@ export function validateOverrideBody(merged, identity, defaultRow) {
         if (out.displayUnit !== undefined) {
             const legal = LEGAL_UNITS_FOR_MEASUREMENT[defaultRow.measurement];
             if (!legal.includes(out.displayUnit)) {
-                return {
-                    status: 'error',
-                    message: `displayUnit '${out.displayUnit}' is not legal for measurement '${defaultRow.measurement}' on ${dp}.`,
-                    warnings,
-                };
+                return err('illegal-displayunit-for-known-measurement', `displayUnit '${out.displayUnit}' is not legal for measurement '${defaultRow.measurement}' on ${dp}.`, warnings, 'displayUnit');
             }
         }
     }
@@ -383,7 +374,9 @@ export function validateOverrideBody(merged, identity, defaultRow) {
 export function validateOverride(input, defaultRow) {
     const identity = validateOverrideIdentity(input);
     if (identity.status === 'error') {
-        return { status: 'error', message: identity.message, warnings: [] };
+        // Identity failures are row-scope by definition (the entry has
+        // no valid identity to hang a field-scoped error on).
+        return { status: 'error', code: 'invalid-identity', message: identity.message, warnings: [] };
     }
     return validateOverrideBody(input, identity.identity, defaultRow);
 }

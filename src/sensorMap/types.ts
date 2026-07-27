@@ -404,10 +404,29 @@ export interface NoticeStore {
  * Row-level validation failure. Attached to the effective-map result
  * so the UI can surface these in the "needs attention" group per
  * §3.7. Never fails the plugin as a whole.
+ *
+ * `code` is a stable machine-readable identifier (see the OverrideErrorCode
+ * union at the validation layer for the canonical list). `field` names
+ * the offending SensorMapOverride field when the failure is about a
+ * specific field — the same per-field merge provenance used for
+ * warnings applies, so `overrideIndex` points at the fragment whose
+ * value for THAT field triggered the rejection, not just the last
+ * fragment. Row-scope failures (missing required field, unknown key,
+ * etc.) fall back to the last fragment because the whole merged
+ * entry is rejected.
  */
 export interface RowValidationError {
-  /** Which override entry failed (by index in the input array). */
+  /**
+   * Which override entry failed. For field-scoped errors, this is
+   * the fragment whose value for `field` was the offending one after
+   * merge; for row-scope errors it's the last fragment (whose
+   * conflict-winning fields make up the merged view).
+   */
   overrideIndex: number;
+  /** Stable machine-readable identifier for the failure class. */
+  code?: string;
+  /** The offending SensorMapOverride field, when the failure is field-scoped. */
+  field?: string;
   /** dataPoint of the offending entry, or undefined if the entry has none. */
   dataPoint?: string;
   /** stationMac from the entry, or undefined for global overrides. */

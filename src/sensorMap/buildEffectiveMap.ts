@@ -92,6 +92,7 @@ export function buildEffectiveSensorMap(input: BuildInput): EffectiveSensorMap {
     if (idResult.status === 'error') {
       errors.push({
         overrideIndex: i,
+        code: 'invalid-identity',
         dataPoint: extractDataPointForError(raw),
         stationMac: extractStationMacForError(raw),
         message: idResult.message,
@@ -167,12 +168,21 @@ export function buildEffectiveSensorMap(input: BuildInput): EffectiveSensorMap {
     }
 
     if (result.status === 'error') {
-      // Errors don't carry a `field` today; attribute to last fragment.
-      // That's fine because errors are total-row failures — the whole
-      // merged entry is rejected regardless of which fragment caused
-      // the problem.
+      // Attribute the error the same way we attribute warnings —
+      // through per-field merge provenance when the failure names a
+      // specific field, falling back to the last fragment for
+      // row-scope failures (unknown key, missing required field,
+      // kind × measurement incompatibility). Point at the fragment
+      // that ACTUALLY caused the rejection so the UI can highlight
+      // the right entry, not an unrelated last-write-wins fragment.
+      const errField = result.field;
+      const attributionIndex = errField !== undefined && provenance[errField] !== undefined
+        ? provenance[errField]
+        : lastFragmentIndex;
       errors.push({
-        overrideIndex: lastFragmentIndex,
+        overrideIndex: attributionIndex,
+        code: result.code,
+        field: errField,
         dataPoint: key.dataPoint,
         stationMac: key.stationMac,
         message: result.message,
