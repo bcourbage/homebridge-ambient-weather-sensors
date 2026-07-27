@@ -180,17 +180,71 @@ export function instantiateWrapper(
 }
 ```
 
-The runtime `assertRowMatchesWrapperId` uses the same
-`RowForWrapperId` table (mirrored as a runtime object) to check that
-a row's `measurement` (and, for timestamp wrappers, its `kind`)
-matches the declared shape for the wrapper's id. Two independent
-producers of `EffectiveSensorRow` exist today — the default map (row
-literals in `defaultMap.ts`) and `buildEffectiveSensorMap` (which
-resolves the wrapperId based on kind + measurement lookup) — so the
-runtime check is what keeps a bug in either producer from routing a
-pressure row through the wind factory. The check throws immediately;
-buildEffectiveSensorMap catches it and demotes the row to a
-validation error rather than crashing the plugin.
+The compile-time `RowForWrapperId` table has a runtime twin that
+enforces the full `kind × measurement` contract for every wrapper
+id, not just the measurement (kind matters because two rows with
+the same measurement but different kinds — e.g. a hypothetical
+`(motion, timestamp)` vs the `(unrecognized, timestamp)` branch —
+must not both route to the same timestamp factory):
+
+```typescript
+// src/sensorMap/wrapperFactories.ts (same file)
+// The single specification the type table + runtime check both
+// derive from. `as const` keeps the literals narrow.
+export const WRAPPER_SPEC = {
+  'temperature':           { kind: 'temperature',       measurement: 'temperature'       },
+  'humidity':              { kind: 'humidity',          measurement: 'humidity'          },
+  'solar-radiation':       { kind: 'light',             measurement: 'illuminance'       },
+  'co2':                   { kind: 'co2',               measurement: 'co2'               },
+  'air-quality-pm25':      { kind: 'air-quality-pm25',  measurement: 'pm25'              },
+  'air-quality-pm10':      { kind: 'air-quality-pm10',  measurement: 'pm10'              },
+  'uv':                    { kind: 'motion',            measurement: 'uv-index'          },
+  'wind-speed':            { kind: 'motion',            measurement: 'wind-speed'        },
+  // ... entry per WrapperId ...
+} as const satisfies Record<WrapperId, { kind: SensorKind; measurement: Measurement }>;
+
+// `RowForWrapperId` is derived FROM this spec so the two can't drift.
+export type RowForWrapperId = {
+  [K in WrapperId]: EffectiveSensorRow & {
+    kind: typeof WRAPPER_SPEC[K]['kind'];
+    measurement: typeof WRAPPER_SPEC[K]['measurement'];
+  };
+};
+
+export function assertRowMatchesWrapperId(row: EffectiveSensorRow): void {
+  if (row.kind === 'unrecognized') { return; }
+  const spec = WRAPPER_SPEC[row.wrapperId];
+  if (row.kind !== spec.kind || row.measurement !== spec.measurement) {
+    throw new Error(
+      `Wrapper ${row.wrapperId} expects (${spec.kind}, ${spec.measurement}); ` +
+      `row for ${row.stationMac}|${row.dataPoint} has (${row.kind}, ${row.measurement}).`,
+    );
+  }
+}
+```
+
+Enforcement runs at TWO points, defense-in-depth:
+
+- **In `buildEffectiveSensorMap`**: right after `wrapperId` is assigned
+  to a row, the resolver calls `assertRowMatchesWrapperId`. On
+  mismatch the row is dropped and a `wrapper-mismatch` error is
+  added to `EffectiveSensorMap.errors` (using the existing
+  RowValidationError channel). This is the first line of defense
+  and catches every drift between the default map / resolution
+  table and the wrapper spec at map-build time, without ever
+  reaching the platform.
+
+- **In `instantiateWrapper`**: same call runs defensively at
+  registration. If it throws here (which it shouldn't if
+  buildEffectiveSensorMap did its job), the caller in `platform.ts`
+  catches the exception, logs an error naming the row, drops that
+  wrapper from the routing map, and continues registering the
+  rest. Startup does not crash.
+
+Registration-time throw handling is a general contract, not just
+for this check — a wrapper constructor throwing for any reason
+(bad accessory context, HAP init failure) must be isolated to that
+row. Every registration site catches.
 
 `air-quality-pm25` and `air-quality-pm10` are the reason we need
 distinct `WrapperId`s that share a class — the factory names the
@@ -227,19 +281,47 @@ class WindSpeedAccessory extends WindSpeedLikeAccessory {
 }
 ```
 
-`ExtendedSensorOptions` grows both units:
+`ExtendedSensorOptions` splits into discriminated numeric vs
+timestamp shapes. `TimestampSensorRow` has no `displayUnit` and
+`sourceUnit` is always `'ms'` by contract, so bundling everything
+into one interface would either lie about the timestamp shape or
+force stringly-typed defaults. Numeric options also need
+`measurement` because that's what `toCanonical` dispatches on:
 
 ```typescript
-export interface ExtendedSensorOptions {
+interface CommonOptions {
   sensorLabel: string;
   awnKey: string;
-  threshold: number;
-  triggerDirection?: 'above' | 'below';
   displayMode: ExtendedDisplayMode;
-  sourceUnit: SensorUnit;      // <-- new
-  displayUnit: SensorUnit;     // <-- new
+  triggerEnabled: boolean;
+  triggerDirection: 'above' | 'below';
+  threshold: number;              // in sourceUnit for numeric; ms for timestamp
 }
+
+export interface NumericExtendedOptions extends CommonOptions {
+  variant: 'numeric';
+  measurement: Exclude<Measurement, 'timestamp' | 'boolean'>;
+  sourceUnit: SensorUnit;
+  displayUnit: SensorUnit;
+}
+
+export interface TimestampExtendedOptions extends CommonOptions {
+  variant: 'timestamp';
+  // measurement is implied ('timestamp'); sourceUnit is always 'ms'.
+  // No displayUnit — timestamps render as relative time via a
+  // wrapper-owned formatter, no unit knob.
+}
+
+export type ExtendedSensorOptions =
+  | NumericExtendedOptions
+  | TimestampExtendedOptions;
 ```
+
+The base class dispatches on `options.variant`. `toCanonical` sees
+the concrete `measurement` for numeric variants and the fixed
+`'ms'` implicit unit for timestamps. Callers construct one variant
+or the other — TypeScript rejects a timestamp options value with
+`displayUnit` set.
 
 **Unit conversion chain**. AWN reports a raw number at
 `stations[i].lastData[dataPoint]`. Its unit is the row's `sourceUnit`
@@ -274,14 +356,37 @@ row.threshold      (in row.sourceUnit)  ─┘        │
                                                   ▼
                                     canonical value + canonical threshold
                                                   │
-                                                  ├─→ formatIntensity(canonical)  // scale-anchored buckets
-                                                  ├─→ compareThreshold(canonical) // MotionDetected transition
-                                                  └─→ toDisplayUnit(canonical, row.displayUnit)
-                                                             │
-                                                             └─→ formatValue(displayValue)  // user-facing string
-                                                                     │
-                                                                     └─→ HAP characteristic (characteristic's fixed unit)
+                                                  ├─→ formatIntensity(canonical)   // scale-anchored buckets
+                                                  ├─→ compareThreshold(canonical)  // MotionDetected transition
+                                                  │
+     ┌────────────────────────────────────────────┼──────────────────────────────────────────────┐
+     │ native HAP wrappers                        │ extended (motion-family) wrappers            │
+     │                                             │                                              │
+     │ canonical value                             │ canonical value                              │
+     │      │                                      │      │                                       │
+     │      └─→ HAP characteristic                 │      └─→ toDisplayUnit(canonical,            │
+     │            in the characteristic's          │              row.displayUnit)                │
+     │            HAP-fixed unit                   │            │                                 │
+     │            (CurrentTemperature = °C,        │            └─→ formatValue(displayValue)     │
+     │             CurrentAmbientLightLevel        │                  → wrapper's custom string   │
+     │             = lux, PM2_5Density = μg/m³)    │                    characteristic            │
+     │                                             │                                              │
+     │ row.displayUnit is IGNORED here;            │ MotionDetected characteristic is             │
+     │ the HAP characteristic's unit is fixed.     │ separately driven by compareThreshold.       │
+     └────────────────────────────────────────────┴──────────────────────────────────────────────┘
 ```
+
+`row.displayUnit` is presentation-only. Its ONLY consumer is the
+extended wrappers' custom-string characteristic (the label users see
+in Eve / Home / Controller for HomeKit). Native HAP wrappers write
+canonical into a fixed-unit characteristic and never touch
+`displayUnit` — attempting to would corrupt HAP's interpretation
+(writing `68 fahrenheit` into `CurrentTemperature` makes HomeKit
+report 68°C). Validation still accepts `displayUnit` on native rows
+(it's a legal SensorMapOverride field), but the wrapper drops it on
+the floor with a debug log; a Group-3 refinement could tighten
+validation to warn on `displayUnit` set for a native row, but that's
+out of scope for v2.0 wrapper parameterization.
 
 Two units-related invariants:
 
@@ -361,47 +466,71 @@ consumed. That means the current design's "custom row Battery
 sub-service" is unreachable end-to-end. Fixing it requires changes
 at four points:
 
-**1. Effective-map resolution.** `buildEffectiveSensorMap` gains an
-explicit ownership pass AFTER the per-row loop. The pass:
+**1. Effective-map resolution.** Ownership is a two-tier rule that
+preserves v1.6.0 behavior EXACTLY for default-map rows and only
+introduces new logic for user-authored custom rows:
 
-- Iterates rows in a stable priority order (documented + tested,
-  see below).
-- Maintains a `Map<stationMac + batteryField, ownedByDataPoint>`.
-- For each ENABLED row with a non-null `batteryField`: if the
-  (station, batteryField) key is unclaimed, this row wins
-  ownership; otherwise the row keeps `batteryField` (for reading —
-  polling still needs the field name) but gets
-  `hasBatterySubService: false`. `buildEffectiveMap` emits a
-  `duplicate-battery-owner` warning naming the winning row so the
-  UI can surface the choice.
+- **Reserved owner** — every AWN battery field is contractually
+  owned by the default-map row with `canonicalForBattery: true`
+  for that field (battout → tempf, batt_co2 → co2_in_aqin, and so
+  on, per `DEFAULT_SENSOR_MAP`). This is the v1.6.0 rule and it
+  stays authoritative when the reserved row is present AND
+  enabled. Non-canonical default rows that name the same
+  batteryField (intentional plugin-side sharing — e.g. every
+  outdoor sensor references `battout`) get `hasBatterySubService:
+  false` without warning; the sharing is by design and users
+  shouldn't see noise about it.
 
-  Disabled rows (`enabled: false`) don't participate — they
-  wouldn't get a HAP accessory to attach a sub-service to. If a
-  user disables the winning row, ownership does NOT roll over to
-  the next candidate automatically; a warning suggests removing
-  `batteryField` from disabled rows.
+- **Custom claimants** — a user-authored row (not in the default
+  map) may claim a batteryField ONLY when there's no reserved
+  owner for that (station, batteryField) pair — either the field
+  is outside AWN's vocabulary (`my_barn_batt`), or the canonical
+  owner is absent because the station doesn't report the
+  canonical row (rare but possible with partial-hardware
+  stations). If two user rows claim the same field, the earliest
+  by resolution metadata (see below) wins and a
+  `duplicate-battery-owner` warning surfaces naming the winner so
+  the UI can present the choice. Warnings fire ONLY on
+  user-authored conflicts — never on the default-map sharing.
 
-  **Stable priority order** for the ownership pass:
+- **Disabled rows** — disabled rows do not participate in
+  ownership. Disabling the reserved canonical owner does NOT roll
+  ownership to the next default-map candidate (structural
+  signatures would drift as users toggle enable state) and does
+  not promote a user row to owner. The battery field simply gets
+  no HAP sub-service on that station until the reserved owner is
+  re-enabled. `buildEffectiveSensorMap` emits an
+  `orphan-battery-field` info-level note when a user disables the
+  reserved owner while other rows still reference the field, so
+  users understand why the sub-service went away.
 
-  1. Rows whose `dataPoint` matches a `DefaultSensorRow` with
-     `canonicalForBattery: true` — preserves v1.6.0 ownership
-     verbatim (battout → tempf, batt_co2 → co2_in_aqin, etc.).
-  2. Remaining default-map rows (non-canonical) in the fixed
-     `DEFAULT_SENSOR_MAP` iteration order.
-  3. User-authored custom rows, ordered by the earliest
-     `overrideIndex` any of their contributing merge fragments
-     carried. Provenance already flows through
-     buildEffectiveSensorMap (Group 1 Finding #5); the ownership
-     pass reads it directly. Ties (a row with no override at all,
-     or two rows tied on overrideIndex) resolve on the fixed
-     iteration order of the effective map.
+The pass runs BEFORE `structuralSignature` is computed on the row,
+so signature stability is a function of resolved ownership, not the
+order signature-vs-ownership happens in. Ownership is a pure
+function of `(enabled rows in effective map, resolution metadata,
+DEFAULT_SENSOR_MAP)`; identical inputs across restarts produce
+identical ownership, so signatures don't drift.
 
-  Ownership is a function only of the effective sensor map's
-  input, so it's stable across restarts as long as the input is
-  stable. It feeds `structuralSignature` (the sub-service presence
-  is already in the signature via `hasBatterySubService`), and the
-  documented priority is what keeps that signature stable across
-  boots.
+**Resolution metadata (internal, not on the public row schema).**
+Override provenance today is threaded to error/warning attribution
+only — it is NOT carried on `EffectiveSensorRow`, and it must not
+be (the frozen schema is a public surface). buildEffectiveSensorMap
+grows an internal side table:
+
+```typescript
+// Internal to buildEffectiveSensorMap; NOT exported on
+// EffectiveSensorMap. Keyed by (stationMac, dataPoint).
+interface RowResolutionMeta {
+  earliestOverrideIndex: number | undefined; // undefined if row came only from defaults
+}
+type ResolutionMetaMap = Map<string, RowResolutionMeta>;
+```
+
+The ownership pass reads `earliestOverrideIndex` off this map for
+user-row ordering. Ties (two custom rows tied on `overrideIndex`)
+resolve deterministically on `(stationMac, dataPoint)`
+lexicographic order — never on discovery iteration order, which
+would depend on observation history.
 
 **2. Platform parse pipeline** (unchanged for known dataPoints,
 extended for custom). Today's `parseDevices` calls
@@ -423,23 +552,48 @@ from "this wrapper OWNS the sub-service" — a non-owner row can
 have `batteryField` set (for reading) and correctly NOT get the
 sub-service.
 
-**4. Runtime updates** (both polling and realtime). Today the
-distribute pipeline calls `wrapper.setBatteryLow(low)` on every
-poll for wrappers that carry the setter. Same path stays: the
-routing map (see next section) resolves `(mac, dp)` to the wrapper
-instance, and the parse pipeline hands it the new battery value.
-The only new wire is that a custom row's `batteryField` is read
-from `row.batteryField` instead of `batteryFieldForSensor(dp)`.
-Realtime uses the same code path today via
-`platform.distributeRealtime` — it flows through the same reader,
-so the fix is a single point.
+**4. Runtime updates.** Polling and realtime are TWO independent
+sources today and neither goes through a single shared reader.
+Polling calls `batteryFieldForSensor(sensorKey)` inside
+`parseDevices`; `RealtimeSource` (in `src/realtime/*.ts`)
+independently calls the same helper. A custom `batteryField` fixes
+polling if we swap that one lookup for `row.batteryField`, but
+realtime would still miss the field. Both need the fix.
 
-Stage 2's battery-family PR includes an integration test that
-seeds a custom row with `batteryField: 'my_barn_batt'`, feeds an
-AWN payload containing a non-2.6V value on that field, and asserts
-`setBatteryLow(true)` fired on the wrapper AND the initial context
-was seeded before the constructor ran (so the sub-service exists
-on the first tick, not on the second).
+The proposed change:
+
+- Introduce a shared row-aware battery-field resolver:
+  `resolveBatteryField(effectiveMap, stationMac, dataPoint) →
+  string | null`. Prefers the row's `batteryField` when present;
+  falls back to `batteryFieldForSensor(dataPoint)` for
+  legacy-flag-off paths that don't yet have an effective map.
+- Polling (`parseDevices`) calls the shared resolver.
+- Realtime does one of the following (Stage 2 picks whichever is
+  smaller):
+  - refactor `RealtimeSource` to deliver its raw station payloads
+    to a platform-owned handler that runs the same reader as
+    polling; OR
+  - inject the shared resolver into `RealtimeSource` at
+    construction, replacing its direct `batteryFieldForSensor`
+    call.
+
+Both replacements keep the existing "0 means low" semantics AWN
+uses on its battery fields — the plugin's `readBatteryLow` helper
+converts that to a boolean and the wrapper's `setBatteryLow`
+consumes the boolean. No change to that reading.
+
+Stage 2's battery-family PR includes two integration tests, one per
+transport:
+
+- Polling test: seeds a custom row with `batteryField:
+  'my_barn_batt'`, feeds a polled AWN payload where
+  `my_barn_batt === 0`, asserts `setBatteryLow(true)` fired on
+  the wrapper AND `context.device.batteryLow` was seeded before
+  the constructor ran (sub-service exists on first tick).
+- Realtime test: same setup but the payload arrives via
+  `RealtimeSource`'s subscription callback, asserts the same
+  outcome. This is the test that would have caught the current
+  gap where realtime uses its own reader.
 
 ### Value distribution — the routing that makes custom sensors receive readings
 
@@ -592,7 +746,14 @@ on a client, not just the field names — the earlier draft's format
 missed characteristic props, permissions, ranges, and primary/hidden
 flags, all of which can shift accessory behavior invisibly.
 
-Normalized snapshot shape:
+Normalized snapshot shape. The `CharSnapshot` fields mirror
+HAP-NodeJS's `CharacteristicProps` interface directly — same field
+names (`unit`, not `units`; `validValueRanges` is a single tuple,
+not an array), same types, so any behavior-affecting prop HAP ships
+today is captured. If HAP-NodeJS's `CharacteristicProps` evolves,
+the serializer implementation regenerates from that interface via
+a small type-import script (documented at the top of
+`tests/helpers/graphSnapshot.ts`) so the two stay in sync:
 
 ```typescript
 interface GraphSnapshot {
@@ -602,23 +763,30 @@ interface GraphSnapshot {
     subtype?: string;
     isPrimary: boolean;
     isHidden: boolean;
-    linkedTo: string[];              // subtypes of linked services, sorted
-    characteristics: CharSnapshot[]; // sorted by UUID; see below
-    optionalCharacteristics: string[]; // UUIDs actually attached, sorted
+    linkedTo: string[];                 // subtypes of linked services, sorted
+    characteristics: CharSnapshot[];    // sorted by UUID
+    optionalCharacteristics: string[];  // UUIDs actually attached, sorted
   }>;
 }
 
+// One-to-one with HAP-NodeJS's CharacteristicProps as of the
+// pinned homebridge peerDep major. Serialize every field HAP
+// itself exposes on the characteristic; add new fields here when
+// the peerDep bumps and CharacteristicProps grows.
 interface CharSnapshot {
-  uuid: string;                      // HAP characteristic UUID
-  perms: string[];                   // sorted: pr/pw/ev/hidden/etc.
-  format: string;                    // int / uint8 / float / bool / string / …
-  units?: string;                    // celsius / percentage / lux / seconds / …
+  uuid: string;                          // HAP characteristic UUID
+  format: string;                        // Formats: bool/int/uint8/float/string/tlv8/…
+  perms: string[];                       // Perms: pr/pw/ev/aa/tw/hd/wr, sorted
+  unit?: string;                         // Units: celsius/percentage/lux/…
   minValue?: number;
   maxValue?: number;
   minStep?: number;
-  validValues?: number[];            // for enum characteristics
-  validValueRanges?: [number, number][];
-  initialValue: unknown;             // seeded value; volatile-value list below
+  validValues?: number[];                // enum characteristics; sorted
+  validValueRanges?: [number, number];   // HAP: a SINGLE tuple, not an array
+  maxLen?: number;                       // string format
+  maxDataLen?: number;                   // data format
+  adminOnlyAccess?: string[];            // sorted
+  initialValue: unknown;                 // seeded value; volatile list below
 }
 ```
 
@@ -663,28 +831,45 @@ one test with a non-default row. The row varies:
 - `dataPoint` to something outside the AWN vocabulary
   (`test_custom_<family>`);
 - `name` to a distinctive string ("Barn Wind Speed");
-- `threshold` to a non-default value in canonical units;
-- `sourceUnit` to a non-default legal choice
-  (`celsius` for temperature, `kph` for wind speed, `lux` for
-  illuminance, `mm/hr` for rain rate, `hPa` for pressure, `km` for
-  distance);
+- `threshold` to a non-default value in the row's `sourceUnit`
+  (per the frozen schema — threshold is authored in sourceUnit, not
+  canonical; the wrapper converts to canonical on the read side);
+- `sourceUnit` to a non-default legal choice (per
+  `LEGAL_UNITS_FOR_MEASUREMENT` in `units.ts` — check the actual
+  literal values there; e.g. `celsius` for temperature, `kph` for
+  wind speed, `lux` for illuminance, `mm_per_hr` for rain rate,
+  `hPa` for pressure, `km` for distance);
 - `displayUnit` to yet a different legal choice, exercising a
-  two-step conversion (sourceUnit → canonical → displayUnit);
+  two-step conversion (sourceUnit → canonical → displayUnit) for
+  the extended wrappers' formatted string characteristic. Native
+  HAP wrappers ignore `displayUnit` per §"HAP unit chain" above; a
+  native-wrapper test asserts the HAP characteristic value stays
+  in the characteristic's fixed unit regardless of what
+  `displayUnit` says;
 - `triggerDirection` to `'below'` on a family that normally uses
   `'above'` and vice versa;
 - `triggerEnabled: false` combined with a finite threshold to prove
   no motion event fires;
 - `embedName: true` on non-motion kinds (must be stripped by
   validation before reaching the wrapper — negative test);
-- `batteryField: 'my_barn_batt'` to prove custom battery attachment.
+- `batteryField: 'my_barn_batt'` to prove custom battery attachment
+  (uses AWN's `0 = low` on the field to trigger `setBatteryLow(true)`).
 
-Assertions run at BOTH layers:
-- wrapper-unit-test layer: `wrapper.setValue(rawSourceUnitValue)`
-  produces the correct HAP characteristic value in the correct unit
-  and the correct MotionDetected transition.
-- platform-integration-test layer (Stage 3): with the custom row
-  loaded into the effective map, an AWN payload containing the
-  custom `dataPoint` reaches the wrapper's setValue.
+Assertions run at TWO layers, matching Stage 3's boundary test and
+Stage 4's full-flow test:
+
+- **Stage 3 (boundary)** — construct the `EffectiveSensorRow`
+  EXPLICITLY (bypassing buildEffectiveSensorMap, whose resolution
+  table is still empty at that stage), register it in the routing
+  map, feed a station payload containing the custom `dataPoint`,
+  assert `wrapper.setValue(expected)` fired. This proves the
+  `station.lastData → routing map → wrapper.setValue` wire without
+  requiring the table restoration.
+- **Stage 4 (full flow)** — with the resolution table restored,
+  load the custom row through `config.sensorMap →
+  buildEffectiveSensorMap → routing`, feed the same payload,
+  assert the same outcome. Same row, same expected value, but now
+  end-to-end.
 
 ### Regressions to lock in
 

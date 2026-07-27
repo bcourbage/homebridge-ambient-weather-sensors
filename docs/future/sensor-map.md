@@ -1093,7 +1093,7 @@ The canonical `(kind, measurement) → WrapperDescriptor` table in §3.9 reuses 
 
 - The AWN sensorKey (must accept any dataPoint that matches the row's `kind`/`measurement`)
 - Display labels or characteristic display names (must derive from the effective row's `name`, not a class constant)
-- Threshold defaults (must come from the row, not from the wrapper class)
+- Motion-trigger threshold defaults for motion-kind wrappers (must come from the row, not from the wrapper class). Fixed HAP alert-state boundaries baked into native characteristics (e.g. `Co2Accessory`'s 1000-ppm `CarbonDioxideDetected` threshold, which is a HAP alert-state semantic, not a user-configurable motion trigger) stay hardcoded — the v2.0 schema explicitly makes `row.threshold` a motion-only field. Extending threshold to native HAP alert wrappers is a schema change deferred post-2.0; see `docs/future/wrapper-parameterization.md`.
 - Battery field assumptions (must come from the row's `batteryField`, not a wrapper-level default)
 - Characteristic metadata (min/max/step values) that presume the original AWN field's range
 
