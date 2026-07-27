@@ -134,18 +134,19 @@ export async function writeJsonStore(
     // Windows via MoveFileExW), so first-rename failure signals a
     // real error (out of disk, permissions, cross-device link)
     // rather than "target already exists." The right thing to do is
-    // fail the write, preserve the existing file, and let the next
-    // save attempt (with a fresh temp file) try again. Clean up our
-    // orphan temp so it doesn't accumulate; cleanupStaleTempFiles
-    // catches any we can't remove synchronously.
+    // fail the write LOUDLY — the caller (e.g. DiscoveryTracker.flush)
+    // needs to know so it doesn't mark the flush as successful and
+    // clear its pending-work flags. Clean up our orphan temp so it
+    // doesn't accumulate, then rethrow the original error.
     log.warn(
       `Persistence write failed on rename ${tmpPath} → ${filePath}: `
       + `${err.code ?? err.message}. Existing file at ${filePath} preserved; `
-      + `orphan temp file will be cleaned up on next startup.`,
+      + `orphan temp file will be cleaned up.`,
     );
     try {
       await fs.unlink(tmpPath);
     } catch { /* best-effort */ }
+    throw err;
   }
 }
 

@@ -428,9 +428,23 @@ export interface RowValidationError {
  * attention" group per §3.7 (ignored-with-warn fields, ambiguous
  * config-mode signals, etc.). Distinct from `RowValidationError`,
  * which is a row rejection.
+ *
+ * `code` is a stable machine-readable identifier — UI can group,
+ * filter, dedup on it without parsing `message`. `field` names the
+ * offending SensorMapOverride field when the warning is about a
+ * specific field (which is most of them).
+ *
+ * `overrideIndex` points to the fragment that CAUSED the warning
+ * for merged-duplicate rows. When a warning is about a specific
+ * `field`, the index is the fragment whose value for that field
+ * survived the merge (i.e., who's actually responsible). For
+ * whole-row warnings (like "duplicate entries merged"), the index
+ * is the first fragment's — the one users typically scroll to first.
  */
 export interface RowValidationWarning {
   overrideIndex: number;
+  code: string;
+  field?: string;
   dataPoint?: string;
   stationMac?: string;
   message: string;

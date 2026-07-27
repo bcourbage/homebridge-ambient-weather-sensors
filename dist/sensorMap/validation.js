@@ -19,9 +19,10 @@
  * `validateOverride(input, defaultRow)` is a convenience that composes
  * both phases for single-entry validation.
  *
- * Every check here is pure. Warnings for ignored-with-warn fields
- * are collected as a separate list so the caller can log them
- * without blocking the row.
+ * Warnings are structured (`OverrideWarning` — code + field +
+ * message) rather than plain strings so buildEffectiveMap can
+ * attribute them to the specific merge fragment responsible and so
+ * the UI can dedupe on `code` + `field` without parsing text.
  */
 import { LEGAL_UNITS_FOR_MEASUREMENT, isCompatibleKind } from './units.js';
 /** Strict MAC-address regex per §3.3.1. Case-insensitive hex + colon. */
@@ -44,6 +45,21 @@ const KNOWN_UNITS = new Set([
     'index', 'count', 'degrees', 'ms',
 ]);
 const TRIGGER_DIRECTIONS = new Set(['above', 'below']);
+/**
+ * The 13 fields users may set on a SensorMapOverride. Any key outside
+ * this set on a hand-edited entry is a typo (e.g. `triggerEnabledd`)
+ * or an attempt to control internal state we don't expose. Reject
+ * loudly so users find the mistake instead of watching their config
+ * silently do nothing.
+ */
+const ALLOWED_KEYS = new Set([
+    'dataPoint', 'stationMac',
+    'kind', 'measurement',
+    'name',
+    'threshold', 'triggerEnabled', 'triggerDirection',
+    'displayUnit', 'sourceUnit',
+    'batteryField', 'embedName', 'enabled',
+]);
 /**
  * Phase 1: identity-only validation. Accepts raw `unknown` (from
  * JSON) and produces the identity key that buildEffectiveMap uses
@@ -82,11 +98,23 @@ export function validateOverrideIdentity(input) {
 export function validateOverrideBody(merged, identity, defaultRow) {
     const warnings = [];
     const dp = identity.dataPoint;
-    // `wrapperId` is not part of the public schema (§3.7). Reject even
-    // before we type-check anything else — its presence signals someone
-    // trying to control internal state we don't expose.
+    // `wrapperId` is not part of the public schema (§3.7). Reject
+    // ahead of the general unknown-key check because it has a
+    // dedicated, actionable error message.
     if ('wrapperId' in merged) {
         return { status: 'error', message: `wrapperId is not a valid override field on ${dp}.`, warnings };
+    }
+    // Reject any other unknown key. Hand-edited configs typo field
+    // names (`triggerEnabledd`, `embed_name`, etc.) and JSON schema
+    // won't catch it. Better to fail loudly than silently discard.
+    for (const key of Object.keys(merged)) {
+        if (!ALLOWED_KEYS.has(key)) {
+            return {
+                status: 'error',
+                message: `Unknown override field '${key}' on ${dp}. Check for typos.`,
+                warnings,
+            };
+        }
     }
     // Runtime type checks. Build the typed override incrementally as
     // each field validates. Anything that fails a type check is an
@@ -101,7 +129,11 @@ export function validateOverrideBody(merged, identity, defaultRow) {
             return { status: 'error', message: `kind '${describe(merged.kind)}' is not a valid SensorKind on ${dp}.`, warnings };
         }
         if (merged.kind === 'unrecognized') {
-            warnings.push(`kind: 'unrecognized' on ${dp} ignored; unrecognized is auto-inferred.`);
+            warnings.push({
+                code: 'ignored-unrecognized-kind',
+                field: 'kind',
+                message: `kind: 'unrecognized' on ${dp} ignored; unrecognized is auto-inferred.`,
+            });
         }
         else {
             out.kind = merged.kind;
@@ -180,8 +212,54 @@ export function validateOverrideBody(merged, identity, defaultRow) {
     // SensorMapOverride containing only the fields the user provided
     // (with unrecognized-kind stripped, per above).
     const isCustom = defaultRow === undefined;
+    // Effective measurement — what the row's measurement will be after
+    // resolving overrides against defaults. Applied BEFORE the
+    // known/custom branch so timestamp/boolean shape normalization
+    // fires consistently regardless of whether the measurement comes
+    // from the built-in default or the user's override.
+    const effectiveMeasurement = isCustom
+        ? out.measurement
+        : defaultRow.measurement;
+    // Measurement-shape normalization. Applies to both known and
+    // custom rows — timestamp rows must have sourceUnit === 'ms' or
+    // absent; boolean rows accept no units.
+    if (effectiveMeasurement === 'boolean') {
+        if (out.sourceUnit !== undefined) {
+            warnings.push({
+                code: 'ignored-boolean-sourceunit',
+                field: 'sourceUnit',
+                message: `sourceUnit on boolean row ${dp} ignored.`,
+            });
+            delete out.sourceUnit;
+        }
+        if (out.displayUnit !== undefined) {
+            warnings.push({
+                code: 'ignored-boolean-displayunit',
+                field: 'displayUnit',
+                message: `displayUnit on boolean row ${dp} ignored.`,
+            });
+            delete out.displayUnit;
+        }
+    }
+    else if (effectiveMeasurement === 'timestamp') {
+        if (out.sourceUnit !== undefined && out.sourceUnit !== 'ms') {
+            return {
+                status: 'error',
+                message: `sourceUnit on timestamp row ${dp} must be 'ms'.`,
+                warnings,
+            };
+        }
+        if (out.displayUnit !== undefined) {
+            warnings.push({
+                code: 'ignored-timestamp-displayunit',
+                field: 'displayUnit',
+                message: `displayUnit on timestamp row ${dp} ignored.`,
+            });
+            delete out.displayUnit;
+        }
+    }
     if (isCustom) {
-        // Custom sensor: kind + measurement required, and (for numeric) sourceUnit.
+        // Custom sensor: kind + measurement required.
         if (!out.kind) {
             return { status: 'error', message: `Custom dataPoint '${dp}' requires 'kind'.`, warnings };
         }
@@ -195,27 +273,9 @@ export function validateOverrideBody(merged, identity, defaultRow) {
                 warnings,
             };
         }
-        if (out.measurement === 'boolean') {
-            if (out.sourceUnit !== undefined) {
-                warnings.push(`sourceUnit on boolean row ${dp} ignored.`);
-                delete out.sourceUnit;
-            }
-            if (out.displayUnit !== undefined) {
-                warnings.push(`displayUnit on boolean row ${dp} ignored.`);
-                delete out.displayUnit;
-            }
-        }
-        else if (out.measurement === 'timestamp') {
-            if (out.sourceUnit !== undefined && out.sourceUnit !== 'ms') {
-                return { status: 'error', message: `sourceUnit on timestamp row ${dp} must be 'ms'.`, warnings };
-            }
-            if (out.displayUnit !== undefined) {
-                warnings.push(`displayUnit on timestamp row ${dp} ignored.`);
-                delete out.displayUnit;
-            }
-        }
-        else {
-            // Numeric.
+        // Numeric measurements need a sourceUnit; already-normalized
+        // boolean/timestamp above don't fall through here.
+        if (out.measurement !== 'boolean' && out.measurement !== 'timestamp') {
             if (!out.sourceUnit) {
                 return { status: 'error', message: `Custom numeric dataPoint '${dp}' requires 'sourceUnit'.`, warnings };
             }
@@ -239,7 +299,11 @@ export function validateOverrideBody(merged, identity, defaultRow) {
     else {
         // Known dataPoint: measurement is fixed by the default row.
         if (out.measurement !== undefined && out.measurement !== defaultRow.measurement) {
-            warnings.push(`measurement override on known dataPoint '${dp}' ignored; measurement is fixed at ${defaultRow.measurement}.`);
+            warnings.push({
+                code: 'ignored-measurement-fixed',
+                field: 'measurement',
+                message: `measurement override on known dataPoint '${dp}' ignored; measurement is fixed at ${defaultRow.measurement}.`,
+            });
             delete out.measurement;
         }
         if (out.kind !== undefined) {
@@ -252,7 +316,11 @@ export function validateOverrideBody(merged, identity, defaultRow) {
             }
         }
         if (out.sourceUnit !== undefined && out.sourceUnit !== defaultRow.sourceUnit) {
-            warnings.push(`sourceUnit override on known dataPoint '${dp}' ignored; source unit is fixed at ${defaultRow.sourceUnit}.`);
+            warnings.push({
+                code: 'ignored-sourceunit-fixed',
+                field: 'sourceUnit',
+                message: `sourceUnit override on known dataPoint '${dp}' ignored; source unit is fixed at ${defaultRow.sourceUnit}.`,
+            });
             delete out.sourceUnit;
         }
         if (out.displayUnit !== undefined) {
@@ -273,19 +341,35 @@ export function validateOverrideBody(merged, identity, defaultRow) {
     const effectiveKind = out.kind ?? defaultRow?.kind;
     if (effectiveKind && effectiveKind !== 'motion') {
         if (out.threshold !== undefined) {
-            warnings.push(`threshold on non-motion row ${dp} ignored.`);
+            warnings.push({
+                code: 'ignored-non-motion-threshold',
+                field: 'threshold',
+                message: `threshold on non-motion row ${dp} ignored.`,
+            });
             delete out.threshold;
         }
         if (out.triggerEnabled !== undefined) {
-            warnings.push(`triggerEnabled on non-motion row ${dp} ignored.`);
+            warnings.push({
+                code: 'ignored-non-motion-triggerenabled',
+                field: 'triggerEnabled',
+                message: `triggerEnabled on non-motion row ${dp} ignored.`,
+            });
             delete out.triggerEnabled;
         }
         if (out.triggerDirection !== undefined) {
-            warnings.push(`triggerDirection on non-motion row ${dp} ignored.`);
+            warnings.push({
+                code: 'ignored-non-motion-triggerdirection',
+                field: 'triggerDirection',
+                message: `triggerDirection on non-motion row ${dp} ignored.`,
+            });
             delete out.triggerDirection;
         }
         if (out.embedName === true) {
-            warnings.push(`embedName on non-motion row ${dp} ignored.`);
+            warnings.push({
+                code: 'ignored-non-motion-embedname',
+                field: 'embedName',
+                message: `embedName on non-motion row ${dp} ignored.`,
+            });
             delete out.embedName;
         }
     }

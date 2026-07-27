@@ -189,7 +189,18 @@ export class ShadowMode {
         if (result.errors.length > 0) {
             for (const err of result.errors) {
                 const key = `err|${err.overrideIndex}|${err.dataPoint ?? ''}`;
-                this.logDivergenceOnce(key, `v2 override validation: ${err.message}`);
+                this.logDivergenceOnce(key, `v2 override validation error: ${err.message}`);
+            }
+        }
+        // Warnings — ignored-with-warn cases from §3.7 (e.g. threshold on
+        // a non-motion row). The row still loads but the field is dropped;
+        // users should see these to know their config isn't doing what
+        // they wrote. Dedup key includes code+field so different warnings
+        // on the same override don't collapse.
+        if (result.warnings.length > 0) {
+            for (const w of result.warnings) {
+                const key = `warn|${w.code}|${w.field ?? ''}|${w.dataPoint ?? ''}|${w.stationMac ?? ''}`;
+                this.logDivergenceOnce(key, `v2 override validation warning: ${w.message}`);
             }
         }
     }

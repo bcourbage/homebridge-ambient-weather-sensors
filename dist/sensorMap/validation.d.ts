@@ -19,21 +19,33 @@
  * `validateOverride(input, defaultRow)` is a convenience that composes
  * both phases for single-entry validation.
  *
- * Every check here is pure. Warnings for ignored-with-warn fields
- * are collected as a separate list so the caller can log them
- * without blocking the row.
+ * Warnings are structured (`OverrideWarning` — code + field +
+ * message) rather than plain strings so buildEffectiveMap can
+ * attribute them to the specific merge fragment responsible and so
+ * the UI can dedupe on `code` + `field` without parsing text.
  */
 import type { DefaultSensorRow, SensorMapOverride } from './types.js';
 /** Strict MAC-address regex per §3.3.1. Case-insensitive hex + colon. */
 export declare const STATION_MAC_REGEX: RegExp;
+/**
+ * Structured warning — code + optional field + message. `code`
+ * identifies the warning class for machine consumers; `field` names
+ * the offending SensorMapOverride field when applicable. Text form
+ * is `message`.
+ */
+export interface OverrideWarning {
+    code: string;
+    field?: string;
+    message: string;
+}
 export type ValidationResult = {
     status: 'ok';
     validated: SensorMapOverride;
-    warnings: string[];
+    warnings: OverrideWarning[];
 } | {
     status: 'error';
     message: string;
-    warnings: string[];
+    warnings: OverrideWarning[];
 };
 /** Identity extracted from Phase 1 validation. `stationMac` is uppercased if present. */
 export interface OverrideIdentity {

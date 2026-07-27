@@ -2,7 +2,7 @@ import { promises as fs } from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   cleanupStaleTempFiles,
@@ -130,45 +130,41 @@ describe('cleanupStaleTempFiles', () => {
   });
 });
 
-// ---- Review finding #12: rename failure preserves existing file -----
+// ---- Review finding #1 / follow-up: rename failure must (a) preserve
+// the existing target and (b) THROW so callers (e.g. DiscoveryTracker.flush)
+// can skip clearing their pending-work flags.
 
-describe('writeJsonStore — rename failure never destroys the existing file (finding #12)', () => {
-  it('preserves the existing target file when the rename step fails', async () => {
+describe('writeJsonStore — rename failure preserves target and rejects', () => {
+  it('preserves the existing target file when the rename step fails, and rejects', async () => {
     const p = path.join(tmpRoot, 'target.json');
     // Seed the target with a known-good value.
     await writeJsonStore(p, { schemaVersion: 1, value: 'previous' }, silentLog);
-    // Verify it's there.
     const before = await readJsonStore<Sample>(p, isSample, silentLog);
     expect(before?.value).toBe('previous');
 
-    // Monkey-patch fs.rename to fail this once.
-    const fsMod = await import('fs');
-    const originalRename = fsMod.promises.rename;
-    const patched = async (from: fsMod.PathLike, to: fsMod.PathLike) => {
-      const restore = fsMod.promises.rename as unknown as typeof originalRename;
-      if (restore === patched as unknown as typeof originalRename) {
-        // We are patched — throw.
-        const err = new Error('simulated rename failure') as NodeJS.ErrnoException;
-        err.code = 'EACCES';
-        throw err;
-      }
-      return originalRename(from, to);
-    };
-    (fsMod.promises as unknown as { rename: typeof originalRename }).rename = patched as unknown as typeof originalRename;
+    // Force fs.rename to fail once with EACCES.
+    const renameSpy = vi.spyOn(fs, 'rename').mockRejectedValueOnce(
+      Object.assign(new Error('simulated rename failure'), { code: 'EACCES' }),
+    );
 
     const log = captureLog();
     try {
-      // Attempt the write. Should log a warn but must NOT throw or destroy `p`.
-      await writeJsonStore(p, { schemaVersion: 1, value: 'attempted' }, log);
+      await expect(
+        writeJsonStore(p, { schemaVersion: 1, value: 'attempted' }, log),
+      ).rejects.toMatchObject({ code: 'EACCES' });
     } finally {
-      (fsMod.promises as unknown as { rename: typeof originalRename }).rename = originalRename;
+      renameSpy.mockRestore();
     }
 
-    // The good file is still there with its previous content.
+    // (a) Existing target is intact.
     const after = await readJsonStore<Sample>(p, isSample, silentLog);
     expect(after?.value).toBe('previous');
 
-    // A warn was logged with context.
-    expect(log.warns.some(w => /rename/i.test(w))).toBe(true);
+    // Warning was logged with rename context, including error code.
+    expect(log.warns.some(w => /rename/i.test(w) && w.includes('EACCES'))).toBe(true);
+
+    // (b) Orphan .tmp cleaned up so temp files don't accumulate on failure.
+    const entries = await fs.readdir(tmpRoot);
+    expect(entries.filter(e => e.endsWith('.tmp'))).toHaveLength(0);
   });
 });

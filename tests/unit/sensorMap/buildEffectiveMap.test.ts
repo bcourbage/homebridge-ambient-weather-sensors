@@ -379,6 +379,44 @@ describe('buildEffectiveSensorMap — warnings surface + threshold stripped (fin
   });
 });
 
+// ---- Follow-up finding #5: per-field warning attribution -----------
+
+describe('buildEffectiveSensorMap — per-field warning attribution', () => {
+  it('attributes a per-field warning to the fragment whose value survived merge, not the last one', () => {
+    // Two fragments for `tempf`:
+    //   index 0: name='A', threshold=90  ← threshold provided here
+    //   index 1: name='B'                ← last, but has no threshold
+    // The threshold ignored-non-motion warning must point at index 0
+    // (the fragment that actually sourced the offending threshold),
+    // not index 1 (the merge-winning last fragment).
+    const result = buildEffectiveSensorMap({
+      ...baseInput(),
+      userOverrides: [
+        { dataPoint: 'tempf', name: 'A', threshold: 90 },
+        { dataPoint: 'tempf', name: 'B' },
+      ],
+    });
+    const w = result.warnings.find(w => w.code === 'ignored-non-motion-threshold');
+    expect(w).toBeDefined();
+    expect(w?.overrideIndex).toBe(0);
+    expect(w?.field).toBe('threshold');
+  });
+
+  it('the whole-row duplicate-merged warning is attributed to the FIRST fragment', () => {
+    const result = buildEffectiveSensorMap({
+      ...baseInput(),
+      userOverrides: [
+        { dataPoint: 'tempf', name: 'A' },
+        { dataPoint: 'tempf', name: 'B' },
+      ],
+    });
+    const w = result.warnings.find(w => w.code === 'duplicate-merged');
+    expect(w).toBeDefined();
+    expect(w?.overrideIndex).toBe(0);
+    expect(w?.field).toBeUndefined();
+  });
+});
+
 // ---- Review finding #10: JSON-boundary type validation --------------
 
 describe('buildEffectiveSensorMap — malformed input rejection (finding #10)', () => {

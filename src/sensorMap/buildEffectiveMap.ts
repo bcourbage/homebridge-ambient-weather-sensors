@@ -111,26 +111,33 @@ export function buildEffectiveSensorMap(input: BuildInput): EffectiveSensorMap {
 
   // ---- 2. Dedup + merge fragments, then run Phase 2 body validation
   //         on each merged entry. `later wins` semantics per §3.3.2.
+  //         Track per-field provenance so a warning about a specific
+  //         field can be attributed to the fragment whose value for
+  //         THAT field survived the merge (not just the last fragment).
   const globalOverrides = new Map<string, SensorMapOverride>();
   const stationOverrides = new Map<string, Map<string, SensorMapOverride>>();
 
   for (const { key, fragments } of pendingMerges.values()) {
-    // Merge fragments field-by-field, later wins on conflict.
+    // Merge fragments field-by-field, later wins on conflict. Record
+    // which fragment provided each field's final value.
     const merged: Record<string, unknown> = {};
+    const provenance: Record<string, number> = {};
     for (const frag of fragments) {
       for (const [k, v] of Object.entries(frag.record)) {
         if (v !== undefined) {
           merged[k] = v;
+          provenance[k] = frag.originalIndex;
         }
       }
     }
 
-    // Warn once per duplicated key, per §3.3.2. Attributed to the
-    // first fragment's index because that's the one users typically
-    // look at first when scrolling through their config.
+    // Warn once per duplicated key, per §3.3.2. Whole-row warning —
+    // attributed to the FIRST fragment because that's the one users
+    // typically scroll to first when auditing their config.
     if (fragments.length > 1) {
       warnings.push({
         overrideIndex: fragments[0].originalIndex,
+        code: 'duplicate-merged',
         dataPoint: key.dataPoint,
         stationMac: key.stationMac,
         message: `Duplicate sensorMap entries for '${key.dataPoint}'${key.stationMac ? ` on ${key.stationMac}` : ''}; merged in order with later fields winning. Canonicalize on next UI save.`,
@@ -140,23 +147,32 @@ export function buildEffectiveSensorMap(input: BuildInput): EffectiveSensorMap {
     const defaultRow = defaultRowFor(key.dataPoint);
     const result = validateOverrideBody(merged, key, defaultRow);
 
-    // Attribute validation output to the LAST fragment's index — the
-    // one whose values won. That's the most actionable pointer.
-    const attributionIndex = fragments[fragments.length - 1].originalIndex;
-
-    // Body validation may emit warnings even on ok — surface all.
+    // Body validation warnings — attribute each to the fragment
+    // whose value for that field survived the merge. If the warning
+    // has no field (whole-row warning), fall back to the last
+    // fragment.
+    const lastFragmentIndex = fragments[fragments.length - 1].originalIndex;
     for (const w of result.warnings) {
+      const attributionIndex = w.field !== undefined && provenance[w.field] !== undefined
+        ? provenance[w.field]
+        : lastFragmentIndex;
       warnings.push({
         overrideIndex: attributionIndex,
+        code: w.code,
+        field: w.field,
         dataPoint: key.dataPoint,
         stationMac: key.stationMac,
-        message: w,
+        message: w.message,
       });
     }
 
     if (result.status === 'error') {
+      // Errors don't carry a `field` today; attribute to last fragment.
+      // That's fine because errors are total-row failures — the whole
+      // merged entry is rejected regardless of which fragment caused
+      // the problem.
       errors.push({
-        overrideIndex: attributionIndex,
+        overrideIndex: lastFragmentIndex,
         dataPoint: key.dataPoint,
         stationMac: key.stationMac,
         message: result.message,
