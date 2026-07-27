@@ -84,6 +84,31 @@ export declare const ALL_WRAPPERS: ReadonlyArray<WrapperDescriptor>;
  * occupancy) are absent — a custom row declaring one fails
  * validation with "no wrapper for (kind, measurement)".
  */
+/**
+ * Custom-sensor `(kind, measurement)` → wrapper resolution table.
+ *
+ * INTENTIONALLY EMPTY as of finding-#4 Stage 0. Emptying it means a
+ * custom row (one whose `dataPoint` is NOT in `DEFAULT_SENSOR_MAP`)
+ * cannot resolve a wrapper and `buildEffectiveSensorMap` rejects it
+ * with a `no-wrapper` error. This is the interim-safety measure
+ * from `docs/future/wrapper-parameterization.md` §"Stage 0": the
+ * wrapper classes do not yet consume the effective row
+ * (row-driven `dataPoint` / `threshold` / unit / name), so routing
+ * a custom row through a legacy wrapper would silently tie it to
+ * that wrapper's hardcoded AWN key. Until Stage 4 restores this
+ * table (after Stages 1–3 wire the factory registry, the
+ * row-consuming constructors, and value routing), custom sensors
+ * are not user-facing.
+ *
+ * KNOWN dataPoints are UNAFFECTED — they resolve their wrapper via
+ * `defaultMap.wrapper` (a direct descriptor reference on the
+ * default row), never through this table. Compat-generated
+ * overrides therefore keep working.
+ *
+ * A regression test (`wrappers.test.ts`) asserts this stays empty
+ * so a well-meaning restore without the Stage-1..3 wiring can't
+ * slip in unnoticed.
+ */
 export declare const WRAPPER_FOR_KIND_AND_MEASUREMENT: Readonly<Partial<Record<`${Exclude<SensorKind, 'unrecognized'>}|${Measurement}`, WrapperDescriptor>>>;
 export declare function wrapperFor(kind: Exclude<SensorKind, 'unrecognized'>, measurement: Measurement): WrapperDescriptor | undefined;
 //# sourceMappingURL=wrappers.d.ts.map

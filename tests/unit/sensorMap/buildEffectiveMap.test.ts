@@ -229,7 +229,9 @@ describe('buildEffectiveSensorMap — unrecognized (auto-discovery)', () => {
     expect(result.rows.find(r => r.dataPoint === 'foo_bar_new')).toBeUndefined();
   });
 
-  it('a custom (kind + measurement) override upgrades an unrecognized field to a configured row', () => {
+  // DORMANT until finding-#4 Stage 4 restores the resolution table —
+  // a custom (kind, measurement) row currently fails with `no-wrapper`.
+  it.skip('a custom (kind + measurement) override upgrades an unrecognized field to a configured row', () => {
     const result = buildEffectiveSensorMap({
       ...baseInput(),
       discovery: {
@@ -288,12 +290,55 @@ describe('buildEffectiveSensorMap — error accumulation', () => {
     const home = result.rows.find(r => r.dataPoint === 'tempf' && r.stationMac === MAC1);
     if (home?.kind !== 'unrecognized') expect(home?.name).toBe('Outside');
   });
+
+  // ---- finding-#4 Stage 0: custom rows rejected with `no-wrapper` ----
+
+  it('a custom (kind + measurement) row produces a `no-wrapper` error and emits no row', () => {
+    // The resolution table is empty (Stage 0), so a well-formed
+    // custom sensor cannot resolve a wrapper and is rejected. It
+    // emits NO configured row; the user sees a clear error. Known
+    // dataPoints are unaffected (they resolve via defaultRow.wrapper).
+    const result = buildEffectiveSensorMap({
+      ...baseInput(),
+      userOverrides: [{
+        dataPoint: 'custom_thing',
+        kind: 'temperature',
+        measurement: 'temperature',
+        sourceUnit: 'fahrenheit',
+      }],
+    });
+    const err = result.errors.find(e => e.code === 'no-wrapper');
+    expect(err).toBeDefined();
+    expect(err?.dataPoint).toBe('custom_thing');
+    expect(err?.message).toMatch(/no wrapper for \(temperature, temperature\)/);
+    // No configured row for the custom dataPoint.
+    expect(result.rows.some(r => r.dataPoint === 'custom_thing')).toBe(false);
+  });
+
+  it('KNOWN dataPoints still emit rows with the table empty (default map path)', () => {
+    // Regression guard for Stage 0: emptying the resolution table
+    // must NOT break known dataPoints. tempf resolves via
+    // defaultRow.wrapper and emits normally.
+    const result = buildEffectiveSensorMap({
+      ...baseInput(),
+      userOverrides: [{ dataPoint: 'tempf', name: 'Outdoor' }],
+    });
+    expect(result.errors).toHaveLength(0);
+    const tempf = result.rows.find(r => r.dataPoint === 'tempf' && r.stationMac === MAC1);
+    expect(tempf).toBeDefined();
+    if (tempf && tempf.kind !== 'unrecognized') expect(tempf.name).toBe('Outdoor');
+  });
 });
 
 // ---- Review finding #7: dedup + merge BEFORE semantic validation ---
 
 describe('buildEffectiveSensorMap — duplicate override merge order (finding #7)', () => {
-  it('merges two individually-incomplete custom fragments into a valid row', () => {
+  // DORMANT until finding-#4 Stage 4 restores the resolution table.
+  // The merge itself still happens, but the merged CUSTOM row now
+  // fails wrapper resolution (`no-wrapper`) so no configured row is
+  // emitted. The merge-order logic stays covered by the known-row
+  // duplicate-merge tests elsewhere.
+  it.skip('merges two individually-incomplete custom fragments into a valid row', () => {
     // Fragment A alone: missing measurement + sourceUnit → would be rejected.
     // Fragment B alone: missing kind → would be rejected.
     // Merged: complete valid custom row.
@@ -525,7 +570,15 @@ describe('buildEffectiveSensorMap — malformed input rejection (finding #10)', 
 
 // ---- Review finding #6: custom-row battery attachment -----------------
 
-describe('buildEffectiveSensorMap — custom-row battery ownership (finding #6)', () => {
+// DORMANT until finding-#4 Stage 4 restores WRAPPER_FOR_KIND_AND_MEASUREMENT.
+// Custom rows (novel dataPoints) currently fail with a `no-wrapper`
+// error and emit no row, so the custom-battery-ownership logic they
+// exercise is unreachable. The resolveHasBatterySubService logic
+// itself is unchanged; these positive assertions get un-skipped when
+// Stage 4 makes custom rows resolvable again. Canonical-owner
+// behavior for KNOWN rows stays covered by the "battery attachment"
+// describe above.
+describe.skip('buildEffectiveSensorMap — custom-row battery ownership (finding #6)', () => {
   it('a custom row with a NOVEL batteryField gets hasBatterySubService=true', () => {
     // `my_barn_batt` is not reserved by any default canonical row,
     // so a custom row claiming it should be authorized to host the
@@ -763,7 +816,11 @@ describe('buildEffectiveSensorMap — custom-row battery ownership (finding #6)'
 
 // ---- Review finding #8: global custom rows × known stations ----------
 
-describe('buildEffectiveSensorMap — global custom pair collection (finding #8)', () => {
+// DORMANT until finding-#4 Stage 4 restores WRAPPER_FOR_KIND_AND_MEASUREMENT.
+// Global custom rows currently fail with `no-wrapper` and emit no
+// row; the pair-collection fan-out these tests exercise is
+// unreachable until custom sensors become resolvable again.
+describe.skip('buildEffectiveSensorMap — global custom pair collection (finding #8)', () => {
   it('emits a row for a global custom override on every station in inventory, even before discovery', () => {
     // Two stations, no discovery entries at all. A global custom row
     // must still produce a "waiting for station" row on each station.

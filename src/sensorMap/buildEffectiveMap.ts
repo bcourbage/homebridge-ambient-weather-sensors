@@ -390,6 +390,17 @@ export function buildEffectiveSensorMap(input: BuildInput): EffectiveSensorMap {
       discovered,
       overrideIndex,
       batteryOwnership,
+      onNoWrapper: (kind, measurement) => {
+        errors.push({
+          overrideIndex: overrideIndex ?? 0,
+          code: 'no-wrapper',
+          dataPoint,
+          stationMac: mac,
+          message: `Custom dataPoint '${dataPoint}' has no wrapper for `
+            + `(${kind}, ${measurement}). Custom sensors are not available in this `
+            + 'plugin version.',
+        });
+      },
     });
     if (row) {
       rows.push(row);
@@ -473,6 +484,15 @@ interface ResolveInput {
    */
   overrideIndex: number | undefined;
   batteryOwnership: BatteryOwnershipContext;
+  /**
+   * Called when a CUSTOM row (no `defaultRow`) resolves no wrapper —
+   * i.e. its `(kind, measurement)` isn't in
+   * `WRAPPER_FOR_KIND_AND_MEASUREMENT`. As of finding-#4 Stage 0 the
+   * table is empty, so every custom row hits this. The loop pushes a
+   * `no-wrapper` RowValidationError. Known rows never reach here
+   * (their wrapper comes from `defaultRow.wrapper`).
+   */
+  onNoWrapper: (kind: string, measurement: string) => void;
 }
 
 /**
@@ -528,7 +548,7 @@ interface BatteryOwnershipContext {
 }
 
 function resolveRow(inp: ResolveInput): EffectiveSensorRow | null {
-  const { stationMac, dataPoint, defaultRow, override, discovered, batteryOwnership } = inp;
+  const { stationMac, dataPoint, defaultRow, override, discovered, batteryOwnership, onNoWrapper } = inp;
 
   // ---- Unrecognized: no default, no user override with kind+measurement.
   if (!defaultRow && !hasKindAndMeasurement(override)) {
@@ -550,8 +570,13 @@ function resolveRow(inp: ResolveInput): EffectiveSensorRow | null {
   // ---- Resolve wrapper.
   const wrapper = defaultRow?.wrapper ?? WRAPPER_FOR_KIND_AND_MEASUREMENT[`${kind}|${measurement}`];
   if (!wrapper) {
-    // Custom row with no registered wrapper for its (kind, measurement).
-    // Should have been caught by validation; belt-and-suspenders skip.
+    // Custom row (no defaultRow) whose (kind, measurement) has no
+    // wrapper. As of finding-#4 Stage 0 the resolution table is
+    // empty, so every custom row lands here. Surface a `no-wrapper`
+    // error (via the loop) rather than silently dropping the row —
+    // the user needs to know their custom sensor was rejected. Known
+    // rows never reach this branch (defaultRow.wrapper is always set).
+    onNoWrapper(kind, measurement);
     return null;
   }
 
