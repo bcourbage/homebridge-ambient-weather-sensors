@@ -79,6 +79,7 @@ export declare class ShadowMode {
     private tracker;
     private readonly loggedCacheInference;
     private readonly loggedDivergences;
+    private readonly preservedAccessories;
     private modeLogged;
     /**
      * Detected config mode. Populated in `initialize()` and then used
@@ -102,6 +103,19 @@ export declare class ShadowMode {
      * the v1.6.0 code path continues to own registration.
      */
     onConfigureAccessory(accessory: CachedAccessoryShape): void;
+    /**
+     * Re-attempt bootstrap for every accessory in the preserve-cached
+     * state. Called from `onParseTick` on every discovery cycle per
+     * `docs/future/sensor-map.md` §17.3. Once inference resolves for a
+     * given accessory, it's removed from the retry map and an info-
+     * level "recovered" line surfaces so the user sees the accessory
+     * has re-entered the normal reconciliation lifecycle.
+     *
+     * The plugin-side context writeback + `updatePlatformAccessories`
+     * (final paragraph of §17.3) is a Path-A concern that lands with
+     * task #65's flag flip. Shadow mode does not mutate context.
+     */
+    private recoverPreservedAccessories;
     /**
      * Called from platform.parseDevices AFTER Devices[] is built. Feeds
      * the discovery tracker + runs the sensor-map path in parallel and

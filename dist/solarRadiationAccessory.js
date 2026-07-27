@@ -1,4 +1,5 @@
 import { setupBatteryService } from './batteryService.js';
+import { solarWm2ToLux } from './nativeConversions.js';
 export class SolarRadiationAccessory {
     constructor(platform, accessory) {
         this.platform = platform;
@@ -40,8 +41,7 @@ export class SolarRadiationAccessory {
      * HomeKit reading if they want W/m² back.
      */
     setValue(rawValue) {
-        // to convert W/m² to lux we divide by 0.0079
-        const lux = Math.round(rawValue / 0.0079);
+        const lux = solarWm2ToLux(rawValue);
         this.platform.log.debug(`SET CurrentAmbientLightLevel: ${rawValue} W/m² → ${lux} lx`);
         this.service.updateCharacteristic(this.platform.Characteristic.CurrentAmbientLightLevel, lux);
     }

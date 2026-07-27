@@ -37,6 +37,8 @@ import {
 } from './extendedSensors/windAccessory.js';
 import { HumidityAccessory } from './humidityAccessory.js';
 import { RealtimeSource } from './realtimeSource.js';
+import { bindSafeMode, type SafeModeBinding } from './safeModeBinding.js';
+import { detectConfigMode, type ConfigMode } from './sensorMap/configMode.js';
 import {
   composeDisplayName as sharedComposeDisplayName,
   hapClean as sharedHapClean,
@@ -94,6 +96,22 @@ export function toMatcherSet(raw: unknown): Set<string> {
 // 1 req/sec per apiKey, so any cadence above that is safe; 2 minutes
 // matches the previous behavior and avoids surprising users.
 const POLL_INTERVAL_MS = 2 * 60 * 1000;
+
+/**
+ * Normalize a `${mac}-${dataPoint}` uniqueId so its MAC prefix is
+ * uppercase, leaving the dataPoint untouched. Cached uniqueIds
+ * preserve whatever MAC casing the AWN API returned at registration
+ * time; safe-mode value distribution uppercases the response MAC
+ * before lookup, so the binding map must be keyed with a normalized
+ * MAC to match. A MAC is `HH:HH:HH:HH:HH:HH` — 17 chars, hyphen at
+ * index 17. Anything malformed is returned unchanged.
+ */
+function normalizeUniqueId(uniqueId: string): string {
+  if (uniqueId.length <= 18 || uniqueId[17] !== '-') {
+    return uniqueId;
+  }
+  return uniqueId.slice(0, 17).toUpperCase() + uniqueId.slice(17);
+}
 
 /**
  * Common shape for the per-accessory wrapper instances the platform
@@ -181,12 +199,49 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
   // opted into `dataSource: "realtime"` via config.
   private realtimeSource: RealtimeSource | undefined;
 
+  // Safe-mode bindings — populated by `safeModeStart()` only when
+  // configMode === 'safe-mode'. Each binding pushes AWN values to
+  // an EXISTING characteristic on a cached accessory via the
+  // retained characteristic instance's `updateValue()` — never
+  // `Service.updateCharacteristic` (which attaches a missing
+  // characteristic on demand), never addService/removeService.
+  // Distinct from `this.wrappers` because wrapper constructors
+  // mutate the HAP graph, which safe mode forbids per
+  // sensor-map.md §17.2. Keyed by normalized uniqueId (MAC
+  // uppercased). See src/safeModeBinding.ts for the mapping.
+  private readonly safeModeBindings = new Map<string, SafeModeBinding>();
+
   // Sensor-map v2.0 shadow-mode observer. Undefined unless the user
   // opts in via env `SENSOR_MAP_V2=1` or hidden config `_sensorMapV2`.
   // When present, runs the v2 pipeline in parallel and logs divergence
   // vs. the v1.6.0 code path. Never writes to Homebridge state.
   // See src/sensorMap/shadowMode.ts.
   private readonly shadow: ShadowMode | undefined;
+
+  // Sensor-map v2.0 configVersion detection outcome, computed once at
+  // startup and never re-evaluated. Drives which startup pipeline
+  // runs:
+  //
+  //   'legacy' / 'v2' — normal operation via `discoverDevices()`
+  //                     (v1.6.0 code path drives everything; v2 is a
+  //                     shadow observer until task #65's flag flip).
+  //   'safe-mode'    — safe mode is contractually reconciliation-free
+  //                     per sensor-map.md §17.2. `discoverDevices()`
+  //                     is NOT called; `safeModeStart()` runs the
+  //                     reduced pipeline instead — it binds existing
+  //                     services/characteristics on cached
+  //                     accessories (no register/deregister/rename/
+  //                     updatePlatformAccessories, no HAP graph
+  //                     mutation) and starts POLLING (realtime
+  //                     disabled) to push fresh values through
+  //                     `safeModePollAndDistribute()`. Accessories
+  //                     it can't bind (extended-sensor / unknown /
+  //                     custom-dataPoint / missing-characteristic)
+  //                     stay frozen at last-known values. This keeps
+  //                     live values flowing to identifiable native
+  //                     sensors while never destroying user-critical
+  //                     HomeKit state under an uninterpretable config.
+  private configMode: ConfigMode = 'legacy';
 
   constructor(
     public readonly log: Logger,
@@ -206,12 +261,42 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
 
     this.api.on('didFinishLaunching', () => {
       log.debug('Executed didFinishLaunching callback');
+
+      // Detect config mode ONCE at startup. This is the authoritative
+      // gate: in safe mode `discoverDevices()` is skipped and
+      // `safeModeStart()` runs the reduced, reconciliation-free
+      // pipeline instead. See the `configMode` field comment for the
+      // full contract.
+      const detected = detectConfigMode(this.config as never);
+      this.configMode = detected.mode;
+      for (const w of detected.warnings) {
+        this.log.warn(w);
+      }
+      if (detected.safeModeBanner) {
+        this.log.error(`SAFE MODE: ${detected.safeModeBanner}`);
+      }
+
       // Load persisted discovery state + log detected config mode.
       // Non-blocking: swallow errors so a broken persistence store
       // never prevents the plugin from starting.
       this.shadow?.initialize().catch(e =>
         this.log.warn(`[sensor-map v2 shadow] initialize failed: ${(e as Error).message}`),
       );
+
+      if (this.configMode === 'safe-mode') {
+        // Per docs/future/sensor-map.md §17.2, safe mode is not a
+        // hard freeze — it's "reconciliation skipped, updates
+        // continue." Cached accessories keep running, polling /
+        // realtime keeps pushing fresh values to their wrappers,
+        // but there is NO register / deregister / rename /
+        // updatePlatformAccessories / persistence write.
+        // safeModeStart() runs that reduced pipeline; the full
+        // register-and-reconcile discoverDevices() path is
+        // deliberately not called.
+        this.safeModeStart();
+        return;
+      }
+
       // run the method to discover / register your devices as accessories
       this.discoverDevices();
     });
@@ -947,6 +1032,204 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
         message = String(error);
       }
       this.log.error('ERROR:', message);
+    }
+  }
+
+  /**
+   * Safe-mode entrypoint — the reduced pipeline for
+   * `configMode === 'safe-mode'` per sensor-map.md §17.2. Reads
+   * cached accessories that HAP already restored (via
+   * `configureAccessory`), and for each KNOWN native default-map
+   * accessory whose primary service + value characteristic(s) are
+   * already attached, builds a `SafeModeBinding` (see
+   * `src/safeModeBinding.ts`) that pushes fresh values through the
+   * RETAINED `Characteristic` instance's `updateValue()`. It does
+   * NOT construct v1.6.0 wrapper objects — those mutate the HAP
+   * graph via `addService` / `removeService` in their constructors.
+   * Bindings are keyed by normalized uniqueId (MAC uppercased) so
+   * the value-distribution lookup matches regardless of cache
+   * casing.
+   *
+   * What safe mode explicitly does NOT do:
+   *   - construct wrapper objects or otherwise mutate the HAP graph
+   *     (no `addService` / `removeService`; no attaching a missing
+   *     characteristic via `updateCharacteristic`);
+   *   - call `registerPlatformAccessories` / `unregisterPlatformAccessories`;
+   *   - call `updatePlatformAccessories` (no displayName rewrites);
+   *   - write to any plugin persistence file (the shadowMode observer
+   *     has its own safe-mode short-circuit for its persist tree);
+   *   - reconcile against `parseDevices`'s "orphan" set;
+   *   - run realtime — transport is polling ONLY (realtime would
+   *     require interpreting apiKey/applicationKey semantics from the
+   *     unsupported config).
+   *
+   * Value distribution runs through `safeModePollAndDistribute()`
+   * (NOT the normal `distribute()` / `parseDevices()` path — those
+   * apply config-derived sensor toggles / include-exclude / station
+   * filters we can't safely interpret in safe mode). It reads the
+   * raw AWN JSON and pushes each bound sensor's value + battery by
+   * uniqueId. Accessories that couldn't be bound — extended-sensor
+   * types, unrecognized cached types, custom dataPoints, or missing
+   * characteristics — stay frozen at their cached HAP values.
+   */
+  private safeModeStart(): void {
+    this.log.error(
+      `SAFE MODE ACTIVE: reconciliation disabled. ${this.accessories.length} cached `
+      + `accessor${this.accessories.length === 1 ? 'y stays' : 'ies stay'} available; polling continues `
+      + 'to push fresh values. Fix your config and restart Homebridge to resume normal operation.',
+    );
+
+    // Bind to existing services + characteristics on each cached
+    // accessory. `bindSafeMode` NEVER calls addService or removeService
+    // — accessories whose expected primary service is absent get
+    // skipped, keeping their cached HAP values intact. That's the
+    // key difference from `createSensorWrapper`, which the v1.6.0
+    // ctor code path uses and which would mutate the HAP graph via
+    // wrapper constructors that assume they can attach services.
+    for (const accessory of this.accessories) {
+      const uniqueId = accessory.context?.device?.uniqueId;
+      if (typeof uniqueId !== 'string' || uniqueId.length === 0) {
+        continue;
+      }
+      const binding = bindSafeMode(this, accessory);
+      if (!binding) {
+        // Extended-sensor types, unrecognized cached types, or
+        // native types whose expected primary service is missing:
+        // stay quiet, cached HAP values remain.
+        continue;
+      }
+      // Key by normalized uniqueId (MAC prefix uppercased). Cached
+      // uniqueIds preserve whatever MAC casing the AWN API returned
+      // at registration time, but `safeModePollAndDistribute`
+      // uppercases the response MAC before lookup — so a lower-case
+      // cache would never match. Normalizing at both ends fixes it.
+      this.safeModeBindings.set(normalizeUniqueId(uniqueId), binding);
+      // Seed from cached numeric value so the first-tick reading
+      // has something to display until AWN's next payload arrives.
+      const value = accessory.context?.device?.value;
+      if (typeof value === 'number') {
+        try {
+          binding.setValue(value);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          this.log.debug(`safe-mode seed failed for ${accessory.displayName}: ${message}`);
+        }
+      }
+    }
+    const bound = this.safeModeBindings.size;
+    const frozen = this.accessories.length - bound;
+    this.log.info(`Safe-mode bound ${bound} cached accessor${bound === 1 ? 'y' : 'ies'} for value updates.`);
+    if (frozen > 0) {
+      this.log.warn(
+        `Safe-mode: ${frozen} cached accessor${frozen === 1 ? 'y' : 'ies'} will stay frozen at last-known values `
+        + '(extended-sensor types, unrecognized cached types, or missing HAP characteristics — safe mode does not '
+        + 'attempt value updates on these to avoid interpreting the unsupported config).',
+      );
+    }
+
+    // Safe-mode transport is polling only. Realtime would require
+    // us to trust the user's apiKey/applicationKey + interpret
+    // realtime payload shapes, and complicates the "no config
+    // interpretation" contract. Polling reads the same REST endpoint
+    // v1.6.0 uses, hands the raw JSON to `safeModePollAndDistribute`,
+    // and pushes values by uniqueId — no `parseDevices`, no config
+    // filters, no toggle interpretation.
+    this.log.info('Safe-mode data source: polling (realtime disabled in safe mode).');
+    if (this.pollTimer) {
+      return;
+    }
+    this.pollTimer = setInterval(() => {
+      this.safeModePollAndDistribute().catch((error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        this.log.warn('Safe-mode poll tick failed:', message);
+      });
+    }, POLL_INTERVAL_MS);
+  }
+
+  /**
+   * Fetch the raw AWN payload and push each (station, dataPoint)
+   * value directly to the matching safe-mode binding — bypassing
+   * `parseDevices()` entirely so config filters (sensor toggles,
+   * include/exclude lists, station filters) never touch the flow.
+   *
+   * Safe mode's contract: the config version is unsupported, so we
+   * cannot interpret its filters safely. We CAN still identify
+   * cached accessories by their uniqueId (`${mac}-${dataPoint}`),
+   * so this path just looks each AWN field up in the binding map
+   * and pushes if we recognize it. Anything else — including
+   * fields that the config's filters would have dropped in normal
+   * mode — is silently ignored.
+   */
+  private async safeModePollAndDistribute(): Promise<void> {
+    if (!this.config.apiKey || !this.config.applicationKey) {
+      this.log.debug('safe-mode: apiKey/applicationKey not set; skipping fetch.');
+      return;
+    }
+    const url = `https://rt.ambientweather.net/v1/devices?applicationKey=${this.config.applicationKey}&apiKey=${this.config.apiKey}`;
+    let response: Response;
+    try {
+      response = await fetch(url);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.log.debug(`safe-mode fetch failed: ${message}`);
+      return;
+    }
+    if (response.status === 429) {
+      // Throttled — just skip this tick; safe mode has no urgency.
+      return;
+    }
+    if (!response.headers.get('content-type')?.includes('application/json')) {
+      this.log.debug('safe-mode fetch: non-JSON response; skipping.');
+      return;
+    }
+    let stations: unknown;
+    try {
+      stations = await response.json();
+    } catch {
+      return;
+    }
+    if (!Array.isArray(stations)) {
+      return;
+    }
+    for (const station of stations) {
+      if (!station || typeof station !== 'object') {continue;}
+      const s = station as { macAddress?: unknown; lastData?: unknown };
+      if (typeof s.macAddress !== 'string') {continue;}
+      if (!s.lastData || typeof s.lastData !== 'object') {continue;}
+      const mac = s.macAddress.toUpperCase();
+      const lastData = s.lastData as Record<string, unknown>;
+      // Iterate BOUND sensor uniqueIds only, not every raw field.
+      // For each bound (mac, dataPoint) sensor: push its value AND
+      // (if the sensor's probe reports battery) push battery-low
+      // from the corresponding batt* field on the same payload.
+      for (const [uniqueId, binding] of this.safeModeBindings) {
+        if (!uniqueId.startsWith(`${mac}-`)) {continue;}
+        const dp = uniqueId.slice(mac.length + 1);
+
+        // Sensor value.
+        const rawValue = lastData[dp];
+        if (typeof rawValue === 'number' && Number.isFinite(rawValue)) {
+          try {
+            binding.setValue(rawValue);
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            this.log.debug(`safe-mode setValue failed for ${uniqueId}: ${message}`);
+          }
+        }
+
+        // Battery. Look up the AWN battery field for this sensor's
+        // probe via v1.6.0's `batteryFieldForSensor` (safe because
+        // it's a static lookup by sensorKey, not a config-driven
+        // decision). Read that field off the same payload and push
+        // AWN's `0 = low` convention through as a boolean.
+        const batteryField = batteryFieldForSensor(dp);
+        if (batteryField !== undefined) {
+          const battRaw = lastData[batteryField];
+          if (typeof battRaw === 'number') {
+            binding.setBatteryLow(battRaw === 0);
+          }
+        }
+      }
     }
   }
 

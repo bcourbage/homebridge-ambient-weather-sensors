@@ -1,13 +1,8 @@
 import { PlatformAccessory, Service } from 'homebridge';
 
 import { setupBatteryService } from './batteryService.js';
+import { co2Reading } from './nativeConversions.js';
 import { AmbientWeatherSensorsPlatform, SensorAccessory } from './platform.js';
-
-// ppm threshold above which HomeKit's CarbonDioxideDetected boolean
-// flips to "abnormal". 1000 ppm is the conventional indoor-air-quality
-// guideline (ASHRAE 62.1) — well-ventilated spaces typically read
-// 400-1000 ppm, and >1000 indicates measurable build-up.
-const CO2_DETECTED_PPM = 1000;
 
 export class Co2Accessory implements SensorAccessory {
   private service: Service;
@@ -46,14 +41,14 @@ export class Co2Accessory implements SensorAccessory {
    * elevated levels.
    */
   setValue(rawValue: number): void {
-    const ppm = Math.max(0, Math.round(rawValue));
-    const detected = ppm >= CO2_DETECTED_PPM
+    const { ppm, detected } = co2Reading(rawValue);
+    const hapDetected = detected
       ? this.platform.Characteristic.CarbonDioxideDetected.CO2_LEVELS_ABNORMAL
       : this.platform.Characteristic.CarbonDioxideDetected.CO2_LEVELS_NORMAL;
 
-    this.platform.log.debug(`SET CarbonDioxideLevel: ${ppm} ppm (${ppm >= CO2_DETECTED_PPM ? 'abnormal' : 'normal'})`);
+    this.platform.log.debug(`SET CarbonDioxideLevel: ${ppm} ppm (${detected ? 'abnormal' : 'normal'})`);
     this.service
       .updateCharacteristic(this.platform.Characteristic.CarbonDioxideLevel, ppm)
-      .updateCharacteristic(this.platform.Characteristic.CarbonDioxideDetected, detected);
+      .updateCharacteristic(this.platform.Characteristic.CarbonDioxideDetected, hapDetected);
   }
 }
