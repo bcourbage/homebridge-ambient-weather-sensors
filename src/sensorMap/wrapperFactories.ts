@@ -156,11 +156,11 @@ type Factory<R> = (
  */
 export const FACTORIES: { [K in WrapperId]: Factory<RowForWrapperId[K]> } = {
   'temperature':           (p, a, r) => new TemperatureAccessory(p, a, r),
-  'humidity':              (p, a) => new HumidityAccessory(p, a),
-  'solar-radiation':       (p, a) => new SolarRadiationAccessory(p, a),
-  'co2':                   (p, a) => new Co2Accessory(p, a),
-  'air-quality-pm25':      (p, a) => new AirQualityAccessory(p, a),
-  'air-quality-pm10':      (p, a) => new AirQualityAccessory(p, a),
+  'humidity':              (p, a, r) => new HumidityAccessory(p, a, r),
+  'solar-radiation':       (p, a, r) => new SolarRadiationAccessory(p, a, r),
+  'co2':                   (p, a, r) => new Co2Accessory(p, a, r),
+  'air-quality-pm25':      (p, a, r) => new AirQualityAccessory(p, a, r),
+  'air-quality-pm10':      (p, a, r) => new AirQualityAccessory(p, a, r),
   'uv':                    (p, a) => new UvAccessory(p, a),
   'wind-speed':            (p, a) => new WindSpeedAccessory(p, a),
   'wind-gust':             (p, a) => new WindGustAccessory(p, a),

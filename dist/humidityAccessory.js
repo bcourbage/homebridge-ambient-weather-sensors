@@ -1,6 +1,11 @@
 import { setupBatteryService } from './batteryService.js';
+import { batteryOptionsFor } from './sensorMap/batterySeed.js';
 export class HumidityAccessory {
-    constructor(platform, accessory) {
+    constructor(platform, accessory, 
+    // Row-driven (finding #4); see TemperatureAccessory for the pattern.
+    // Humidity has one legal unit (percent), so there is no conversion —
+    // the row only supplies the display name and battery ownership.
+    row) {
         this.platform = platform;
         this.accessory = accessory;
         // set accessory information
@@ -13,8 +18,8 @@ export class HumidityAccessory {
         this.service = this.accessory.getService(this.platform.Service.HumiditySensor)
             || this.accessory.addService(this.platform.Service.HumiditySensor);
         // set the service name, this is what is displayed as the default name on the Home app
-        this.service.setCharacteristic(this.platform.Characteristic.Name, accessory.context.device.displayName);
-        this.batterySetter = setupBatteryService(this.platform, this.accessory);
+        this.service.setCharacteristic(this.platform.Characteristic.Name, row?.name ?? accessory.context.device.displayName);
+        this.batterySetter = setupBatteryService(this.platform, this.accessory, batteryOptionsFor(row, accessory));
         if (typeof accessory.context.device.value === 'number') {
             this.setValue(accessory.context.device.value);
         }

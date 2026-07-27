@@ -2,6 +2,8 @@ import { PlatformAccessory, Service } from 'homebridge';
 
 import { setupBatteryService } from './batteryService.js';
 import { AmbientWeatherSensorsPlatform, SensorAccessory } from './platform.js';
+import { batteryOptionsFor } from './sensorMap/batterySeed.js';
+import type { NumericSensorRow } from './sensorMap/types.js';
 
 
 export class HumidityAccessory implements SensorAccessory {
@@ -11,6 +13,10 @@ export class HumidityAccessory implements SensorAccessory {
   constructor(
     private readonly platform: AmbientWeatherSensorsPlatform,
     private readonly accessory: PlatformAccessory,
+    // Row-driven (finding #4); see TemperatureAccessory for the pattern.
+    // Humidity has one legal unit (percent), so there is no conversion —
+    // the row only supplies the display name and battery ownership.
+    row?: NumericSensorRow,
   ) {
 
     // set accessory information
@@ -25,9 +31,14 @@ export class HumidityAccessory implements SensorAccessory {
                 || this.accessory.addService(this.platform.Service.HumiditySensor);
 
     // set the service name, this is what is displayed as the default name on the Home app
-    this.service.setCharacteristic(this.platform.Characteristic.Name, accessory.context.device.displayName);
+    this.service.setCharacteristic(
+      this.platform.Characteristic.Name,
+      row?.name ?? accessory.context.device.displayName,
+    );
 
-    this.batterySetter = setupBatteryService(this.platform, this.accessory);
+    this.batterySetter = setupBatteryService(
+      this.platform, this.accessory, batteryOptionsFor(row, accessory),
+    );
 
     if (typeof accessory.context.device.value === 'number') {
       this.setValue(accessory.context.device.value);
