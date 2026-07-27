@@ -514,14 +514,17 @@ get `hasBatterySubService: true` through a `resolveHasBatterySubService`
 helper, `duplicate-battery-owner` warnings fire with real
 `overrideIndex` attribution via a `batteryFieldProvenance`
 side-table, and a startup invariant
-(`assertCanonicalBatteryOwnersUnique`) guards against a default map
-that ever grows two canonical owners for the same field.
+(`assertCanonicalBatteryOwnersUnique`) guards the default map on
+BOTH halves — no field with two canonical owners AND no referenced
+field with zero canonical owner.
 
-**PR #20 is not the final ownership contract.** It still uses
-resolution iteration order (defaults × stations → discovery → station
-overrides → global custom) as its custom-vs-custom tie-break. The
-Stage 2 replacement machinery, described below in full, is a
-BEHAVIORAL CHANGE on top of PR #20:
+**PR #20 is not the final ownership contract.** The canonical-owner
+invariant above is final (PR #20 ships both halves; Stage 2 keeps
+it), but PR #20 still uses resolution iteration order (defaults ×
+stations → discovery → station overrides → global custom) as its
+custom-vs-custom tie-break, and routes warnings through the
+RowValidationWarning channel. The Stage 2 replacement machinery,
+described below in full, is a BEHAVIORAL CHANGE on top of PR #20:
 
 - `earliestOverrideIndex` from `RowResolutionMeta` becomes the
   primary ordering, with `(stationMac, dataPoint)` lexicographic
@@ -563,9 +566,10 @@ for all three cases):
   owners is a bug) AND at-least-one (a field referenced by
   non-canonical rows with zero canonical owner is also a bug,
   since a runtime collision on those rows would have no honest
-  fragment to attribute to). PR #20 shipped the no-more-than-one
-  half; the at-least-one completeness check is the Stage 2
-  strengthening. The "canonical" status applies only when the
+  fragment to attribute to). PR #20 ships BOTH halves; Stage 2
+  preserves this invariant unchanged while it replaces the
+  ordering and diagnostic machinery below. The "canonical" status
+  applies only when the
   row's RESOLVED `batteryField` equals its `defaultRow.batteryField`
   — if the user overrides the field to a different value, the row
   loses canonical status for that field and enters the
