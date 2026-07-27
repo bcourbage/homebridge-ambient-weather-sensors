@@ -102,7 +102,7 @@ export const WRAPPER_SPEC = {
  * that family's constructor is migrated.
  */
 export const FACTORIES = {
-    'temperature': (p, a) => new TemperatureAccessory(p, a),
+    'temperature': (p, a, r) => new TemperatureAccessory(p, a, r),
     'humidity': (p, a) => new HumidityAccessory(p, a),
     'solar-radiation': (p, a) => new SolarRadiationAccessory(p, a),
     'co2': (p, a) => new Co2Accessory(p, a),

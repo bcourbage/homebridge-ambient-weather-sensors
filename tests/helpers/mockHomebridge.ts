@@ -217,6 +217,20 @@ export class MockService {
     const c = this.characteristics.get(charCtor.UUID);
     return c ? c.value : undefined;
   }
+
+  /**
+   * Graph-snapshot support (finding-#4 graph-parity fixtures). Returns
+   * this service's attached characteristics as a stable, sorted list of
+   * `{ uuid, name }`. Values are deliberately excluded — parity fixtures
+   * compare the SHAPE of the HAP graph (which services + characteristics
+   * exist), which is what drives HAP cache invalidation; live values are
+   * asserted separately.
+   */
+  characteristicShape(): Array<{ uuid: string; name: string }> {
+    return [...this.characteristics.entries()]
+      .map(([uuid, c]) => ({ uuid, name: c.displayName }))
+      .sort((a, b) => a.uuid.localeCompare(b.uuid));
+  }
 }
 
 /**
@@ -278,6 +292,19 @@ export class MockPlatformAccessory {
       }
     }
     return this;
+  }
+
+  /**
+   * Graph-snapshot support (finding-#4 graph-parity fixtures). Returns
+   * the accessory's full HAP graph SHAPE — every attached service
+   * (uuid + displayName) and each service's characteristic shape — as a
+   * stable, sorted structure two constructions can be compared with.
+   * Excludes live values by design (see MockService.characteristicShape).
+   */
+  serviceShape(): Array<{ uuid: string; name: string; characteristics: Array<{ uuid: string; name: string }> }> {
+    return [...this.services.entries()]
+      .map(([uuid, s]) => ({ uuid, name: s.displayName, characteristics: s.characteristicShape() }))
+      .sort((a, b) => a.uuid.localeCompare(b.uuid));
   }
 }
 

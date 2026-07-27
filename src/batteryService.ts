@@ -28,10 +28,44 @@ import type { AmbientWeatherSensorsPlatform } from './platform.js';
  * convention for battery-powered devices (the same way an Eve
  * Motion sensor exposes its own battery).
  */
+/**
+ * Row-driven attach contract (finding-#4 Stage 2). Under the row model
+ * the HAP graph is a property of the effective map, NOT of transient
+ * telemetry — a row whose signature says `battery:1` must get a Battery
+ * sub-service even if AWN happened to omit the field on the discovery
+ * tick. Callers that have a resolved row pass this shape:
+ *
+ *   - `attach`: `row.hasBatterySubService` — attach unconditionally
+ *     when true; remove any existing sub-service when false.
+ *   - `initialLow`: the seed value. `'unknown'` (no cached reading yet)
+ *     seeds HAP's NORMAL placeholder; the first real `setBatteryLow`
+ *     overrides it.
+ */
+export interface BatteryServiceOptions {
+  attach: boolean;
+  initialLow: boolean | 'unknown';
+}
+
 export function setupBatteryService(
   platform: AmbientWeatherSensorsPlatform,
   accessory: PlatformAccessory,
+  options?: BatteryServiceOptions,
 ): ((low: boolean) => void) | undefined {
+  // Row-driven contract: attach is a structural decision from the
+  // effective map, decoupled from whether telemetry reported the field.
+  if (options) {
+    if (!options.attach) {
+      removeBatteryService(platform, accessory);
+      return undefined;
+    }
+    // 'unknown' → seed NORMAL (0 / 100), the characteristic's default;
+    // overridden by the first real setBatteryLow.
+    const seedLow = options.initialLow === 'unknown' ? false : options.initialLow;
+    return attachBatteryService(platform, accessory, seedLow);
+  }
+
+  // Legacy telemetry-gated contract (v1.6.0 live path). Attach iff AWN
+  // reported a battery for this probe on the discovery tick.
   const initialLow: boolean | undefined = accessory.context.device.batteryLow;
   if (initialLow === undefined) {
     // No battery reported for this sensor's probe — skip the
@@ -41,13 +75,27 @@ export function setupBatteryService(
     // probe-backed accessory, before the per-probe dedup added in
     // beta.13), remove the stale sub-service from the cached
     // accessory so it disappears from HomeKit on next restart.
-    const existing = accessory.getService(platform.Service.Battery);
-    if (existing) {
-      accessory.removeService(existing);
-    }
+    removeBatteryService(platform, accessory);
     return undefined;
   }
+  return attachBatteryService(platform, accessory, initialLow);
+}
 
+function removeBatteryService(
+  platform: AmbientWeatherSensorsPlatform,
+  accessory: PlatformAccessory,
+): void {
+  const existing = accessory.getService(platform.Service.Battery);
+  if (existing) {
+    accessory.removeService(existing);
+  }
+}
+
+function attachBatteryService(
+  platform: AmbientWeatherSensorsPlatform,
+  accessory: PlatformAccessory,
+  initialLow: boolean,
+): (low: boolean) => void {
   const service = accessory.getService(platform.Service.Battery)
               || accessory.addService(platform.Service.Battery);
 
