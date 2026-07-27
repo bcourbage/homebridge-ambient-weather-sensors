@@ -104,7 +104,7 @@ describe('buildEffectiveSensorMap — override precedence', () => {
     if (cabin?.kind !== 'unrecognized') expect((cabin as { name: string }).name).toBe('Deck');
   });
 
-  it('later-in-array duplicate overrides field-wise merge', () => {
+  it('later-in-array duplicate overrides field-wise merge; non-motion threshold is stripped', () => {
     const overrides: SensorMapOverride[] = [
       { dataPoint: 'tempf', name: 'First' },
       { dataPoint: 'tempf', threshold: 80 },
@@ -113,9 +113,12 @@ describe('buildEffectiveSensorMap — override precedence', () => {
     const row = result.rows.find(r => r.dataPoint === 'tempf' && r.stationMac === MAC1);
     if (row && row.kind !== 'unrecognized') {
       expect(row.name).toBe('First');
-      // threshold gets merged in but threshold on temperature is warn-and-ignore
-      // so it's not actually stored on the row (temperature kind, not motion).
+      // Threshold on a temperature (non-motion) row is warn-and-ignore
+      // per §3.7. Assert BOTH: the value is not on the row AND a
+      // warning was emitted.
+      expect(row.threshold).toBeUndefined();
     }
+    expect(result.warnings.some(w => /threshold on non-motion/.test(w.message))).toBe(true);
   });
 
   it('unknown-field override cannot invert measurement', () => {
@@ -284,5 +287,238 @@ describe('buildEffectiveSensorMap — error accumulation', () => {
     // Valid override still applied.
     const home = result.rows.find(r => r.dataPoint === 'tempf' && r.stationMac === MAC1);
     if (home?.kind !== 'unrecognized') expect(home?.name).toBe('Outside');
+  });
+});
+
+// ---- Review finding #7: dedup + merge BEFORE semantic validation ---
+
+describe('buildEffectiveSensorMap — duplicate override merge order (finding #7)', () => {
+  it('merges two individually-incomplete custom fragments into a valid row', () => {
+    // Fragment A alone: missing measurement + sourceUnit → would be rejected.
+    // Fragment B alone: missing kind → would be rejected.
+    // Merged: complete valid custom row.
+    const result = buildEffectiveSensorMap({
+      ...baseInput(),
+      userOverrides: [
+        { dataPoint: 'custom_x', kind: 'temperature', name: 'From A' },
+        { dataPoint: 'custom_x', measurement: 'temperature', sourceUnit: 'fahrenheit' },
+      ],
+      discovery: {
+        schemaVersion: 1,
+        entries: [{
+          stationMac: MAC1,
+          stationName: 'Home',
+          dataPoint: 'custom_x',
+          firstSeen: '2026-07-01T00:00:00Z',
+          lastSeen: '2026-07-09T21:00:00Z',
+        }],
+      },
+    });
+    // Should succeed — merged row is valid.
+    expect(result.errors).toHaveLength(0);
+    const row = result.rows.find(r => r.dataPoint === 'custom_x');
+    expect(row).toBeDefined();
+    expect(row?.kind).toBe('temperature');
+    if (row && row.kind !== 'unrecognized') {
+      expect(row.name).toBe('From A');
+    }
+    // AND we emit the "duplicate merged" warning.
+    expect(result.warnings.some(w => /Duplicate sensorMap entries.*custom_x/.test(w.message))).toBe(true);
+  });
+
+  it('later fragment wins on conflicting fields', () => {
+    const result = buildEffectiveSensorMap({
+      ...baseInput(),
+      userOverrides: [
+        { dataPoint: 'tempf', name: 'First' },
+        { dataPoint: 'tempf', name: 'Second' },
+      ],
+    });
+    expect(result.errors).toHaveLength(0);
+    const row = result.rows.find(r => r.dataPoint === 'tempf' && r.stationMac === MAC1);
+    if (row && row.kind !== 'unrecognized') expect(row.name).toBe('Second');
+  });
+});
+
+// ---- Review finding #9: warnings surfaced through EffectiveSensorMap ---
+
+describe('buildEffectiveSensorMap — warnings surface + threshold stripped (finding #9)', () => {
+  it('exposes warnings for non-motion field ignores', () => {
+    const result = buildEffectiveSensorMap({
+      ...baseInput(),
+      userOverrides: [
+        // Temperature is non-motion — threshold gets stripped with a warning.
+        { dataPoint: 'tempf', threshold: 90 },
+      ],
+    });
+    expect(result.warnings.some(w => /threshold on non-motion/.test(w.message))).toBe(true);
+    // AND the row does not carry the ignored threshold value.
+    const row = result.rows.find(r => r.dataPoint === 'tempf' && r.stationMac === MAC1);
+    if (row && row.kind !== 'unrecognized') {
+      expect(row.threshold).toBeUndefined();
+    }
+  });
+
+  it('warnings carry override-index attribution', () => {
+    const result = buildEffectiveSensorMap({
+      ...baseInput(),
+      userOverrides: [
+        { dataPoint: 'humidity' },                    // index 0 — no warning
+        { dataPoint: 'tempf', threshold: 90 },        // index 1 — warns
+      ],
+    });
+    const w = result.warnings.find(w => /threshold on non-motion/.test(w.message));
+    expect(w).toBeDefined();
+    expect(w?.overrideIndex).toBe(1);
+    expect(w?.dataPoint).toBe('tempf');
+  });
+
+  it('EffectiveSensorMap always has a warnings array (even when empty)', () => {
+    const result = buildEffectiveSensorMap(baseInput());
+    expect(Array.isArray(result.warnings)).toBe(true);
+  });
+});
+
+// ---- Follow-up finding #5: per-field warning attribution -----------
+
+describe('buildEffectiveSensorMap — per-field warning attribution', () => {
+  it('attributes a per-field warning to the fragment whose value survived merge, not the last one', () => {
+    // Two fragments for `tempf`:
+    //   index 0: name='A', threshold=90  ← threshold provided here
+    //   index 1: name='B'                ← last, but has no threshold
+    // The threshold ignored-non-motion warning must point at index 0
+    // (the fragment that actually sourced the offending threshold),
+    // not index 1 (the merge-winning last fragment).
+    const result = buildEffectiveSensorMap({
+      ...baseInput(),
+      userOverrides: [
+        { dataPoint: 'tempf', name: 'A', threshold: 90 },
+        { dataPoint: 'tempf', name: 'B' },
+      ],
+    });
+    const w = result.warnings.find(w => w.code === 'ignored-non-motion-threshold');
+    expect(w).toBeDefined();
+    expect(w?.overrideIndex).toBe(0);
+    expect(w?.field).toBe('threshold');
+  });
+
+  it('the whole-row duplicate-merged warning is attributed to the FIRST fragment', () => {
+    const result = buildEffectiveSensorMap({
+      ...baseInput(),
+      userOverrides: [
+        { dataPoint: 'tempf', name: 'A' },
+        { dataPoint: 'tempf', name: 'B' },
+      ],
+    });
+    const w = result.warnings.find(w => w.code === 'duplicate-merged');
+    expect(w).toBeDefined();
+    expect(w?.overrideIndex).toBe(0);
+    expect(w?.field).toBeUndefined();
+  });
+
+  it('attributes a field-scoped ERROR to the fragment whose value survived merge, not the last one', () => {
+    // Fragment 0 supplies the bad `name: 42`.
+    // Fragment 1 supplies `enabled: true` — merge-wins on `enabled`
+    // but doesn't touch `name`.
+    // The error must point at index 0 (the fragment that owns the
+    // offending name), not index 1.
+    const result = buildEffectiveSensorMap({
+      ...baseInput(),
+      userOverrides: [
+        { dataPoint: 'tempf', name: 42 },
+        { dataPoint: 'tempf', enabled: true },
+      ] as never,
+    });
+    const e = result.errors.find(e => e.code === 'invalid-name');
+    expect(e).toBeDefined();
+    expect(e?.overrideIndex).toBe(0);
+    expect(e?.field).toBe('name');
+  });
+
+  it('attributes an unknown-key ERROR to the fragment that CONTAINED the bad key', () => {
+    // The offending key `triggerEnabledd` is in fragment 0.
+    // Fragment 1 supplies an unrelated valid `enabled: true`.
+    // Attribution must point at fragment 0 — the merge provenance
+    // map records every input key, so unknown keys route through it
+    // the same way SensorMapOverride fields do. If we fell back to
+    // the last fragment, the UI would highlight the wrong entry.
+    const result = buildEffectiveSensorMap({
+      ...baseInput(),
+      userOverrides: [
+        { dataPoint: 'tempf', triggerEnabledd: true },
+        { dataPoint: 'tempf', enabled: true },
+      ] as never,
+    });
+    const e = result.errors.find(e => e.code === 'unknown-key');
+    expect(e).toBeDefined();
+    expect(e?.overrideIndex).toBe(0);
+    expect(e?.field).toBe('triggerEnabledd');
+  });
+
+  it('attributes a wrapper-id-forbidden ERROR to the fragment that CONTAINED wrapperId', () => {
+    // Same shape as the unknown-key case but for the specific
+    // wrapperId rejection path (§3.7 forbids setting it manually).
+    const result = buildEffectiveSensorMap({
+      ...baseInput(),
+      userOverrides: [
+        { dataPoint: 'tempf', wrapperId: 'temperature' },
+        { dataPoint: 'tempf', enabled: true },
+      ] as never,
+    });
+    const e = result.errors.find(e => e.code === 'wrapper-id-forbidden');
+    expect(e).toBeDefined();
+    expect(e?.overrideIndex).toBe(0);
+    expect(e?.field).toBe('wrapperId');
+  });
+
+  it('attributes a truly row-scope ERROR (kind × measurement incompatibility) to the last fragment', () => {
+    // No single field is "wrong" in isolation — kind and measurement
+    // are both individually valid, but the combination isn't. This
+    // is a genuine row-scope failure: `field` is undefined and
+    // attribution falls back to the last fragment.
+    const result = buildEffectiveSensorMap({
+      ...baseInput(),
+      userOverrides: [
+        { dataPoint: 'custom_x', kind: 'temperature' },
+        { dataPoint: 'custom_x', measurement: 'humidity', sourceUnit: 'percent' },
+      ],
+    });
+    const e = result.errors.find(e => e.code === 'incompatible-kind-measurement');
+    expect(e).toBeDefined();
+    expect(e?.overrideIndex).toBe(1);
+    expect(e?.field).toBeUndefined();
+  });
+});
+
+// ---- Review finding #10: JSON-boundary type validation --------------
+
+describe('buildEffectiveSensorMap — malformed input rejection (finding #10)', () => {
+  it('rejects a non-object override entry', () => {
+    const result = buildEffectiveSensorMap({
+      ...baseInput(),
+      userOverrides: [null, 'not-an-override', 42] as never,
+    });
+    expect(result.errors.length).toBe(3);
+    for (const e of result.errors) {
+      expect(e.message).toMatch(/not an object/);
+    }
+  });
+
+  it('rejects an override with a numeric batteryField', () => {
+    const result = buildEffectiveSensorMap({
+      ...baseInput(),
+      userOverrides: [{ dataPoint: 'tempf', batteryField: 42 }] as never,
+    });
+    expect(result.errors.length).toBe(1);
+    expect(result.errors[0].message).toMatch(/batteryField/);
+  });
+
+  it('rejects a stringly-typed triggerEnabled', () => {
+    const result = buildEffectiveSensorMap({
+      ...baseInput(),
+      userOverrides: [{ dataPoint: 'windspeedmph', triggerEnabled: 'false' }] as never,
+    });
+    expect(result.errors.length).toBe(1);
+    expect(result.errors[0].message).toMatch(/triggerEnabled/);
   });
 });

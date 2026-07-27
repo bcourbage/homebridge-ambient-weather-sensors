@@ -2,7 +2,7 @@ import { promises as fs } from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   cleanupStaleTempFiles,
@@ -127,5 +127,44 @@ describe('cleanupStaleTempFiles', () => {
 
   it('is a no-op on missing directory', async () => {
     await expect(cleanupStaleTempFiles(path.join(tmpRoot, 'nope'), silentLog)).resolves.toBeUndefined();
+  });
+});
+
+// ---- Review finding #1 / follow-up: rename failure must (a) preserve
+// the existing target and (b) THROW so callers (e.g. DiscoveryTracker.flush)
+// can skip clearing their pending-work flags.
+
+describe('writeJsonStore — rename failure preserves target and rejects', () => {
+  it('preserves the existing target file when the rename step fails, and rejects', async () => {
+    const p = path.join(tmpRoot, 'target.json');
+    // Seed the target with a known-good value.
+    await writeJsonStore(p, { schemaVersion: 1, value: 'previous' }, silentLog);
+    const before = await readJsonStore<Sample>(p, isSample, silentLog);
+    expect(before?.value).toBe('previous');
+
+    // Force fs.rename to fail once with EACCES.
+    const renameSpy = vi.spyOn(fs, 'rename').mockRejectedValueOnce(
+      Object.assign(new Error('simulated rename failure'), { code: 'EACCES' }),
+    );
+
+    const log = captureLog();
+    try {
+      await expect(
+        writeJsonStore(p, { schemaVersion: 1, value: 'attempted' }, log),
+      ).rejects.toMatchObject({ code: 'EACCES' });
+    } finally {
+      renameSpy.mockRestore();
+    }
+
+    // (a) Existing target is intact.
+    const after = await readJsonStore<Sample>(p, isSample, silentLog);
+    expect(after?.value).toBe('previous');
+
+    // Warning was logged with rename context, including error code.
+    expect(log.warns.some(w => /rename/i.test(w) && w.includes('EACCES'))).toBe(true);
+
+    // (b) Orphan .tmp cleaned up so temp files don't accumulate on failure.
+    const entries = await fs.readdir(tmpRoot);
+    expect(entries.filter(e => e.endsWith('.tmp'))).toHaveLength(0);
   });
 });

@@ -297,10 +297,37 @@ export interface NoticeStore {
  * Row-level validation failure. Attached to the effective-map result
  * so the UI can surface these in the "needs attention" group per
  * §3.7. Never fails the plugin as a whole.
+ *
+ * `code` is a stable machine-readable identifier — required, so UI
+ * consumers can group / filter / dedup without parsing `message`.
+ * The set of codes is defined by validation.ts's `err()` call sites;
+ * kept as `string` here (not a union) to keep the type simple, but
+ * every producing site is required to set one.
+ *
+ * `field` names the offending key when the failure is field-scoped —
+ * usually a SensorMapOverride field, but for `unknown-key` /
+ * `wrapper-id-forbidden` it's the offending input key even though
+ * it's outside the vocabulary. Attribution flows through the same
+ * per-field merge provenance used for warnings, so `overrideIndex`
+ * points at the fragment that actually contained the bad key /
+ * value, not just the last-merge-wins fragment.
+ *
+ * Truly row-scope failures — kind × measurement incompatibility, a
+ * required field missing after merge — leave `field` unset and fall
+ * back to the last fragment.
  */
 export interface RowValidationError {
-    /** Which override entry failed (by index in the input array). */
+    /**
+     * Which override entry failed. For field-scoped errors, this is
+     * the fragment whose value for `field` was the offending one after
+     * merge; for row-scope errors it's the last fragment (whose
+     * conflict-winning fields make up the merged view).
+     */
     overrideIndex: number;
+    /** Stable machine-readable identifier for the failure class. */
+    code: string;
+    /** The offending key, when the failure is field-scoped. */
+    field?: string;
     /** dataPoint of the offending entry, or undefined if the entry has none. */
     dataPoint?: string;
     /** stationMac from the entry, or undefined for global overrides. */
@@ -314,9 +341,37 @@ export interface RowValidationError {
  * is representable). `errors` accumulates row-level failures; the
  * plugin loads valid rows regardless.
  */
+/**
+ * Non-fatal warning emitted during row-level validation. Attached to
+ * the effective-map result so the UI can surface them in a "needs
+ * attention" group per §3.7 (ignored-with-warn fields, ambiguous
+ * config-mode signals, etc.). Distinct from `RowValidationError`,
+ * which is a row rejection.
+ *
+ * `code` is a stable machine-readable identifier — UI can group,
+ * filter, dedup on it without parsing `message`. `field` names the
+ * offending SensorMapOverride field when the warning is about a
+ * specific field (which is most of them).
+ *
+ * `overrideIndex` points to the fragment that CAUSED the warning
+ * for merged-duplicate rows. When a warning is about a specific
+ * `field`, the index is the fragment whose value for that field
+ * survived the merge (i.e., who's actually responsible). For
+ * whole-row warnings (like "duplicate entries merged"), the index
+ * is the first fragment's — the one users typically scroll to first.
+ */
+export interface RowValidationWarning {
+    overrideIndex: number;
+    code: string;
+    field?: string;
+    dataPoint?: string;
+    stationMac?: string;
+    message: string;
+}
 export interface EffectiveSensorMap {
     rows: EffectiveSensorRow[];
     errors: RowValidationError[];
+    warnings: RowValidationWarning[];
 }
 export {};
 //# sourceMappingURL=types.d.ts.map

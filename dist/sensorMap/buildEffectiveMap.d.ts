@@ -19,9 +19,16 @@
  * accessories continue via configureAccessory() restore; no new
  * add/remove decisions happen.
  */
-import type { DiscoveryStore, EffectiveSensorMap, SensorMapOverride, StationInventory, UiStateStore, WrapperDescriptor } from './types.js';
+import type { DiscoveryStore, EffectiveSensorMap, StationInventory, UiStateStore, WrapperDescriptor } from './types.js';
 export interface BuildInput {
-    userOverrides: ReadonlyArray<SensorMapOverride>;
+    /**
+     * Raw override entries. Accepted as `unknown[]` because in v2 mode
+     * the values come from user-authored `config.json`; the boundary
+     * runtime-typechecks them before promoting to `SensorMapOverride`
+     * (fix for review finding #10). Callers on the compat path may
+     * pass already-typed overrides — they'll pass validation trivially.
+     */
+    userOverrides: ReadonlyArray<unknown>;
     discovery: DiscoveryStore;
     uiState: UiStateStore;
     stations: StationInventory;

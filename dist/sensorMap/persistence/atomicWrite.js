@@ -65,12 +65,18 @@ export async function readJsonStore(filePath, validator, log, clock = REAL_CLOCK
 }
 /**
  * Write a JSON store atomically. The temp file is closed and renamed
- * over the target path in one step (on POSIX + modern Windows).
+ * over the target path in one step (POSIX + modern Windows both
+ * support atomic replace).
  *
- * On unsupported platforms the fallback is unlink + rename with a
- * warn; a brief window of "file absent" is visible to concurrent
- * readers. The stores are single-writer per §8 so cross-process
- * races are outside this function's remit.
+ * If the rename step fails (out of disk, permissions, cross-device
+ * link), the destination file is left untouched, the orphan temp file
+ * is unlinked on a best-effort basis, a warn is logged, and the
+ * original error is re-thrown so the caller (e.g. DiscoveryTracker.flush)
+ * can skip advancing its flush watermarks. There is NO unlink+rename
+ * fallback — see the throw at the bottom of the function.
+ *
+ * The stores are single-writer per §8 so cross-process races are
+ * outside this function's remit.
  */
 export async function writeJsonStore(filePath, data, log) {
     const dir = path.dirname(filePath);
@@ -97,13 +103,25 @@ export async function writeJsonStore(filePath, data, log) {
     }
     catch (e) {
         const err = e;
-        // Rare: platform without atomic replace. Best-effort fallback.
-        log.warn(`Atomic rename failed (${err.message}); using unlink + rename fallback.`);
+        // Rename failure. Do NOT unlink the existing file and retry — a
+        // second rename that also fails would leave us with no persisted
+        // state at all. Node.js's fs.rename atomically replaces an
+        // existing destination on every platform we support (POSIX +
+        // Windows via MoveFileExW), so first-rename failure signals a
+        // real error (out of disk, permissions, cross-device link)
+        // rather than "target already exists." The right thing to do is
+        // fail the write LOUDLY — the caller (e.g. DiscoveryTracker.flush)
+        // needs to know so it doesn't mark the flush as successful and
+        // clear its pending-work flags. Clean up our orphan temp so it
+        // doesn't accumulate, then rethrow the original error.
+        log.warn(`Persistence write failed on rename ${tmpPath} → ${filePath}: `
+            + `${err.code ?? err.message}. Existing file at ${filePath} preserved; `
+            + `orphan temp file will be cleaned up.`);
         try {
-            await fs.unlink(filePath);
+            await fs.unlink(tmpPath);
         }
-        catch { /* file may not exist; ignore */ }
-        await fs.rename(tmpPath, filePath);
+        catch { /* best-effort */ }
+        throw err;
     }
 }
 /**
