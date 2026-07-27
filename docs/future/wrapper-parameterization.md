@@ -508,12 +508,18 @@ with the same rigor as extended wrappers.
 
 ### Custom-row battery attachment — full lifecycle
 
-Current effective-map resolution sets `hasBatterySubService = batteryField !== null && (defaultRow?.canonicalForBattery ?? false)`.
-For a custom row there is no `defaultRow`, so `hasBatterySubService`
-is always `false` and `batteryField` might be truthy but is never
-consumed. That means the current design's "custom row Battery
-sub-service" is unreachable end-to-end. Fixing it requires changes
-at four points:
+The effective-map-side portion of this ships as part of Group 4
+(PR #20): custom rows with a novel `batteryField` now get
+`hasBatterySubService: true` through an explicit ownership pass in
+`resolveHasBatterySubService`, and the collision case emits a
+`duplicate-battery-owner` warning with real `overrideIndex`
+attribution via a `batteryFieldProvenance` side-table. What's still
+outstanding — and lands with #4's Stage 2 battery-family PR — is
+the runtime side: wrappers consuming `row.batteryField` and
+`row.hasBatterySubService`, the shared `resolveBatteryField(effectiveMap,
+mac, dp)` reader shared by polling + realtime, and the
+`setupBatteryService({ attach, initialLow })` contract change. Full
+lifecycle spelled out below across four coordinated pieces:
 
 **1. Effective-map resolution.** Ownership is a two-tier rule that
 preserves v1.6.0 behavior EXACTLY for default-map rows and only
