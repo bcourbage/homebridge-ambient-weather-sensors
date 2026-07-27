@@ -422,7 +422,22 @@ export interface RowValidationError {
  * is representable). `errors` accumulates row-level failures; the
  * plugin loads valid rows regardless.
  */
+/**
+ * Non-fatal warning emitted during row-level validation. Attached to
+ * the effective-map result so the UI can surface them in a "needs
+ * attention" group per §3.7 (ignored-with-warn fields, ambiguous
+ * config-mode signals, etc.). Distinct from `RowValidationError`,
+ * which is a row rejection.
+ */
+export interface RowValidationWarning {
+  overrideIndex: number;
+  dataPoint?: string;
+  stationMac?: string;
+  message: string;
+}
+
 export interface EffectiveSensorMap {
   rows: EffectiveSensorRow[];
   errors: RowValidationError[];
+  warnings: RowValidationWarning[];
 }

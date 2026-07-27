@@ -129,3 +129,46 @@ describe('cleanupStaleTempFiles', () => {
     await expect(cleanupStaleTempFiles(path.join(tmpRoot, 'nope'), silentLog)).resolves.toBeUndefined();
   });
 });
+
+// ---- Review finding #12: rename failure preserves existing file -----
+
+describe('writeJsonStore — rename failure never destroys the existing file (finding #12)', () => {
+  it('preserves the existing target file when the rename step fails', async () => {
+    const p = path.join(tmpRoot, 'target.json');
+    // Seed the target with a known-good value.
+    await writeJsonStore(p, { schemaVersion: 1, value: 'previous' }, silentLog);
+    // Verify it's there.
+    const before = await readJsonStore<Sample>(p, isSample, silentLog);
+    expect(before?.value).toBe('previous');
+
+    // Monkey-patch fs.rename to fail this once.
+    const fsMod = await import('fs');
+    const originalRename = fsMod.promises.rename;
+    const patched = async (from: fsMod.PathLike, to: fsMod.PathLike) => {
+      const restore = fsMod.promises.rename as unknown as typeof originalRename;
+      if (restore === patched as unknown as typeof originalRename) {
+        // We are patched — throw.
+        const err = new Error('simulated rename failure') as NodeJS.ErrnoException;
+        err.code = 'EACCES';
+        throw err;
+      }
+      return originalRename(from, to);
+    };
+    (fsMod.promises as unknown as { rename: typeof originalRename }).rename = patched as unknown as typeof originalRename;
+
+    const log = captureLog();
+    try {
+      // Attempt the write. Should log a warn but must NOT throw or destroy `p`.
+      await writeJsonStore(p, { schemaVersion: 1, value: 'attempted' }, log);
+    } finally {
+      (fsMod.promises as unknown as { rename: typeof originalRename }).rename = originalRename;
+    }
+
+    // The good file is still there with its previous content.
+    const after = await readJsonStore<Sample>(p, isSample, silentLog);
+    expect(after?.value).toBe('previous');
+
+    // A warn was logged with context.
+    expect(log.warns.some(w => /rename/i.test(w))).toBe(true);
+  });
+});

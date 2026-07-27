@@ -127,12 +127,25 @@ export async function writeJsonStore(
     await fs.rename(tmpPath, filePath);
   } catch (e) {
     const err = e as NodeJS.ErrnoException;
-    // Rare: platform without atomic replace. Best-effort fallback.
-    log.warn(`Atomic rename failed (${err.message}); using unlink + rename fallback.`);
+    // Rename failure. Do NOT unlink the existing file and retry — a
+    // second rename that also fails would leave us with no persisted
+    // state at all. Node.js's fs.rename atomically replaces an
+    // existing destination on every platform we support (POSIX +
+    // Windows via MoveFileExW), so first-rename failure signals a
+    // real error (out of disk, permissions, cross-device link)
+    // rather than "target already exists." The right thing to do is
+    // fail the write, preserve the existing file, and let the next
+    // save attempt (with a fresh temp file) try again. Clean up our
+    // orphan temp so it doesn't accumulate; cleanupStaleTempFiles
+    // catches any we can't remove synchronously.
+    log.warn(
+      `Persistence write failed on rename ${tmpPath} → ${filePath}: `
+      + `${err.code ?? err.message}. Existing file at ${filePath} preserved; `
+      + `orphan temp file will be cleaned up on next startup.`,
+    );
     try {
-      await fs.unlink(filePath);
-    } catch { /* file may not exist; ignore */ }
-    await fs.rename(tmpPath, filePath);
+      await fs.unlink(tmpPath);
+    } catch { /* best-effort */ }
   }
 }
 

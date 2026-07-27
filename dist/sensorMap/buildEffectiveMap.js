@@ -21,30 +21,95 @@
  */
 import { DEFAULT_SENSOR_MAP, defaultRowFor } from './defaultMap.js';
 import { computeStructuralSignature } from './structuralSignature.js';
-import { validateOverride } from './validation.js';
+import { validateOverrideBody, validateOverrideIdentity, } from './validation.js';
 import { WRAPPER_FOR_KIND_AND_MEASUREMENT } from './wrappers.js';
 export function buildEffectiveSensorMap(input) {
     if (input.configMode === 'safe-mode') {
-        return { rows: [], errors: [] };
+        return { rows: [], errors: [], warnings: [] };
     }
     const errors = [];
-    // ---- 1. Validate + partition overrides by (dataPoint, stationMac?)
-    //         with de-dup (later wins per §3.3.2).
-    const validated = validateOverrides(input.userOverrides, errors);
+    const warnings = [];
+    const pendingMerges = new Map();
+    input.userOverrides.forEach((raw, i) => {
+        const idResult = validateOverrideIdentity(raw);
+        if (idResult.status === 'error') {
+            errors.push({
+                overrideIndex: i,
+                dataPoint: extractDataPointForError(raw),
+                stationMac: extractStationMacForError(raw),
+                message: idResult.message,
+            });
+            return;
+        }
+        const { dataPoint, stationMac } = idResult.identity;
+        const key = `${stationMac ?? '*'}|${dataPoint}`;
+        let bucket = pendingMerges.get(key);
+        if (!bucket) {
+            bucket = { key: { dataPoint, stationMac }, fragments: [] };
+            pendingMerges.set(key, bucket);
+        }
+        // At this point raw passed identity check, so it IS an object.
+        bucket.fragments.push({ originalIndex: i, record: raw });
+    });
+    // ---- 2. Dedup + merge fragments, then run Phase 2 body validation
+    //         on each merged entry. `later wins` semantics per §3.3.2.
     const globalOverrides = new Map();
     const stationOverrides = new Map();
-    for (const o of validated) {
-        if (o.stationMac === undefined) {
-            globalOverrides.set(o.dataPoint, mergeInto(globalOverrides.get(o.dataPoint), o));
+    for (const { key, fragments } of pendingMerges.values()) {
+        // Merge fragments field-by-field, later wins on conflict.
+        const merged = {};
+        for (const frag of fragments) {
+            for (const [k, v] of Object.entries(frag.record)) {
+                if (v !== undefined) {
+                    merged[k] = v;
+                }
+            }
+        }
+        // Warn once per duplicated key, per §3.3.2. Attributed to the
+        // first fragment's index because that's the one users typically
+        // look at first when scrolling through their config.
+        if (fragments.length > 1) {
+            warnings.push({
+                overrideIndex: fragments[0].originalIndex,
+                dataPoint: key.dataPoint,
+                stationMac: key.stationMac,
+                message: `Duplicate sensorMap entries for '${key.dataPoint}'${key.stationMac ? ` on ${key.stationMac}` : ''}; merged in order with later fields winning. Canonicalize on next UI save.`,
+            });
+        }
+        const defaultRow = defaultRowFor(key.dataPoint);
+        const result = validateOverrideBody(merged, key, defaultRow);
+        // Attribute validation output to the LAST fragment's index — the
+        // one whose values won. That's the most actionable pointer.
+        const attributionIndex = fragments[fragments.length - 1].originalIndex;
+        // Body validation may emit warnings even on ok — surface all.
+        for (const w of result.warnings) {
+            warnings.push({
+                overrideIndex: attributionIndex,
+                dataPoint: key.dataPoint,
+                stationMac: key.stationMac,
+                message: w,
+            });
+        }
+        if (result.status === 'error') {
+            errors.push({
+                overrideIndex: attributionIndex,
+                dataPoint: key.dataPoint,
+                stationMac: key.stationMac,
+                message: result.message,
+            });
+            continue;
+        }
+        const validated = result.validated;
+        if (validated.stationMac === undefined) {
+            globalOverrides.set(validated.dataPoint, validated);
         }
         else {
-            const mac = o.stationMac.toUpperCase();
-            let m = stationOverrides.get(mac);
+            let m = stationOverrides.get(validated.stationMac);
             if (!m) {
                 m = new Map();
-                stationOverrides.set(mac, m);
+                stationOverrides.set(validated.stationMac, m);
             }
-            m.set(o.dataPoint, mergeInto(m.get(o.dataPoint), o));
+            m.set(validated.dataPoint, validated);
         }
     }
     // ---- 2. Build lookup for discovery entries.
@@ -117,26 +182,27 @@ export function buildEffectiveSensorMap(input) {
             rows.push(row);
         }
     }
-    return { rows, errors };
+    return { rows, errors, warnings };
 }
 // ---- Helpers ------------------------------------------------------
-function validateOverrides(overrides, errors) {
-    const valid = [];
-    overrides.forEach((o, i) => {
-        const defaultRow = o.dataPoint ? defaultRowFor(o.dataPoint) : undefined;
-        const result = validateOverride(o, defaultRow);
-        if (result.status === 'error') {
-            errors.push({
-                overrideIndex: i,
-                dataPoint: o.dataPoint,
-                stationMac: o.stationMac,
-                message: result.message,
-            });
-            return;
-        }
-        valid.push(o);
-    });
-    return valid;
+/**
+ * Best-effort dataPoint extraction for a RowValidationError whose
+ * source failed identity validation. Purely for user-facing error
+ * attribution — do not use for anything semantic.
+ */
+function extractDataPointForError(raw) {
+    if (typeof raw !== 'object' || raw === null) {
+        return undefined;
+    }
+    const dp = raw.dataPoint;
+    return typeof dp === 'string' ? dp : undefined;
+}
+function extractStationMacForError(raw) {
+    if (typeof raw !== 'object' || raw === null) {
+        return undefined;
+    }
+    const mac = raw.stationMac;
+    return typeof mac === 'string' ? mac : undefined;
 }
 /**
  * Later-wins field merge for duplicate override entries with the same
@@ -199,7 +265,11 @@ function resolveRow(inp) {
         && (defaultRow?.canonicalForBattery ?? false);
     // ---- Resolve name.
     const name = override?.name ?? defaultRow?.name ?? dataPoint;
-    // ---- Motion trigger fields.
+    // ---- Motion trigger fields. Non-motion rows never carry any of
+    //       these — validation (Phase 2) has already stripped them
+    //       from `override`, but we also gate the fallback to
+    //       defaultRow here so a non-motion row's threshold/embedName
+    //       can't slip through via the built-in default. §3.6 / §3.7.
     const isMotion = kind === 'motion';
     const triggerEnabled = isMotion
         ? (override?.triggerEnabled ?? defaultRow?.triggerEnabled ?? true)
@@ -207,8 +277,12 @@ function resolveRow(inp) {
     const triggerDirection = isMotion
         ? (override?.triggerDirection ?? defaultRow?.triggerDirection ?? 'above')
         : 'above';
-    const threshold = override?.threshold ?? defaultRow?.threshold;
-    const embedName = isMotion ? (override?.embedName ?? defaultRow?.embedName ?? false) : false;
+    const threshold = isMotion
+        ? (override?.threshold ?? defaultRow?.threshold)
+        : undefined;
+    const embedName = isMotion
+        ? (override?.embedName ?? defaultRow?.embedName ?? false)
+        : false;
     const enabled = override?.enabled !== false;
     const wrapperId = wrapper.id;
     const structuralSignature = computeStructuralSignature(kind, measurement, hasBatterySubService, wrapper);
