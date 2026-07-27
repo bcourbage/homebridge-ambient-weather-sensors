@@ -246,7 +246,7 @@ describe('TemperatureAccessory — row-driven (finding #4)', () => {
     expect(platform.log.logs.some(l => l.message.includes('°F'))).toBe(false);
   });
 
-  it('graph parity: row-driven build (native fahrenheit) matches the legacy build', () => {
+  it('HEAD row-driven vs legacy consistency (mock; the v1.7.0 golden in graphParity.test.ts is the authoritative migration gate)', () => {
     // Both constructions get the SAME accessory shape: same displayName,
     // same battery presence. The row-driven path must produce a
     // byte-identical HAP graph so cached accessories don't invalidate.

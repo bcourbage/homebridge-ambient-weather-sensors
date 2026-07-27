@@ -4,49 +4,52 @@ import { WRAPPER_SPEC, instantiateWrapper } from '../../src/sensorMap/wrapperFac
 import { ALL_WRAPPERS } from '../../src/sensorMap/wrappers';
 import { DEFAULT_SENSOR_MAP } from '../../src/sensorMap/defaultMap';
 import { AmbientWeatherSensorsPlatform } from '../../src/platform';
-import type {
-  DefaultSensorRow,
-  EffectiveSensorRow,
-  WrapperId,
-} from '../../src/sensorMap/types';
-import { makeMockAccessory, makeMockPlatform } from '../helpers/mockHomebridge';
+import type { DefaultSensorRow, EffectiveSensorRow, WrapperId } from '../../src/sensorMap/types';
+// Real-HAP harness + serializer (shared with the golden generator).
+// eslint-disable-next-line
+import { makeHapPlatform, makeHapAccessory, serializeHapGraph, contextFor } from '../helpers/hapGraph.mjs';
 import { makeNumericRow, makeTimestampRow } from '../helpers/effectiveRow';
+import golden from '../fixtures/graph/v1.7.0.json';
 
 /**
- * finding-#4 review (P1-C): graph-parity gate. For EVERY one of the 25
- * WrapperIds, the row-driven build (the v2 path, via instantiateWrapper
- * with a resolved default row) must produce a HAP graph byte-identical
- * to the legacy 2-arg build (the shipping v1.7 path). This is the
- * cache-migration gate: a divergence would silently invalidate every
- * user's cached accessory.
+ * finding-#4 review (P1-C): the cache-migration gate.
  *
- * The serializer (MockPlatformAccessory.serviceShape) captures, per
- * service: uuid + displayName, and per characteristic: uuid, name,
- * setProps-recorded props, and the seeded value (with the volatile
- * "Last Updated" timestamp normalized). Class-level characteristic
- * metadata (format / perms / unit) is identical BY CONSTRUCTION — both
- * paths instantiate the exact same characteristic classes — so the
- * capturable differentiators are structure (which services /
- * characteristics attach), setProps overrides, and seeded values.
+ * Golden fixtures were generated ONCE from the v1.7.0 tag's shipping
+ * wrappers (`tests/helpers/genGraphFixtures.mjs`) using REAL
+ * @homebridge/hap-nodejs objects, capturing the full behavior-affecting
+ * graph: service subtype/primary/hidden/linked/optional sets and every
+ * characteristic's full `CharacteristicProps` (format, perms, unit,
+ * ranges, step) + seeded values. This test constructs HEAD's builds with
+ * the SAME real-HAP harness and asserts they equal the v1.7.0 golden —
+ * for EVERY structural variant (wrapperId × battery 0|1), and for BOTH
+ * the legacy 2-arg build AND the row-driven build. That catches:
+ *   - HEAD's LEGACY path drifting from v1.7.0 (a regression shared by
+ *     both HEAD paths that a HEAD-legacy-vs-HEAD-row test would miss);
+ *   - HEAD's ROW-DRIVEN path diverging from v1.7.0.
+ *
+ * A diff here is a HAP cache-migration event and requires a
+ * structuralSignature migration plan, not a fixture regen.
  */
 
-const SEED = 1;   // benign value valid for every family's seed path
+type Variant = 0 | 1;
+
+function airQualityType(wrapperId: WrapperId): string | undefined {
+  return wrapperId === 'air-quality-pm10' ? 'PM10'
+    : wrapperId === 'air-quality-pm25' ? 'PM25' : undefined;
+}
 
 function representativeDefaultRow(wrapperId: WrapperId): DefaultSensorRow {
   const row = DEFAULT_SENSOR_MAP.find(r => r.wrapper.id === wrapperId);
-  if (!row) {
-    throw new Error(`no DEFAULT_SENSOR_MAP row uses wrapper '${wrapperId}' — cannot build a parity fixture`);
-  }
+  if (!row) throw new Error(`no DEFAULT_SENSOR_MAP row uses wrapper '${wrapperId}'`);
   return row;
 }
 
-/** Build a resolved effective row from a default row, forcing battery attach. */
-function rowFromDefault(dr: DefaultSensorRow): EffectiveSensorRow {
+/** Build a resolved row from a default row, toggling battery attachment. */
+function rowFromDefault(dr: DefaultSensorRow, battery: Variant): EffectiveSensorRow {
   const common = {
-    kind: dr.kind, dataPoint: dr.dataPoint, name: dr.name,
-    wrapperId: dr.wrapper.id,
+    kind: dr.kind, dataPoint: dr.dataPoint, name: dr.name, wrapperId: dr.wrapper.id,
     threshold: dr.threshold, triggerDirection: dr.triggerDirection,
-    hasBatterySubService: true, batteryField: dr.batteryField ?? 'battout',
+    hasBatterySubService: battery === 1, batteryField: dr.batteryField ?? 'battout',
   } as const;
   if (dr.measurement === 'timestamp') {
     return makeTimestampRow({ ...common });
@@ -58,44 +61,41 @@ function rowFromDefault(dr: DefaultSensorRow): EffectiveSensorRow {
   });
 }
 
-/** The legacy 2-arg constructor for a wrapperId (from the descriptor registry). */
 function legacyCtor(wrapperId: WrapperId): new (p: unknown, a: unknown) => unknown {
   const desc = ALL_WRAPPERS.find(w => w.id === wrapperId);
   if (!desc) throw new Error(`no descriptor for ${wrapperId}`);
   return desc.constructor as new (p: unknown, a: unknown) => unknown;
 }
 
-describe('HAP graph parity — row-driven vs legacy build, ALL 25 WrapperIds', () => {
-  const wrapperIds = Object.keys(WRAPPER_SPEC) as WrapperId[];
+const wrapperIds = Object.keys(WRAPPER_SPEC) as WrapperId[];
+const cases: Array<[WrapperId, Variant]> = wrapperIds.flatMap(id => [[id, 0], [id, 1]] as Array<[WrapperId, Variant]>);
 
-  it('covers all 25 WrapperIds', () => {
-    expect(wrapperIds).toHaveLength(25);
+describe('HAP graph parity vs the v1.7.0 golden (finding-#4 review P1-C)', () => {
+  it('golden covers all 25 WrapperIds × 2 battery variants', () => {
+    expect(Object.keys(golden)).toHaveLength(25);
+    for (const id of wrapperIds) {
+      expect(golden, `golden missing ${id}`).toHaveProperty(id);
+      expect((golden as Record<string, unknown>)[id]).toHaveProperty('0');
+      expect((golden as Record<string, unknown>)[id]).toHaveProperty('1');
+    }
   });
 
-  it.each(wrapperIds)('%s: row-driven graph === legacy graph', (wrapperId) => {
-    const dr = representativeDefaultRow(wrapperId);
-    // Air-quality reads context.device.type in the legacy path; give the
-    // legacy build the variant matching this wrapperId so both agree.
-    const type = wrapperId === 'air-quality-pm10' ? 'PM10'
-      : wrapperId === 'air-quality-pm25' ? 'PM25' : undefined;
-
-    const ctx = { uniqueId: `MAC-${dr.dataPoint}`, displayName: 'Parity Sensor', value: SEED, batteryLow: false, type };
-
-    const platform = makeMockPlatform();
-
-    // Legacy 2-arg build (shipping v1.7 path).
-    const legacyAcc = makeMockAccessory({ ...ctx });
+  it.each(cases)('%s (battery=%d): LEGACY 2-arg build === v1.7.0 golden', (wrapperId, battery) => {
+    const platform = makeHapPlatform();
+    const accessory = makeHapAccessory(contextFor(wrapperId, { battery: battery === 1, type: airQualityType(wrapperId) }));
     const Ctor = legacyCtor(wrapperId);
-    new Ctor(platform as unknown as AmbientWeatherSensorsPlatform, legacyAcc as never);
+    new Ctor(platform as unknown as AmbientWeatherSensorsPlatform, accessory);
+    expect(serializeHapGraph(accessory)).toEqual((golden as never)[wrapperId][battery]);
+  });
 
-    // Row-driven build (v2 path).
-    const rowAcc = makeMockAccessory({ ...ctx });
+  it.each(cases)('%s (battery=%d): ROW-DRIVEN build === v1.7.0 golden', (wrapperId, battery) => {
+    const platform = makeHapPlatform();
+    const accessory = makeHapAccessory(contextFor(wrapperId, { battery: battery === 1, type: airQualityType(wrapperId) }));
     instantiateWrapper(
       platform as unknown as AmbientWeatherSensorsPlatform,
-      rowAcc as never,
-      rowFromDefault(dr),
+      accessory as never,
+      rowFromDefault(representativeDefaultRow(wrapperId), battery),
     );
-
-    expect(rowAcc.serviceShape()).toEqual(legacyAcc.serviceShape());
+    expect(serializeHapGraph(accessory)).toEqual((golden as never)[wrapperId][battery]);
   });
 });

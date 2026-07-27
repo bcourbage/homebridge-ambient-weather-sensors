@@ -29,7 +29,7 @@ export class UvAccessory extends ExtendedSensorBase {
 
     super(platform, accessory, {
       variant: 'numeric',
-      sensorLabel: 'UV Index',
+      sensorLabel: row?.name ?? 'UV Index',
       awnKey: row?.dataPoint ?? 'uv',
       threshold: thresholdFor(row, threshold),
       displayMode: extendedDisplayModeFor(platform, row),

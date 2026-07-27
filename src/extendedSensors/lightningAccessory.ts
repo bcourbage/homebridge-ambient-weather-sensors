@@ -45,7 +45,7 @@ abstract class LightningCountLikeAccessory extends ExtendedSensorBase {
   ) {
     super(platform, accessory, {
       variant: 'numeric',
-      sensorLabel,
+      sensorLabel: row?.name ?? sensorLabel,
       awnKey: row?.dataPoint ?? awnKey,
       // Any strike at all is noteworthy — the family default is 1, set on
       // the KNOWN lightning-count rows in DEFAULT_SENSOR_MAP so a resolved
@@ -113,7 +113,7 @@ export class LightningDistanceAccessory extends ExtendedSensorBase {
 
     super(platform, accessory, {
       variant: 'numeric',
-      sensorLabel: 'Lightning Distance',
+      sensorLabel: row?.name ?? 'Lightning Distance',
       awnKey: row?.dataPoint ?? 'lightning_distance',
       threshold: thresholdFor(row, thresholdMi),  // in mi (canonical for AWN)
       triggerDirection: row?.triggerDirection ?? 'below',  // close = alarming, opposite of most sensors
@@ -144,7 +144,7 @@ export class LightningLastStrikeAccessory extends ExtendedSensorBase {
   constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory, row?: TimestampSensorRow) {
     super(platform, accessory, {
       variant: 'timestamp',
-      sensorLabel: 'Last Lightning Strike',
+      sensorLabel: row?.name ?? 'Last Lightning Strike',
       awnKey: row?.dataPoint ?? 'lightning_time',
       threshold: Infinity,  // informational, never triggers motion
       displayMode: extendedDisplayModeFor(platform, row),

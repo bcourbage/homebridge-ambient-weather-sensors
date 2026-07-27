@@ -1,22 +1,27 @@
 /**
- * Value distribution routing (finding-#4 Stage 3).
+ * Value distribution routing MECHANISM (finding-#4 Stage 3).
  *
- * This is the load-bearing wire that makes a row's wrapper actually
- * receive readings. v1.6.0's `distribute` matched AWN payload keys to
- * wrappers by a `MAC-sensorKey` uniqueId built from the built-in AWN
- * vocabulary — a custom `dataPoint` (`my_barn_wind`) would never match
- * and its value was dropped. The row-driven router instead builds its
- * `(mac, dataPoint) → wrapper` map straight from the effective sensor
- * map, so any row (known or custom) that resolved a wrapper receives its
- * value; `coerceValue` handles the non-numeric (timestamp / boolean)
- * fields at the boundary.
+ * IMPORTANT (review): this module is NOT yet wired into the platform. It
+ * is a mechanism-only, UNIT-tested stage. `platform.ts` still constructs
+ * and distributes via the v1.6.0 `createSensorWrapper` path; there is no
+ * v2 construction branch yet, and shadow mode registers nothing. The
+ * flag-gated v2 lifecycle — building this routing map, registering the
+ * wrappers, and distributing through it — is wired as the FIRST commit of
+ * the Stage 4 PR, BEFORE the resolution table is restored. Do not assume
+ * the lifecycle boundary already exists.
  *
- * This module is the mechanism the v2 platform path consumes once the
- * `_sensorMapV2` construction path goes live (GA task #65). It is
- * exercised directly by a platform-boundary integration test that feeds
- * an AWN payload through the map — proving the
- * `station.lastData → routing → coerceValue → wrapper.setValue` wire
- * without depending on the still-empty resolution table.
+ * When it goes live it is the load-bearing wire that makes a row's
+ * wrapper actually receive readings. v1.6.0's `distribute` matched AWN
+ * payload keys to wrappers by a `MAC-sensorKey` uniqueId built from the
+ * built-in AWN vocabulary — a custom `dataPoint` (`my_barn_wind`) would
+ * never match and its value was dropped. The row-driven router instead
+ * builds its `(mac, dataPoint) → wrapper` map straight from the effective
+ * sensor map, so any row (known or custom) that resolved a wrapper
+ * receives its value; `coerceValue` handles the non-numeric (timestamp /
+ * boolean) fields at the boundary.
+ *
+ * The unit tests in `tests/unit/sensorMap/routing.test.ts` exercise these
+ * functions in isolation (not the platform lifecycle).
  */
 import type { Logger, PlatformAccessory } from 'homebridge';
 import type { AmbientWeatherSensorsPlatform, SensorAccessory } from '../platform.js';

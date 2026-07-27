@@ -98,7 +98,7 @@ describe('Co2Accessory — row-driven (finding #4)', () => {
     expect(svc.readCharacteristic(MockCharacteristics.CarbonDioxideDetected)).toBe(0);   // NORMAL
   });
 
-  it('graph parity: row-driven build matches the legacy build', () => {
+  it('HEAD row-driven vs legacy consistency (mock; graphParity.test.ts holds the authoritative v1.7.0 gate)', () => {
     const platform = makeMockPlatform();
     const legacyAcc = makeMockAccessory({ uniqueId: 'MAC-co2', displayName: 'CO2', batteryLow: false, value: 800 });
     new Co2Accessory(platform as unknown as AmbientWeatherSensorsPlatform, legacyAcc as never);

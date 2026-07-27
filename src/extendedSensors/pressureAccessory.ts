@@ -60,7 +60,7 @@ abstract class PressureLikeAccessory extends ExtendedSensorBase {
 
     super(platform, accessory, {
       variant: 'numeric',
-      sensorLabel,
+      sensorLabel: row?.name ?? sensorLabel,
       awnKey: row?.dataPoint ?? awnKey,
       threshold: thresholdFor(row, thresholdInHg),
       triggerDirection: row?.triggerDirection ?? 'below',

@@ -42,7 +42,7 @@ class PressureLikeAccessory extends ExtendedSensorBase {
         const thresholdInHg = typeof raw === 'number' ? raw : Infinity;
         super(platform, accessory, {
             variant: 'numeric',
-            sensorLabel,
+            sensorLabel: row?.name ?? sensorLabel,
             awnKey: row?.dataPoint ?? awnKey,
             threshold: thresholdFor(row, thresholdInHg),
             triggerDirection: row?.triggerDirection ?? 'below',

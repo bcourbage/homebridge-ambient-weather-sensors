@@ -910,32 +910,41 @@ code PR, blocking the next one until it merges green.
     (see Testing below).
   - Does NOT restore any resolution-table entry.
 
-- **Stage 3 — Value routing goes live (adapter-boundary test).**
-  Platform's `distribute` routes via the `(mac, dp) → wrapper` map
-  built from the effective map. Ships a platform-boundary
-  integration test that constructs an `EffectiveSensorRow`
-  explicitly (bypassing buildEffectiveSensorMap so the still-empty
-  resolution table doesn't reject the custom row), registers it in
-  the routing map, feeds an AWN payload containing its
-  `dataPoint`, and asserts `wrapper.setValue(expected)` fired.
+- **Stage 3 — Value routing MECHANISM (unit-tested only; NOT yet
+  platform-wired).** Adds `coerceValue` and the `(mac, dp) → wrapper`
+  routing functions (`buildWrapperRouting` / `distributeViaRouting`)
+  and unit-tests them in isolation. **It does NOT wire routing into
+  `platform.ts`** — there is no v2 construction branch yet
+  (construction is always `createSensorWrapper`; shadow mode registers
+  nothing), so the lifecycle boundary does not exist after Stage 3.
+  The unit tests exercise the
+  `station.lastData → routing map → coerceValue → wrapper.setValue`
+  arithmetic directly (constructing an `EffectiveSensorRow` explicitly,
+  bypassing buildEffectiveSensorMap), NOT the platform lifecycle.
 
-  This is deliberately a boundary test: it proves the
-  `station.lastData → routing map → wrapper.setValue` wire, not
-  the `config.sensorMap → buildEffectiveSensorMap → row → routing
-  map` flow. The full config-to-value integration is Stage 4's job
-  because only Stage 4 restores the table entries that let a
-  custom row survive validation.
+  Do not restore the resolution table on the strength of Stage 3
+  alone — the load-bearing platform connection is Stage 4's first
+  commit (next).
 
-- **Stage 4 — Restore `WRAPPER_FOR_KIND_AND_MEASUREMENT` +
-  full-flow integration tests.** Only after Stages 1–3 all merge
-  and go green in CI. Restoration is ALL-OR-NOTHING: the entire
-  15-entry table comes back in one PR alongside:
+- **Stage 4 — Wire the platform boundary, THEN restore
+  `WRAPPER_FOR_KIND_AND_MEASUREMENT` + full-flow integration tests.**
+  Only after Stages 1–3 all merge and go green in CI. Stage 4's FIRST
+  commit wires routing into the flag-gated v2 construction/registration
+  path in `platform.ts` and exercises it through the platform lifecycle
+  (table still empty, known dataPoints only) — establishing the boundary
+  the reviewer requires before any table entry comes back. THEN, in
+  subsequent commits, restoration is ALL-OR-NOTHING: the entire 15-entry
+  table comes back alongside:
   - `test_custom_<entry>` for all 15 entries, this time going
     through the full `config.sensorMap → buildEffectiveSensorMap →
     routing → wrapper` pipeline;
   - platform-integration test proving each custom row actually
     routes end-to-end from raw AWN payload to HAP characteristic
     value.
+  - the battery-ownership ordering / orphan-note change and the shared
+    polling/realtime `resolveBatteryField` reader (separate commits),
+    plus the v1.7-downgrade-safety fixture — all land here where their
+    full-flow behavior is testable.
 
 - **Stage 5 — Retire the Stage-1 adapter form.** Every factory
   entry is now row-aware, so the "Stage 1 adapter" description in

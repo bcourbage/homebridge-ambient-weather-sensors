@@ -20,19 +20,18 @@
  *     correlation has been erased down to a bare `EffectiveSensorRow`.
  *
  * ── Staged rollout ────────────────────────────────────────────────
- * This is Stage 1 of the rollout described in
- * `docs/future/wrapper-parameterization.md`. Each `FACTORIES` entry is
- * currently an ADAPTER that accepts the row and DISCARDS it, then
- * invokes the wrapper's existing two-argument `(platform, accessory)`
- * constructor. That keeps every existing test and the shipping value
- * path green while giving the platform a single row-aware entry point
- * to call. `instantiateWrapper` is exercised by its own unit tests
- * here; `platform.ts` starts routing through it in Stage 3. The
- * row-consuming constructor forms land family-by-family in Stage 2,
- * at which point each adapter is replaced by its row-aware `(p, a, r)`
- * form. The resolution table stays empty until Stage 4, so no CUSTOM
- * row reaches this registry yet — only known-dataPoint rows do, and
- * those already carry a correct `wrapperId` from the default map.
+ * See `docs/future/wrapper-parameterization.md`. As of Stage 2 every
+ * `FACTORIES` entry is the row-consuming `(p, a, r) => new X(p, a, r)`
+ * form — the wrapper reads its runtime knobs (threshold, units,
+ * battery, trigger direction) from the row (Stage 1's adapter form,
+ * which discarded the row and called the legacy two-argument
+ * constructor, is gone). `instantiateWrapper` is exercised by its own
+ * unit tests here and by the routing mechanism; `platform.ts` does NOT
+ * yet route through it — the flag-gated v2 construction path is wired in
+ * Stage 4's first commit (Stage 3 is mechanism-only, unit-tested). The
+ * resolution table stays empty until Stage 4, so no CUSTOM row reaches
+ * this registry yet — only known-dataPoint rows do, and those already
+ * carry a correct `wrapperId` from the default map.
  */
 
 import type { PlatformAccessory } from 'homebridge';

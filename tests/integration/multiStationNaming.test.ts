@@ -81,10 +81,12 @@ describe('multi-station naming survives v1.7 → v2 (P2-D)', () => {
     expect(svc.readCharacteristic(MockCharacteristics.Name)).toBe('Outdoor Temperature');
   });
 
-  it('extended wind: the family label is fixed (v1.7 never station-prefixed extended tiles)', () => {
-    // Extended wrappers name their tile from the hardcoded family label
-    // via composeStaticName — unchanged from v1.7, and the row does not
-    // alter it. So there is nothing to migrate / no rename risk.
+  it('extended wind default row: renders the v1.7 label (default-map name == legacy label)', () => {
+    // Extended tiles are never station-prefixed (v1.7 named them from the
+    // family label via composeStaticName). Under the row model the label
+    // is `row?.name ?? legacyLabel`; for a DEFAULT known row the row.name
+    // equals the default-map name, which equals the v1.7 label, so the
+    // default migration is identity — no rename.
     const platform = makeMockPlatform();
     const accessory = makeMockAccessory({ uniqueId: `${STATION.macAddress}-windspeedmph`, displayName: 'Backyard Wind Speed' });
     new WindSpeedAccessory(
@@ -95,7 +97,22 @@ describe('multi-station naming survives v1.7 → v2 (P2-D)', () => {
       }),
     );
     const svc = accessory.getService(MockServices.MotionSensor)!;
-    // composeStaticName('Wind Speed') — the v1.7 value, unchanged.
     expect(svc.readCharacteristic(MockCharacteristics.Name)).toBe('Wind Speed');
+  });
+
+  it('extended wind custom row: a renamed row DOES render its own label', () => {
+    // Separately from the default case: a custom/renamed extended row
+    // renders row.name (the sensor-map naming concern is effective).
+    const platform = makeMockPlatform();
+    const accessory = makeMockAccessory({ uniqueId: `${STATION.macAddress}-my_barn_wind`, displayName: 'whatever' });
+    new WindSpeedAccessory(
+      platform as unknown as AmbientWeatherSensorsPlatform, accessory as never,
+      makeNumericRow({
+        kind: 'motion', measurement: 'wind-speed', wrapperId: 'wind-speed',
+        sourceUnit: 'mph', displayUnit: 'mph', dataPoint: 'my_barn_wind', name: 'Barn Wind',
+      }),
+    );
+    const svc = accessory.getService(MockServices.MotionSensor)!;
+    expect(svc.readCharacteristic(MockCharacteristics.Name)).toBe('Barn Wind');
   });
 });

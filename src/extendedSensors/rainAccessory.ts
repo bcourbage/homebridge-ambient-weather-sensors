@@ -50,7 +50,7 @@ abstract class RainRateLikeAccessory extends ExtendedSensorBase {
 
     super(platform, accessory, {
       variant: 'numeric',
-      sensorLabel,
+      sensorLabel: row?.name ?? sensorLabel,
       awnKey: row?.dataPoint ?? awnKey,
       threshold: thresholdFor(row, thresholdInHr),  // in in/hr (canonical for AWN)
       displayMode: extendedDisplayModeFor(platform, row),
@@ -116,7 +116,7 @@ abstract class RainAccumulationLikeAccessory extends ExtendedSensorBase {
 
     super(platform, accessory, {
       variant: 'numeric',
-      sensorLabel,
+      sensorLabel: row?.name ?? sensorLabel,
       awnKey: row?.dataPoint ?? awnKey,
       // Trigger if there's *any* measurable accumulation since the last
       // reset; the family default (0.01 in) is set on the KNOWN
@@ -177,7 +177,7 @@ export class LastRainAccessory extends ExtendedSensorBase {
   constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory, row?: TimestampSensorRow) {
     super(platform, accessory, {
       variant: 'timestamp',
-      sensorLabel: 'Last Rain',
+      sensorLabel: row?.name ?? 'Last Rain',
       awnKey: row?.dataPoint ?? 'lastRain',
       threshold: Infinity,
       displayMode: extendedDisplayModeFor(platform, row),

@@ -31,7 +31,7 @@ class RainRateLikeAccessory extends ExtendedSensorBase {
         const legacyUnit = platform.config.units?.rain || 'in';
         super(platform, accessory, {
             variant: 'numeric',
-            sensorLabel,
+            sensorLabel: row?.name ?? sensorLabel,
             awnKey: row?.dataPoint ?? awnKey,
             threshold: thresholdFor(row, thresholdInHr), // in in/hr (canonical for AWN)
             displayMode: extendedDisplayModeFor(platform, row),
@@ -84,7 +84,7 @@ class RainAccumulationLikeAccessory extends ExtendedSensorBase {
         const legacyUnit = platform.config.units?.rain || 'in';
         super(platform, accessory, {
             variant: 'numeric',
-            sensorLabel,
+            sensorLabel: row?.name ?? sensorLabel,
             awnKey: row?.dataPoint ?? awnKey,
             // Trigger if there's *any* measurable accumulation since the last
             // reset; the family default (0.01 in) is set on the KNOWN
@@ -137,7 +137,7 @@ export class LastRainAccessory extends ExtendedSensorBase {
     constructor(platform, accessory, row) {
         super(platform, accessory, {
             variant: 'timestamp',
-            sensorLabel: 'Last Rain',
+            sensorLabel: row?.name ?? 'Last Rain',
             awnKey: row?.dataPoint ?? 'lastRain',
             threshold: Infinity,
             displayMode: extendedDisplayModeFor(platform, row),

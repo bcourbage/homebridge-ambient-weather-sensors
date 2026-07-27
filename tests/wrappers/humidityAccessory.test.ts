@@ -92,7 +92,7 @@ describe('HumidityAccessory — row-driven (finding #4)', () => {
     expect(svc.readCharacteristic(MockCharacteristics.CurrentRelativeHumidity)).toBe(55);
   });
 
-  it('graph parity: row-driven build matches the legacy build', () => {
+  it('HEAD row-driven vs legacy consistency (mock; graphParity.test.ts holds the authoritative v1.7.0 gate)', () => {
     const platform = makeMockPlatform();
     const legacyAcc = makeMockAccessory({ uniqueId: 'MAC-hum', displayName: 'Outdoor Humidity', batteryLow: false, value: 55 });
     new HumidityAccessory(platform as unknown as AmbientWeatherSensorsPlatform, legacyAcc as never);
