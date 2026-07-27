@@ -522,3 +522,184 @@ describe('buildEffectiveSensorMap — malformed input rejection (finding #10)', 
     expect(result.errors[0].message).toMatch(/triggerEnabled/);
   });
 });
+
+// ---- Review finding #6: custom-row battery attachment -----------------
+
+describe('buildEffectiveSensorMap — custom-row battery ownership (finding #6)', () => {
+  it('a custom row with a NOVEL batteryField gets hasBatterySubService=true', () => {
+    // `my_barn_batt` is not reserved by any default canonical row,
+    // so a custom row claiming it should be authorized to host the
+    // HAP BatteryService.
+    const result = buildEffectiveSensorMap({
+      ...baseInput(),
+      userOverrides: [{
+        dataPoint: 'custom_barn_wind',
+        kind: 'motion',
+        measurement: 'wind-speed',
+        sourceUnit: 'mph',
+        batteryField: 'my_barn_batt',
+      }],
+    });
+    const row = result.rows.find(r => r.dataPoint === 'custom_barn_wind');
+    expect(row).toBeDefined();
+    if (row && row.kind !== 'unrecognized') {
+      expect(row.batteryField).toBe('my_barn_batt');
+      expect(row.hasBatterySubService).toBe(true);
+    }
+  });
+
+  it('a custom row cannot claim a RESERVED default battery field', () => {
+    // `battout` is the reserved owner (`tempf` has canonicalForBattery:
+    // true). A custom row naming it may still READ the field (for
+    // battery-low display) but can NOT host the HAP sub-service — the
+    // reserved default row owns that.
+    const result = buildEffectiveSensorMap({
+      ...baseInput(),
+      userOverrides: [{
+        dataPoint: 'custom_second_temp',
+        kind: 'temperature',
+        measurement: 'temperature',
+        sourceUnit: 'fahrenheit',
+        batteryField: 'battout',
+      }],
+    });
+    const row = result.rows.find(r => r.dataPoint === 'custom_second_temp');
+    expect(row).toBeDefined();
+    if (row && row.kind !== 'unrecognized') {
+      expect(row.batteryField).toBe('battout');
+      expect(row.hasBatterySubService).toBe(false);
+    }
+  });
+
+  it('two custom rows on the same station sharing a novel batteryField: first wins, warn surfaces', () => {
+    const result = buildEffectiveSensorMap({
+      ...baseInput(),
+      userOverrides: [
+        {
+          dataPoint: 'custom_barn_wind',
+          kind: 'motion',
+          measurement: 'wind-speed',
+          sourceUnit: 'mph',
+          batteryField: 'my_barn_batt',
+        },
+        {
+          dataPoint: 'custom_barn_temp',
+          kind: 'temperature',
+          measurement: 'temperature',
+          sourceUnit: 'fahrenheit',
+          batteryField: 'my_barn_batt',
+        },
+      ],
+    });
+    const wind = result.rows.find(r => r.dataPoint === 'custom_barn_wind');
+    const temp = result.rows.find(r => r.dataPoint === 'custom_barn_temp');
+    // Pair-collection order matters: defaults × stations first, then
+    // discovery, then station-scoped, then global custom. Both
+    // custom rows land in the global-custom bucket. The first-emitted
+    // wins; either wind or temp depending on iteration order, but
+    // whichever wins claims the sub-service and the other gets a
+    // warning.
+    const withService = [wind, temp].filter((r): r is Exclude<typeof r, undefined> =>
+      r !== undefined && r.kind !== 'unrecognized' && r.hasBatterySubService === true);
+    const withoutService = [wind, temp].filter((r): r is Exclude<typeof r, undefined> =>
+      r !== undefined && r.kind !== 'unrecognized' && r.hasBatterySubService === false);
+    expect(withService).toHaveLength(1);
+    expect(withoutService).toHaveLength(1);
+    // The loser still carries batteryField for reading.
+    expect((withoutService[0] as { batteryField: string | null }).batteryField).toBe('my_barn_batt');
+    // Warning fires with the collision code.
+    expect(result.warnings.some(w => w.code === 'duplicate-battery-owner')).toBe(true);
+  });
+
+  it('canonical default row still owns its reserved battery field even alongside a custom claimant', () => {
+    // Regression guard: adding a custom row that tries to claim
+    // `battout` must NOT displace the canonical tempf row's
+    // ownership.
+    const result = buildEffectiveSensorMap({
+      ...baseInput(),
+      userOverrides: [{
+        dataPoint: 'custom_second',
+        kind: 'temperature',
+        measurement: 'temperature',
+        sourceUnit: 'fahrenheit',
+        batteryField: 'battout',
+      }],
+    });
+    const tempf = result.rows.find(r => r.dataPoint === 'tempf' && r.stationMac === MAC1);
+    if (tempf && tempf.kind !== 'unrecognized') {
+      expect(tempf.hasBatterySubService).toBe(true);
+      expect(tempf.batteryField).toBe('battout');
+    }
+  });
+});
+
+// ---- Review finding #8: global custom rows × known stations ----------
+
+describe('buildEffectiveSensorMap — global custom pair collection (finding #8)', () => {
+  it('emits a row for a global custom override on every station in inventory, even before discovery', () => {
+    // Two stations, no discovery entries at all. A global custom row
+    // must still produce a "waiting for station" row on each station.
+    // Pre-fix, buildEffectiveSensorMap dropped these on the floor
+    // because pair collection only considered defaults × stations,
+    // discovery entries, and station-specific overrides.
+    const result = buildEffectiveSensorMap({
+      ...baseInput(),
+      stations: [
+        { macAddress: MAC1, name: 'Home' },
+        { macAddress: 'AA:BB:CC:DD:EE:02', name: 'Barn' },
+      ],
+      userOverrides: [{
+        dataPoint: 'custom_multi',
+        kind: 'motion',
+        measurement: 'wind-speed',
+        sourceUnit: 'mph',
+      }],
+      discovery: { schemaVersion: 1, entries: [] },
+    });
+    const rows = result.rows.filter(r => r.dataPoint === 'custom_multi');
+    expect(rows.map(r => r.stationMac).sort()).toEqual([
+      'AA:BB:CC:DD:EE:01',
+      'AA:BB:CC:DD:EE:02',
+    ]);
+  });
+
+  it('a station-scoped custom override is NOT duplicated onto other stations', () => {
+    // The global-custom-fanout must skip rows whose stationMac is
+    // already set — those are station-scoped and belong to exactly
+    // one station.
+    const result = buildEffectiveSensorMap({
+      ...baseInput(),
+      stations: [
+        { macAddress: MAC1, name: 'Home' },
+        { macAddress: 'AA:BB:CC:DD:EE:02', name: 'Barn' },
+      ],
+      userOverrides: [{
+        dataPoint: 'custom_home_only',
+        stationMac: MAC1,
+        kind: 'motion',
+        measurement: 'wind-speed',
+        sourceUnit: 'mph',
+      }],
+    });
+    const rows = result.rows.filter(r => r.dataPoint === 'custom_home_only');
+    expect(rows.map(r => r.stationMac)).toEqual([MAC1]);
+  });
+
+  it('a global override targeting a KNOWN dataPoint (compat path) is not double-fanned', () => {
+    // Regression guard: compat produces `{ dataPoint: 'tempf', ... }`
+    // for legacy configs. That's a global override for a KNOWN
+    // dataPoint — the defaults × stations pass has already emitted
+    // a pair for every station, so the global-custom-fanout must
+    // NOT emit duplicates.
+    const result = buildEffectiveSensorMap({
+      ...baseInput(),
+      stations: [
+        { macAddress: MAC1, name: 'Home' },
+        { macAddress: 'AA:BB:CC:DD:EE:02', name: 'Barn' },
+      ],
+      userOverrides: [{ dataPoint: 'tempf', name: 'Custom Temperature Label' }],
+    });
+    const rows = result.rows.filter(r => r.dataPoint === 'tempf');
+    expect(rows).toHaveLength(2);
+  });
+});

@@ -13,6 +13,7 @@ import { UvAccessory } from './extendedSensors/uvAccessory.js';
 import { WindDirection10mAccessory, WindDirectionAccessory, WindGustAccessory, WindMaxDailyGustAccessory, WindSpeedAccessory, } from './extendedSensors/windAccessory.js';
 import { HumidityAccessory } from './humidityAccessory.js';
 import { RealtimeSource } from './realtimeSource.js';
+import { detectConfigMode } from './sensorMap/configMode.js';
 import { composeDisplayName as sharedComposeDisplayName, hapClean as sharedHapClean, } from './sensorMap/displayName.js';
 import { createShadowMode } from './sensorMap/shadowMode.js';
 import { friendlySensorName, sensorKeyByFriendlyName } from './sensorNames.js';
@@ -114,6 +115,26 @@ export class AmbientWeatherSensorsPlatform {
         // discover station names see every station their AWN account has,
         // not just the filtered subset.
         this.loggedDiscoveredStations = new Set();
+        // Sensor-map v2.0 configVersion detection outcome, computed once at
+        // startup and never re-evaluated. Drives whether discoverDevices +
+        // polling + realtime are allowed to run:
+        //
+        //   'legacy' / 'v2' — normal operation (v1.6.0 code path drives
+        //                     everything; v2 is a shadow observer until
+        //                     task #65's flag flip).
+        //   'safe-mode'    — CRITICAL: safe mode is contractually read-only
+        //                     per sensor-map.md §5. `discoverDevices()` MUST
+        //                     bail before touching the AWN API or the
+        //                     accessory cache; cached accessories keep
+        //                     serving their last-known HAP characteristic
+        //                     values (Homebridge restores them from the
+        //                     accessory cache automatically), but the
+        //                     plugin does not fetch, does not reconcile,
+        //                     does not start polling or realtime. Losing
+        //                     live values is preferable to a downgraded
+        //                     plugin destroying user-critical HomeKit state
+        //                     while it can't interpret the config safely.
+        this.configMode = 'legacy';
         this.sleep = (delay) => new Promise((resolve) => setTimeout(resolve, delay));
         this.log.debug('Finished initializing platform:', this.config.platform);
         // Instantiate the sensor-map shadow observer if the flag is set.
@@ -125,10 +146,34 @@ export class AmbientWeatherSensorsPlatform {
         });
         this.api.on('didFinishLaunching', () => {
             log.debug('Executed didFinishLaunching callback');
+            // Detect config mode ONCE at startup. This is the authoritative
+            // gate for whether the v1.6.0 code path is allowed to run:
+            // safe mode short-circuits below and never touches the AWN API
+            // or the accessory cache. See the `configMode` field comment
+            // for the full contract.
+            const detected = detectConfigMode(this.config);
+            this.configMode = detected.mode;
+            for (const w of detected.warnings) {
+                this.log.warn(w);
+            }
+            if (detected.safeModeBanner) {
+                this.log.error(`SAFE MODE: ${detected.safeModeBanner}`);
+            }
             // Load persisted discovery state + log detected config mode.
             // Non-blocking: swallow errors so a broken persistence store
             // never prevents the plugin from starting.
             this.shadow?.initialize().catch(e => this.log.warn(`[sensor-map v2 shadow] initialize failed: ${e.message}`));
+            if (this.configMode === 'safe-mode') {
+                // Cached accessories were restored via configureAccessory; HAP
+                // will keep serving their last-known characteristic values.
+                // We skip discoverDevices entirely — no fetch, no reconcile,
+                // no polling, no realtime. The user must fix their config
+                // and restart Homebridge to leave safe mode.
+                this.log.error('Skipping device discovery: configVersion is unsupported. '
+                    + `${this.accessories.length} cached accessor${this.accessories.length === 1 ? 'y stays' : 'ies stay'} `
+                    + 'available with last-known values. Fix your config and restart Homebridge to resume.');
+                return;
+            }
             // run the method to discover / register your devices as accessories
             this.discoverDevices();
         });

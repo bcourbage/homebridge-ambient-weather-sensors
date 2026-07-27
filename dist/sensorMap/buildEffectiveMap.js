@@ -185,8 +185,62 @@ export function buildEffectiveSensorMap(input) {
             }
         }
     }
+    // Global custom override targets × every known station.
+    //
+    // A global custom row (stationMac absent, dataPoint outside the
+    // built-in default map) declares a custom sensor the user wants
+    // on every station. Without this pass, such rows only produce a
+    // pair once AWN's discovery layer observes the dataPoint on a
+    // specific station — meaning a valid custom configuration
+    // produces no row and no error until discovery happens. Per
+    // review finding #8, we emit a row for the (station, dataPoint)
+    // pair on every station in inventory so the user gets immediate
+    // feedback ("waiting for station" rows, per §3.3.4 of
+    // sensor-map.md), instead of a silent nothing.
+    for (const dp of globalOverrides.keys()) {
+        if (defaultRowFor(dp)) {
+            // Global row for a known dataPoint — the defaults × stations
+            // pass above already emitted a pair for every station.
+            continue;
+        }
+        for (const station of input.stations) {
+            const mac = station.macAddress.toUpperCase();
+            const key = `${mac}|${dp}`;
+            if (!pairs.has(key)) {
+                pairs.set(key, {
+                    mac,
+                    dataPoint: dp,
+                    stationName: station.name,
+                });
+            }
+        }
+    }
     // ---- 4. Resolve each pair to an EffectiveSensorRow.
+    //
+    // The battery-ownership context is threaded through the pass so
+    // custom rows can claim their (station, batteryField) key. Iteration
+    // order determines first-writer-wins for custom-vs-custom collisions;
+    // the pair map is insertion-ordered (defaults first per §3 above,
+    // then discovery, then station-specific and global custom targets)
+    // so a default canonical row always resolves before any custom row
+    // that might collide with it — matches the reserved-owner rule.
     const rows = [];
+    const batteryOwnership = {
+        reservedFields: RESERVED_BATTERY_FIELDS,
+        claims: new Map(),
+        onDuplicate: (mac, batteryField, winner, loser) => {
+            warnings.push({
+                overrideIndex: -1,
+                code: 'duplicate-battery-owner',
+                field: 'batteryField',
+                dataPoint: loser,
+                stationMac: mac,
+                message: `Custom row '${loser}' on ${mac} declares batteryField '${batteryField}', `
+                    + `but '${winner}' already owns that field's Battery sub-service on this station. `
+                    + `'${loser}' will report the battery value but not host the HAP BatteryService.`,
+            });
+        },
+    };
     for (const { mac, dataPoint } of pairs.values()) {
         const key = `${mac}|${dataPoint}`;
         // Skip forgotten unrecognized fields.
@@ -204,6 +258,7 @@ export function buildEffectiveSensorMap(input) {
             defaultRow,
             override: merged,
             discovered,
+            batteryOwnership,
         });
         if (row) {
             rows.push(row);
@@ -262,7 +317,7 @@ function mergeOverrides(global, station) {
     return mergeInto(global, station);
 }
 function resolveRow(inp) {
-    const { stationMac, dataPoint, defaultRow, override, discovered } = inp;
+    const { stationMac, dataPoint, defaultRow, override, discovered, batteryOwnership } = inp;
     // ---- Unrecognized: no default, no user override with kind+measurement.
     if (!defaultRow && !hasKindAndMeasurement(override)) {
         if (!discovered) {
@@ -288,8 +343,7 @@ function resolveRow(inp) {
     const displayUnit = override?.displayUnit ?? defaultRow?.displayUnit ?? sourceUnit;
     // ---- Resolve battery attachment.
     const batteryField = resolveBatteryField(defaultRow, override);
-    const hasBatterySubService = batteryField !== null
-        && (defaultRow?.canonicalForBattery ?? false);
+    const hasBatterySubService = resolveHasBatterySubService(stationMac, dataPoint, batteryField, defaultRow, batteryOwnership);
     // ---- Resolve name.
     const name = override?.name ?? defaultRow?.name ?? dataPoint;
     // ---- Motion trigger fields. Non-motion rows never carry any of
@@ -374,5 +428,48 @@ function resolveBatteryField(defaultRow, override) {
         return override.batteryField ?? null;
     }
     return defaultRow?.batteryField ?? null;
+}
+/**
+ * Static set of every `batteryField` value reserved by a canonical
+ * default-map row. Computed once at module load. A custom row's
+ * `batteryField` that appears in this set gets `hasBatterySubService:
+ * false` — the reserved default row owns the sub-service and a
+ * custom row cannot take that over (rule 2 in
+ * `BatteryOwnershipContext`).
+ */
+const RESERVED_BATTERY_FIELDS = new Set(DEFAULT_SENSOR_MAP
+    .filter(r => r.canonicalForBattery && r.batteryField !== null)
+    .map(r => r.batteryField));
+/**
+ * Ownership decision for a single row. See `BatteryOwnershipContext`
+ * for the full rule; this function is where those rules are executed
+ * per row and where `claims` gets mutated on a successful custom
+ * attachment.
+ */
+function resolveHasBatterySubService(stationMac, dataPoint, batteryField, defaultRow, ownership) {
+    if (batteryField === null) {
+        return false;
+    }
+    if (defaultRow) {
+        // Default-map row — attachment is authorized only when this row
+        // is the canonical owner. Non-canonical default rows share the
+        // batteryField intentionally (every outdoor sensor references
+        // battout) and stay `false` without warning.
+        return defaultRow.canonicalForBattery;
+    }
+    // Custom row. Can attach only if the batteryField isn't reserved
+    // by any default canonical row anywhere in DEFAULT_SENSOR_MAP.
+    if (RESERVED_BATTERY_FIELDS.has(batteryField)) {
+        return false;
+    }
+    // Collision with another custom row on the same station?
+    const key = `${stationMac}|${batteryField}`;
+    const priorClaim = ownership.claims.get(key);
+    if (priorClaim !== undefined) {
+        ownership.onDuplicate(stationMac, batteryField, priorClaim, dataPoint);
+        return false;
+    }
+    ownership.claims.set(key, dataPoint);
+    return true;
 }
 //# sourceMappingURL=buildEffectiveMap.js.map

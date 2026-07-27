@@ -9,7 +9,7 @@ import {
   shadowModeEnabled,
   ShadowMode,
 } from '../../../src/sensorMap/shadowMode';
-import { HAP_SERVICE_UUIDS } from '../../../src/sensorMap/bootstrap';
+import { HAP_SERVICE_UUIDS, type CachedAccessoryShape } from '../../../src/sensorMap/bootstrap';
 import { loadDiscoveryStore } from '../../../src/sensorMap/persistence/discoveryStore';
 
 interface LogCapture {
@@ -484,6 +484,104 @@ describe('ShadowMode — config mode drives the parallel pipeline (finding #5)',
     });
     expect(captured.info.some(l => /config mode: legacy/.test(l))).toBe(true);
     expect(captured.info.filter(l => /would/.test(l))).toHaveLength(0);
+    await s.shutdown();
+  });
+});
+
+// ---- Review finding #11: preserve-cached retry (§17.3) ---------------
+
+describe('ShadowMode — preserve-cached recovery (finding #11)', () => {
+  it('re-attempts inference on every parse tick and logs a recovered line once the row resolves', async () => {
+    // A cached accessory whose kind+measurement isn't inferable at
+    // startup — no legacy type field, unknown dataPoint. It stays
+    // in the preserved set until a parse tick discovers it and the
+    // default map (or a plugin update) resolves it.
+    //
+    // We simulate the recovery by mutating the accessory's context
+    // BETWEEN parse ticks — a `type` field appears (as if a plugin
+    // update taught inferForCachedAccessory a new legacy string).
+    // A production recovery would look different (default-map
+    // update, or AWN newly reporting the field), but the code path
+    // exercised is identical: preserved accessories are re-inferred
+    // and dropped from the set when resolution succeeds.
+    const { log, captured } = makeLog();
+    const s = new ShadowMode({
+      log,
+      config: { _sensorMapV2: true, temperatureSensors: true } as never,
+      api: { user: { storagePath: () => tmpRoot } },
+    });
+    await s.initialize();
+
+    // Cached accessory with only a uniqueId — inferForCachedAccessory
+    // returns preserve-cached.
+    const accessory: CachedAccessoryShape = {
+      context: { device: { uniqueId: 'AA:BB:CC:DD:EE:01-mystery' } },
+    };
+    s.onConfigureAccessory(accessory);
+    expect(captured.debug.some(l => l.includes('preserve-cached'))).toBe(true);
+
+    // First parse tick — nothing changed on the accessory; still
+    // preserve-cached, no info-level "recovered" line yet.
+    s.onParseTick({
+      stations: [{ macAddress: 'AA:BB:CC:DD:EE:01', name: 'Home' }],
+      observed: [],
+      v1Decisions: [],
+    });
+    expect(captured.info.filter(l => l.includes('recovered')).length).toBe(0);
+
+    // Simulate resolution: something about the accessory's context
+    // now lets inferForCachedAccessory succeed.
+    (accessory.context!.device as { type?: string }).type = 'Temperature';
+
+    // Next parse tick — the retry should now find the accessory
+    // inferable, log the recovery, and drop it from the preserved
+    // set.
+    s.onParseTick({
+      stations: [{ macAddress: 'AA:BB:CC:DD:EE:01', name: 'Home' }],
+      observed: [],
+      v1Decisions: [],
+    });
+    expect(captured.info.some(l =>
+      /recovered.*kind=temperature/.test(l) && l.includes('AA:BB:CC:DD:EE:01-mystery'),
+    )).toBe(true);
+
+    // Third tick — accessory no longer in the preserved set, so no
+    // duplicate recovery line fires.
+    s.onParseTick({
+      stations: [{ macAddress: 'AA:BB:CC:DD:EE:01', name: 'Home' }],
+      observed: [],
+      v1Decisions: [],
+    });
+    expect(captured.info.filter(l => l.includes('recovered')).length).toBe(1);
+
+    await s.shutdown();
+  });
+
+  it('does not retry in safe mode (short-circuit stays before recovery)', async () => {
+    // Safe mode's onParseTick returns immediately per §5. That
+    // includes the preserve-cached recovery — we must not touch
+    // the retry map in safe mode, which would happen if the retry
+    // ran before the short-circuit.
+    const { log, captured } = makeLog();
+    const s = new ShadowMode({
+      log,
+      config: { _sensorMapV2: true, configVersion: 999 } as never,
+      api: { user: { storagePath: () => tmpRoot } },
+    });
+    await s.initialize();
+    const accessory: CachedAccessoryShape = {
+      context: { device: { uniqueId: 'AA:BB:CC:DD:EE:01-mystery' } },
+    };
+    s.onConfigureAccessory(accessory);
+    // Even if the accessory becomes resolvable, safe mode must not
+    // announce recovery — the parallel pipeline is quiet.
+    (accessory.context!.device as { type?: string }).type = 'Temperature';
+    s.onParseTick({
+      stations: [{ macAddress: 'AA:BB:CC:DD:EE:01', name: 'Home' }],
+      observed: [],
+      v1Decisions: [],
+    });
+    expect(captured.info.filter(l => l.includes('recovered')).length).toBe(0);
     await s.shutdown();
   });
 });

@@ -59,6 +59,20 @@ export class ShadowMode {
         // Dedup log throttling — one line per unique event per boot.
         this.loggedCacheInference = new Set();
         this.loggedDivergences = new Set();
+        // Preserve-cached recovery bookkeeping (review finding #11 / §17.3).
+        // Cached accessories whose kind+measurement couldn't be inferred at
+        // bootstrap time stay in HomeKit with last-known values, and every
+        // subsequent parse tick re-attempts inference against them. Once
+        // one resolves — because AWN started reporting its dataPoint, or a
+        // future default-map update covered it — it drops out of this map.
+        //
+        // The plugin-side "populate context via updatePlatformAccessories"
+        // (§17.3, final paragraph) is a Path-A concern — shadow mode is
+        // Path B and does not mutate context. We surface the recovery at
+        // info level so users see the accessory has re-entered the normal
+        // reconciliation lifecycle, and the actual writeback lands with
+        // task #65's flag flip.
+        this.preservedAccessories = new Map();
         // Snapshot of config-mode detection at startup. Logged once.
         this.modeLogged = false;
         /**
@@ -127,16 +141,47 @@ export class ShadowMode {
      */
     onConfigureAccessory(accessory) {
         const dp = accessory.context?.device?.uniqueId ?? '<no-uniqueId>';
-        if (this.loggedCacheInference.has(dp)) {
-            return;
-        }
-        this.loggedCacheInference.add(dp);
         const result = inferForCachedAccessory(accessory);
         if (result.status === 'inferred') {
-            this.log.debug(`[sensor-map v2 shadow] cache-restore ${dp}: kind=${result.kind} measurement=${result.measurement}`);
+            if (!this.loggedCacheInference.has(dp)) {
+                this.loggedCacheInference.add(dp);
+                this.log.debug(`[sensor-map v2 shadow] cache-restore ${dp}: kind=${result.kind} measurement=${result.measurement}`);
+            }
+            return;
         }
-        else {
+        // preserve-cached: log once at bootstrap and register the
+        // accessory for retry. Every subsequent onParseTick will re-run
+        // inference against it (see recoverPreservedAccessories below).
+        if (!this.loggedCacheInference.has(dp)) {
+            this.loggedCacheInference.add(dp);
             this.log.debug(`[sensor-map v2 shadow] cache-restore ${dp}: preserve-cached (kind/measurement not inferable yet)`);
+        }
+        this.preservedAccessories.set(dp, accessory);
+    }
+    /**
+     * Re-attempt bootstrap for every accessory in the preserve-cached
+     * state. Called from `onParseTick` on every discovery cycle per
+     * `docs/future/sensor-map.md` §17.3. Once inference resolves for a
+     * given accessory, it's removed from the retry map and an info-
+     * level "recovered" line surfaces so the user sees the accessory
+     * has re-entered the normal reconciliation lifecycle.
+     *
+     * The plugin-side context writeback + `updatePlatformAccessories`
+     * (final paragraph of §17.3) is a Path-A concern that lands with
+     * task #65's flag flip. Shadow mode does not mutate context.
+     */
+    recoverPreservedAccessories() {
+        if (this.preservedAccessories.size === 0) {
+            return;
+        }
+        for (const [uid, accessory] of this.preservedAccessories) {
+            const result = inferForCachedAccessory(accessory);
+            if (result.status === 'inferred') {
+                this.log.info(`[sensor-map v2 shadow] cache-restore ${uid}: recovered — kind=${result.kind} `
+                    + `measurement=${result.measurement}. Context writeback pending task #65's flag flip.`);
+                this.preservedAccessories.delete(uid);
+            }
+            // Otherwise stay in preserve-cached; try again next tick.
         }
     }
     /**
@@ -157,6 +202,10 @@ export class ShadowMode {
         if (this.configMode === 'safe-mode') {
             return;
         }
+        // §17.3 recovery: re-attempt bootstrap for every cached
+        // accessory that returned preserve-cached at startup. Any that
+        // resolves now drops out of the retry map.
+        this.recoverPreservedAccessories();
         // Feed the tracker regardless of shadow comparison — this lets
         // discovery.json accumulate real data while the flag is on.
         if (this.tracker) {
