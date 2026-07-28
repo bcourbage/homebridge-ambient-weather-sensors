@@ -70,12 +70,22 @@ export function composeRowDisplayName(
   rowName: string,
   isMultiStation: boolean,
 ): string {
+  // Defense-in-depth (review R3-6): validation already warn-strips name
+  // overrides that sanitize to empty, but this is the last HAP sink —
+  // never emit an empty or over-length Name regardless of input. The
+  // 'Sensor' fallback is unreachable through validated rows; it guards
+  // direct callers.
+  const label = hapClean(rowName) || 'Sensor';
   if (!isMultiStation) {
-    return hapClean(rowName);
+    return truncateHapName(label);
   }
   const stationName = hapClean(station.name);
   const macFallback = station.macAddress.replaceAll(':', '');
   const baseName = stationName || macFallback;
-  const composed = hapClean(`${baseName} ${rowName}`);
-  return composed.length <= HAP_NAME_MAX ? composed : composed.slice(0, HAP_NAME_MAX).trim();
+  return truncateHapName(hapClean(`${baseName} ${label}`));
+}
+
+/** Right-truncate to HAP 2.x's 64-char Name limit. */
+function truncateHapName(name: string): string {
+  return name.length <= HAP_NAME_MAX ? name : name.slice(0, HAP_NAME_MAX).trim();
 }

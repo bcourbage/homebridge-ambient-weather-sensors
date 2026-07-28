@@ -494,3 +494,25 @@ describe('validateOverrideBody — non-motion field stripping (finding #9)', () 
     }
   });
 });
+
+describe('validateOverrideBody — name sanitization (review R3-6)', () => {
+  it('warn-strips a name that sanitizes to empty; the row keeps its default name', () => {
+    for (const bad of ['---', '   ', '!!!', 'ːː']) {
+      const r = validateOverride({ dataPoint: 'tempf', name: bad }, KNOWN);
+      expect(r.status, `name=${JSON.stringify(bad)}`).toBe('ok');
+      if (r.status === 'ok') {
+        expect(r.validated.name).toBeUndefined();
+        expect(r.warnings.some(w => w.code === 'ignored-unsanitizable-name')).toBe(true);
+      }
+    }
+  });
+
+  it('keeps a name that sanitizes non-empty (punctuation stripped later at the HAP sink)', () => {
+    const r = validateOverride({ dataPoint: 'tempf', name: 'Patio (South)' }, KNOWN);
+    expect(r.status).toBe('ok');
+    if (r.status === 'ok') {
+      expect(r.validated.name).toBe('Patio (South)');
+      expect(r.warnings.some(w => w.code === 'ignored-unsanitizable-name')).toBe(false);
+    }
+  });
+});

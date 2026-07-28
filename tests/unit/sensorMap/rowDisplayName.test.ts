@@ -52,6 +52,19 @@ describe('composeRowDisplayName', () => {
     expect(out.startsWith('Backyard X')).toBe(true);
   });
 
+  it('truncates the SINGLE-station path too (R3-6)', () => {
+    const long = 'Y'.repeat(100);
+    const out = composeRowDisplayName(named, long, false);
+    expect(out.length).toBe(HAP_NAME_MAX);
+    expect(out).toBe('Y'.repeat(HAP_NAME_MAX));
+  });
+
+  it('never emits an empty name for punctuation/whitespace-only input (R3-6)', () => {
+    expect(composeRowDisplayName(named, '---', false)).toBe('Sensor');
+    expect(composeRowDisplayName(named, '   ', false)).toBe('Sensor');
+    expect(composeRowDisplayName(named, '---', true)).toBe('Backyard Sensor');
+  });
+
   it('pressure parens distinction: display name sanitized, raw row name preserved for labels', () => {
     // The platform display name strips the parens (hapClean); the
     // extended-service label keeps them because wrappers read row.name
