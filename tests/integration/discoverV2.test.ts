@@ -385,13 +385,16 @@ describe('discoverDevicesV2 — discovery tracker ownership (review P1-4)', () =
       const tracker = (platform as unknown as { v2Tracker: { snapshot(): { entries: Array<{ dataPoint: string }> } } }).v2Tracker;
       expect(tracker.snapshot().entries.some(e => e.dataPoint === 'brand_new')).toBe(true);
 
-      // Shutdown force-flush drains it to disk.
+      // Shutdown force-flush drains it to disk. The handler's flush is
+      // fire-and-forget, so poll for the write instead of racing it
+      // with a fixed sleep.
       api.emit('shutdown');
-      await new Promise(r => setTimeout(r, 20));
-      const store = JSON.parse(readFileSync(discoveryPath(api), 'utf8')) as {
-        entries: Array<{ dataPoint: string }>;
-      };
-      expect(store.entries.some(e => e.dataPoint === 'brand_new')).toBe(true);
+      await vi.waitFor(() => {
+        const store = JSON.parse(readFileSync(discoveryPath(api), 'utf8')) as {
+          entries: Array<{ dataPoint: string }>;
+        };
+        expect(store.entries.some(e => e.dataPoint === 'brand_new')).toBe(true);
+      }, { timeout: 3000, interval: 25 });
     } finally {
       rmSync(storageDir(api), { recursive: true, force: true });
     }
