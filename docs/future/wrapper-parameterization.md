@@ -218,13 +218,19 @@ doesn't fit: `RowValidationError.overrideIndex` is required (frozen
 in Group 1), and a wrapper mismatch caused by a bug in the built-in
 default map has NO override to point at — inventing an index would
 make the UI highlight an unrelated config entry the user didn't
-write. Same problem for the `orphan-battery-field` note the
-battery-ownership pass produces when a user disables the reserved
-canonical owner or rebinds it to a different batteryField: there's
-no natural "config index" to attach it to.
+write.
 
-Solution — grow `EffectiveSensorMap` with a THIRD diagnostic channel
-dedicated to internal-invariant / attribution-free notes:
+Solution — grow `EffectiveSensorMap` with a THIRD diagnostic
+channel. `notes` is a MIXED channel distinguished by `source`: some
+notes are genuinely attribution-free (`source: 'default-map'` —
+internal invariants, plugin bugs, both-default collisions), while
+others deliberately carry a real `overrideIndex`
+(`source: 'override'` — the battery-ownership pass's
+`duplicate-battery-owner` and `orphan-battery-field`, which point at
+the fragment that lost the collision, disabled the owner, or rebound
+its field). What unifies the channel is that entries are NOT row
+rejections or field strips — they are ownership/health diagnostics —
+and that `overrideIndex` is optional rather than required:
 
 ```typescript
 export interface InternalInvariantNote {

@@ -1263,9 +1263,77 @@ describe('buildEffectiveSensorMap — compound orphan state (review R13-2)', () 
     // field rebound and still hostless.
     expect(note.message).toContain('disabled AND was rebound');
     expect(note.message).toContain("re-enabled and restored to 'battout'");
-    // Honest cache wording (R13-3): other rows untouched, the owner
-    // itself may re-register.
-    expect(note.message).toContain("no OTHER row's structural signature changes");
+    // Honest cache wording (R13-3 + R14-1): rows referencing the
+    // RESERVED field untouched; the owner itself may re-register; and
+    // (rebound) claimants on the NEW field may change under collision
+    // ordering.
+    expect(note.message).toContain("no other row referencing 'battout' changes structural signature");
     expect(note.message).toContain('may re-register');
+    expect(note.message).toContain("Claimants on 'new_temp_batt' may change ownership or signature");
+  });
+
+  it("the reviewer's rebind-collision case matches the narrowed wording (R14-1)", () => {
+    const result = buildEffectiveSensorMap({
+      ...baseInput(),
+      stations: [{ macAddress: MAC1, name: 'Home' }],
+      userOverrides: [
+        // tempf (index 0) rebinds to new_temp_batt and, being earliest,
+        // TAKES the field from custom_a — whose signature flips
+        // battery:1 → battery:0. The note must not deny that.
+        { dataPoint: 'tempf', batteryField: 'new_temp_batt' },   // 0
+        { dataPoint: 'custom_a', kind: 'temperature', measurement: 'temperature', sourceUnit: 'fahrenheit', batteryField: 'new_temp_batt' }, // 1
+      ],
+    });
+    const tempf = result.rows.find(r => r.dataPoint === 'tempf');
+    const customA = result.rows.find(r => r.dataPoint === 'custom_a');
+    expect(tempf && tempf.kind !== 'unrecognized' ? tempf.hasBatterySubService : null).toBe(true);
+    expect(customA && customA.kind !== 'unrecognized' ? customA.hasBatterySubService : null).toBe(false);
+    expect(customA && customA.kind !== 'unrecognized' ? customA.structuralSignature : '').toContain('battery:0');
+    const orphan = result.notes.find(n => n.code === 'orphan-battery-field');
+    expect(orphan).toBeDefined();
+    // Narrowed claim: scoped to the reserved field, with the explicit
+    // new-field collision caveat.
+    expect(orphan!.message).toContain("no other row referencing 'battout'");
+    expect(orphan!.message).toContain("Claimants on 'new_temp_batt' may change ownership or signature");
+    // And the collision itself is separately surfaced.
+    expect(result.notes.some(n => n.code === 'duplicate-battery-owner' && n.dataPoint === 'custom_a')).toBe(true);
+  });
+});
+
+describe('buildEffectiveSensorMap — rejected fragments: discriminating side-table probes (R14-2)', () => {
+  it('enabledProvenance: orphan attribution comes from the VALID disable, not a rejected station one', () => {
+    const result = buildEffectiveSensorMap({
+      ...baseInput(),
+      stations: [{ macAddress: MAC1, name: 'Home' }],
+      userOverrides: [
+        // REJECTED station-scoped disable (invalid name). If its
+        // enabledProvenance leaked, the station-scope lookup would win
+        // and attribute the orphan to index 0.
+        { dataPoint: 'tempf', stationMac: MAC1, enabled: false, name: 42 as unknown as string },  // 0
+        // VALID global disable — the real cause.
+        { dataPoint: 'tempf', enabled: false },                                                    // 1
+      ],
+    });
+    const orphan = result.notes.find(n => n.code === 'orphan-battery-field');
+    expect(orphan).toBeDefined();
+    expect(orphan?.overrideIndex).toBe(1);   // the valid fragment, never the rejected one
+  });
+
+  it('rowScopeProvenance: no-wrapper attribution comes from the VALID fragment, not a rejected station one', () => {
+    const result = buildEffectiveSensorMap({
+      ...baseInput(),
+      stations: [{ macAddress: MAC1, name: 'Home' }],
+      userOverrides: [
+        // REJECTED station-scoped fragment for the same dataPoint.
+        { dataPoint: 'water_x', stationMac: MAC1, kind: 'leak', measurement: 'boolean', name: 42 as unknown as string },  // 0
+        // VALID global wrapper-less custom → no-wrapper error.
+        { dataPoint: 'water_x', kind: 'leak', measurement: 'boolean' },                                                    // 1
+      ],
+    });
+    const noWrap = result.errors.filter(e => e.code === 'no-wrapper');
+    expect(noWrap.length).toBeGreaterThan(0);
+    for (const e of noWrap) {
+      expect(e.overrideIndex).toBe(1);   // the valid fragment's row-scope index
+    }
   });
 });

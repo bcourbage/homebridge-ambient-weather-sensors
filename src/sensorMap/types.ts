@@ -535,20 +535,25 @@ export interface RowValidationWarning {
 }
 
 /**
- * Internal-invariant / attribution-free diagnostic. Distinct from
- * `RowValidationError` and `RowValidationWarning`, both of which REQUIRE
- * an `overrideIndex` pointing at a user-authored config fragment. Some
- * diagnostics have no such fragment to blame:
+ * MIXED diagnostic channel, distinguished by `source` (review R14-3).
+ * Distinct from `RowValidationError` and `RowValidationWarning`, both
+ * of which REQUIRE an `overrideIndex` — here it is OPTIONAL:
  *
- *   - a wrapper whose `(kind, measurement)` drifted from the built-in
- *     default map (a plugin bug, not a user's config);
- *   - an attribution-free battery-owner collision where BOTH colliding
- *     rows came from the default map (no override on either side).
+ *   - `source: 'default-map'` — genuinely attribution-free: a wrapper
+ *     whose `(kind, measurement)` drifted from the built-in default map
+ *     (a plugin bug), or a battery-owner collision where both rows came
+ *     from the default map. Inventing an `overrideIndex: 0` for these
+ *     would make the UI highlight an unrelated config entry the user
+ *     never wrote.
+ *   - `source: 'override'` — deliberately ATTRIBUTED: the
+ *     battery-ownership pass's `duplicate-battery-owner` and
+ *     `orphan-battery-field` carry the real fragment that lost the
+ *     collision, disabled the owner, or rebound its field.
  *
- * Inventing an `overrideIndex: 0` for these would make the UI highlight
- * an unrelated config entry the user never wrote. This third channel
- * carries them with an explicit `source` instead, so the UI can surface
- * them in a separate "plugin health" section and never mis-attribute.
+ * What unifies the channel is that entries are ownership / plugin-health
+ * diagnostics rather than row rejections or field strips; the UI
+ * surfaces them in its own section and attributes only when `source`
+ * says it may.
  *
  * See `docs/future/wrapper-parameterization.md` §"InternalInvariantNote".
  */

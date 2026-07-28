@@ -559,22 +559,31 @@ export function buildEffectiveSensorMap(input: BuildInput): EffectiveSensorMap {
         : ownerDisabled
           ? `until '${ownerDp}' is re-enabled`
           : `until '${ownerDp}' is restored to '${field}'`;
+      // Cache-consequence wording (reviews R13-3 + R14-1), stated
+      // precisely: ownership of the RESERVED field never rolls, so no
+      // other row REFERENCING THAT FIELD changes signature. The owner's
+      // OWN signature can change (losing battery:1 is a structural
+      // replacement for that one accessory), and — rebind only — the
+      // owner enters the collision ordering on its NEW field, where an
+      // existing claimant can lose ownership and flip battery:1 →
+      // battery:0.
+      const reboundCollisionClause = ownerRebound
+        ? ` Claimants on '${String(owner.batteryField)}' may change ownership or signature under `
+          + 'collision ordering now that the owner competes there.'
+        : '';
       notes.push({
         code: 'orphan-battery-field',
         source: attribution !== undefined ? 'override' : 'default-map',
         overrideIndex: attribution,
         dataPoint: ownerDp,
         stationMac: mac,
-        // Cache-consequence wording (review R13-3): ownership never
-        // rolls, so OTHER rows' signatures are untouched — but the
-        // owner's OWN signature can change (losing battery:1 is a
-        // structural replacement for that one accessory).
         message: `'${ownerDp}' on ${mac} ${cause}, but it is the reserved owner of batteryField `
           + `'${field}', which ${referencing.length} enabled row(s) still reference `
           + `(${referencing.map(r => `'${r.dataPoint}'`).join(', ')}). The field has no HAP Battery `
-          + `sub-service on this station ${remedy} — ownership never rolls to another row, so no `
-          + `OTHER row's structural signature changes; '${ownerDp}' itself may re-register if its `
-          + 'own Battery sub-service was added or removed by this change.',
+          + `sub-service on this station ${remedy} — ownership of '${field}' never rolls to another `
+          + `row, so no other row referencing '${field}' changes structural signature; '${ownerDp}' `
+          + 'itself may re-register if its own Battery sub-service was added or removed by this '
+          + `change.${reboundCollisionClause}`,
       });
     }
   }
