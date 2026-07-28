@@ -979,9 +979,12 @@ export class AmbientWeatherSensorsPlatform {
      *   6. Start the poll / realtime data source; both fan out through
      *      `distributeViaRouting` (see distributeViaV2Routing).
      *
-     * Custom (non-default) dataPoints never register: the resolution table
-     * is empty, so they resolve `no-wrapper` and produce no row — the
-     * ordering gate the reviewer requires before restoring the table.
+     * Custom (non-default) dataPoints register through the RESTORED
+     * resolution table (Stage 4's table-restoration commit): a custom row
+     * declaring a `(kind, measurement)` with a concrete wrapper class
+     * resolves, registers, and routes like any known row. Kinds without a
+     * wrapper class (co, leak, contact, occupancy) still resolve
+     * `no-wrapper` and never register.
      *
      * Safe mode never reaches here — `didFinishLaunching` routes to
      * `safeModeStart()` first, before any persistence read that could
@@ -1563,9 +1566,9 @@ export class AmbientWeatherSensorsPlatform {
     }
     /**
      * Surface effective-map diagnostics. Config-attributable errors (e.g.
-     * a custom row's `no-wrapper` while the resolution table is empty) log
-     * at info so the user learns their sensor was rejected; warnings and
-     * attribution-free notes stay at debug.
+     * a custom row's `no-wrapper` for a kind without a concrete wrapper
+     * class) log at info so the user learns their sensor was rejected;
+     * warnings and attribution-free notes stay at debug.
      */
     logEffectiveMapDiagnostics(map) {
         for (const e of map.errors) {

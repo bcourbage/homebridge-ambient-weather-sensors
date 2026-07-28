@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { compatToOverrides } from '../../../src/sensorMap/compat';
 import { detectConfigMode } from '../../../src/sensorMap/configMode';
 import { buildEffectiveSensorMap } from '../../../src/sensorMap/buildEffectiveMap';
+import { defaultRowFor } from '../../../src/sensorMap/defaultMap';
 import {
   LEGACY_MIRROR_KEY,
   LEGACY_SENSOR_FIELDS,
@@ -359,14 +360,18 @@ describe('projection property test (finding 5 — reviewer requirement)', () => 
       configMode: 'legacy',
     });
 
-    // Index known configured rows by (mac, dataPoint).
+    // Index KNOWN configured rows by (mac, dataPoint). Custom rows are
+    // deliberately excluded from the universe comparison: since the
+    // Stage-4 table restoration they materialize as real rows in the
+    // v2 map, but v1.7 cannot represent them — they are the explicit
+    // downgrade-loss boundary, asserted separately below.
     type Rowish = { stationMac: string; dataPoint: string; enabled: boolean;
       hasBatterySubService?: boolean; structuralSignature?: string;
       threshold?: number; displayUnit?: string };
     const index = (m: EffectiveSensorMap): Map<string, Rowish> => {
       const out = new Map<string, Rowish>();
       for (const r of m.rows) {
-        if (r.kind === 'unrecognized') {
+        if (r.kind === 'unrecognized' || !defaultRowFor(r.dataPoint)) {
           continue;
         }
         out.set(`${r.stationMac}|${r.dataPoint}`, r as unknown as Rowish);
@@ -390,8 +395,11 @@ describe('projection property test (finding 5 — reviewer requirement)', () => 
       expect(legacyRow.displayUnit, `${key} displayUnit`).toBe(v2Row.displayUnit);
     }
 
-    // The custom dataPoint is absent from both maps' rows (loss boundary).
-    expect([...v2Rows.keys()].some(k => k.endsWith('|barn_temp'))).toBe(false);
-    expect([...legacyRows.keys()].some(k => k.endsWith('|barn_temp'))).toBe(false);
+    // The custom dataPoint is the loss boundary: a REAL row in the v2
+    // map (table restored), absent from the legacy projection, and
+    // excluded by the mirror so v1.7's broad matchers can't misclassify.
+    expect(v2.rows.some(r => r.dataPoint === 'barn_temp' && r.kind !== 'unrecognized')).toBe(true);
+    expect(legacy.rows.some(r => r.dataPoint === 'barn_temp')).toBe(false);
+    expect(mirror.excludeSensors).toContain('barn_temp');
   });
 });

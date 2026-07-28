@@ -252,9 +252,10 @@ export function projectLegacyMirror(effectiveMap: EffectiveSensorMap): LegacyCon
     excludeSensors.push(`${r.stationMac}-${r.dataPoint}`);
     customDataPoints.add(r.dataPoint);
   }
-  // While the resolution table is empty (pre-table-restore), custom
-  // declarations surface as `no-wrapper` ERRORS instead of rows — cover
-  // both sources so the mirror is correct in either state.
+  // Custom declarations for wrapper-less kinds (co, leak, contact,
+  // occupancy) surface as `no-wrapper` ERRORS instead of rows — cover
+  // both sources so every declared custom dataPoint is excluded from
+  // the mirror whether it resolved a wrapper or not.
   for (const e of effectiveMap.errors) {
     if (e.code === 'no-wrapper' && e.dataPoint) {
       if (e.stationMac) {

@@ -541,8 +541,9 @@ interface ResolveInput {
   /**
    * Called when a CUSTOM row (no `defaultRow`) resolves no wrapper —
    * i.e. its `(kind, measurement)` isn't in
-   * `WRAPPER_FOR_KIND_AND_MEASUREMENT`. As of finding-#4 Stage 0 the
-   * table is empty, so every custom row hits this. The loop pushes a
+   * `WRAPPER_FOR_KIND_AND_MEASUREMENT`. With the table restored
+   * (Stage 4) this is reachable only for kinds without a concrete
+   * wrapper class (co, leak, contact, occupancy). The loop pushes a
    * `no-wrapper` RowValidationError. Known rows never reach here
    * (their wrapper comes from `defaultRow.wrapper`).
    */
@@ -639,11 +640,12 @@ function resolveRow(inp: ResolveInput): EffectiveSensorRow | null {
   const wrapper = defaultRow?.wrapper ?? WRAPPER_FOR_KIND_AND_MEASUREMENT[`${kind}|${measurement}`];
   if (!wrapper) {
     // Custom row (no defaultRow) whose (kind, measurement) has no
-    // wrapper. As of finding-#4 Stage 0 the resolution table is
-    // empty, so every custom row lands here. Surface a `no-wrapper`
-    // error (via the loop) rather than silently dropping the row —
-    // the user needs to know their custom sensor was rejected. Known
-    // rows never reach this branch (defaultRow.wrapper is always set).
+    // wrapper. With the table restored (Stage 4) only kinds without a
+    // concrete wrapper class (co, leak, contact, occupancy) land here.
+    // Surface a `no-wrapper` error (via the loop) rather than silently
+    // dropping the row — the user needs to know their custom sensor
+    // was rejected. Known rows never reach this branch
+    // (defaultRow.wrapper is always set).
     onNoWrapper(kind, measurement);
     return null;
   }

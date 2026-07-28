@@ -67,7 +67,7 @@ describe('buildPlatformEffectiveMap', () => {
     expect(map.rows).toEqual([]);
   });
 
-  it('v2 mode rejects a custom dataPoint with no-wrapper while the table is empty', () => {
+  it('v2 mode resolves a custom dataPoint through the restored table (Stage 4)', () => {
     const map = buildPlatformEffectiveMap({
       config: { sensorMap: [{ dataPoint: 'my_barn', kind: 'temperature', measurement: 'temperature', sourceUnit: 'fahrenheit', displayUnit: 'fahrenheit' }] },
       configMode: 'v2',
@@ -75,7 +75,23 @@ describe('buildPlatformEffectiveMap', () => {
       discovery: emptyDiscoveryStore(),
       uiState: emptyUiStateStore(),
     });
-    expect(map.rows.some(r => r.dataPoint === 'my_barn')).toBe(false);
-    expect(map.errors.some(e => e.code === 'no-wrapper' && e.dataPoint === 'my_barn')).toBe(true);
+    const row = map.rows.find(r => r.dataPoint === 'my_barn');
+    expect(row).toBeDefined();
+    expect(map.errors).toHaveLength(0);
+    if (row && row.kind !== 'unrecognized') {
+      expect(row.wrapperId).toBe('temperature');
+    }
+  });
+
+  it('v2 mode still rejects wrapper-less kinds with no-wrapper (leak)', () => {
+    const map = buildPlatformEffectiveMap({
+      config: { sensorMap: [{ dataPoint: 'water_alarm', kind: 'leak', measurement: 'boolean' }] },
+      configMode: 'v2',
+      stations,
+      discovery: emptyDiscoveryStore(),
+      uiState: emptyUiStateStore(),
+    });
+    expect(map.rows.some(r => r.dataPoint === 'water_alarm')).toBe(false);
+    expect(map.errors.some(e => e.code === 'no-wrapper' && e.dataPoint === 'water_alarm')).toBe(true);
   });
 });

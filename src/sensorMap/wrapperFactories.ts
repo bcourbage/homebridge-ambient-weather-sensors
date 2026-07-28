@@ -26,12 +26,13 @@
  * battery, trigger direction) from the row (Stage 1's adapter form,
  * which discarded the row and called the legacy two-argument
  * constructor, is gone). `instantiateWrapper` is exercised by its own
- * unit tests here and by the routing mechanism; `platform.ts` does NOT
- * yet route through it — the flag-gated v2 construction path is wired in
- * Stage 4's first commit (Stage 3 is mechanism-only, unit-tested). The
- * resolution table stays empty until Stage 4, so no CUSTOM row reaches
- * this registry yet — only known-dataPoint rows do, and those already
- * carry a correct `wrapperId` from the default map.
+ * unit tests here, by the routing mechanism, and by the LIVE flag-gated
+ * v2 construction path (`platform.ts`'s `discoverDevicesV2`, wired in
+ * Stage 4). With the resolution table restored (Stage 4's
+ * table-restoration commit), CUSTOM rows reach this registry too —
+ * their `wrapperId` comes from `WRAPPER_FOR_KIND_AND_MEASUREMENT`,
+ * known-dataPoint rows' from the default map; both are spec-checked at
+ * map construction and re-asserted here at dispatch.
  */
 
 import type { PlatformAccessory } from 'homebridge';

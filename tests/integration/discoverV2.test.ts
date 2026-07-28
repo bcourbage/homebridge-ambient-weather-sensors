@@ -1048,22 +1048,70 @@ describe('discoverDevicesV2 — safe mode and custom rows', () => {
     }
   });
 
-  it('a custom dataPoint produces no-wrapper and never registers while the table is empty', async () => {
+  it('a custom dataPoint registers, routes values, and hosts its custom battery (Stage 4 table restored)', async () => {
+    const { platform, api } = makePlatform({
+      _sensorMapV2: true,
+      configVersion: 2,
+      sensorMap: [{
+        dataPoint: 'my_barn',
+        kind: 'temperature',
+        measurement: 'temperature',
+        sourceUnit: 'celsius',
+        displayUnit: 'celsius',
+        name: 'Barn Temp',
+        batteryField: 'barn_batt',      // novel field → custom battery host
+      }],
+    });
+    mockFetch([{ macAddress: MAC, info: { name: 'Home' }, lastData: { my_barn: 21, barn_batt: 1 } }]);
+    stubTimer();
+    try {
+      await reconcile(platform, 'v2');
+
+      // Registered end-to-end with the row-driven identity.
+      const acc = api.registered.find(a => a.context.device.uniqueId === `${MAC}-my_barn`)!;
+      expect(acc).toBeDefined();
+      const ctx = acc.context.device as Record<string, unknown>;
+      expect(ctx.type).toBe('Temperature');                    // downgrade-recognizable
+      expect(ctx.displayName).toBe('Barn Temp');
+      expect(String(ctx.structuralSignature)).toContain('wrapper:temperature');
+      expect(String(ctx.structuralSignature)).toContain('battery:1');
+
+      // Routed: the celsius source seeds straight through (canonical).
+      expect(routing(platform)!.has(`${MAC}|my_barn`)).toBe(true);
+      const svc = acc.getService(MockServices.TemperatureSensor)!;
+      expect(svc.readCharacteristic(MockCharacteristics.CurrentTemperature)).toBeCloseTo(21, 4);
+
+      // A poll tick routes a fresh value through distributeViaRouting.
+      mockFetch([{ macAddress: MAC, info: { name: 'Home' }, lastData: { my_barn: 25, barn_batt: 0 } }]);
+      await (platform as unknown as { pollAndDistribute(): Promise<void> }).pollAndDistribute();
+      expect(svc.readCharacteristic(MockCharacteristics.CurrentTemperature)).toBeCloseTo(25, 4);
+
+      // The CUSTOM battery field flows through the bridge: barn_batt=0
+      // (AWN low) flips StatusLowBattery on the custom-owned sub-service.
+      const battSvc = acc.getService(MockServices.Battery)!;
+      expect(battSvc).toBeDefined();
+      expect(battSvc.readCharacteristic(MockCharacteristics.StatusLowBattery)).toBe(1);
+    } finally {
+      rmSync((api as unknown as { user: { storagePath(): string } }).user.storagePath(), { recursive: true, force: true });
+    }
+  });
+
+  it('a wrapper-less kind (leak) still produces no-wrapper and never registers', async () => {
     const { platform, api, log } = makePlatform({
       _sensorMapV2: true,
       configVersion: 2,
-      sensorMap: [{ dataPoint: 'my_barn', kind: 'temperature', measurement: 'temperature', sourceUnit: 'fahrenheit', displayUnit: 'fahrenheit' }],
+      sensorMap: [{ dataPoint: 'water_alarm', kind: 'leak', measurement: 'boolean' }],
     });
-    mockFetch([{ macAddress: MAC, info: { name: 'Home' }, lastData: { my_barn: 50 } }]);
+    mockFetch([{ macAddress: MAC, info: { name: 'Home' }, lastData: { water_alarm: 1 } }]);
     stubTimer();
+    try {
+      await reconcile(platform, 'v2');
 
-    await reconcile(platform, 'v2');
-
-    // No accessory registered for the custom dataPoint.
-    expect(api.registered.some(a => a.context.device.uniqueId === `${MAC}-my_barn`)).toBe(false);
-    // Routing has no entry for it.
-    expect(routing(platform)!.has(`${MAC}|my_barn`)).toBe(false);
-    // The rejection is surfaced.
-    expect(log.find('info', 'no-wrapper').length).toBeGreaterThan(0);
+      expect(api.registered.some(a => a.context.device.uniqueId === `${MAC}-water_alarm`)).toBe(false);
+      expect(routing(platform)!.has(`${MAC}|water_alarm`)).toBe(false);
+      expect(log.find('info', 'no-wrapper').length).toBeGreaterThan(0);
+    } finally {
+      rmSync((api as unknown as { user: { storagePath(): string } }).user.storagePath(), { recursive: true, force: true });
+    }
   });
 });

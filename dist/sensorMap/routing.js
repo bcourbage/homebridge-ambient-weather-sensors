@@ -18,8 +18,8 @@
  * `(mac, dataPoint) → wrapper` map straight from the effective sensor
  * map, so any row (known or custom) that resolved a wrapper receives its
  * value; `coerceValue` handles the non-numeric (timestamp / boolean)
- * fields at the boundary. (Custom rows stay non-constructible until the
- * resolution table is restored later in Stage 4.)
+ * fields at the boundary. (Custom rows construct through the restored
+ * resolution table as of Stage 4's table-restoration commit.)
  *
  * Unit tests: `tests/unit/sensorMap/routing.test.ts` (mechanism in
  * isolation); lifecycle: `tests/integration/discoverV2.test.ts`.
