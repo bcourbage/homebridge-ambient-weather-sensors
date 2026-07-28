@@ -520,12 +520,16 @@ projection property test). Specifics:
   family-mixed display units are omitted (v1.7 default applies); embed mode
   mirrors only when every enabled motion row embeds. Behavioral only —
   registration is unaffected.
-- The mirrored fields are stamped with `_legacyMirror: { version, hash }`
-  (canonical hash of the mirrored subset). `detectConfigMode` suppresses its
-  both-shapes-present ambiguity warning ONLY for a recognized (hash-matching)
-  mirror; a hand-edited `sensorMap` or mirrored field produces a loud
-  "mirror is STALE" warning carrying both hashes, so drift is diagnosable.
-  Manual config edits are the user's responsibility to re-save through the UI.
+- The mirrored fields are stamped with `_legacyMirror: { version, hash }`.
+  The hash is a canonical SHA-256 over BOTH the canonical `sensorMap` AND the
+  mirrored legacy fields — the mirror is a projection of the sensorMap, so a
+  hand edit to EITHER side invalidates the pair. `detectConfigMode` suppresses
+  its both-shapes-present ambiguity warning ONLY for a recognized
+  (hash-matching) mirror; a hand-edited `sensorMap` or mirrored field (or
+  deleting the mirrored fields) produces a loud "mirror is STALE" warning
+  carrying both hashes, and present-but-malformed metadata produces an
+  equally loud "metadata is INVALID" warning. Manual config edits are the
+  user's responsibility to re-save through the UI.
 
 **Support window:** automatic 1.x rollback (the mirror) is maintained through
 the **2.1.x line and removed in 2.2.0**. The snapshot remains permanently;

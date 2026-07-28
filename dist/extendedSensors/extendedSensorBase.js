@@ -1,5 +1,6 @@
 import { setupBatteryService } from '../batteryService.js';
 import { batteryOptionsFor } from '../sensorMap/batterySeed.js';
+import { truncateHapName } from '../sensorMap/displayName.js';
 import { toCanonical } from '../sensorMap/unitConversions.js';
 import { register as registerCharacteristics } from './customCharacteristics.js';
 import { composeStaticName, composeEmbeddedName, isUserRenamed } from './nameComposer.js';
@@ -63,7 +64,10 @@ export class ExtendedSensorBase {
         this.customCharacteristics = registerCharacteristics(this.platform.api);
         this.accessory.getService(this.platform.Service.AccessoryInformation)
             .setCharacteristic(this.platform.Characteristic.Manufacturer, 'Ambient Weather')
-            .setCharacteristic(this.platform.Characteristic.Model, options.sensorLabel)
+            // Model carries the RAW label (parentheses preserved — see the
+            // pressure naming tests) but still honors HAP's 64-char string
+            // limit (review R4-2): truncate, never sanitize.
+            .setCharacteristic(this.platform.Characteristic.Model, truncateHapName(options.sensorLabel))
             .setCharacteristic(this.platform.Characteristic.SerialNumber, accessory.context.device.uniqueId);
         // MotionSensor is HAP-native and renders in Apple Home with an
         // on/off state — the most useful affordance Apple's Home app

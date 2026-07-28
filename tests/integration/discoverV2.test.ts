@@ -277,6 +277,29 @@ describe('discoverDevicesV2 — flag ON lifecycle', () => {
     expect(names).toEqual(['Cabin Patio', 'Main House Patio']);
   });
 
+  it('a 100-char rename respects the 64-char limit at EVERY HAP sink (R4-2)', async () => {
+    const longName = 'L'.repeat(100);
+    const { platform, api } = makePlatform({
+      _sensorMapV2: true,
+      configVersion: 2,
+      sensorMap: [{ dataPoint: 'baromabsin', name: longName }],
+    });
+    mockFetch([{ macAddress: MAC, info: { name: 'Home' }, lastData: { baromabsin: 29.92 } }]);
+    stubTimer();
+    await reconcile(platform, 'v2');
+
+    const acc = api.registered.find(a => a.context.device.uniqueId === `${MAC}-baromabsin`)!;
+    // Accessory displayName (platform sink).
+    expect((acc.context.device.displayName as string).length).toBeLessThanOrEqual(64);
+    // AccessoryInformation.Model (raw label, truncate-only).
+    const info = acc.getService(MockServices.AccessoryInformation)!;
+    expect(String(info.getCharacteristic(MockCharacteristics.Model).value).length).toBe(64);
+    // MotionSensor Name + ConfiguredName (composeStaticName sink).
+    const motion = acc.getService(MockServices.MotionSensor)!;
+    expect(String(motion.getCharacteristic(MockCharacteristics.Name).value).length).toBeLessThanOrEqual(64);
+    expect(String(motion.getCharacteristic(MockCharacteristics.ConfiguredName).value).length).toBeLessThanOrEqual(64);
+  });
+
   it('stationFilter drops non-matching stations and post-filter naming is bare (v1 parity)', async () => {
     // Regression for the adversarial-review finding: the v2 reconciler
     // must apply stationFilter BEFORE building the inventory, and

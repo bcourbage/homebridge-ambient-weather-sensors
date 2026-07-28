@@ -53,4 +53,13 @@ export declare function composeRowDisplayName(station: {
     macAddress: string;
     name: string;
 }, rowName: string, isMultiStation: boolean): string;
+/**
+ * Right-truncate to HAP 2.x's 64-char Name limit. Exported (review
+ * R4-2) so EVERY HAP string sink shares the one policy — the extended
+ * sensors' service names (`composeStaticName` / `composeEmbeddedName`)
+ * and the `AccessoryInformation.Model` assignment, not just the
+ * accessory displayName. Deliberately does NOT sanitize: Model keeps
+ * characters like parentheses that tile names strip.
+ */
+export declare function truncateHapName(name: string): string;
 //# sourceMappingURL=displayName.d.ts.map

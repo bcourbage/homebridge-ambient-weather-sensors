@@ -72,6 +72,7 @@
  *     suppressed in the mirror.
  */
 import type { LegacyConfig } from './compat.js';
+import type { ConfigMode } from './configMode.js';
 import type { EffectiveSensorMap } from './types.js';
 import { type Clock, type Logger } from './persistence/atomicWrite.js';
 /** Metadata key stamped into config.json next to the mirrored fields. */
@@ -90,7 +91,11 @@ export declare const LEGACY_MIRROR_VERSION = 1;
 export declare const LEGACY_SENSOR_FIELDS: readonly ["temperatureSensors", "humiditySensors", "solarRadiationSensors", "co2Sensors", "airQualitySensors", "extendedSensors", "windSensors", "rainSensors", "pressureSensors", "uvSensors", "lightningSensors", "extendedDisplayMode", "thresholds", "units", "excludeSensors", "includeOnly"];
 export interface LegacyMirrorMeta {
     version: number;
-    /** Canonical hash of the mirrored legacy fields at save time. */
+    /**
+     * Canonical hash binding BOTH the mirrored legacy fields AND the
+     * canonical `sensorMap` at save time — editing either side by hand
+     * reads as STALE. See `mirrorHash`.
+     */
     hash: string;
 }
 /**
@@ -116,16 +121,23 @@ export type MirrorRecognition = {
     state: 'stale';
     expectedHash: string;
     actualHash: string;
+} | {
+    state: 'invalid';
+    reason: string;
 };
 /**
  * Classify a config's mirror metadata. `recognized` = `_legacyMirror`
  * present with a hash matching the mirrored legacy fields AND the
  * canonical sensorMap as they stand — detectConfigMode suppresses the
- * ambiguity warning only then. `stale` = metadata present but the pair
- * no longer hash-matches: a hand edit of the sensorMap, of a mirrored
- * field, or the deletion of the mirrored fields entirely. The hashes
- * are surfaced for diagnosis. Callers must run this whenever the
- * metadata is present, independent of whether any legacy keys remain.
+ * ambiguity warning only then. `stale` = well-formed metadata whose
+ * pair no longer hash-matches: a hand edit of the sensorMap, of a
+ * mirrored field, or the deletion of the mirrored fields entirely.
+ * `invalid` = metadata is PRESENT but malformed (non-object, unknown
+ * version, non-string hash) — as loud a downgrade-safety signal as
+ * stale (review R4-4: `{version: 1, hash: 42}` previously read as
+ * `absent` and produced zero warning). Only a truly missing key is
+ * `absent`. Callers must run this whenever the metadata is present,
+ * independent of whether any legacy keys remain.
  */
 export declare function recognizeMirror(config: Record<string, unknown>): MirrorRecognition;
 /**
@@ -137,15 +149,28 @@ export declare function recognizeMirror(config: Record<string, unknown>): Mirror
  *   2. Persist `nextConfig` through the Homebridge UI config API.
  *
  * `snapshot` carries the legacy sensor fields currently in the config —
- * but ONLY when `currentConfig` is a TRUE legacy-mode config (no
- * `configVersion: 2+`, no `sensorMap`, no mirror metadata). On every
- * subsequent v2 save the legacy fields present are the SYNCHRONIZED
- * MIRROR, not user-authored v1 configuration — snapshotting those would
- * let a deleted snapshot be silently "recreated" from the projection,
- * corrupting the permanent rollback/audit record (review R3-5). For a
- * non-legacy input, `snapshot` is always undefined.
+ * but ONLY when the runtime classifies `currentConfig` as LEGACY mode.
+ * `detectedMode` MUST be `detectConfigMode(currentConfig).mode`: config-
+ * mode detection is the single authority on what counts as a legacy
+ * config (review R4-3 — an inlined marker check disagreed with it on
+ * hybrids like `{configVersion: 1, sensorMap: [...]}`, where
+ * configVersion 1 wins and the config IS legacy, and on malformed
+ * shapes). The parameter is explicit rather than computed here because
+ * `configMode.ts` imports this module (recognizeMirror) — only the
+ * TYPE is imported back, which is erased at runtime.
+ *
+ * On every subsequent v2 save the legacy fields present are the
+ * SYNCHRONIZED MIRROR, not user-authored v1 configuration —
+ * snapshotting those would let a deleted snapshot be silently
+ * "recreated" from the projection, corrupting the permanent
+ * rollback/audit record (review R3-5). For a non-legacy input,
+ * `snapshot` is always undefined.
+ *
+ * Throws on `safe-mode`: the design makes safe mode strictly read-only
+ * (UI saves are refused, §5), so composing a save from an
+ * uninterpretable config is a caller bug, never a valid operation.
  */
-export declare function composeV2ConfigSave(currentConfig: Record<string, unknown>, sensorMap: unknown[], effectiveMap: EffectiveSensorMap): {
+export declare function composeV2ConfigSave(currentConfig: Record<string, unknown>, sensorMap: unknown[], effectiveMap: EffectiveSensorMap, detectedMode: ConfigMode): {
     snapshot: Record<string, unknown> | undefined;
     nextConfig: Record<string, unknown>;
 };

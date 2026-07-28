@@ -85,7 +85,14 @@ export function composeRowDisplayName(
   return truncateHapName(hapClean(`${baseName} ${label}`));
 }
 
-/** Right-truncate to HAP 2.x's 64-char Name limit. */
-function truncateHapName(name: string): string {
+/**
+ * Right-truncate to HAP 2.x's 64-char Name limit. Exported (review
+ * R4-2) so EVERY HAP string sink shares the one policy — the extended
+ * sensors' service names (`composeStaticName` / `composeEmbeddedName`)
+ * and the `AccessoryInformation.Model` assignment, not just the
+ * accessory displayName. Deliberately does NOT sanitize: Model keeps
+ * characters like parentheses that tile names strip.
+ */
+export function truncateHapName(name: string): string {
   return name.length <= HAP_NAME_MAX ? name : name.slice(0, HAP_NAME_MAX).trim();
 }

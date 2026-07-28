@@ -3,6 +3,7 @@ import { Characteristic, PlatformAccessory, Service, WithUUID } from 'homebridge
 import { setupBatteryService } from '../batteryService.js';
 import { AmbientWeatherSensorsPlatform, SensorAccessory } from '../platform.js';
 import { batteryOptionsFor } from '../sensorMap/batterySeed.js';
+import { truncateHapName } from '../sensorMap/displayName.js';
 import { toCanonical } from '../sensorMap/unitConversions.js';
 import type {
   EffectiveSensorRow,
@@ -190,7 +191,10 @@ export abstract class ExtendedSensorBase implements SensorAccessory {
 
     this.accessory.getService(this.platform.Service.AccessoryInformation)!
       .setCharacteristic(this.platform.Characteristic.Manufacturer, 'Ambient Weather')
-      .setCharacteristic(this.platform.Characteristic.Model, options.sensorLabel)
+      // Model carries the RAW label (parentheses preserved — see the
+      // pressure naming tests) but still honors HAP's 64-char string
+      // limit (review R4-2): truncate, never sanitize.
+      .setCharacteristic(this.platform.Characteristic.Model, truncateHapName(options.sensorLabel))
       .setCharacteristic(this.platform.Characteristic.SerialNumber, accessory.context.device.uniqueId);
 
     // MotionSensor is HAP-native and renders in Apple Home with an

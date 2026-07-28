@@ -40,6 +40,15 @@ function v2Map(sensorMap: unknown[], stations: StationInventory = ONE_STATION): 
   });
 }
 
+/**
+ * Compose as the real save flow must: the mode passed to
+ * composeV2ConfigSave is ALWAYS detectConfigMode's verdict (review
+ * R4-3 — config-mode detection is the single legacy authority).
+ */
+function compose(config: Record<string, unknown>, sensorMap: unknown[], map: EffectiveSensorMap) {
+  return composeV2ConfigSave(config, sensorMap, map, detectConfigMode(config as never).mode);
+}
+
 describe('projectLegacyMirror (finding 5 — reverse projection)', () => {
   it('all-defaults v2 map turns every category toggle on with no exclusions', () => {
     const mirror = projectLegacyMirror(v2Map([]));
@@ -146,9 +155,27 @@ describe('mirrorHash + recognizeMirror', () => {
     expect(recognizeMirror(stale).state).toBe('stale');
   });
 
+  it('present-but-malformed metadata is INVALID and warns loudly, even with zero legacy fields (R4-4)', () => {
+    // A number hash, an unsupported version, and a non-object are all
+    // "invalid" — never silently "absent".
+    const badHash = { configVersion: 2, sensorMap: [], [LEGACY_MIRROR_KEY]: { version: 1, hash: 42 } };
+    const badVersion = { configVersion: 2, sensorMap: [], [LEGACY_MIRROR_KEY]: { version: 99, hash: 'abc' } };
+    const nonObject = { configVersion: 2, sensorMap: [], [LEGACY_MIRROR_KEY]: true };
+    for (const cfg of [badHash, badVersion, nonObject]) {
+      expect(recognizeMirror(cfg).state, JSON.stringify(cfg[LEGACY_MIRROR_KEY])).toBe('invalid');
+      const detected = detectConfigMode(cfg as never);
+      expect(detected.mode).toBe('v2');
+      expect(detected.warnings.some(w => w.includes('INVALID')), JSON.stringify(cfg[LEGACY_MIRROR_KEY])).toBe(true);
+    }
+    // Sanity: valid metadata on the same zero-legacy-field shape warns
+    // stale (hash can't match a gutted config) but not invalid.
+    const valid = { configVersion: 2, sensorMap: [], [LEGACY_MIRROR_KEY]: { version: 1, hash: 'a'.repeat(64) } };
+    expect(recognizeMirror(valid).state).toBe('stale');
+  });
+
   it('detectConfigMode suppresses the ambiguity warning ONLY for a recognized mirror', () => {
     const map = v2Map([]);
-    const { nextConfig } = composeV2ConfigSave({ apiKey: 'k' }, [], map);
+    const { nextConfig } = compose({ apiKey: 'k' }, [], map);
     // Recognized mirror: v2 mode, silent.
     const recognized = detectConfigMode(nextConfig as never);
     expect(recognized.mode).toBe('v2');
@@ -168,7 +195,7 @@ describe('mirrorHash + recognizeMirror', () => {
 
   it('a sensorMap-only hand edit reads as STALE (hash binds both sides)', () => {
     const map = v2Map([]);
-    const { nextConfig } = composeV2ConfigSave({ apiKey: 'k' }, [], map);
+    const { nextConfig } = compose({ apiKey: 'k' }, [], map);
     const edited = { ...nextConfig, sensorMap: [{ dataPoint: 'tempf', enabled: false }] };
     expect(recognizeMirror(edited).state).toBe('stale');
     const detected = detectConfigMode(edited as never);
@@ -177,7 +204,7 @@ describe('mirrorHash + recognizeMirror', () => {
 
   it('deleting every mirrored legacy field still warns (metadata validated unconditionally)', () => {
     const map = v2Map([]);
-    const { nextConfig } = composeV2ConfigSave({ apiKey: 'k' }, [], map);
+    const { nextConfig } = compose({ apiKey: 'k' }, [], map);
     const gutted: Record<string, unknown> = { ...nextConfig };
     for (const key of LEGACY_SENSOR_FIELDS) {
       delete gutted[key];
@@ -195,7 +222,7 @@ describe('composeV2ConfigSave', () => {
       temperatureSensors: true, excludeSensors: ['tempinf'], thresholds: { uv: 6 },
     };
     const map = v2Map([{ dataPoint: 'humidity', enabled: false }]);
-    const { snapshot, nextConfig } = composeV2ConfigSave(current, [{ dataPoint: 'humidity', enabled: false }], map);
+    const { snapshot, nextConfig } = compose(current, [{ dataPoint: 'humidity', enabled: false }], map);
 
     // Snapshot = exactly the legacy fields being removed. Never secrets.
     expect(snapshot).toEqual({ temperatureSensors: true, excludeSensors: ['tempinf'], thresholds: { uv: 6 } });
@@ -213,8 +240,30 @@ describe('composeV2ConfigSave', () => {
 
   it('already-migrated config (no legacy fields) yields no snapshot payload', () => {
     const map = v2Map([]);
-    const { snapshot } = composeV2ConfigSave({ apiKey: 'k', configVersion: 2, sensorMap: [] }, [], map);
+    const { snapshot } = compose({ apiKey: 'k', configVersion: 2, sensorMap: [] }, [], map);
     expect(snapshot).toBeUndefined();
+  });
+
+  it('hybrid/malformed legacy shapes follow detectConfigMode (R4-3)', () => {
+    const map = v2Map([]);
+    // configVersion: 1 wins over a stray sensorMap — detectConfigMode
+    // says LEGACY, so conversion MUST emit the permanent snapshot.
+    const hybrid = { configVersion: 1, sensorMap: [], temperatureSensors: true };
+    expect(detectConfigMode(hybrid as never).mode).toBe('legacy');
+    expect(compose(hybrid, [], map).snapshot).toEqual({ temperatureSensors: true });
+
+    // Absent version + sensorMap: null — also legacy per detection.
+    const nullMap = { sensorMap: null, temperatureSensors: true };
+    expect(detectConfigMode(nullMap as never).mode).toBe('legacy');
+    const { snapshot, nextConfig } = compose(nullMap, [], map);
+    expect(snapshot).toEqual({ temperatureSensors: true });
+    // The stray null is replaced by the real sensorMap in the output.
+    expect(nextConfig.sensorMap).toEqual([]);
+
+    // safe-mode input: composing a save is a caller bug — throws.
+    const safe = { configVersion: 999 };
+    expect(detectConfigMode(safe as never).mode).toBe('safe-mode');
+    expect(() => compose(safe, [], map)).toThrow(/safe-mode/);
   });
 
   it('re-saving its OWN prior nextConfig never re-emits a snapshot (mirror is not legacy input)', () => {
@@ -223,15 +272,15 @@ describe('composeV2ConfigSave', () => {
     // its own output must NOT produce a snapshot payload that could
     // "recreate" a deleted snapshot from the mirror.
     const map = v2Map([]);
-    const first = composeV2ConfigSave({ apiKey: 'k', temperatureSensors: true }, [], map);
+    const first = compose({ apiKey: 'k', temperatureSensors: true }, [], map);
     expect(first.snapshot).toBeDefined();               // true legacy conversion
-    const second = composeV2ConfigSave(first.nextConfig, [], map);
+    const second = compose(first.nextConfig, [], map);
     expect(second.snapshot).toBeUndefined();            // subsequent v2 save
     // Even a hand-gutted variant (metadata removed but sensorMap kept)
     // is not a legacy conversion.
     const gutted = { ...first.nextConfig };
     delete gutted[LEGACY_MIRROR_KEY];
-    expect(composeV2ConfigSave(gutted, [], map).snapshot).toBeUndefined();
+    expect(compose(gutted, [], map).snapshot).toBeUndefined();
   });
 });
 

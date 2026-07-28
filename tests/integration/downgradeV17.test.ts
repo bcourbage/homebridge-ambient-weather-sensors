@@ -32,6 +32,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { AmbientWeatherSensorsPlatform } from '../../src/platform';
 import { buildEffectiveSensorMap } from '../../src/sensorMap/buildEffectiveMap';
+import { detectConfigMode } from '../../src/sensorMap/configMode';
 import { composeV2ConfigSave } from '../../src/sensorMap/legacyMirror';
 import { emptyDiscoveryStore } from '../../src/sensorMap/persistence/discoveryStore';
 import { emptyUiStateStore } from '../../src/sensorMap/persistence/uiStateStore';
@@ -93,7 +94,12 @@ describe('v1.7 downgrade fixture: v2 config + synchronized mirror + v2-written c
       stations: STATIONS,
       configMode: 'v2',
     });
-    const { nextConfig } = composeV2ConfigSave({ apiKey: 'k', applicationKey: 'k' }, sensorMap, v2Map);
+    // The mode passed to the composer is detectConfigMode's verdict
+    // (R4-3): a plain 1.x config with credentials only → 'legacy'.
+    const { nextConfig } = composeV2ConfigSave(
+      { apiKey: 'k', applicationKey: 'k' }, sensorMap, v2Map,
+      detectConfigMode({ } as never).mode,
+    );
 
     // ---- 2. The v2-written cache: native + extended + battery host.
     const api = new MockAPI();

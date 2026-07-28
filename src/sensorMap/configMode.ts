@@ -120,7 +120,16 @@ export function detectConfigMode(config: ConfigInputShape | undefined): ModeDete
   //     warning.
   const legacySet = LEGACY_TOGGLE_KEYS.filter(k => config[k] !== undefined);
   const mirror = recognizeMirror(config as Record<string, unknown>);
-  if (mirror.state === 'stale') {
+  if (mirror.state === 'invalid') {
+    // Present-but-malformed metadata is as loud a downgrade-safety
+    // signal as a stale hash (review R4-4): the mirror cannot be
+    // verified, so a 1.x downgrade must be treated as unsafe.
+    warnings.push(
+      `The _legacyMirror metadata is INVALID (${mirror.reason}). The downgrade mirror cannot be `
+      + 'verified, so treat a downgrade to 1.x as unsafe. configVersion: 2 still drives this plugin; '
+      + 're-save through the UI to rewrite valid mirror metadata.',
+    );
+  } else if (mirror.state === 'stale') {
     const fieldsNote = legacySet.length === 0
       ? 'Every mirrored legacy field has been REMOVED, so a downgrade to 1.x would unregister your accessories. '
       : 'The sensorMap or the mirrored legacy fields were edited by hand since the last UI save. ';
