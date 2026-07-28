@@ -1337,3 +1337,34 @@ describe('buildEffectiveSensorMap — rejected fragments: discriminating side-ta
     }
   });
 });
+
+describe('buildEffectiveSensorMap — collision caveat gating (review R15-1)', () => {
+  it('batteryField: null suppression carries NO collision caveat and the suppressed phrasing', () => {
+    const result = buildEffectiveSensorMap({
+      ...baseInput(),
+      stations: [{ macAddress: MAC1, name: 'Home' }],
+      userOverrides: [{ dataPoint: 'tempf', batteryField: null }],
+    });
+    const orphan = result.notes.find(n => n.code === 'orphan-battery-field');
+    expect(orphan).toBeDefined();
+    // A null field claims nothing — no "Claimants on 'null'" nonsense.
+    expect(orphan!.message).not.toContain('Claimants on');
+    expect(orphan!.message).toContain('suppressed (batteryField: null)');
+  });
+
+  it('a rebind to ANOTHER reserved field carries NO collision caveat (reserved fields reject claimants)', () => {
+    const result = buildEffectiveSensorMap({
+      ...baseInput(),
+      stations: [{ macAddress: MAC1, name: 'Home' }],
+      // battin is reserved (canonical owner: tempinf) — tempf cannot
+      // compete there, so no claimant can be disturbed.
+      userOverrides: [{ dataPoint: 'tempf', batteryField: 'battin' }],
+    });
+    const orphan = result.notes.find(n => n.code === 'orphan-battery-field' && n.dataPoint === 'tempf');
+    expect(orphan).toBeDefined();
+    expect(orphan!.message).not.toContain('Claimants on');
+    // And the rebound owner did NOT gain a sub-service on the reserved field.
+    const tempf = result.rows.find(r => r.dataPoint === 'tempf');
+    expect(tempf && tempf.kind !== 'unrecognized' ? tempf.hasBatterySubService : null).toBe(false);
+  });
+});

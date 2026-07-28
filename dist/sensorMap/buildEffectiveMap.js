@@ -456,25 +456,32 @@ export function buildEffectiveSensorMap(input) {
             ].filter((e) => e !== undefined && e.value === owner.batteryField)
                 .reduce((min, e) => (min === undefined || e.index < min ? e.index : min), undefined);
             const attribution = (ownerDisabled ? disabledBy : undefined) ?? (ownerRebound ? reboundBy : undefined);
+            const reboundPhrase = owner.batteryField === null
+                ? 'had its batteryField suppressed (batteryField: null)'
+                : `was rebound to batteryField '${owner.batteryField}'`;
             const cause = ownerDisabled && ownerRebound
-                ? `is disabled AND was rebound to batteryField '${String(owner.batteryField)}'`
+                ? `is disabled AND ${reboundPhrase}`
                 : ownerDisabled
                     ? 'is disabled'
-                    : `was rebound to batteryField '${String(owner.batteryField)}'`;
+                    : reboundPhrase;
             const remedy = ownerDisabled && ownerRebound
                 ? `until '${ownerDp}' is re-enabled and restored to '${field}'`
                 : ownerDisabled
                     ? `until '${ownerDp}' is re-enabled`
                     : `until '${ownerDp}' is restored to '${field}'`;
-            // Cache-consequence wording (reviews R13-3 + R14-1), stated
-            // precisely: ownership of the RESERVED field never rolls, so no
-            // other row REFERENCING THAT FIELD changes signature. The owner's
-            // OWN signature can change (losing battery:1 is a structural
-            // replacement for that one accessory), and — rebind only — the
-            // owner enters the collision ordering on its NEW field, where an
-            // existing claimant can lose ownership and flip battery:1 →
-            // battery:0.
-            const reboundCollisionClause = ownerRebound
+            // Cache-consequence wording (reviews R13-3 + R14-1 + R15-1),
+            // stated precisely: ownership of the RESERVED field never rolls,
+            // so no other row REFERENCING THAT FIELD changes signature. The
+            // owner's OWN signature can change (losing battery:1 is a
+            // structural replacement for that one accessory). The collision
+            // caveat applies ONLY when the rebound owner actually enters the
+            // claimant ordering: a null field claims nothing, and a rebind to
+            // ANOTHER reserved field is rejected by the static reserved set —
+            // neither can disturb existing claimants.
+            const entersClaims = ownerRebound
+                && owner.batteryField !== null
+                && !RESERVED_BATTERY_FIELDS.has(owner.batteryField);
+            const reboundCollisionClause = entersClaims
                 ? ` Claimants on '${String(owner.batteryField)}' may change ownership or signature under `
                     + 'collision ordering now that the owner competes there.'
                 : '';

@@ -248,7 +248,7 @@ export interface EffectiveSensorMap {
   rows: EffectiveSensorRow[];
   errors: RowValidationError[];       // config-attributable failures
   warnings: RowValidationWarning[];   // config-attributable warnings
-  notes: InternalInvariantNote[];     // NEW — no override attribution required
+  notes: InternalInvariantNote[];     // NEW — mixed diagnostics; attribution determined by `source`
 }
 ```
 
@@ -544,8 +544,8 @@ described below in full, is a BEHAVIORAL CHANGE on top of PR #20:
   through `EffectiveSensorMap.notes` (`source: 'default-map' |
   'override'`) instead of the shipping RowValidationWarning
   channel — that channel keeps carrying config-attributable
-  warnings; internal-invariant + attribution-free notes move to
-  the new channel.
+  warnings; ownership/plugin-health diagnostics (attributed or
+  attribution-free, per `source`) move to the new channel.
 - Reserved-owner rows that are DISABLED or REBOUND away from their
   reserved field (or both) produce an `orphan-battery-field`
   info-level note when other enabled rows still reference the field

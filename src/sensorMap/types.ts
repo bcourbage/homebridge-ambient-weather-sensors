@@ -573,5 +573,5 @@ export interface EffectiveSensorMap {
   rows: EffectiveSensorRow[];
   errors: RowValidationError[];       // config-attributable failures
   warnings: RowValidationWarning[];   // config-attributable warnings
-  notes: InternalInvariantNote[];     // attribution-free / internal-invariant diagnostics
+  notes: InternalInvariantNote[];     // mixed ownership/plugin-health diagnostics; attribution determined by `source`
 }
