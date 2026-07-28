@@ -1095,3 +1095,106 @@ describe('buildEffectiveSensorMap — orphan-battery-field notes (Stage 4)', () 
     expect(result.notes.filter(n => n.code === 'orphan-battery-field')).toHaveLength(0);
   });
 });
+
+describe('buildEffectiveSensorMap — battery authorship is value-aware (review R12-1)', () => {
+  it("a redundant same-value re-statement keeps the EARLIER authoring index (reviewer's counterexample)", () => {
+    const result = buildEffectiveSensorMap({
+      ...baseInput(),
+      stations: [{ macAddress: MAC1, name: 'Home' }],
+      userOverrides: [
+        { dataPoint: 'custom_a', kind: 'temperature', measurement: 'temperature', sourceUnit: 'fahrenheit', batteryField: 'shared_batt' }, // 0
+        { dataPoint: 'custom_b', kind: 'humidity', measurement: 'humidity', sourceUnit: 'percent', batteryField: 'shared_batt' },          // 1
+        { dataPoint: 'custom_a', batteryField: 'shared_batt' },   // 2 — REDUNDANT re-statement
+      ],
+    });
+    const a = result.rows.find(r => r.dataPoint === 'custom_a');
+    const b = result.rows.find(r => r.dataPoint === 'custom_b');
+    // custom_a authored shared_batt at index 0; index 2 merely repeated
+    // the same value, so custom_a retains authorship and WINS.
+    expect(a && a.kind !== 'unrecognized' ? a.hasBatterySubService : null).toBe(true);
+    expect(b && b.kind !== 'unrecognized' ? b.hasBatterySubService : null).toBe(false);
+    const note = result.notes.find(n => n.code === 'duplicate-battery-owner');
+    expect(note?.dataPoint).toBe('custom_b');
+    expect(note?.overrideIndex).toBe(1);
+  });
+
+  it('an ACTUAL value change moves authorship to the changing fragment', () => {
+    const result = buildEffectiveSensorMap({
+      ...baseInput(),
+      stations: [{ macAddress: MAC1, name: 'Home' }],
+      userOverrides: [
+        { dataPoint: 'custom_a', kind: 'temperature', measurement: 'temperature', sourceUnit: 'fahrenheit', batteryField: 'other_batt' }, // 0
+        { dataPoint: 'custom_b', kind: 'humidity', measurement: 'humidity', sourceUnit: 'percent', batteryField: 'shared_batt' },          // 1
+        { dataPoint: 'custom_a', batteryField: 'shared_batt' },   // 2 — CHANGES custom_a's field
+      ],
+    });
+    const a = result.rows.find(r => r.dataPoint === 'custom_a');
+    const b = result.rows.find(r => r.dataPoint === 'custom_b');
+    // custom_a's claim on shared_batt was authored at index 2 (a real
+    // change), so custom_b's index-1 authorship wins.
+    expect(b && b.kind !== 'unrecognized' ? b.hasBatterySubService : null).toBe(true);
+    expect(a && a.kind !== 'unrecognized' ? a.hasBatterySubService : null).toBe(false);
+    const note = result.notes.find(n => n.code === 'duplicate-battery-owner');
+    expect(note?.dataPoint).toBe('custom_a');
+    expect(note?.overrideIndex).toBe(2);
+  });
+
+  it('CROSS-SCOPE redundancy: a station fragment re-stating the global value keeps global authorship', () => {
+    const result = buildEffectiveSensorMap({
+      ...baseInput(),
+      stations: [{ macAddress: MAC1, name: 'Home' }],
+      userOverrides: [
+        { dataPoint: 'custom_a', kind: 'temperature', measurement: 'temperature', sourceUnit: 'fahrenheit', batteryField: 'shared_batt' }, // 0 (global)
+        { dataPoint: 'custom_b', kind: 'humidity', measurement: 'humidity', sourceUnit: 'percent', batteryField: 'shared_batt' },          // 1
+        { dataPoint: 'custom_a', stationMac: MAC1, batteryField: 'shared_batt' },   // 2 — station-scoped, SAME value
+      ],
+    });
+    const a = result.rows.find(r => r.dataPoint === 'custom_a');
+    const b = result.rows.find(r => r.dataPoint === 'custom_b');
+    expect(a && a.kind !== 'unrecognized' ? a.hasBatterySubService : null).toBe(true);
+    expect(b && b.kind !== 'unrecognized' ? b.hasBatterySubService : null).toBe(false);
+  });
+});
+
+describe('buildEffectiveSensorMap — orphan note covers a REBOUND owner (review R12-2)', () => {
+  it('rebinding the canonical owner away from its reserved field emits the orphan note', () => {
+    const result = buildEffectiveSensorMap({
+      ...baseInput(),
+      stations: [{ macAddress: MAC1, name: 'Home' }],
+      // tempf stays ENABLED but is rebound to a novel field — battout
+      // has no host while humidity etc. still reference it.
+      userOverrides: [{ dataPoint: 'tempf', batteryField: 'new_temp_batt' }],   // index 0
+    });
+    const orphans = result.notes.filter(n => n.code === 'orphan-battery-field');
+    expect(orphans).toHaveLength(1);
+    expect(orphans[0].dataPoint).toBe('tempf');
+    expect(orphans[0].stationMac).toBe(MAC1);
+    expect(orphans[0].source).toBe('override');
+    expect(orphans[0].overrideIndex).toBe(0);      // the rebinding fragment
+    expect(orphans[0].message).toContain('rebound');
+    expect(orphans[0].message).toContain('battout');
+    // battout truly has no host (reserved: nothing else may claim it)...
+    const battoutHosts = result.rows.filter(r =>
+      r.kind !== 'unrecognized' && r.batteryField === 'battout' && r.hasBatterySubService);
+    expect(battoutHosts).toHaveLength(0);
+    // ...while tempf now hosts its NOVEL field via the claims path.
+    const tempf = result.rows.find(r => r.dataPoint === 'tempf');
+    expect(tempf && tempf.kind !== 'unrecognized' ? tempf.hasBatterySubService : null).toBe(true);
+    expect(tempf && tempf.kind !== 'unrecognized' ? tempf.batteryField : null).toBe('new_temp_batt');
+  });
+
+  it('no rebind note when nothing enabled still references the reserved field', () => {
+    const battoutRows = DEFAULT_SENSOR_MAP.filter(r => r.batteryField === 'battout');
+    const result = buildEffectiveSensorMap({
+      ...baseInput(),
+      stations: [{ macAddress: MAC1, name: 'Home' }],
+      userOverrides: [
+        { dataPoint: 'tempf', batteryField: 'new_temp_batt' },
+        // Disable every OTHER battout-referencing default row.
+        ...battoutRows.filter(r => r.dataPoint !== 'tempf')
+          .map(r => ({ dataPoint: r.dataPoint, enabled: false })),
+      ],
+    });
+    expect(result.notes.filter(n => n.code === 'orphan-battery-field')).toHaveLength(0);
+  });
+});
