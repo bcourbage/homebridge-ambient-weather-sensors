@@ -32,6 +32,9 @@ export class UvAccessory extends ExtendedSensorBase {
       sensorLabel: row?.name ?? 'UV Index',
       awnKey: row?.dataPoint ?? 'uv',
       threshold: thresholdFor(row, threshold),
+      // Row-driven trigger direction (review R10-1): an authored
+      // `below` must flow through; 'above' is the family default.
+      triggerDirection: row?.triggerDirection ?? 'above',
       displayMode: extendedDisplayModeFor(platform, row),
       measurement: 'uv-index',
       sourceUnit: row?.sourceUnit ?? 'index',

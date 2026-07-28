@@ -39,6 +39,9 @@ class LightningCountLikeAccessory extends ExtendedSensorBase {
             // only on the row-absent path. A custom count row that omits
             // `threshold` is disabled (Infinity), per the frozen schema.
             threshold: thresholdFor(row, 1),
+            // Row-driven trigger direction (review R10-1): an authored
+            // `below` must flow through; 'above' is the family default.
+            triggerDirection: row?.triggerDirection ?? 'above',
             displayMode: extendedDisplayModeFor(platform, row),
             measurement: 'count',
             sourceUnit: 'count',

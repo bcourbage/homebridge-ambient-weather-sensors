@@ -21,6 +21,7 @@
  */
 import { DEFAULT_SENSOR_MAP, defaultRowFor } from './defaultMap.js';
 import { computeStructuralSignature } from './structuralSignature.js';
+import { DEFAULT_DISPLAY_UNIT_FOR_MEASUREMENT } from './units.js';
 import { validateOverrideBody, validateOverrideIdentity, } from './validation.js';
 import { WRAPPER_FOR_KIND_AND_MEASUREMENT } from './wrappers.js';
 import { WRAPPER_SPEC } from './wrapperFactories.js';
@@ -451,9 +452,16 @@ function resolveRow(inp) {
         onNoWrapper(kind, measurement);
         return null;
     }
-    // ---- Resolve units.
+    // ---- Resolve units. A custom row that omits `displayUnit` gets the
+    //      measurement's DOCUMENTED default display unit (review R10-3) —
+    //      falling back to the row's sourceUnit would silently flip a
+    //      metric-source custom to metric display (mm_per_hr / hPa / km
+    //      instead of the frozen in_per_hr / inHg / mi defaults).
     const sourceUnit = defaultRow?.sourceUnit ?? override?.sourceUnit;
-    const displayUnit = override?.displayUnit ?? defaultRow?.displayUnit ?? sourceUnit;
+    const displayUnit = override?.displayUnit
+        ?? defaultRow?.displayUnit
+        ?? DEFAULT_DISPLAY_UNIT_FOR_MEASUREMENT[measurement]
+        ?? sourceUnit;
     // ---- Resolve enabled BEFORE battery ownership. A disabled row
     //       must never consume a claim slot; see the
     //       `resolveHasBatterySubService` doc-comment for why.
@@ -472,8 +480,15 @@ function resolveRow(inp) {
     const triggerEnabled = isMotion
         ? (override?.triggerEnabled ?? defaultRow?.triggerEnabled ?? true)
         : false;
+    // Direction fallback is MEASUREMENT-AWARE (review R10-2): for
+    // pressure and lightning-distance the alarming direction is LOW
+    // (storm incoming / strike nearby) — every known default row of
+    // those families carries `below`, and a custom row with a threshold
+    // but no explicit direction must behave the same, not trigger on
+    // high pressure or distant lightning.
+    const familyDefaultDirection = (measurement === 'pressure' || measurement === 'distance') ? 'below' : 'above';
     const triggerDirection = isMotion
-        ? (override?.triggerDirection ?? defaultRow?.triggerDirection ?? 'above')
+        ? (override?.triggerDirection ?? defaultRow?.triggerDirection ?? familyDefaultDirection)
         : 'above';
     const threshold = isMotion
         ? (override?.threshold ?? defaultRow?.threshold)

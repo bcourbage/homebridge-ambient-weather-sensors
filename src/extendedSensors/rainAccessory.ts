@@ -53,6 +53,9 @@ abstract class RainRateLikeAccessory extends ExtendedSensorBase {
       sensorLabel: row?.name ?? sensorLabel,
       awnKey: row?.dataPoint ?? awnKey,
       threshold: thresholdFor(row, thresholdInHr),  // in in/hr (canonical for AWN)
+      // Row-driven trigger direction (review R10-1): an authored
+      // `below` must flow through; 'above' is the family default.
+      triggerDirection: row?.triggerDirection ?? 'above',
       displayMode: extendedDisplayModeFor(platform, row),
       measurement: 'rain-rate',
       sourceUnit: row?.sourceUnit ?? 'in_per_hr',
@@ -127,6 +130,9 @@ abstract class RainAccumulationLikeAccessory extends ExtendedSensorBase {
       // that omits `threshold` is disabled (Infinity), per the frozen
       // schema.
       threshold: thresholdFor(row, 0.01),
+      // Row-driven trigger direction (review R10-1): an authored
+      // `below` must flow through; 'above' is the family default.
+      triggerDirection: row?.triggerDirection ?? 'above',
       displayMode: extendedDisplayModeFor(platform, row),
       measurement: 'rain-accumulation',
       sourceUnit: row?.sourceUnit ?? 'in',
