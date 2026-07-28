@@ -165,6 +165,27 @@ describe('mirrorHash + recognizeMirror', () => {
     const ambiguous = detectConfigMode(bare as never);
     expect(ambiguous.warnings.some(w => w.includes('takes precedence'))).toBe(true);
   });
+
+  it('a sensorMap-only hand edit reads as STALE (hash binds both sides)', () => {
+    const map = v2Map([]);
+    const { nextConfig } = composeV2ConfigSave({ apiKey: 'k' }, [], map);
+    const edited = { ...nextConfig, sensorMap: [{ dataPoint: 'tempf', enabled: false }] };
+    expect(recognizeMirror(edited).state).toBe('stale');
+    const detected = detectConfigMode(edited as never);
+    expect(detected.warnings.some(w => w.includes('STALE'))).toBe(true);
+  });
+
+  it('deleting every mirrored legacy field still warns (metadata validated unconditionally)', () => {
+    const map = v2Map([]);
+    const { nextConfig } = composeV2ConfigSave({ apiKey: 'k' }, [], map);
+    const gutted: Record<string, unknown> = { ...nextConfig };
+    for (const key of LEGACY_SENSOR_FIELDS) {
+      delete gutted[key];
+    }
+    expect(recognizeMirror(gutted).state).toBe('stale');
+    const detected = detectConfigMode(gutted as never);
+    expect(detected.warnings.some(w => w.includes('STALE') && w.includes('REMOVED'))).toBe(true);
+  });
 });
 
 describe('composeV2ConfigSave', () => {

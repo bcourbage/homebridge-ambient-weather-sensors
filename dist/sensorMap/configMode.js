@@ -53,30 +53,36 @@ export function detectConfigMode(config) {
         return { mode: 'legacy', warnings };
     }
     // configVersion === 2.
-    // Legacy toggles alongside v2: three cases (finding 5).
-    //   - A RECOGNIZED legacy mirror (hash-matching `_legacyMirror`
-    //     metadata written by the v2 UI save flow) is the downgrade-safety
-    //     projection, deliberately present: no warning, v2 drives.
-    //   - STALE mirror metadata (hash mismatch — someone hand-edited
-    //     sensorMap or the mirrored fields): warn with both hashes so the
-    //     drift is diagnosable; v2 still drives, but a v1.7 downgrade
-    //     would see the stale projection.
-    //   - No mirror metadata: the original ambiguity warning.
+    // Mirror metadata is validated whenever it is PRESENT — regardless of
+    // whether any mirrored legacy fields remain (review round 3, finding
+    // 2: deleting every mirrored field must not silently skip the check;
+    // a v1.7 downgrade against such a config would unregister every
+    // representable accessory with zero warning). The hash binds BOTH the
+    // mirrored fields and the canonical sensorMap, so a sensorMap-only
+    // hand edit also reads as STALE. Cases:
+    //   - RECOGNIZED mirror (hash matches): the maintained downgrade
+    //     projection, deliberately present — silent, v2 drives.
+    //   - STALE mirror (metadata present, hash mismatch — a mirrored
+    //     field or the sensorMap was hand-edited, or the mirrored fields
+    //     were deleted): loud warning with both hashes; v2 still drives.
+    //   - No metadata + legacy toggles present: the original ambiguity
+    //     warning.
     const legacySet = LEGACY_TOGGLE_KEYS.filter(k => config[k] !== undefined);
-    if (legacySet.length > 0) {
-        const mirror = recognizeMirror(config);
-        if (mirror.state === 'stale') {
-            warnings.push(`The legacy config mirror is STALE (expected hash ${mirror.expectedHash.slice(0, 12)}…, `
-                + `actual ${mirror.actualHash.slice(0, 12)}…). The sensorMap or the mirrored legacy fields were `
-                + 'edited by hand since the last UI save. configVersion: 2 still drives this plugin, but a '
-                + 'downgrade to 1.x would run the stale projection. Re-save through the UI to refresh the mirror.');
-        }
-        else if (mirror.state === 'absent') {
-            warnings.push(`Both configVersion: 2 and legacy toggle(s) [${legacySet.join(', ')}] are set. `
-                + 'configVersion: 2 takes precedence; the legacy toggles are ignored.');
-        }
-        // 'recognized': the maintained downgrade mirror — intentionally silent.
+    const mirror = recognizeMirror(config);
+    if (mirror.state === 'stale') {
+        const fieldsNote = legacySet.length === 0
+            ? 'Every mirrored legacy field has been REMOVED, so a downgrade to 1.x would unregister your accessories. '
+            : 'The sensorMap or the mirrored legacy fields were edited by hand since the last UI save. ';
+        warnings.push(`The legacy config mirror is STALE (expected hash ${mirror.expectedHash.slice(0, 12)}…, `
+            + `actual ${mirror.actualHash.slice(0, 12)}…). ${fieldsNote}`
+            + 'configVersion: 2 still drives this plugin, but a downgrade to 1.x would not see the intended '
+            + 'projection. Re-save through the UI to refresh the mirror.');
     }
+    else if (mirror.state === 'absent' && legacySet.length > 0) {
+        warnings.push(`Both configVersion: 2 and legacy toggle(s) [${legacySet.join(', ')}] are set. `
+            + 'configVersion: 2 takes precedence; the legacy toggles are ignored.');
+    }
+    // 'recognized': the maintained downgrade mirror — intentionally silent.
     return { mode: 'v2', warnings };
 }
 function describe(v) {

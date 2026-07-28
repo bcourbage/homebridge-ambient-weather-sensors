@@ -99,11 +99,15 @@ export interface LegacyMirrorMeta {
  */
 export declare function projectLegacyMirror(effectiveMap: EffectiveSensorMap): LegacyConfig;
 /**
- * Canonical hash of the mirrored legacy fields: SHA-256 over a
- * key-sorted JSON serialization of the `LEGACY_SENSOR_FIELDS` subset.
- * Field order in config.json and absent-vs-undefined never change it.
+ * Canonical hash binding the mirror to its SOURCE: SHA-256 over a
+ * key-sorted JSON serialization of BOTH the `LEGACY_SENSOR_FIELDS`
+ * subset AND the canonical `sensorMap`. The mirror is a projection OF
+ * the sensorMap, so editing either side by hand invalidates the pair —
+ * a sensorMap-only edit must read as STALE just as loudly as a mirrored-
+ * field edit (review round 3, finding 2). Field order in config.json
+ * and absent-vs-undefined never change the hash.
  */
-export declare function mirrorHash(fields: Record<string, unknown>): string;
+export declare function mirrorHash(config: Record<string, unknown>): string;
 export type MirrorRecognition = {
     state: 'absent';
 } | {
@@ -115,10 +119,13 @@ export type MirrorRecognition = {
 };
 /**
  * Classify a config's mirror metadata. `recognized` = `_legacyMirror`
- * present with a hash matching the legacy fields as they stand —
- * detectConfigMode suppresses the ambiguity warning only then. `stale`
- * = metadata present but the fields no longer hash-match (manual edit
- * of either side); the hashes are surfaced for diagnosis.
+ * present with a hash matching the mirrored legacy fields AND the
+ * canonical sensorMap as they stand — detectConfigMode suppresses the
+ * ambiguity warning only then. `stale` = metadata present but the pair
+ * no longer hash-matches: a hand edit of the sensorMap, of a mirrored
+ * field, or the deletion of the mirrored fields entirely. The hashes
+ * are surfaced for diagnosis. Callers must run this whenever the
+ * metadata is present, independent of whether any legacy keys remain.
  */
 export declare function recognizeMirror(config: Record<string, unknown>): MirrorRecognition;
 /**

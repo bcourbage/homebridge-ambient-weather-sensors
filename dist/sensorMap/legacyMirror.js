@@ -330,18 +330,23 @@ export function projectLegacyMirror(effectiveMap) {
     return mirror;
 }
 /**
- * Canonical hash of the mirrored legacy fields: SHA-256 over a
- * key-sorted JSON serialization of the `LEGACY_SENSOR_FIELDS` subset.
- * Field order in config.json and absent-vs-undefined never change it.
+ * Canonical hash binding the mirror to its SOURCE: SHA-256 over a
+ * key-sorted JSON serialization of BOTH the `LEGACY_SENSOR_FIELDS`
+ * subset AND the canonical `sensorMap`. The mirror is a projection OF
+ * the sensorMap, so editing either side by hand invalidates the pair —
+ * a sensorMap-only edit must read as STALE just as loudly as a mirrored-
+ * field edit (review round 3, finding 2). Field order in config.json
+ * and absent-vs-undefined never change the hash.
  */
-export function mirrorHash(fields) {
+export function mirrorHash(config) {
     const subset = {};
     for (const key of LEGACY_SENSOR_FIELDS) {
-        if (fields[key] !== undefined) {
-            subset[key] = fields[key];
+        if (config[key] !== undefined) {
+            subset[key] = config[key];
         }
     }
-    return createHash('sha256').update(canonicalJson(subset)).digest('hex');
+    const bound = { legacy: subset, sensorMap: config.sensorMap ?? null };
+    return createHash('sha256').update(canonicalJson(bound)).digest('hex');
 }
 function canonicalJson(v) {
     if (Array.isArray(v)) {
@@ -355,10 +360,13 @@ function canonicalJson(v) {
 }
 /**
  * Classify a config's mirror metadata. `recognized` = `_legacyMirror`
- * present with a hash matching the legacy fields as they stand —
- * detectConfigMode suppresses the ambiguity warning only then. `stale`
- * = metadata present but the fields no longer hash-match (manual edit
- * of either side); the hashes are surfaced for diagnosis.
+ * present with a hash matching the mirrored legacy fields AND the
+ * canonical sensorMap as they stand — detectConfigMode suppresses the
+ * ambiguity warning only then. `stale` = metadata present but the pair
+ * no longer hash-matches: a hand edit of the sensorMap, of a mirrored
+ * field, or the deletion of the mirrored fields entirely. The hashes
+ * are surfaced for diagnosis. Callers must run this whenever the
+ * metadata is present, independent of whether any legacy keys remain.
  */
 export function recognizeMirror(config) {
     const meta = config[LEGACY_MIRROR_KEY];
@@ -405,9 +413,11 @@ export function composeV2ConfigSave(currentConfig, sensorMap, effectiveMap) {
     Object.assign(next, mirror);
     next.configVersion = 2;
     next.sensorMap = sensorMap;
+    // Hash the assembled config (mirrored fields + sensorMap) so BOTH
+    // sides are bound — a hand edit to either reads as STALE.
     next[LEGACY_MIRROR_KEY] = {
         version: LEGACY_MIRROR_VERSION,
-        hash: mirrorHash(mirror),
+        hash: mirrorHash(next),
     };
     return { snapshot: hasLegacy ? legacyPresent : undefined, nextConfig: next };
 }
