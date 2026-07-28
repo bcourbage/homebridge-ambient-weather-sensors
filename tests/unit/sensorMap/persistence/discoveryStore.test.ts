@@ -154,3 +154,40 @@ describe('DiscoveryTracker', () => {
     expect(t.observe('AA:BB:CC:DD:EE:01', 'Home', 'tempf')).toBe(false);
   });
 });
+
+describe('DiscoveryTracker — structural flush is never throttled (review R3-7)', () => {
+  it('a mixed tick (existing observation + NEW pair) writes immediately inside the throttle window', async () => {
+    const p = path.join(tmpRoot, 'd.json');
+    const clock = new FakeClock();
+    const t = new DiscoveryTracker({ filePath: p, log: silentLog, clock, lastSeenIntervalMs: 60_000 });
+
+    // Establish the baseline entry + first flush.
+    t.observe('AA:BB:CC:DD:EE:01', 'Home', 'tempf');
+    await t.flush();
+
+    // WELL inside the throttle window: the same tick refreshes the
+    // existing entry (sets lastSeen-only work) AND discovers a new pair.
+    clock.advanceMs(1_000);
+    t.observe('AA:BB:CC:DD:EE:01', 'Home', 'tempf');       // existing → lastSeen-only
+    t.observe('AA:BB:CC:DD:EE:01', 'Home', 'brand_new');   // NEW → structural
+    await t.flush();                                       // not forced
+
+    const onDisk = await loadDiscoveryStore(p, silentLog);
+    expect(onDisk.entries.some(e => e.dataPoint === 'brand_new')).toBe(true);
+  });
+
+  it('lastSeen-only work is still throttled', async () => {
+    const p = path.join(tmpRoot, 'd.json');
+    const clock = new FakeClock();
+    const t = new DiscoveryTracker({ filePath: p, log: silentLog, clock, lastSeenIntervalMs: 60_000 });
+
+    t.observe('AA:BB:CC:DD:EE:01', 'Home', 'tempf');
+    await t.flush();
+    const before = (await fs.stat(p)).mtimeMs;
+
+    clock.advanceMs(1_000);
+    t.observe('AA:BB:CC:DD:EE:01', 'Home', 'tempf');       // existing only
+    await t.flush();
+    expect((await fs.stat(p)).mtimeMs).toBe(before);        // throttled, no write
+  });
+});

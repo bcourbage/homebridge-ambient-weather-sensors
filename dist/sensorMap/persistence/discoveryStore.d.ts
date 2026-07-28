@@ -45,6 +45,7 @@ export declare class DiscoveryTracker {
     private readonly lastSeenIntervalMs;
     private lastFlushAt;
     private pendingLastSeenOnly;
+    private pendingStructural;
     private inflight;
     constructor(opts: TrackerOptions);
     /**

@@ -368,14 +368,16 @@ describe('discoverDevicesV2 — discovery tracker ownership (review P1-4)', () =
     }
   });
 
-  it('a poll tick observes newly-appearing fields; shutdown force-flushes them to disk', async () => {
+  it('a poll tick flushes a newly-appearing field to disk IMMEDIATELY (structural, unthrottled)', async () => {
     const { platform, api } = makePlatform({ _sensorMapV2: true, temperatureSensors: true });
     mockFetch([{ macAddress: MAC, info: { name: 'Home' }, lastData: { tempf: 68 } }]);
     stubTimer();
     try {
       await reconcile(platform, 'legacy');
 
-      // Poll tick reports a field the discovery store has never seen.
+      // Poll tick reports a field the discovery store has never seen —
+      // ALONGSIDE the existing field, the exact mix that used to trip
+      // the lastSeen throttle and defer the structural write (R3-7).
       mockFetch([{ macAddress: MAC, info: { name: 'Home' }, lastData: { tempf: 68, brand_new: 1 } }]);
       await (platform as unknown as { pollAndDistribute(): Promise<void> }).pollAndDistribute();
 
@@ -383,16 +385,19 @@ describe('discoverDevicesV2 — discovery tracker ownership (review P1-4)', () =
       const tracker = (platform as unknown as { v2Tracker: { snapshot(): { entries: Array<{ dataPoint: string }> } } }).v2Tracker;
       expect(tracker.snapshot().entries.some(e => e.dataPoint === 'brand_new')).toBe(true);
 
-      // Shutdown force-flush drains it to disk. The handler's flush is
-      // fire-and-forget, so poll for the write instead of racing it
-      // with a fixed sleep.
-      api.emit('shutdown');
+      // ON DISK before any shutdown: a crash after this tick must not
+      // lose the discovery. (The platform's flush is fire-and-forget,
+      // so poll for the write completing — the point is that it happens
+      // NOW, not at shutdown or after the 15-minute throttle.)
       await vi.waitFor(() => {
         const store = JSON.parse(readFileSync(discoveryPath(api), 'utf8')) as {
           entries: Array<{ dataPoint: string }>;
         };
         expect(store.entries.some(e => e.dataPoint === 'brand_new')).toBe(true);
       }, { timeout: 3000, interval: 25 });
+
+      // Shutdown force-flush still runs cleanly afterwards.
+      api.emit('shutdown');
     } finally {
       rmSync(storageDir(api), { recursive: true, force: true });
     }
