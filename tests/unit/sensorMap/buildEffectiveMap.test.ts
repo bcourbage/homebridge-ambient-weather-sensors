@@ -736,7 +736,7 @@ describe('buildEffectiveSensorMap — custom-row battery ownership (finding #6)'
     }
   });
 
-  it('two custom rows on the same station sharing a novel batteryField: first wins, warn surfaces', () => {
+  it('two custom rows sharing a novel batteryField: the EARLIEST-authored fragment wins, note surfaces', () => {
     const result = buildEffectiveSensorMap({
       ...baseInput(),
       userOverrides: [
@@ -758,22 +758,24 @@ describe('buildEffectiveSensorMap — custom-row battery ownership (finding #6)'
     });
     const wind = result.rows.find(r => r.dataPoint === 'custom_barn_wind');
     const temp = result.rows.find(r => r.dataPoint === 'custom_barn_temp');
-    // Pair-collection order matters: defaults × stations first, then
-    // discovery, then station-scoped, then global custom. Both
-    // custom rows land in the global-custom bucket. The first-emitted
-    // wins; either wind or temp depending on iteration order, but
-    // whichever wins claims the sub-service and the other gets a
-    // warning.
-    const withService = [wind, temp].filter((r): r is Exclude<typeof r, undefined> =>
-      r !== undefined && r.kind !== 'unrecognized' && r.hasBatterySubService === true);
-    const withoutService = [wind, temp].filter((r): r is Exclude<typeof r, undefined> =>
-      r !== undefined && r.kind !== 'unrecognized' && r.hasBatterySubService === false);
-    expect(withService).toHaveLength(1);
-    expect(withoutService).toHaveLength(1);
+    // Stage-4 ordering: the winner is DETERMINISTIC — the claimant
+    // whose batteryField was authored by the EARLIEST config fragment
+    // (wind at index 0), never resolution-iteration order.
+    expect(wind && wind.kind !== 'unrecognized' ? wind.hasBatterySubService : null).toBe(true);
+    expect(temp && temp.kind !== 'unrecognized' ? temp.hasBatterySubService : null).toBe(false);
     // The loser still carries batteryField for reading.
-    expect((withoutService[0] as { batteryField: string | null }).batteryField).toBe('my_barn_batt');
-    // Warning fires with the collision code.
-    expect(result.warnings.some(w => w.code === 'duplicate-battery-owner')).toBe(true);
+    expect(temp && temp.kind !== 'unrecognized' ? temp.batteryField : null).toBe('my_barn_batt');
+    // The collision routes through the NOTES channel (Stage-4 channel
+    // move) with the loser's fragment attributed.
+    const note = result.notes.find(n => n.code === 'duplicate-battery-owner');
+    expect(note).toBeDefined();
+    expect(note?.source).toBe('override');
+    expect(note?.overrideIndex).toBe(1);
+    expect(note?.dataPoint).toBe('custom_barn_temp');
+    expect(result.warnings.some(w => w.code === 'duplicate-battery-owner')).toBe(false);
+    // Signatures reflect settled ownership.
+    expect(wind && wind.kind !== 'unrecognized' ? wind.structuralSignature : '').toContain('battery:1');
+    expect(temp && temp.kind !== 'unrecognized' ? temp.structuralSignature : '').toContain('battery:0');
   });
 
   it('canonical default row still owns its reserved battery field even alongside a custom claimant', () => {
@@ -866,32 +868,29 @@ describe('buildEffectiveSensorMap — custom-row battery ownership (finding #6)'
         },
       ],
     });
-    // On MAC1: tempf resolves first (defaults × stations pass) so it
-    // wins the claim; custom_second collides.
+    // On MAC1: tempf's batteryField was authored at index 0 (earliest)
+    // so it wins the adjudication; custom_second (index 1) collides.
     const tempfMac1 = result.rows.find(r => r.dataPoint === 'tempf' && r.stationMac === MAC1);
     const customMac1 = result.rows.find(r => r.dataPoint === 'custom_second' && r.stationMac === MAC1);
-    const owned = [tempfMac1, customMac1].filter((r): r is Exclude<typeof r, undefined> =>
-      r !== undefined && r.kind !== 'unrecognized' && r.hasBatterySubService === true);
-    expect(owned).toHaveLength(1);
+    expect(tempfMac1 && tempfMac1.kind !== 'unrecognized' ? tempfMac1.hasBatterySubService : null).toBe(true);
+    expect(customMac1 && customMac1.kind !== 'unrecognized' ? customMac1.hasBatterySubService : null).toBe(false);
     // The loser retains the batteryField for reading.
-    const loser = [tempfMac1, customMac1].find(r =>
-      r !== undefined && r.kind !== 'unrecognized' && r.hasBatterySubService === false);
-    expect(loser).toBeDefined();
-    if (loser && loser.kind !== 'unrecognized') {
-      expect(loser.batteryField).toBe('my_barn_batt');
+    if (customMac1 && customMac1.kind !== 'unrecognized') {
+      expect(customMac1.batteryField).toBe('my_barn_batt');
     }
-    // Duplicate warning fires for MAC1 only (MAC2's tempf still uses
+    // Duplicate note fires for MAC1 only (MAC2's tempf still uses
     // the default 'battout' — no collision there).
-    const dupes = result.warnings.filter(w => w.code === 'duplicate-battery-owner');
+    const dupes = result.notes.filter(n => n.code === 'duplicate-battery-owner');
     expect(dupes).toHaveLength(1);
     expect(dupes[0].stationMac).toBe(MAC1);
   });
 
-  it('duplicate-battery-owner warning attributes to a REAL overrideIndex (never -1)', () => {
-    // Group 4 review finding #3: the warning used a `-1` sentinel
+  it('duplicate-battery-owner note attributes to a REAL overrideIndex (never -1)', () => {
+    // Group 4 review finding #3: the diagnostic used a `-1` sentinel
     // for overrideIndex, violating the Group 1 provenance contract.
-    // Fix: attribute to the loser's batteryField-supplying fragment
-    // (or fall back to the winner's provenance — never -1).
+    // Attribution goes to the loser's batteryField-supplying fragment
+    // (falling back to the winner's — never -1). Stage 4 moved the
+    // diagnostic to the notes channel with source 'override'.
     const result = buildEffectiveSensorMap({
       ...baseInput(),
       userOverrides: [
@@ -913,15 +912,15 @@ describe('buildEffectiveSensorMap — custom-row battery ownership (finding #6)'
         },
       ],
     });
-    const dupe = result.warnings.find(w => w.code === 'duplicate-battery-owner');
+    const dupe = result.notes.find(n => n.code === 'duplicate-battery-owner');
     expect(dupe).toBeDefined();
     // MUST NOT be -1 — that would violate Group 1's contract that
-    // every warning attributes to a real fragment.
+    // every attributed diagnostic points at a real fragment.
     expect(dupe?.overrideIndex).not.toBe(-1);
     // The loser's batteryField came from index 1, so that's the
     // config entry the UI should highlight.
     expect(dupe?.overrideIndex).toBe(1);
-    expect(dupe?.field).toBe('batteryField');
+    expect(dupe?.source).toBe('override');
     expect(dupe?.dataPoint).toBe('custom_second');
   });
 });
@@ -995,5 +994,104 @@ describe('buildEffectiveSensorMap — global custom pair collection (finding #8)
     });
     const rows = result.rows.filter(r => r.dataPoint === 'tempf');
     expect(rows).toHaveLength(2);
+  });
+});
+
+// ---- Stage-4 battery-ownership ordering (earliestOverrideIndex) -------
+
+describe('buildEffectiveSensorMap — Stage-4 ownership ordering', () => {
+  it('earliest-authored fragment beats resolution-iteration order', () => {
+    // Station-scoped overrides resolve in an EARLIER pair-collection
+    // bucket than global customs, so PR #20's first-resolved rule
+    // handed ownership to the station-scoped row. Stage 4's rule hands
+    // it to the fragment authored FIRST in config.sensorMap: the
+    // global custom at index 0.
+    const result = buildEffectiveSensorMap({
+      ...baseInput(),
+      userOverrides: [
+        {  // index 0 — GLOBAL custom (later pair-collection bucket)
+          dataPoint: 'custom_global',
+          kind: 'temperature', measurement: 'temperature', sourceUnit: 'fahrenheit',
+          batteryField: 'novel_batt',
+        },
+        {  // index 1 — STATION-SCOPED custom (earlier bucket)
+          dataPoint: 'custom_scoped', stationMac: MAC1,
+          kind: 'humidity', measurement: 'humidity', sourceUnit: 'percent',
+          batteryField: 'novel_batt',
+        },
+      ],
+    });
+    const globalRow = result.rows.find(r => r.dataPoint === 'custom_global' && r.stationMac === MAC1);
+    const scopedRow = result.rows.find(r => r.dataPoint === 'custom_scoped' && r.stationMac === MAC1);
+    expect(globalRow && globalRow.kind !== 'unrecognized' ? globalRow.hasBatterySubService : null).toBe(true);
+    expect(scopedRow && scopedRow.kind !== 'unrecognized' ? scopedRow.hasBatterySubService : null).toBe(false);
+    // Signatures computed AFTER adjudication reflect the settled state.
+    expect(globalRow && globalRow.kind !== 'unrecognized' ? globalRow.structuralSignature : '').toContain('battery:1');
+    expect(scopedRow && scopedRow.kind !== 'unrecognized' ? scopedRow.structuralSignature : '').toContain('battery:0');
+    // The note names the loser with its own fragment.
+    const note = result.notes.find(n => n.code === 'duplicate-battery-owner');
+    expect(note?.dataPoint).toBe('custom_scoped');
+    expect(note?.overrideIndex).toBe(1);
+    // On MAC2 the global custom is alone — owner there too, no note.
+    expect(result.notes.filter(n => n.code === 'duplicate-battery-owner')).toHaveLength(1);
+  });
+
+  it('the merged-fragment rule keeps earliestOverrideIndex = the batteryField-authoring fragment', () => {
+    // Two fragments merge into ONE row: the batteryField came from the
+    // EARLIER fragment (index 0), so the merged row's ordering key is 0
+    // and it beats a claimant authored at index 1.
+    const result = buildEffectiveSensorMap({
+      ...baseInput(),
+      userOverrides: [
+        { dataPoint: 'custom_a', kind: 'temperature', measurement: 'temperature', sourceUnit: 'fahrenheit', batteryField: 'shared_batt' }, // 0
+        { dataPoint: 'custom_b', kind: 'humidity', measurement: 'humidity', sourceUnit: 'percent', batteryField: 'shared_batt' },          // 1
+        { dataPoint: 'custom_a', name: 'Renamed Later' },   // 2 — merges into custom_a; batteryField provenance stays 0
+      ],
+    });
+    const a = result.rows.find(r => r.dataPoint === 'custom_a' && r.stationMac === MAC1);
+    const b = result.rows.find(r => r.dataPoint === 'custom_b' && r.stationMac === MAC1);
+    expect(a && a.kind !== 'unrecognized' ? a.hasBatterySubService : null).toBe(true);
+    expect(b && b.kind !== 'unrecognized' ? b.hasBatterySubService : null).toBe(false);
+  });
+});
+
+describe('buildEffectiveSensorMap — orphan-battery-field notes (Stage 4)', () => {
+  it('disabling a reserved canonical owner with referencing rows enabled emits a per-station note', () => {
+    const result = buildEffectiveSensorMap({
+      ...baseInput(),
+      // tempf is the canonical owner of battout; humidity (enabled by
+      // default in v2 mode) still references battout.
+      userOverrides: [{ dataPoint: 'tempf', enabled: false }],   // index 0
+    });
+    const orphans = result.notes.filter(n => n.code === 'orphan-battery-field');
+    // One per station (ownership is per-station).
+    expect(orphans.map(n => n.stationMac).sort()).toEqual([MAC1, MAC2]);
+    for (const note of orphans) {
+      expect(note.dataPoint).toBe('tempf');
+      expect(note.source).toBe('override');
+      expect(note.overrideIndex).toBe(0);   // the fragment that disabled the owner
+      expect(note.message).toContain('battout');
+    }
+    // Ownership did NOT roll: no other battout row gained the service.
+    const battoutHosts = result.rows.filter(r =>
+      r.kind !== 'unrecognized' && r.batteryField === 'battout' && r.hasBatterySubService);
+    expect(battoutHosts).toHaveLength(0);
+  });
+
+  it('no orphan note when every referencing row is also disabled', () => {
+    // Disable the whole battout family on MAC1 via station-scoped
+    // overrides for each referencing default row.
+    const battoutRows = DEFAULT_SENSOR_MAP.filter(r => r.batteryField === 'battout');
+    const result = buildEffectiveSensorMap({
+      ...baseInput(),
+      stations: [{ macAddress: MAC1, name: 'Home' }],
+      userOverrides: battoutRows.map(r => ({ dataPoint: r.dataPoint, enabled: false })),
+    });
+    expect(result.notes.filter(n => n.code === 'orphan-battery-field')).toHaveLength(0);
+  });
+
+  it('no orphan note while the owner is enabled', () => {
+    const result = buildEffectiveSensorMap(baseInput());
+    expect(result.notes.filter(n => n.code === 'orphan-battery-field')).toHaveLength(0);
   });
 });

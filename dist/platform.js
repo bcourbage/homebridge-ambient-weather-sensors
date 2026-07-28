@@ -1578,7 +1578,17 @@ export class AmbientWeatherSensorsPlatform {
             this.log.debug(`[sensor-map v2] override warning (${w.code}): ${w.message}`);
         }
         for (const n of map.notes) {
-            this.log.debug(`[sensor-map v2] note (${n.code}/${n.source}): ${n.message}`);
+            // Config-attributable notes (source 'override' — e.g. the Stage-4
+            // battery-ownership pass's duplicate-battery-owner and
+            // orphan-battery-field) are user-actionable: surface at info per
+            // the design doc. Internal-invariant default-map notes stay at
+            // debug.
+            if (n.source === 'override') {
+                this.log.info(`[sensor-map v2] note (${n.code}): ${n.message}`);
+            }
+            else {
+                this.log.debug(`[sensor-map v2] note (${n.code}/${n.source}): ${n.message}`);
+            }
         }
     }
     /**

@@ -23,7 +23,7 @@ import { DEFAULT_SENSOR_MAP, defaultRowFor } from './defaultMap.js';
 import { computeStructuralSignature } from './structuralSignature.js';
 import { DEFAULT_DISPLAY_UNIT_FOR_MEASUREMENT } from './units.js';
 import { validateOverrideBody, validateOverrideIdentity, } from './validation.js';
-import { WRAPPER_FOR_KIND_AND_MEASUREMENT } from './wrappers.js';
+import { WRAPPER_FOR_KIND_AND_MEASUREMENT, wrapperById } from './wrappers.js';
 import { WRAPPER_SPEC } from './wrapperFactories.js';
 export function buildEffectiveSensorMap(input) {
     if (input.configMode === 'safe-mode') {
@@ -79,6 +79,11 @@ export function buildEffectiveSensorMap(input) {
     // and must never fall back to a synthetic index 0. See finding-#4
     // review (P2 — no-wrapper attribution).
     const rowScopeProvenance = new Map();
+    // `enabled` provenance side-table — the fragment whose `enabled`
+    // value survived the merge. The orphan-battery-field note (Stage-4
+    // battery-ownership pass) attributes to the fragment that DISABLED a
+    // reserved canonical owner.
+    const enabledProvenance = new Map();
     for (const { key, fragments } of pendingMerges.values()) {
         // Merge fragments field-by-field, later wins on conflict. Record
         // which fragment provided each field's final value.
@@ -94,6 +99,9 @@ export function buildEffectiveSensorMap(input) {
         }
         if (provenance.batteryField !== undefined) {
             batteryFieldProvenance.set(`${key.stationMac ?? '*'}|${key.dataPoint}`, provenance.batteryField);
+        }
+        if (provenance.enabled !== undefined) {
+            enabledProvenance.set(`${key.stationMac ?? '*'}|${key.dataPoint}`, provenance.enabled);
         }
         // Warn once per duplicated key, per §3.3.2. Whole-row warning —
         // attributed to the FIRST fragment because that's the one users
@@ -242,68 +250,17 @@ export function buildEffectiveSensorMap(input) {
     // ---- 4. Resolve each pair to an EffectiveSensorRow.
     //
     // The battery-ownership context is threaded through the pass so
-    // custom rows can claim their (station, batteryField) key. Iteration
-    // order determines first-writer-wins for custom-vs-custom collisions;
-    // the pair map is insertion-ordered (defaults first per §3 above,
-    // then discovery, then station-specific and global custom targets)
-    // so a default canonical row always resolves before any custom row
-    // that might collide with it — matches the reserved-owner rule.
+    // custom rows can claim their (station, batteryField) key. Ownership
+    // is adjudicated AFTER the resolution loop (Stage-4 battery-ownership
+    // pass): claims are collected per (station, batteryField) and the
+    // winner is the claimant whose `batteryField` was authored by the
+    // EARLIEST config fragment, with `(stationMac, dataPoint)`
+    // lexicographic order as the final tie-break — replacing PR #20's
+    // resolution-iteration-order rule. Structural signatures are computed
+    // only after ownership settles, so signature stability is a function
+    // of resolved ownership, never of iteration order.
     const rows = [];
-    const batteryOwnership = {
-        reservedFields: RESERVED_BATTERY_FIELDS,
-        claims: new Map(),
-        onDuplicate: (mac, batteryField, winner, loser, loserOverrideIndex) => {
-            // Attribute the warning to the fragment that supplied the
-            // losing row's `batteryField` — real config authorship, per
-            // Group 1's provenance contract. Fallback: the winner's
-            // provenance, if the loser had no config-authored field.
-            //
-            // If NEITHER side has provenance, both collided rows were
-            // authored by the default map. That's a plugin bug (two
-            // canonical owners for the same field) — the startup
-            // invariant in `assertCanonicalBatteryOwnersUnique()` below
-            // catches that at module load, so this branch is unreachable
-            // in shipping code. We keep the guard here as belt-and-
-            // suspenders: rather than manufacture an unrelated
-            // `overrideIndex: 0` and mislead the UI, drop the warning
-            // and log at debug — the invariant assertion is what surfaces
-            // the real problem to the developer.
-            const winnerIndex = batteryFieldProvenance.get(`${mac}|${winner}`)
-                ?? batteryFieldProvenance.get(`*|${winner}`);
-            const attribution = loserOverrideIndex ?? winnerIndex;
-            if (attribution === undefined) {
-                // No config authorship on either side — both colliding rows
-                // came from the default map. That's a plugin bug (two canonical
-                // owners for one field), which `assertCanonicalBatteryOwnersUnique()`
-                // catches at module load, so this branch is unreachable in
-                // shipping code. Rather than manufacture a bogus `overrideIndex: 0`
-                // on a `RowValidationWarning` (which would make the UI highlight
-                // an unrelated config entry), route it through the attribution-free
-                // `notes` channel with `source: 'default-map'`. See
-                // `docs/future/wrapper-parameterization.md` §"InternalInvariantNote".
-                notes.push({
-                    code: 'duplicate-battery-owner',
-                    source: 'default-map',
-                    dataPoint: loser,
-                    stationMac: mac,
-                    message: `Row '${loser}' on ${mac} declares batteryField '${batteryField}', `
-                        + `but '${winner}' already owns that field's Battery sub-service on this station. `
-                        + 'Both rows originate from the built-in default map (a plugin bug).',
-                });
-                return;
-            }
-            warnings.push({
-                overrideIndex: attribution,
-                code: 'duplicate-battery-owner',
-                field: 'batteryField',
-                dataPoint: loser,
-                stationMac: mac,
-                message: `Row '${loser}' on ${mac} declares batteryField '${batteryField}', `
-                    + `but '${winner}' already owns that field's Battery sub-service on this station. `
-                    + `'${loser}' will report the battery value but not host the HAP BatteryService.`,
-            });
-        },
-    };
+    const batteryClaims = [];
     for (const { mac, dataPoint } of pairs.values()) {
         const key = `${mac}|${dataPoint}`;
         // Skip forgotten unrecognized fields.
@@ -323,14 +280,12 @@ export function buildEffectiveSensorMap(input) {
         // like `no-wrapper`, independent of batteryField provenance.
         const rowScopeIndex = rowScopeProvenance.get(`${mac}|${dataPoint}`)
             ?? rowScopeProvenance.get(`*|${dataPoint}`);
-        const row = resolveRow({
+        const resolved = resolveRow({
             stationMac: mac,
             dataPoint,
             defaultRow,
             override: merged,
             discovered,
-            overrideIndex,
-            batteryOwnership,
             onNoWrapper: (kind, measurement) => {
                 // A custom (no-default) row is authored entirely by overrides, so
                 // rowScopeProvenance always has its last-fragment index. Attribute
@@ -368,9 +323,111 @@ export function buildEffectiveSensorMap(input) {
                 });
             },
         });
-        if (row) {
-            rows.push(row);
+        if (resolved.row) {
+            rows.push(resolved.row);
+            if (resolved.batteryClaim) {
+                batteryClaims.push({
+                    stationMac: mac,
+                    dataPoint,
+                    batteryField: resolved.batteryClaim,
+                    overrideIndex,
+                    row: resolved.row,
+                });
+            }
         }
+    }
+    // ---- 5. Battery-ownership adjudication (Stage-4 pass). Claims on
+    //         the same (station, batteryField) are ordered by
+    //         `earliestOverrideIndex` — the fragment that authored the
+    //         winning `batteryField` value — with `(stationMac,
+    //         dataPoint)` lexicographic order as the final tie-break.
+    //         Losers keep the field for battery-low reading but host no
+    //         sub-service; the collision routes through the NOTES channel
+    //         (source 'override' with the loser's fragment, falling back
+    //         to the winner's; 'default-map' only in the
+    //         unreachable-by-invariant both-default case).
+    const claimGroups = new Map();
+    for (const claim of batteryClaims) {
+        const key = `${claim.stationMac}|${claim.batteryField}`;
+        const group = claimGroups.get(key) ?? [];
+        group.push(claim);
+        claimGroups.set(key, group);
+    }
+    for (const group of claimGroups.values()) {
+        group.sort((a, b) => {
+            const ai = a.overrideIndex ?? Number.MAX_SAFE_INTEGER;
+            const bi = b.overrideIndex ?? Number.MAX_SAFE_INTEGER;
+            if (ai !== bi) {
+                return ai - bi;
+            }
+            // stationMac is constant within a group; dataPoint breaks the tie.
+            return a.dataPoint.localeCompare(b.dataPoint);
+        });
+        const winner = group[0];
+        winner.row.hasBatterySubService = true;
+        for (const loser of group.slice(1)) {
+            const attribution = loser.overrideIndex ?? winner.overrideIndex;
+            notes.push({
+                code: 'duplicate-battery-owner',
+                source: attribution !== undefined ? 'override' : 'default-map',
+                overrideIndex: attribution,
+                dataPoint: loser.dataPoint,
+                stationMac: loser.stationMac,
+                message: `Row '${loser.dataPoint}' on ${loser.stationMac} declares batteryField `
+                    + `'${loser.batteryField}', but '${winner.dataPoint}' owns that field's Battery `
+                    + 'sub-service on this station (earliest-authored fragment wins). '
+                    + `'${loser.dataPoint}' will report the battery value but not host the HAP BatteryService.`,
+            });
+        }
+    }
+    // ---- 6. Orphan-battery-field notes (Stage-4 pass). Disabling a
+    //         reserved canonical owner does NOT roll ownership anywhere
+    //         (structural-signature stability), so the field has no HAP
+    //         sub-service on that station while OTHER enabled rows still
+    //         reference it. Surface a note per (station, field) attributed
+    //         to the fragment that disabled the owner, so users understand
+    //         why the sub-service went away.
+    const rowsByStation = new Map();
+    for (const row of rows) {
+        const list = rowsByStation.get(row.stationMac) ?? [];
+        list.push(row);
+        rowsByStation.set(row.stationMac, list);
+    }
+    for (const [mac, stationRows] of rowsByStation) {
+        for (const [field, ownerDp] of CANONICAL_OWNER_FOR_FIELD) {
+            const owner = stationRows.find(r => r.dataPoint === ownerDp);
+            if (!owner || owner.kind === 'unrecognized' || owner.enabled) {
+                continue;
+            }
+            const referencing = stationRows.filter(r => r.kind !== 'unrecognized' && r.enabled && r.dataPoint !== ownerDp && r.batteryField === field);
+            if (referencing.length === 0) {
+                continue;
+            }
+            const disabledBy = enabledProvenance.get(`${mac}|${ownerDp}`)
+                ?? enabledProvenance.get(`*|${ownerDp}`);
+            notes.push({
+                code: 'orphan-battery-field',
+                source: disabledBy !== undefined ? 'override' : 'default-map',
+                overrideIndex: disabledBy,
+                dataPoint: ownerDp,
+                stationMac: mac,
+                message: `'${ownerDp}' on ${mac} is disabled, but it is the reserved owner of batteryField `
+                    + `'${field}', which ${referencing.length} enabled row(s) still reference `
+                    + `(${referencing.map(r => `'${r.dataPoint}'`).join(', ')}). The field has no HAP Battery `
+                    + `sub-service on this station until '${ownerDp}' is re-enabled — ownership never rolls to `
+                    + 'another row, so toggling enable state cannot invalidate accessory caches.',
+            });
+        }
+    }
+    // ---- 7. Structural signatures — computed only AFTER ownership
+    //         settles, so a signature is a pure function of the resolved
+    //         row, never of resolution iteration order.
+    for (const row of rows) {
+        if (row.kind === 'unrecognized') {
+            continue;
+        }
+        row.structuralSignature =
+            computeStructuralSignature(row.kind, row.measurement, row.hasBatterySubService, wrapperById(row.wrapperId));
     }
     return { rows, errors, warnings, notes };
 }
@@ -425,14 +482,14 @@ function mergeOverrides(global, station) {
     return mergeInto(global, station);
 }
 function resolveRow(inp) {
-    const { stationMac, dataPoint, defaultRow, override, discovered, batteryOwnership, onNoWrapper, onWrapperMismatch, } = inp;
+    const { stationMac, dataPoint, defaultRow, override, discovered, onNoWrapper, onWrapperMismatch, } = inp;
     // ---- Unrecognized: no default, no user override with kind+measurement.
     if (!defaultRow && !hasKindAndMeasurement(override)) {
         if (!discovered) {
             // Neither default, custom-declared, nor observed. Nothing to emit.
-            return null;
+            return { row: null };
         }
-        return buildUnrecognizedRow(stationMac, dataPoint, discovered);
+        return { row: buildUnrecognizedRow(stationMac, dataPoint, discovered) };
     }
     // ---- Resolve kind + measurement.
     const kind = (override?.kind && override.kind !== 'unrecognized' ? override.kind : undefined)
@@ -450,7 +507,7 @@ function resolveRow(inp) {
         // was rejected. Known rows never reach this branch
         // (defaultRow.wrapper is always set).
         onNoWrapper(kind, measurement);
-        return null;
+        return { row: null };
     }
     // ---- Resolve units. A custom row that omits `displayUnit` gets the
     //      measurement's DOCUMENTED default display unit (review R10-3) —
@@ -463,12 +520,26 @@ function resolveRow(inp) {
         ?? DEFAULT_DISPLAY_UNIT_FOR_MEASUREMENT[measurement]
         ?? sourceUnit;
     // ---- Resolve enabled BEFORE battery ownership. A disabled row
-    //       must never consume a claim slot; see the
-    //       `resolveHasBatterySubService` doc-comment for why.
+    //       must never consume a claim slot.
     const enabled = override?.enabled !== false;
-    // ---- Resolve battery attachment.
+    // ---- Resolve battery attachment (Stage-4 ownership pass; see the
+    //       ResolvedRow doc-comment). Canonical defaults own outright;
+    //       novel-field claimants enroll for the post-loop adjudication;
+    //       reserved fields and disabled rows never attach here.
     const batteryField = resolveBatteryField(defaultRow, override);
-    const hasBatterySubService = resolveHasBatterySubService(stationMac, dataPoint, batteryField, defaultRow, enabled, inp.overrideIndex, batteryOwnership);
+    const isCanonicalDefault = defaultRow !== undefined
+        && defaultRow.canonicalForBattery
+        && defaultRow.batteryField === batteryField;
+    let hasBatterySubService = false;
+    let batteryClaim;
+    if (batteryField !== null && enabled) {
+        if (isCanonicalDefault) {
+            hasBatterySubService = true;
+        }
+        else if (!RESERVED_BATTERY_FIELDS.has(batteryField)) {
+            batteryClaim = batteryField;
+        }
+    }
     // ---- Resolve name.
     const name = override?.name ?? defaultRow?.name ?? dataPoint;
     // ---- Motion trigger fields. Non-motion rows never carry any of
@@ -511,9 +582,12 @@ function resolveRow(inp) {
     // unreachable — no WrapperId maps to a boolean measurement today).
     if (kind !== spec.kind || measurement !== spec.measurement) {
         onWrapperMismatch(wrapperId, kind, measurement, defaultRow !== undefined);
-        return null;
+        return { row: null };
     }
-    const structuralSignature = computeStructuralSignature(kind, measurement, hasBatterySubService, wrapper);
+    // structuralSignature is a PLACEHOLDER here — the ownership pass may
+    // still flip `hasBatterySubService` for enrolled claimants, and the
+    // signature must reflect the settled value. buildEffectiveSensorMap
+    // computes every configured row's signature after adjudication.
     const base = {
         dataPoint,
         stationMac,
@@ -528,21 +602,21 @@ function resolveRow(inp) {
         hasBatterySubService,
         embedName,
         enabled,
-        structuralSignature,
+        structuralSignature: '',
         wrapperId,
     };
     if (measurement === 'boolean') {
         const row = { ...base, measurement: 'boolean' };
-        return row;
+        return { row, batteryClaim };
     }
     if (measurement === 'timestamp') {
         const row = { ...base, measurement: 'timestamp', sourceUnit: 'ms' };
-        return row;
+        return { row, batteryClaim };
     }
     // Numeric.
     if (!sourceUnit || !displayUnit) {
         // Underspecified custom row that slipped past validation. Skip.
-        return null;
+        return { row: null };
     }
     const row = {
         ...base,
@@ -550,7 +624,7 @@ function resolveRow(inp) {
         sourceUnit,
         displayUnit,
     };
-    return row;
+    return { row, batteryClaim };
 }
 function hasKindAndMeasurement(o) {
     return !!o && !!o.kind && o.kind !== 'unrecognized' && !!o.measurement;
@@ -638,61 +712,13 @@ function assertCanonicalBatteryOwnersUnique() {
 }
 assertCanonicalBatteryOwnersUnique();
 /**
- * Ownership decision for a single row. See `BatteryOwnershipContext`
- * for the full rule; this function is where those rules are executed
- * per row and where `claims` gets mutated on a successful custom
- * attachment.
- *
- * Order of operations, per Group 4 follow-up review:
- *
- *   1. If the row's effective batteryField is null → no sub-service.
- *   2. If the row is DISABLED (`enabled: false`) → no sub-service AND
- *      no claim recorded. A disabled row must never block an enabled
- *      row from taking ownership of the same batteryField.
- *   3. Canonical-owner fast path: a default-map row whose resolved
- *      batteryField still equals `defaultRow.batteryField` and
- *      `canonicalForBattery: true` — reserved forever, no need to
- *      touch claims (the reservation is static across resolveRow
- *      calls; other rows check RESERVED_BATTERY_FIELDS below).
- *   4. Any other row (custom OR default-with-overridden-batteryField
- *      OR non-canonical default with explicit user-set batteryField):
- *      go through the CLAIMS path. Reject if RESERVED_BATTERY_FIELDS
- *      says the field is default-owned. Otherwise first-writer wins
- *      via ownership.claims.
+ * batteryField → its canonical owner's dataPoint. Consumed by the
+ * orphan-battery-field pass: when the owner row is disabled on a
+ * station while other enabled rows still reference the field, a note
+ * explains why the sub-service disappeared. Uniqueness of owners is
+ * guaranteed by `assertCanonicalBatteryOwnersUnique()` above.
  */
-function resolveHasBatterySubService(stationMac, dataPoint, batteryField, defaultRow, enabled, overrideIndex, ownership) {
-    if (batteryField === null) {
-        return false;
-    }
-    if (!enabled) {
-        // Disabled rows never own a sub-service and never consume a
-        // claim slot. This is the fix for the "disabled row wins over
-        // enabled row" bug flagged in the Group 4 follow-up.
-        return false;
-    }
-    const isCanonicalDefault = defaultRow !== undefined
-        && defaultRow.canonicalForBattery
-        && defaultRow.batteryField === batteryField;
-    if (isCanonicalDefault) {
-        // Canonical owner keeps ownership. Reserved by DEFAULT_SENSOR_MAP
-        // (see RESERVED_BATTERY_FIELDS); no need to record in claims
-        // because reservation is checked statically below.
-        return true;
-    }
-    // Any other row wanting a sub-service — including a default row
-    // whose batteryField was OVERRIDDEN to something novel, or a
-    // non-canonical default with an explicit user batteryField, or a
-    // custom row — must go through the reserved-set + claims path.
-    if (RESERVED_BATTERY_FIELDS.has(batteryField)) {
-        return false;
-    }
-    const key = `${stationMac}|${batteryField}`;
-    const priorClaim = ownership.claims.get(key);
-    if (priorClaim !== undefined) {
-        ownership.onDuplicate(stationMac, batteryField, priorClaim, dataPoint, overrideIndex);
-        return false;
-    }
-    ownership.claims.set(key, dataPoint);
-    return true;
-}
+const CANONICAL_OWNER_FOR_FIELD = new Map(DEFAULT_SENSOR_MAP
+    .filter(r => r.canonicalForBattery && r.batteryField !== null)
+    .map(r => [r.batteryField, r.dataPoint]));
 //# sourceMappingURL=buildEffectiveMap.js.map
