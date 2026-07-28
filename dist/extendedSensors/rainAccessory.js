@@ -1,6 +1,18 @@
-import { ExtendedSensorBase } from './extendedSensorBase.js';
+import { ExtendedSensorBase, extendedDisplayModeFor, thresholdFor, } from './extendedSensorBase.js';
 import { rainIntensity, timeSince } from './intensityBuckets.js';
 import { convertRain } from './unitConversions.js';
+/**
+ * Rain measurements report length in the family canonical unit
+ * (in / in_per_hr). The display converter (`convertRain`) works in the
+ * dimensionless length unit `RainUnit` ('in' | 'mm'), so a row's
+ * per-hour rate display unit maps to its length unit for formatting.
+ */
+function rainDisplayUnit(row, legacy) {
+    if (!row) {
+        return legacy;
+    }
+    return row.displayUnit === 'mm' || row.displayUnit === 'mm_per_hr' ? 'mm' : 'in';
+}
 /**
  * Rain-rate accessory. AWN's `hourlyrainin` is inches-per-hour — the
  * canonical "is it raining right now" signal. Threshold default
@@ -13,19 +25,23 @@ import { convertRain } from './unitConversions.js';
  * meteorological definitions.
  */
 class RainRateLikeAccessory extends ExtendedSensorBase {
-    constructor(platform, accessory, sensorLabel, awnKey, thresholdInHr) {
-        const displayMode = platform.config.extendedDisplayMode === 'embed' ? 'embed' : 'static';
-        const rainUnit = platform.config.units?.rain || 'in';
+    constructor(platform, accessory, sensorLabel, awnKey, thresholdInHr, 
+    // Row-driven (finding #4). in_per_hr is canonical for rain rate.
+    row) {
+        const legacyUnit = platform.config.units?.rain || 'in';
         super(platform, accessory, {
-            sensorLabel,
-            awnKey,
-            threshold: thresholdInHr, // threshold stays in inches/hr internally (AWN's native unit)
-            displayMode,
-        });
-        this.rainUnit = rainUnit;
+            variant: 'numeric',
+            sensorLabel: row?.name ?? sensorLabel,
+            awnKey: row?.dataPoint ?? awnKey,
+            threshold: thresholdFor(row, thresholdInHr), // in in/hr (canonical for AWN)
+            displayMode: extendedDisplayModeFor(platform, row),
+            measurement: 'rain-rate',
+            sourceUnit: row?.sourceUnit ?? 'in_per_hr',
+        }, row);
+        this.rainUnit = rainDisplayUnit(row, legacyUnit);
     }
-    formatValue(rawInHr) {
-        const converted = convertRain(rawInHr, this.rainUnit);
+    formatValue(canonicalInHr) {
+        const converted = convertRain(canonicalInHr, this.rainUnit);
         // Two decimals at low values, one at moderate, none at violent —
         // matches what someone would actually want to see at each rate.
         const precision = converted < 1 ? 2 : (converted < 10 ? 1 : 0);
@@ -42,12 +58,12 @@ class RainRateLikeAccessory extends ExtendedSensorBase {
  * every poll/realtime tick.
  */
 export class RainRateAccessory extends RainRateLikeAccessory {
-    constructor(platform, accessory) {
+    constructor(platform, accessory, row) {
         // Blank in HB UI form → undefined → Infinity → never triggers.
         // Accessory still appears so the rate is visible in Eve.
         const raw = platform.config.thresholds?.rainRateInHr;
         const threshold = typeof raw === 'number' ? raw : Infinity;
-        super(platform, accessory, 'Rain Rate', 'hourlyrainin', threshold);
+        super(platform, accessory, 'Rain Rate', 'hourlyrainin', threshold, row);
     }
 }
 /**
@@ -62,41 +78,50 @@ export class RainRateAccessory extends RainRateLikeAccessory {
  * an at-a-glance "how wet has it been this week?" indicator.
  */
 class RainAccumulationLikeAccessory extends ExtendedSensorBase {
-    constructor(platform, accessory, sensorLabel, awnKey) {
-        const displayMode = platform.config.extendedDisplayMode === 'embed' ? 'embed' : 'static';
-        const rainUnit = platform.config.units?.rain || 'in';
+    constructor(platform, accessory, sensorLabel, awnKey, 
+    // Row-driven (finding #4). in is canonical for rain accumulation.
+    row) {
+        const legacyUnit = platform.config.units?.rain || 'in';
         super(platform, accessory, {
-            sensorLabel,
-            awnKey,
-            // Trigger if there's *any* measurable accumulation since the
-            // last reset; threshold deliberately tiny so light drizzle
-            // counts. Users can raise it in config for noisier signals.
-            threshold: 0.01,
-            displayMode,
-        });
-        this.rainUnit = rainUnit;
+            variant: 'numeric',
+            sensorLabel: row?.name ?? sensorLabel,
+            awnKey: row?.dataPoint ?? awnKey,
+            // Trigger if there's *any* measurable accumulation since the last
+            // reset; the family default (0.01 in) is set on the KNOWN
+            // rain-accumulation rows in DEFAULT_SENSOR_MAP, so a resolved
+            // known row carries it and `thresholdFor` reads it off the row —
+            // uniform with every other family. The legacy fallback (0.01) is
+            // used only on the row-absent path. A custom rain-accumulation row
+            // that omits `threshold` is disabled (Infinity), per the frozen
+            // schema.
+            threshold: thresholdFor(row, 0.01),
+            displayMode: extendedDisplayModeFor(platform, row),
+            measurement: 'rain-accumulation',
+            sourceUnit: row?.sourceUnit ?? 'in',
+        }, row);
+        this.rainUnit = rainDisplayUnit(row, legacyUnit);
     }
-    formatValue(rawIn) {
-        const converted = convertRain(rawIn, this.rainUnit);
+    formatValue(canonicalIn) {
+        const converted = convertRain(canonicalIn, this.rainUnit);
         const precision = converted < 1 ? 2 : (converted < 10 ? 1 : 0);
         const unitLabel = this.rainUnit === 'mm' ? 'mm' : 'in';
         return `${converted.toFixed(precision)} ${unitLabel}`;
     }
 }
 export class RainEventAccessory extends RainAccumulationLikeAccessory {
-    constructor(p, a) { super(p, a, 'Rain Event', 'eventrainin'); }
+    constructor(p, a, row) { super(p, a, 'Rain Event', 'eventrainin', row); }
 }
 export class RainDailyAccessory extends RainAccumulationLikeAccessory {
-    constructor(p, a) { super(p, a, 'Rain Daily', 'dailyrainin'); }
+    constructor(p, a, row) { super(p, a, 'Rain Daily', 'dailyrainin', row); }
 }
 export class RainWeeklyAccessory extends RainAccumulationLikeAccessory {
-    constructor(p, a) { super(p, a, 'Rain Weekly', 'weeklyrainin'); }
+    constructor(p, a, row) { super(p, a, 'Rain Weekly', 'weeklyrainin', row); }
 }
 export class RainMonthlyAccessory extends RainAccumulationLikeAccessory {
-    constructor(p, a) { super(p, a, 'Rain Monthly', 'monthlyrainin'); }
+    constructor(p, a, row) { super(p, a, 'Rain Monthly', 'monthlyrainin', row); }
 }
 export class RainYearlyAccessory extends RainAccumulationLikeAccessory {
-    constructor(p, a) { super(p, a, 'Rain Yearly', 'yearlyrainin'); }
+    constructor(p, a, row) { super(p, a, 'Rain Yearly', 'yearlyrainin', row); }
 }
 /**
  * AWN: `lastRain` — ISO timestamp string of the last detected rain
@@ -109,14 +134,16 @@ export class RainYearlyAccessory extends RainAccumulationLikeAccessory {
  * threshold against a timestamp; we leave it always false.
  */
 export class LastRainAccessory extends ExtendedSensorBase {
-    constructor(platform, accessory) {
-        const displayMode = platform.config.extendedDisplayMode === 'embed' ? 'embed' : 'static';
+    constructor(platform, accessory, row) {
         super(platform, accessory, {
-            sensorLabel: 'Last Rain',
-            awnKey: 'lastRain',
+            variant: 'timestamp',
+            sensorLabel: row?.name ?? 'Last Rain',
+            awnKey: row?.dataPoint ?? 'lastRain',
             threshold: Infinity,
-            displayMode,
-        });
+            displayMode: extendedDisplayModeFor(platform, row),
+            measurement: 'timestamp',
+            sourceUnit: 'ms',
+        }, row);
     }
     formatValue(rawMs) {
         return timeSince(rawMs);

@@ -347,9 +347,37 @@ Each entry in `DEFAULT_SENSOR_MAP` references its wrapper directly:
 
 ```typescript
 { dataPoint: 'tempf',        kind: 'temperature', measurement: 'temperature', wrapper: TEMPERATURE_WRAPPER,      name: 'Outdoor Temperature',  batteryField: 'battout', ... },
-{ dataPoint: 'windgustmph',  kind: 'motion',      measurement: 'wind-speed',  wrapper: WIND_GUST_WRAPPER,        name: 'Wind Gust',            batteryField: 'battout', threshold: 35, ... },
-{ dataPoint: 'baromabsin',   kind: 'motion',      measurement: 'pressure',    wrapper: PRESSURE_ABSOLUTE_WRAPPER, name: 'Pressure Station',    batteryField: 'battin', threshold: 29.5, triggerDirection: 'below', ... },
+{ dataPoint: 'windgustmph',  kind: 'motion',      measurement: 'wind-speed',  wrapper: WIND_GUST_WRAPPER,        name: 'Wind Gust',            batteryField: 'battout', ... },
+{ dataPoint: 'baromabsin',   kind: 'motion',      measurement: 'pressure',    wrapper: PRESSURE_ABSOLUTE_WRAPPER, name: 'Pressure (Station)',  batteryField: 'battin', triggerDirection: 'below', ... },
+{ dataPoint: 'dailyrainin',  kind: 'motion',      measurement: 'rain-accumulation', wrapper: RAIN_DAILY_WRAPPER,  name: 'Rain Daily',      batteryField: 'battout', threshold: 0.01, ... },
 ```
+
+Two things the example above makes explicit (they matter for Stage 4 — do not "fix" them back):
+
+- **`name` mirrors the v1.7 service label exactly.** The pressure rows are
+  `'Pressure (Station)'` / `'Pressure (Sea Level)'` (with parentheses), because
+  the extended wrappers derive their label from `row.name` (`row?.name ??
+  legacyLabel`) and the `AccessoryInformation.Model` characteristic uses the
+  raw label. A default known row must therefore reproduce the v1.7 label
+  byte-for-byte, or the migration renames existing accessories. Precisely,
+  for `baromabsin` the v1.7.0 golden-parity test locks two distinct strings:
+  `AccessoryInformation.Model = "Pressure (Station)"` (raw label, parens kept)
+  and the MotionSensor service `Name` / `ConfiguredName = "Pressure Station"`
+  (via `composeStaticName`, which strips the parentheses). The golden harness
+  pins the accessory's own name to a fixed value, so it does NOT exercise the
+  platform-supplied `PlatformAccessory.displayName` or the real
+  `AccessoryInformation.Name` — the Stage 4 platform-lifecycle test is the gate
+  for those.
+
+- **`threshold` on the built-in default row is set ONLY for the families whose
+  v1.7 default fired without user config** — rain-accumulation (`0.01`) and
+  lightning-count (`1`). Wind, UV, rain-rate, pressure, and lightning-distance
+  thresholds are NOT built-in defaults: they arrive through the legacy
+  compat/config path (`platform.config.thresholds.*`), so a pressure row's
+  `29.5` or a wind-gust row's `35` comes from the user's config, not from
+  `DEFAULT_SENSOR_MAP`. A blank config threshold resolves to `Infinity`
+  (motion disabled). Pressure's `triggerDirection: 'below'` IS a built-in
+  default.
 
 For CUSTOM datapoints (not in the default map), the wrapper is chosen from a canonical `(kind, measurement)` → descriptor lookup. This table is the ONLY way custom sensors pick a wrapper — there is no public `wrapperId` override in v2.0.
 

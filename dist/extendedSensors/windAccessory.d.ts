@@ -1,5 +1,6 @@
 import { PlatformAccessory } from 'homebridge';
 import { AmbientWeatherSensorsPlatform } from '../platform.js';
+import type { NumericSensorRow } from '../sensorMap/types.js';
 import { ExtendedSensorBase } from './extendedSensorBase.js';
 /**
  * Wind speed/gust accessories share their entire body — only the
@@ -14,9 +15,9 @@ import { ExtendedSensorBase } from './extendedSensorBase.js';
 declare abstract class WindSpeedLikeAccessory extends ExtendedSensorBase {
     private readonly speedUnit;
     private readonly unitLabel;
-    constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory, sensorLabel: string, awnKey: string, thresholdMph: number);
-    protected formatValue(rawMph: number): string;
-    protected formatIntensity(rawMph: number): string | undefined;
+    constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory, sensorLabel: string, awnKey: string, thresholdMph: number, row?: NumericSensorRow);
+    protected formatValue(canonicalMph: number): string;
+    protected formatIntensity(canonicalMph: number): string | undefined;
 }
 /**
  * AWN: `windspeedmph` — the current instantaneous wind speed. Default
@@ -25,7 +26,7 @@ declare abstract class WindSpeedLikeAccessory extends ExtendedSensorBase {
  * automation trigger ("close the awning when it gets gusty").
  */
 export declare class WindSpeedAccessory extends WindSpeedLikeAccessory {
-    constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory);
+    constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory, row?: NumericSensorRow);
 }
 /**
  * AWN: `windgustmph` — the highest instantaneous reading in the last
@@ -34,7 +35,7 @@ export declare class WindSpeedAccessory extends WindSpeedLikeAccessory {
  * larger value to be alarming. Beaufort 7 territory.
  */
 export declare class WindGustAccessory extends WindSpeedLikeAccessory {
-    constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory);
+    constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory, row?: NumericSensorRow);
 }
 /**
  * AWN: `maxdailygust` — the maximum gust speed recorded today (resets
@@ -43,7 +44,7 @@ export declare class WindGustAccessory extends WindSpeedLikeAccessory {
  * fundamental measurement.
  */
 export declare class WindMaxDailyGustAccessory extends WindSpeedLikeAccessory {
-    constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory);
+    constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory, row?: NumericSensorRow);
 }
 /**
  * Wind direction is informational. The Value characteristic carries
@@ -58,7 +59,7 @@ export declare class WindMaxDailyGustAccessory extends WindSpeedLikeAccessory {
  * since fractional degrees are below the station's sensor precision.
  */
 declare abstract class WindDirectionLikeAccessory extends ExtendedSensorBase {
-    constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory, sensorLabel: string, awnKey: string);
+    constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory, sensorLabel: string, awnKey: string, row?: NumericSensorRow);
     protected formatValue(rawDegrees: number): string;
 }
 /**
@@ -67,7 +68,7 @@ declare abstract class WindDirectionLikeAccessory extends ExtendedSensorBase {
  * enable the 10m-averaged variant below.
  */
 export declare class WindDirectionAccessory extends WindDirectionLikeAccessory {
-    constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory);
+    constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory, row?: NumericSensorRow);
 }
 /**
  * AWN: `winddir_avg10m` — direction averaged over the last 10
@@ -75,7 +76,7 @@ export declare class WindDirectionAccessory extends WindDirectionLikeAccessory {
  * users in variable-wind locations.
  */
 export declare class WindDirection10mAccessory extends WindDirectionLikeAccessory {
-    constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory);
+    constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory, row?: NumericSensorRow);
 }
 export {};
 //# sourceMappingURL=windAccessory.d.ts.map

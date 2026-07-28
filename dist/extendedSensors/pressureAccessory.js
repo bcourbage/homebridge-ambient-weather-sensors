@@ -1,4 +1,4 @@
-import { ExtendedSensorBase } from './extendedSensorBase.js';
+import { ExtendedSensorBase, extendedDisplayModeFor, thresholdFor, } from './extendedSensorBase.js';
 import { convertPressure } from './unitConversions.js';
 /**
  * Barometric pressure accessory. AWN reports two values:
@@ -23,12 +23,16 @@ import { convertPressure } from './unitConversions.js';
  * base class carries.
  */
 class PressureLikeAccessory extends ExtendedSensorBase {
-    constructor(platform, accessory, sensorLabel, awnKey) {
-        const displayMode = platform.config.extendedDisplayMode === 'embed' ? 'embed' : 'static';
-        const pressureUnit = platform.config.units?.pressure || 'inHg';
+    constructor(platform, accessory, sensorLabel, awnKey, 
+    // Row-driven (finding #4). inHg is canonical for pressure, so the
+    // base's toCanonical is a no-op for AWN-native rows.
+    row) {
+        const pressureUnit = row
+            ? row.displayUnit
+            : (platform.config.units?.pressure || 'inHg');
         // Pressure trigger fires when readings drop *below* the threshold
-        // — opposite of wind/UV/rain. The configured threshold value is
-        // in AWN's native unit (inHg); default 29.5 inHg ≈ 999 hPa is the
+        // — opposite of wind/UV/rain. The threshold value is in AWN's
+        // native unit (inHg); default 29.5 inHg ≈ 999 hPa is the
         // conventional "low pressure system incoming" boundary.
         //
         // Blank in HB UI form → undefined → Infinity → Number.isFinite
@@ -37,16 +41,19 @@ class PressureLikeAccessory extends ExtendedSensorBase {
         const raw = platform.config.thresholds?.pressureInHg;
         const thresholdInHg = typeof raw === 'number' ? raw : Infinity;
         super(platform, accessory, {
-            sensorLabel,
-            awnKey,
-            threshold: thresholdInHg,
-            triggerDirection: 'below',
-            displayMode,
-        });
+            variant: 'numeric',
+            sensorLabel: row?.name ?? sensorLabel,
+            awnKey: row?.dataPoint ?? awnKey,
+            threshold: thresholdFor(row, thresholdInHg),
+            triggerDirection: row?.triggerDirection ?? 'below',
+            displayMode: extendedDisplayModeFor(platform, row),
+            measurement: 'pressure',
+            sourceUnit: row?.sourceUnit ?? 'inHg',
+        }, row);
         this.pressureUnit = pressureUnit;
     }
-    formatValue(rawInHg) {
-        const converted = convertPressure(rawInHg, this.pressureUnit);
+    formatValue(canonicalInHg) {
+        const converted = convertPressure(canonicalInHg, this.pressureUnit);
         const unitLabel = this.pressureUnit;
         // hPa values are whole-number-ish (~1013); inHg readings are
         // two-decimal (~29.92).
@@ -55,13 +62,13 @@ class PressureLikeAccessory extends ExtendedSensorBase {
     }
 }
 export class PressureRelativeAccessory extends PressureLikeAccessory {
-    constructor(platform, accessory) {
-        super(platform, accessory, 'Pressure (Sea Level)', 'baromrelin');
+    constructor(platform, accessory, row) {
+        super(platform, accessory, 'Pressure (Sea Level)', 'baromrelin', row);
     }
 }
 export class PressureAbsoluteAccessory extends PressureLikeAccessory {
-    constructor(platform, accessory) {
-        super(platform, accessory, 'Pressure (Station)', 'baromabsin');
+    constructor(platform, accessory, row) {
+        super(platform, accessory, 'Pressure (Station)', 'baromabsin', row);
     }
 }
 //# sourceMappingURL=pressureAccessory.js.map

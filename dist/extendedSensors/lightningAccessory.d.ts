@@ -1,5 +1,6 @@
 import { PlatformAccessory } from 'homebridge';
 import { AmbientWeatherSensorsPlatform } from '../platform.js';
+import type { NumericSensorRow, TimestampSensorRow } from '../sensorMap/types.js';
 import { ExtendedSensorBase } from './extendedSensorBase.js';
 /**
  * AWN's WH31L lightning sensor (Ecowitt WH57 equivalent) reports four fields, and we expose each
@@ -25,7 +26,7 @@ import { ExtendedSensorBase } from './extendedSensorBase.js';
  * a raw number before passing into setValue().
  */
 declare abstract class LightningCountLikeAccessory extends ExtendedSensorBase {
-    constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory, sensorLabel: string, awnKey: string);
+    constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory, sensorLabel: string, awnKey: string, row?: NumericSensorRow);
     protected formatValue(rawCount: number): string;
 }
 /**
@@ -33,14 +34,14 @@ declare abstract class LightningCountLikeAccessory extends ExtendedSensorBase {
  * midnight in the station's configured timezone.
  */
 export declare class LightningDayAccessory extends LightningCountLikeAccessory {
-    constructor(p: AmbientWeatherSensorsPlatform, a: PlatformAccessory);
+    constructor(p: AmbientWeatherSensorsPlatform, a: PlatformAccessory, row?: NumericSensorRow);
 }
 /**
  * AWN: `lightning_hour` — strike count in the trailing 60 minutes.
  * Sliding window, not aligned to clock hours.
  */
 export declare class LightningHourAccessory extends LightningCountLikeAccessory {
-    constructor(p: AmbientWeatherSensorsPlatform, a: PlatformAccessory);
+    constructor(p: AmbientWeatherSensorsPlatform, a: PlatformAccessory, row?: NumericSensorRow);
 }
 /**
  * AWN: `lightning_distance` — distance to the most recent strike, in
@@ -54,8 +55,8 @@ export declare class LightningHourAccessory extends LightningCountLikeAccessory 
  */
 export declare class LightningDistanceAccessory extends ExtendedSensorBase {
     private readonly distanceUnit;
-    constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory);
-    protected formatValue(rawMi: number): string;
+    constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory, row?: NumericSensorRow);
+    protected formatValue(canonicalMi: number): string;
 }
 /**
  * AWN: `lightning_time` — Unix-ms timestamp of the last detected
@@ -65,7 +66,7 @@ export declare class LightningDistanceAccessory extends ExtendedSensorBase {
  * relative time string ("2 minutes ago", "never").
  */
 export declare class LightningLastStrikeAccessory extends ExtendedSensorBase {
-    constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory);
+    constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory, row?: TimestampSensorRow);
     protected formatValue(rawMs: number): string;
 }
 export {};

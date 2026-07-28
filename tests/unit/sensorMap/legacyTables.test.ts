@@ -5,8 +5,8 @@ import {
   LEGACY_TYPE_TO_MEASUREMENT,
   LEGACY_TYPES,
 } from '../../../src/sensorMap/legacyTables';
+import { defaultRowFor } from '../../../src/sensorMap/defaultMap';
 import { LEGAL_UNITS_FOR_MEASUREMENT } from '../../../src/sensorMap/units';
-import { WRAPPER_FOR_KIND_AND_MEASUREMENT } from '../../../src/sensorMap/wrappers';
 
 describe('LEGACY_TYPE_TO_KIND / LEGACY_TYPE_TO_MEASUREMENT parity', () => {
   it('both tables share the same keys', () => {
@@ -49,11 +49,15 @@ describe('LEGACY_TYPE_TO_KIND / LEGACY_TYPE_TO_MEASUREMENT parity', () => {
     expect(LEGACY_TYPES.length).toBe(25);
   });
 
-  it('has a wrapper available for at least one legacy type per family', () => {
-    // Sanity: verify the design-doc statement that WRAPPER_FOR_KIND_AND_MEASUREMENT
-    // can resolve the primary families.
-    expect(WRAPPER_FOR_KIND_AND_MEASUREMENT['temperature|temperature']).toBeDefined();
-    expect(WRAPPER_FOR_KIND_AND_MEASUREMENT['humidity|humidity']).toBeDefined();
-    expect(WRAPPER_FOR_KIND_AND_MEASUREMENT['motion|wind-speed']).toBeDefined();
+  it('known dataPoints resolve their wrapper via the DEFAULT MAP (not the resolution table)', () => {
+    // finding-#4 Stage 0 emptied WRAPPER_FOR_KIND_AND_MEASUREMENT, so
+    // this test now verifies the invariant that actually matters:
+    // KNOWN dataPoints carry their wrapper directly on the default
+    // row (`defaultRow.wrapper`) and keep resolving even with the
+    // custom-sensor resolution table empty. Compat-generated
+    // overrides therefore stay functional.
+    expect(defaultRowFor('tempf')?.wrapper.id).toBe('temperature');
+    expect(defaultRowFor('humidity')?.wrapper.id).toBe('humidity');
+    expect(defaultRowFor('windspeedmph')?.wrapper.id).toBe('wind-speed');
   });
 });

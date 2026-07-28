@@ -8,6 +8,7 @@ import {
   makeMockAccessory,
   makeMockPlatform,
 } from '../helpers/mockHomebridge';
+import { makeNumericRow } from '../helpers/effectiveRow';
 
 describe('SolarRadiationAccessory', () => {
   // Conversion: lux = W/m² / 0.0079, rounded to integer.
@@ -56,5 +57,62 @@ describe('SolarRadiationAccessory', () => {
       platform as unknown as AmbientWeatherSensorsPlatform,
       accessory as never,
     )).not.toThrow();
+  });
+});
+
+// ---- finding-#4 Stage 2: row-driven construction ----
+describe('SolarRadiationAccessory — row-driven (finding #4)', () => {
+  function solarRow(overrides = {}) {
+    return makeNumericRow({
+      kind: 'light', measurement: 'illuminance', sourceUnit: 'wm2', displayUnit: 'wm2',
+      wrapperId: 'solar-radiation', dataPoint: 'solarradiation', name: 'Solar Radiation',
+      ...overrides,
+    });
+  }
+
+  it('converts an AWN-native wm2 row exactly like the legacy W/m²→lux path', () => {
+    const platform = makeMockPlatform();
+    const accessory = makeMockAccessory({ uniqueId: 'MAC-solar', displayName: 'Solar Radiation' });
+    const wrapper = new SolarRadiationAccessory(
+      platform as unknown as AmbientWeatherSensorsPlatform,
+      accessory as never,
+      solarRow({ sourceUnit: 'wm2' }),
+    );
+    wrapper.setValue(500);
+    const svc = accessory.getService(MockServices.LightSensor)!;
+    expect(svc.readCharacteristic(MockCharacteristics.CurrentAmbientLightLevel)).toBe(Math.round(500 / 0.0079));
+  });
+
+  it('legacy (row-absent) build keeps the exact v1.7 "W/m² → lx" debug string', () => {
+    // P2-B: preserve flag-off log identity.
+    const platform = makeMockPlatform();
+    const accessory = makeMockAccessory({ uniqueId: 'MAC-solar', displayName: 'Solar Radiation' });
+    new SolarRadiationAccessory(platform as unknown as AmbientWeatherSensorsPlatform, accessory as never)
+      .setValue(500);
+    const expectedLux = Math.round(500 / 0.0079);
+    expect(platform.log.logs.some(l => l.message === `SET CurrentAmbientLightLevel: 500 W/m² → ${expectedLux} lx`)).toBe(true);
+  });
+
+  it('row-driven build uses the unit-neutral debug string (no "W/m²")', () => {
+    const platform = makeMockPlatform();
+    const accessory = makeMockAccessory({ uniqueId: 'MAC-solar', displayName: 'Solar Radiation' });
+    new SolarRadiationAccessory(
+      platform as unknown as AmbientWeatherSensorsPlatform, accessory as never, solarRow(),
+    ).setValue(500);
+    expect(platform.log.logs.some(l => l.message.includes('W/m²'))).toBe(false);
+  });
+
+  it('skips the W/m²→lux conversion for a custom sensor reporting lux (sourceUnit: lux)', () => {
+    const platform = makeMockPlatform();
+    const accessory = makeMockAccessory({ uniqueId: 'MAC-lux', displayName: 'Greenhouse Light' });
+    const wrapper = new SolarRadiationAccessory(
+      platform as unknown as AmbientWeatherSensorsPlatform,
+      accessory as never,
+      solarRow({ dataPoint: 'gh_lux', sourceUnit: 'lux', displayUnit: 'lux', name: 'Greenhouse Light' }),
+    );
+    wrapper.setValue(12000);   // already lux — no re-conversion
+    const svc = accessory.getService(MockServices.LightSensor)!;
+    expect(svc.readCharacteristic(MockCharacteristics.CurrentAmbientLightLevel)).toBe(12000);
+    expect(svc.readCharacteristic(MockCharacteristics.Name)).toBe('Greenhouse Light');
   });
 });

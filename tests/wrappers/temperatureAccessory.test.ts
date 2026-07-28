@@ -8,6 +8,7 @@ import {
   makeMockAccessory,
   makeMockPlatform,
 } from '../helpers/mockHomebridge';
+import { makeNumericRow } from '../helpers/effectiveRow';
 
 /**
  * TemperatureAccessory wraps AWN's `tempf` (and related) fields into a
@@ -140,5 +141,132 @@ describe('TemperatureAccessory', () => {
     wrapper.setBatteryLow(true);
     expect(battSvc!.readCharacteristic(MockCharacteristics.StatusLowBattery)).toBe(1);   // BATTERY_LEVEL_LOW
     expect(battSvc!.readCharacteristic(MockCharacteristics.BatteryLevel)).toBe(5);
+  });
+});
+
+// ---- finding-#4 Stage 2: row-driven construction ----
+describe('TemperatureAccessory — row-driven (finding #4)', () => {
+  const F_TO_C = (f: number) => (f - 32) * 5 / 9;
+
+  function tempRow(overrides: Partial<Parameters<typeof makeNumericRow>[0]> = {}) {
+    return makeNumericRow({
+      kind: 'temperature', measurement: 'temperature',
+      sourceUnit: 'fahrenheit', displayUnit: 'fahrenheit',
+      dataPoint: 'tempf', name: 'Outdoor Temperature',
+      wrapperId: 'temperature',
+      ...overrides,
+    });
+  }
+
+  it('keeps the tile Name platform-owned (context.displayName), NOT row.name', () => {
+    // finding-#4 review (P2-D): station composition is platform-owned.
+    // The platform sets context.device.displayName (station-prefixed for
+    // multi-station); the wrapper renders THAT, so a row never silently
+    // renames an existing customer's accessory. `row.name` is the bare
+    // sensor label the platform composes INTO displayName elsewhere.
+    const platform = makeMockPlatform();
+    const accessory = makeMockAccessory({ uniqueId: 'MAC-tempf', displayName: 'Backyard Outdoor Temperature' });
+    new TemperatureAccessory(
+      platform as unknown as AmbientWeatherSensorsPlatform,
+      accessory as never,
+      tempRow({ name: 'Outdoor Temperature' }),   // bare label — must NOT clobber the composed name
+    );
+    const svc = accessory.getService(MockServices.TemperatureSensor)!;
+    expect(svc.readCharacteristic(MockCharacteristics.Name)).toBe('Backyard Outdoor Temperature');
+  });
+
+  it('converts an AWN-native fahrenheit row exactly like the legacy F→C path', () => {
+    const platform = makeMockPlatform();
+    const accessory = makeMockAccessory({ uniqueId: 'MAC-tempf', displayName: 'Outdoor Temperature' });
+    const wrapper = new TemperatureAccessory(
+      platform as unknown as AmbientWeatherSensorsPlatform,
+      accessory as never,
+      tempRow({ sourceUnit: 'fahrenheit' }),
+    );
+    wrapper.setValue(68);
+    const svc = accessory.getService(MockServices.TemperatureSensor)!;
+    expect(svc.readCharacteristic(MockCharacteristics.CurrentTemperature)).toBeCloseTo(F_TO_C(68), 6);
+  });
+
+  it('skips F→C for a custom sensor already reporting celsius (sourceUnit: celsius)', () => {
+    const platform = makeMockPlatform();
+    const accessory = makeMockAccessory({ uniqueId: 'MAC-barn_c', displayName: 'Barn' });
+    const wrapper = new TemperatureAccessory(
+      platform as unknown as AmbientWeatherSensorsPlatform,
+      accessory as never,
+      tempRow({ dataPoint: 'barn_c', sourceUnit: 'celsius', displayUnit: 'celsius' }),
+    );
+    wrapper.setValue(20);   // already °C — must NOT be re-converted
+    const svc = accessory.getService(MockServices.TemperatureSensor)!;
+    expect(svc.readCharacteristic(MockCharacteristics.CurrentTemperature)).toBe(20);
+  });
+
+  it('attaches Battery iff row.hasBatterySubService, decoupled from telemetry', () => {
+    const platform = makeMockPlatform();
+    // No batteryLow in context (telemetry absent this tick) but the row
+    // owns the field → the sub-service must still exist, seeded NORMAL.
+    const accessory = makeMockAccessory({ uniqueId: 'MAC-tempf', displayName: 'Outdoor Temperature' });
+    new TemperatureAccessory(
+      platform as unknown as AmbientWeatherSensorsPlatform,
+      accessory as never,
+      tempRow({ hasBatterySubService: true, batteryField: 'battout' }),
+    );
+    const batt = accessory.getService(MockServices.Battery);
+    expect(batt).toBeDefined();
+    expect(batt!.readCharacteristic(MockCharacteristics.StatusLowBattery)).toBe(0);   // NORMAL placeholder
+  });
+
+  it('does NOT attach Battery when row.hasBatterySubService is false', () => {
+    const platform = makeMockPlatform();
+    const accessory = makeMockAccessory({ uniqueId: 'MAC-tempf', displayName: 'Outdoor Temperature' });
+    new TemperatureAccessory(
+      platform as unknown as AmbientWeatherSensorsPlatform,
+      accessory as never,
+      tempRow({ hasBatterySubService: false }),
+    );
+    expect(accessory.getService(MockServices.Battery)).toBeUndefined();
+  });
+
+  it('legacy (row-absent) build keeps the exact v1.7 "°F → °C" debug string', () => {
+    // P2-B: preserve flag-off log identity.
+    const platform = makeMockPlatform();
+    const accessory = makeMockAccessory({ uniqueId: 'MAC-tempf', displayName: 'Outdoor' });
+    new TemperatureAccessory(platform as unknown as AmbientWeatherSensorsPlatform, accessory as never)
+      .setValue(68);
+    expect(platform.log.logs.some(l => l.message === 'SET CurrentTemperature: 68°F → 20.00°C')).toBe(true);
+  });
+
+  it('row-driven build uses the unit-neutral debug string (no "°F")', () => {
+    const platform = makeMockPlatform();
+    const accessory = makeMockAccessory({ uniqueId: 'MAC-tempf', displayName: 'Outdoor' });
+    new TemperatureAccessory(
+      platform as unknown as AmbientWeatherSensorsPlatform, accessory as never, tempRow(),
+    ).setValue(68);
+    expect(platform.log.logs.some(l => l.message === 'SET CurrentTemperature: 68 → 20.00°C')).toBe(true);
+    expect(platform.log.logs.some(l => l.message.includes('°F'))).toBe(false);
+  });
+
+  it('HEAD row-driven vs legacy consistency (mock; the v1.7.0 golden in graphParity.test.ts is the authoritative migration gate)', () => {
+    // Both constructions get the SAME accessory shape: same displayName,
+    // same battery presence. The row-driven path must produce a
+    // byte-identical HAP graph so cached accessories don't invalidate.
+    const platform = makeMockPlatform();
+
+    const legacyAcc = makeMockAccessory({
+      uniqueId: 'MAC-tempf', displayName: 'Outdoor Temperature', batteryLow: false, value: 68,
+    });
+    new TemperatureAccessory(
+      platform as unknown as AmbientWeatherSensorsPlatform, legacyAcc as never,
+    );
+
+    const rowAcc = makeMockAccessory({
+      uniqueId: 'MAC-tempf', displayName: 'Outdoor Temperature', batteryLow: false, value: 68,
+    });
+    new TemperatureAccessory(
+      platform as unknown as AmbientWeatherSensorsPlatform, rowAcc as never,
+      tempRow({ hasBatterySubService: true, batteryField: 'battout' }),
+    );
+
+    expect(rowAcc.serviceShape()).toEqual(legacyAcc.serviceShape());
   });
 });

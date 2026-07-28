@@ -1,11 +1,12 @@
 import { PlatformAccessory } from 'homebridge';
 import { AmbientWeatherSensorsPlatform, SensorAccessory } from './platform.js';
+import type { NumericSensorRow } from './sensorMap/types.js';
 export declare class Co2Accessory implements SensorAccessory {
     private readonly platform;
     private readonly accessory;
     private service;
     private readonly batterySetter?;
-    constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory);
+    constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory, row?: NumericSensorRow);
     setBatteryLow(batteryLow: boolean): void;
     /**
      * AWN reports CO2 in ppm directly. HomeKit's CarbonDioxideLevel is

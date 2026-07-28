@@ -2,6 +2,15 @@ import { Characteristic, PlatformAccessory, Service, WithUUID } from 'homebridge
 
 import { setupBatteryService } from '../batteryService.js';
 import { AmbientWeatherSensorsPlatform, SensorAccessory } from '../platform.js';
+import { batteryOptionsFor } from '../sensorMap/batterySeed.js';
+import { toCanonical } from '../sensorMap/unitConversions.js';
+import type {
+  EffectiveSensorRow,
+  Measurement,
+  NumericSensorRow,
+  SensorUnit,
+  TimestampSensorRow,
+} from '../sensorMap/types.js';
 import { register as registerCharacteristics } from './customCharacteristics.js';
 import { composeStaticName, composeEmbeddedName, isUserRenamed } from './nameComposer.js';
 
@@ -22,38 +31,103 @@ import { composeStaticName, composeEmbeddedName, isUserRenamed } from './nameCom
 export type ExtendedDisplayMode = 'static' | 'embed';
 
 /**
+ * The configured row shapes an extended wrapper can be handed. Both
+ * carry the knobs (`name`, `threshold`, `triggerEnabled`, `embedName`,
+ * `sourceUnit`, `triggerDirection`) the row-driven constructors read;
+ * unrecognized rows never reach a wrapper.
+ */
+export type ConfiguredExtendedRow = NumericSensorRow | TimestampSensorRow;
+
+/**
+ * Display mode from the row (`embedName`) when present, else from the
+ * legacy `platform.config.extendedDisplayMode`. Finding-#4 Stage 2.
+ */
+export function extendedDisplayModeFor(
+  platform: AmbientWeatherSensorsPlatform,
+  row: ConfiguredExtendedRow | undefined,
+): ExtendedDisplayMode {
+  if (row) {
+    return row.embedName ? 'embed' : 'static';
+  }
+  return platform.config.extendedDisplayMode === 'embed' ? 'embed' : 'static';
+}
+
+/**
+ * Threshold (in the row's source unit) from the row when present, else
+ * the legacy config-derived value. `triggerEnabled: false` and a blank
+ * threshold both collapse to `Infinity`, which the base's
+ * `Number.isFinite` gate reads as "motion trigger disabled".
+ */
+export function thresholdFor(row: ConfiguredExtendedRow | undefined, legacyThreshold: number): number {
+  if (!row) {
+    return legacyThreshold;
+  }
+  return row.triggerEnabled === false ? Infinity : (row.threshold ?? Infinity);
+}
+
+/**
  * Inputs threaded through the constructor — keeps the public surface
  * small even as subclasses grow. Each extended-sensor subclass passes
  * one of these into super().
+ *
+ * Discriminated on `variant` (finding-#4 review): a `TimestampSensorRow`
+ * has no `displayUnit` and `sourceUnit` is fixed at `'ms'` by contract,
+ * so bundling everything into one interface would let an illegal
+ * `(timestamp, non-ms)` combination be constructed. The union makes
+ * that unrepresentable and the base dispatches on `variant`.
  */
-export interface ExtendedSensorOptions {
+interface CommonExtendedOptions {
   /** Friendly base name, shown in Apple Home. Examples: "Wind Speed", "Rain Rate", "UV Index". */
   sensorLabel: string;
   /** AWN's machine name for this sensor (e.g. "windspeedmph"). Used for logging only. */
   awnKey: string;
   /**
-   * Value at which MotionDetected flips to true. Interpretation
-   * depends on `triggerDirection` below — by default a reading at or
-   * above `threshold` trips the motion event; for "low values are
-   * noteworthy" sensors (barometric pressure, lightning distance),
-   * the subclass sets `triggerDirection: 'below'` so readings at or
-   * below the threshold trip it instead. Pass `Infinity` (with the
-   * default 'above') to disable motion triggering entirely (e.g.
-   * wind direction, last-strike timestamp — informational only).
+   * Value at which MotionDetected flips to true, IN `sourceUnit`.
+   * Interpretation depends on `triggerDirection` — by default a reading
+   * at or above `threshold` trips the event; sensors where low readings
+   * are the alarming direction pass `triggerDirection: 'below'`. Pass
+   * `Infinity` to disable motion triggering entirely (wind direction,
+   * timestamps — informational only).
    */
   threshold: number;
   /**
-   * Compare direction for the threshold. 'above' is the default and
-   * matches the conventional "trigger on high values" sensors (wind
-   * gust, UV, rain rate, lightning count). 'below' inverts the
-   * comparison for sensors where low readings are the alarming
-   * direction (barometric pressure = storm incoming, lightning
+   * Compare direction for the threshold. 'above' is the default;
+   * 'below' inverts it (barometric pressure = storm incoming, lightning
    * distance = nearby strike).
    */
   triggerDirection?: 'above' | 'below';
   /** Display mode chosen by the user in config. */
   displayMode: ExtendedDisplayMode;
 }
+
+/**
+ * Numeric extended sensor. `measurement` + `sourceUnit` let the base
+ * convert the raw reading AND the threshold to the family's canonical
+ * unit before comparing / bucketing, so a custom sensor reporting a
+ * non-AWN unit (kph, mm, hPa, km) thresholds correctly. For every
+ * AWN-native known dataPoint `sourceUnit` already equals the canonical
+ * unit, so `toCanonical` is the identity and behavior is byte-identical
+ * to v1.6.0.
+ */
+export interface NumericExtendedOptions extends CommonExtendedOptions {
+  variant: 'numeric';
+  measurement: Exclude<Measurement, 'timestamp' | 'boolean'>;
+  sourceUnit: SensorUnit;
+}
+
+/**
+ * Timestamp extended sensor (last-rain, last-lightning-strike). The
+ * value is already Unix ms — `sourceUnit` is locked to `'ms'`, there is
+ * no display unit, and `threshold` is always `Infinity` (a timestamp
+ * cannot meaningfully cross a threshold).
+ */
+export interface TimestampExtendedOptions extends CommonExtendedOptions {
+  variant: 'timestamp';
+  measurement: 'timestamp';
+  sourceUnit: 'ms';
+}
+
+export type ExtendedSensorOptions = NumericExtendedOptions | TimestampExtendedOptions;
 
 /**
  * Base class for every extended (non-native) sensor type. Wraps a
@@ -93,12 +167,25 @@ export abstract class ExtendedSensorBase implements SensorAccessory {
   private readonly valueChar: Characteristic;
   private readonly lastUpdatedChar: Characteristic;
   private readonly intensityChar: Characteristic | undefined;
+  // True iff constructed from a resolved row (the v2 path). Governs the
+  // debug-log form only — the row-absent legacy path keeps its exact
+  // v1.7 log strings (finding-#4 review: preserve flag-off log identity).
+  private readonly rowDriven: boolean;
 
   constructor(
     protected readonly platform: AmbientWeatherSensorsPlatform,
     protected readonly accessory: PlatformAccessory,
     protected readonly options: ExtendedSensorOptions,
+    // Row-driven (finding #4): the resolved row drives battery ownership
+    // when present. Subclasses fold the row's threshold / sourceUnit /
+    // displayUnit / trigger direction into `options`; the battery
+    // decision is the one piece the base owns directly. Absent → legacy
+    // telemetry-gated battery, byte-identical to v1.6.0. (The tile NAME
+    // stays platform-owned — see the native wrappers — so a row never
+    // silently renames a multi-station customer's accessory.)
+    row?: EffectiveSensorRow,
   ) {
+    this.rowDriven = row !== undefined;
     this.customCharacteristics = registerCharacteristics(this.platform.api);
 
     this.accessory.getService(this.platform.Service.AccessoryInformation)!
@@ -143,7 +230,9 @@ export abstract class ExtendedSensorBase implements SensorAccessory {
     // that AWN does report batteries for, so in practice this will
     // attach a Battery sub-service for every extended sensor on a
     // typical station.
-    this.batterySetter = setupBatteryService(this.platform, this.accessory);
+    this.batterySetter = setupBatteryService(
+      this.platform, this.accessory, batteryOptionsFor(row, accessory),
+    );
 
     // NOTE: Don't call setValue() from this constructor. Subclasses
     // assign their unit-conversion / formatter state AFTER super()
@@ -172,18 +261,43 @@ export abstract class ExtendedSensorBase implements SensorAccessory {
    * renames).
    */
   setValue(rawValue: number): void {
-    const valueStr = this.formatValue(rawValue);
-    const intensityStr = this.formatIntensity(rawValue);
+    // Convert the raw reading — and the threshold — to the family's
+    // canonical unit before formatting / bucketing / comparing. For an
+    // AWN-native known dataPoint `sourceUnit` IS the canonical unit, so
+    // both conversions are the identity and this is byte-identical to
+    // v1.6.0; the non-identity case is a custom sensor reporting a
+    // different unit (kph, mm, hPa, km). The subclass formatters and
+    // intensity buckets are all scale-anchored in canonical, so they
+    // receive the canonical value.
+    // Dispatch on `variant`: numeric readings route through toCanonical
+    // (identity for AWN-native units); a timestamp is already Unix ms and
+    // passes straight through (its threshold is always Infinity, so it
+    // never triggers).
+    const canonical = this.options.variant === 'numeric'
+      ? toCanonical(this.options.measurement, this.options.sourceUnit, rawValue)
+      : rawValue;
+    const canonicalThreshold = this.options.variant === 'numeric'
+      ? toCanonical(this.options.measurement, this.options.sourceUnit, this.options.threshold)
+      : this.options.threshold;
+
+    const valueStr = this.formatValue(canonical);
+    const intensityStr = this.formatIntensity(canonical);
     const timestamp = new Date().toISOString();
     const direction = this.options.triggerDirection ?? 'above';
     const detected = Number.isFinite(this.options.threshold)
       && (direction === 'above'
-        ? rawValue >= this.options.threshold
-        : rawValue <= this.options.threshold);
+        ? canonical >= canonicalThreshold
+        : canonical <= canonicalThreshold);
 
+    // Preserve flag-off log identity (finding-#4 review): the legacy
+    // (row-absent) path keeps its exact v1.7 debug string; the
+    // canonical-annotated form is used only for row-driven construction.
     this.platform.log.debug(
-      `EXTENDED ${this.options.awnKey}: value="${valueStr}" intensity="${intensityStr ?? '-'}" ` +
-      `raw=${rawValue} threshold=${this.options.threshold} motion=${detected}`,
+      this.rowDriven
+        ? `EXTENDED ${this.options.awnKey}: value="${valueStr}" intensity="${intensityStr ?? '-'}" `
+          + `raw=${rawValue} canonical=${canonical} threshold=${this.options.threshold} motion=${detected}`
+        : `EXTENDED ${this.options.awnKey}: value="${valueStr}" intensity="${intensityStr ?? '-'}" `
+          + `raw=${rawValue} threshold=${this.options.threshold} motion=${detected}`,
     );
 
     // Update the three custom characteristics via the cached instance

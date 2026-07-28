@@ -3,6 +3,8 @@ import { PlatformAccessory, Service } from 'homebridge';
 import { setupBatteryService } from './batteryService.js';
 import { airQualityReading } from './nativeConversions.js';
 import { AmbientWeatherSensorsPlatform, SensorAccessory } from './platform.js';
+import { batteryOptionsFor } from './sensorMap/batterySeed.js';
+import type { NumericSensorRow } from './sensorMap/types.js';
 
 export class AirQualityAccessory implements SensorAccessory {
   private service: Service;
@@ -12,8 +14,16 @@ export class AirQualityAccessory implements SensorAccessory {
   constructor(
     private readonly platform: AmbientWeatherSensorsPlatform,
     private readonly accessory: PlatformAccessory,
+    // Row-driven (finding #4). The PM2.5-vs-PM10 variant now comes from
+    // the row's measurement (the factory routed 'air-quality-pm25' vs
+    // 'air-quality-pm10' here), removing the cross-source-of-truth with
+    // `context.device.type` that has bitten upgrades before. Density is
+    // reported in μg/m³ (canonical) so there is no unit conversion.
+    row?: NumericSensorRow,
   ) {
-    this.variant = accessory.context.device.type === 'PM10' ? 'PM10' : 'PM2.5';
+    this.variant = row
+      ? (row.measurement === 'pm10' ? 'PM10' : 'PM2.5')
+      : (accessory.context.device.type === 'PM10' ? 'PM10' : 'PM2.5');
 
     this.accessory.getService(this.platform.Service.AccessoryInformation)!
       .setCharacteristic(this.platform.Characteristic.Manufacturer, 'Ambient Weather')
@@ -25,7 +35,9 @@ export class AirQualityAccessory implements SensorAccessory {
 
     this.service.setCharacteristic(this.platform.Characteristic.Name, accessory.context.device.displayName);
 
-    this.batterySetter = setupBatteryService(this.platform, this.accessory);
+    this.batterySetter = setupBatteryService(
+      this.platform, this.accessory, batteryOptionsFor(row, accessory),
+    );
 
     if (typeof accessory.context.device.value === 'number') {
       this.setValue(accessory.context.device.value);

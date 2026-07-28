@@ -1,11 +1,13 @@
 import { PlatformAccessory } from 'homebridge';
 import { AmbientWeatherSensorsPlatform, SensorAccessory } from './platform.js';
+import type { NumericSensorRow } from './sensorMap/types.js';
 export declare class SolarRadiationAccessory implements SensorAccessory {
     private readonly platform;
     private readonly accessory;
+    private readonly row?;
     private service;
     private readonly batterySetter?;
-    constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory);
+    constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory, row?: NumericSensorRow | undefined);
     setBatteryLow(batteryLow: boolean): void;
     /**
      * Push a fresh raw AWN solar-radiation reading (W/m²) into the HomeKit

@@ -88,7 +88,18 @@ export interface SensorMapOverride {
      * `kind: motion`; ignored with warn on other kinds.
      */
     triggerDirection?: 'above' | 'below';
-    /** Display unit override. Must be legal for the row's measurement. */
+    /**
+     * Display unit override. Must be legal for the row's measurement.
+     *
+     * Presentation-only, and ONLY the extended (motion-family) wrappers
+     * consume it — they render the reading as a custom string in the unit
+     * the user picks. On NATIVE-HAP measurements (temperature, humidity,
+     * illuminance, co2, pm25, pm10) the wrapper writes the canonical value
+     * into a fixed-unit HomeKit characteristic and ignores displayUnit, so
+     * validation warn-and-strips it there (`ignored-native-displayunit`)
+     * rather than letting a silently-ineffective field ship. See
+     * finding-#4 wrapper parameterization.
+     */
     displayUnit?: SensorUnit;
     /**
      * For CUSTOM dataPoints only. Declares the unit the AWN payload
@@ -388,10 +399,40 @@ export interface RowValidationWarning {
     stationMac?: string;
     message: string;
 }
+/**
+ * Internal-invariant / attribution-free diagnostic. Distinct from
+ * `RowValidationError` and `RowValidationWarning`, both of which REQUIRE
+ * an `overrideIndex` pointing at a user-authored config fragment. Some
+ * diagnostics have no such fragment to blame:
+ *
+ *   - a wrapper whose `(kind, measurement)` drifted from the built-in
+ *     default map (a plugin bug, not a user's config);
+ *   - an attribution-free battery-owner collision where BOTH colliding
+ *     rows came from the default map (no override on either side).
+ *
+ * Inventing an `overrideIndex: 0` for these would make the UI highlight
+ * an unrelated config entry the user never wrote. This third channel
+ * carries them with an explicit `source` instead, so the UI can surface
+ * them in a separate "plugin health" section and never mis-attribute.
+ *
+ * See `docs/future/wrapper-parameterization.md` §"InternalInvariantNote".
+ */
+export interface InternalInvariantNote {
+    /** Stable machine-readable identifier for the note class. */
+    code: string;
+    /** Where the note originated. `override` is the only value that carries a meaningful `overrideIndex`. */
+    source: 'default-map' | 'override';
+    /** Only meaningful when `source === 'override'`. */
+    overrideIndex?: number;
+    dataPoint?: string;
+    stationMac?: string;
+    message: string;
+}
 export interface EffectiveSensorMap {
     rows: EffectiveSensorRow[];
     errors: RowValidationError[];
     warnings: RowValidationWarning[];
+    notes: InternalInvariantNote[];
 }
 export {};
 //# sourceMappingURL=types.d.ts.map

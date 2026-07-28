@@ -8,6 +8,7 @@ import {
   makeMockAccessory,
   makeMockPlatform,
 } from '../helpers/mockHomebridge';
+import { makeNumericRow } from '../helpers/effectiveRow';
 
 describe('Co2Accessory', () => {
   it('constructs and populates metadata for CO2 Sensor', () => {
@@ -70,5 +71,40 @@ describe('Co2Accessory', () => {
     // Negative raw values (shouldn't happen but guard) → clamped to 0.
     wrapper.setValue(-10);
     expect(svc.readCharacteristic(MockCharacteristics.CarbonDioxideLevel)).toBe(0);
+  });
+});
+
+// ---- finding-#4 Stage 2: row-driven construction ----
+describe('Co2Accessory — row-driven (finding #4)', () => {
+  const co2Row = (overrides = {}) => makeNumericRow({
+    kind: 'co2', measurement: 'co2', sourceUnit: 'ppm', displayUnit: 'ppm',
+    wrapperId: 'co2', dataPoint: 'co2_in_aqin', name: 'CO2', ...overrides,
+  });
+
+  it('keeps Name platform-owned (displayName); ppm passes through with the hardcoded 1000-ppm alert intact', () => {
+    const platform = makeMockPlatform();
+    const accessory = makeMockAccessory({ uniqueId: 'MAC-co2', displayName: 'Office CO2' });
+    const wrapper = new Co2Accessory(
+      platform as unknown as AmbientWeatherSensorsPlatform,
+      accessory as never,
+      co2Row({ name: 'CO2' }),
+    );
+    const svc = accessory.getService(MockServices.CarbonDioxideSensor)!;
+    expect(svc.readCharacteristic(MockCharacteristics.Name)).toBe('Office CO2');
+    wrapper.setValue(1500);
+    expect(svc.readCharacteristic(MockCharacteristics.CarbonDioxideLevel)).toBe(1500);
+    expect(svc.readCharacteristic(MockCharacteristics.CarbonDioxideDetected)).toBe(1);   // ABNORMAL ≥ 1000
+    wrapper.setValue(800);
+    expect(svc.readCharacteristic(MockCharacteristics.CarbonDioxideDetected)).toBe(0);   // NORMAL
+  });
+
+  it('HEAD row-driven vs legacy consistency (mock; graphParity.test.ts holds the authoritative v1.7.0 gate)', () => {
+    const platform = makeMockPlatform();
+    const legacyAcc = makeMockAccessory({ uniqueId: 'MAC-co2', displayName: 'CO2', batteryLow: false, value: 800 });
+    new Co2Accessory(platform as unknown as AmbientWeatherSensorsPlatform, legacyAcc as never);
+    const rowAcc = makeMockAccessory({ uniqueId: 'MAC-co2', displayName: 'CO2', batteryLow: false, value: 800 });
+    new Co2Accessory(platform as unknown as AmbientWeatherSensorsPlatform, rowAcc as never,
+      co2Row({ hasBatterySubService: true, batteryField: 'batt_co2' }));
+    expect(rowAcc.serviceShape()).toEqual(legacyAcc.serviceShape());
   });
 });

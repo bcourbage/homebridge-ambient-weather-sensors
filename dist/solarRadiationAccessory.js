@@ -1,9 +1,16 @@
 import { setupBatteryService } from './batteryService.js';
 import { solarWm2ToLux } from './nativeConversions.js';
+import { batteryOptionsFor } from './sensorMap/batterySeed.js';
+import { toCanonical } from './sensorMap/unitConversions.js';
 export class SolarRadiationAccessory {
-    constructor(platform, accessory) {
+    constructor(platform, accessory, 
+    // Row-driven (finding #4). The canonical unit is lux; toCanonical is
+    // solarWm2ToLux for the AWN-native `sourceUnit: 'wm2'` and a no-op
+    // for a custom sensor reporting lux directly.
+    row) {
         this.platform = platform;
         this.accessory = accessory;
+        this.row = row;
         // set accessory information
         this.accessory.getService(this.platform.Service.AccessoryInformation)
             .setCharacteristic(this.platform.Characteristic.Manufacturer, 'Ambient Weather')
@@ -21,7 +28,7 @@ export class SolarRadiationAccessory {
             minValue: 0,
             maxValue: 200000,
         });
-        this.batterySetter = setupBatteryService(this.platform, this.accessory);
+        this.batterySetter = setupBatteryService(this.platform, this.accessory, batteryOptionsFor(row, accessory));
         if (typeof accessory.context.device.value === 'number') {
             this.setValue(accessory.context.device.value);
         }
@@ -41,8 +48,15 @@ export class SolarRadiationAccessory {
      * HomeKit reading if they want W/m² back.
      */
     setValue(rawValue) {
-        const lux = solarWm2ToLux(rawValue);
-        this.platform.log.debug(`SET CurrentAmbientLightLevel: ${rawValue} W/m² → ${lux} lx`);
+        const lux = this.row
+            ? toCanonical(this.row.measurement, this.row.sourceUnit, rawValue)
+            : solarWm2ToLux(rawValue);
+        // Preserve flag-off log identity (finding-#4 review): the legacy
+        // (row-absent) path keeps the exact v1.7 "W/m² → lx" string; the
+        // unit-neutral form is used only for row-driven construction.
+        this.platform.log.debug(this.row
+            ? `SET CurrentAmbientLightLevel: ${rawValue} → ${lux} lx`
+            : `SET CurrentAmbientLightLevel: ${rawValue} W/m² → ${lux} lx`);
         this.service.updateCharacteristic(this.platform.Characteristic.CurrentAmbientLightLevel, lux);
     }
 }

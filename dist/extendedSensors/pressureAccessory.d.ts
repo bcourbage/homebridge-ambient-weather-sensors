@@ -1,5 +1,6 @@
 import { PlatformAccessory } from 'homebridge';
 import { AmbientWeatherSensorsPlatform } from '../platform.js';
+import type { NumericSensorRow } from '../sensorMap/types.js';
 import { ExtendedSensorBase } from './extendedSensorBase.js';
 /**
  * Barometric pressure accessory. AWN reports two values:
@@ -25,14 +26,14 @@ import { ExtendedSensorBase } from './extendedSensorBase.js';
  */
 declare abstract class PressureLikeAccessory extends ExtendedSensorBase {
     private readonly pressureUnit;
-    constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory, sensorLabel: string, awnKey: string);
-    protected formatValue(rawInHg: number): string;
+    constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory, sensorLabel: string, awnKey: string, row?: NumericSensorRow);
+    protected formatValue(canonicalInHg: number): string;
 }
 export declare class PressureRelativeAccessory extends PressureLikeAccessory {
-    constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory);
+    constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory, row?: NumericSensorRow);
 }
 export declare class PressureAbsoluteAccessory extends PressureLikeAccessory {
-    constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory);
+    constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory, row?: NumericSensorRow);
 }
 export {};
 //# sourceMappingURL=pressureAccessory.d.ts.map

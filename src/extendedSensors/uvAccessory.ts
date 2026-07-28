@@ -1,7 +1,12 @@
 import { PlatformAccessory } from 'homebridge';
 
 import { AmbientWeatherSensorsPlatform } from '../platform.js';
-import { ExtendedDisplayMode, ExtendedSensorBase } from './extendedSensorBase.js';
+import type { NumericSensorRow } from '../sensorMap/types.js';
+import {
+  ExtendedSensorBase,
+  extendedDisplayModeFor,
+  thresholdFor,
+} from './extendedSensorBase.js';
 import { uvBucket } from './intensityBuckets.js';
 
 /**
@@ -15,27 +20,29 @@ import { uvBucket } from './intensityBuckets.js';
  * we display the raw integer plus the EPA bucket label.
  */
 export class UvAccessory extends ExtendedSensorBase {
-  constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory) {
-    const displayMode: ExtendedDisplayMode =
-      platform.config.extendedDisplayMode === 'embed' ? 'embed' : 'static';
+  constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory, row?: NumericSensorRow) {
     // Blank in HB UI form → undefined → Infinity → never triggers.
     // Accessory still appears so the UV index is visible in Eve.
+    // (Legacy path only — a row supplies its own threshold.)
     const raw = platform.config.thresholds?.uv;
     const threshold = typeof raw === 'number' ? raw : Infinity;
 
     super(platform, accessory, {
-      sensorLabel: 'UV Index',
-      awnKey: 'uv',
-      threshold,
-      displayMode,
-    });
+      variant: 'numeric',
+      sensorLabel: row?.name ?? 'UV Index',
+      awnKey: row?.dataPoint ?? 'uv',
+      threshold: thresholdFor(row, threshold),
+      displayMode: extendedDisplayModeFor(platform, row),
+      measurement: 'uv-index',
+      sourceUnit: row?.sourceUnit ?? 'index',
+    }, row);
   }
 
-  protected formatValue(rawUv: number): string {
-    return `${Math.round(rawUv)}`;
+  protected formatValue(canonicalUv: number): string {
+    return `${Math.round(canonicalUv)}`;
   }
 
-  protected formatIntensity(rawUv: number): string | undefined {
-    return uvBucket(rawUv);
+  protected formatIntensity(canonicalUv: number): string | undefined {
+    return uvBucket(canonicalUv);
   }
 }

@@ -8,6 +8,7 @@ import {
   makeMockAccessory,
   makeMockPlatform,
 } from '../helpers/mockHomebridge';
+import { makeNumericRow } from '../helpers/effectiveRow';
 
 describe('HumidityAccessory', () => {
   it('constructs, populates metadata, and seeds the cached value', () => {
@@ -65,5 +66,39 @@ describe('HumidityAccessory', () => {
     const battSvc = accessory.getService(MockServices.Battery)!;
     expect(battSvc.readCharacteristic(MockCharacteristics.StatusLowBattery)).toBe(1);
     expect(battSvc.readCharacteristic(MockCharacteristics.BatteryLevel)).toBe(5);
+  });
+});
+
+// ---- finding-#4 Stage 2: row-driven construction ----
+describe('HumidityAccessory — row-driven (finding #4)', () => {
+  const humRow = (overrides = {}) => makeNumericRow({
+    kind: 'humidity', measurement: 'humidity', sourceUnit: 'percent', displayUnit: 'percent',
+    wrapperId: 'humidity', dataPoint: 'humidity', name: 'Outdoor Humidity', ...overrides,
+  });
+
+  it('keeps Name platform-owned (displayName); passes the percent reading through unchanged', () => {
+    // P2-D: name is platform-owned — the row must not clobber the
+    // station-composed displayName.
+    const platform = makeMockPlatform();
+    const accessory = makeMockAccessory({ uniqueId: 'MAC-hum', displayName: 'Backyard Humidity' });
+    const wrapper = new HumidityAccessory(
+      platform as unknown as AmbientWeatherSensorsPlatform,
+      accessory as never,
+      humRow({ name: 'Humidity' }),
+    );
+    wrapper.setValue(55);
+    const svc = accessory.getService(MockServices.HumiditySensor)!;
+    expect(svc.readCharacteristic(MockCharacteristics.Name)).toBe('Backyard Humidity');
+    expect(svc.readCharacteristic(MockCharacteristics.CurrentRelativeHumidity)).toBe(55);
+  });
+
+  it('HEAD row-driven vs legacy consistency (mock; graphParity.test.ts holds the authoritative v1.7.0 gate)', () => {
+    const platform = makeMockPlatform();
+    const legacyAcc = makeMockAccessory({ uniqueId: 'MAC-hum', displayName: 'Outdoor Humidity', batteryLow: false, value: 55 });
+    new HumidityAccessory(platform as unknown as AmbientWeatherSensorsPlatform, legacyAcc as never);
+    const rowAcc = makeMockAccessory({ uniqueId: 'MAC-hum', displayName: 'Outdoor Humidity', batteryLow: false, value: 55 });
+    new HumidityAccessory(platform as unknown as AmbientWeatherSensorsPlatform, rowAcc as never,
+      humRow({ hasBatterySubService: true, batteryField: 'battout' }));
+    expect(rowAcc.serviceShape()).toEqual(legacyAcc.serviceShape());
   });
 });

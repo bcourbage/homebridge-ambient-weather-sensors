@@ -1,5 +1,6 @@
 import { PlatformAccessory, Service } from 'homebridge';
 import { AmbientWeatherSensorsPlatform, SensorAccessory } from '../platform.js';
+import type { EffectiveSensorRow, Measurement, NumericSensorRow, SensorUnit, TimestampSensorRow } from '../sensorMap/types.js';
 /**
  * Display mode for the extended-sensor tile in Apple's Home app.
  *
@@ -16,38 +17,84 @@ import { AmbientWeatherSensorsPlatform, SensorAccessory } from '../platform.js';
  */
 export type ExtendedDisplayMode = 'static' | 'embed';
 /**
+ * The configured row shapes an extended wrapper can be handed. Both
+ * carry the knobs (`name`, `threshold`, `triggerEnabled`, `embedName`,
+ * `sourceUnit`, `triggerDirection`) the row-driven constructors read;
+ * unrecognized rows never reach a wrapper.
+ */
+export type ConfiguredExtendedRow = NumericSensorRow | TimestampSensorRow;
+/**
+ * Display mode from the row (`embedName`) when present, else from the
+ * legacy `platform.config.extendedDisplayMode`. Finding-#4 Stage 2.
+ */
+export declare function extendedDisplayModeFor(platform: AmbientWeatherSensorsPlatform, row: ConfiguredExtendedRow | undefined): ExtendedDisplayMode;
+/**
+ * Threshold (in the row's source unit) from the row when present, else
+ * the legacy config-derived value. `triggerEnabled: false` and a blank
+ * threshold both collapse to `Infinity`, which the base's
+ * `Number.isFinite` gate reads as "motion trigger disabled".
+ */
+export declare function thresholdFor(row: ConfiguredExtendedRow | undefined, legacyThreshold: number): number;
+/**
  * Inputs threaded through the constructor — keeps the public surface
  * small even as subclasses grow. Each extended-sensor subclass passes
  * one of these into super().
+ *
+ * Discriminated on `variant` (finding-#4 review): a `TimestampSensorRow`
+ * has no `displayUnit` and `sourceUnit` is fixed at `'ms'` by contract,
+ * so bundling everything into one interface would let an illegal
+ * `(timestamp, non-ms)` combination be constructed. The union makes
+ * that unrepresentable and the base dispatches on `variant`.
  */
-export interface ExtendedSensorOptions {
+interface CommonExtendedOptions {
     /** Friendly base name, shown in Apple Home. Examples: "Wind Speed", "Rain Rate", "UV Index". */
     sensorLabel: string;
     /** AWN's machine name for this sensor (e.g. "windspeedmph"). Used for logging only. */
     awnKey: string;
     /**
-     * Value at which MotionDetected flips to true. Interpretation
-     * depends on `triggerDirection` below — by default a reading at or
-     * above `threshold` trips the motion event; for "low values are
-     * noteworthy" sensors (barometric pressure, lightning distance),
-     * the subclass sets `triggerDirection: 'below'` so readings at or
-     * below the threshold trip it instead. Pass `Infinity` (with the
-     * default 'above') to disable motion triggering entirely (e.g.
-     * wind direction, last-strike timestamp — informational only).
+     * Value at which MotionDetected flips to true, IN `sourceUnit`.
+     * Interpretation depends on `triggerDirection` — by default a reading
+     * at or above `threshold` trips the event; sensors where low readings
+     * are the alarming direction pass `triggerDirection: 'below'`. Pass
+     * `Infinity` to disable motion triggering entirely (wind direction,
+     * timestamps — informational only).
      */
     threshold: number;
     /**
-     * Compare direction for the threshold. 'above' is the default and
-     * matches the conventional "trigger on high values" sensors (wind
-     * gust, UV, rain rate, lightning count). 'below' inverts the
-     * comparison for sensors where low readings are the alarming
-     * direction (barometric pressure = storm incoming, lightning
+     * Compare direction for the threshold. 'above' is the default;
+     * 'below' inverts it (barometric pressure = storm incoming, lightning
      * distance = nearby strike).
      */
     triggerDirection?: 'above' | 'below';
     /** Display mode chosen by the user in config. */
     displayMode: ExtendedDisplayMode;
 }
+/**
+ * Numeric extended sensor. `measurement` + `sourceUnit` let the base
+ * convert the raw reading AND the threshold to the family's canonical
+ * unit before comparing / bucketing, so a custom sensor reporting a
+ * non-AWN unit (kph, mm, hPa, km) thresholds correctly. For every
+ * AWN-native known dataPoint `sourceUnit` already equals the canonical
+ * unit, so `toCanonical` is the identity and behavior is byte-identical
+ * to v1.6.0.
+ */
+export interface NumericExtendedOptions extends CommonExtendedOptions {
+    variant: 'numeric';
+    measurement: Exclude<Measurement, 'timestamp' | 'boolean'>;
+    sourceUnit: SensorUnit;
+}
+/**
+ * Timestamp extended sensor (last-rain, last-lightning-strike). The
+ * value is already Unix ms — `sourceUnit` is locked to `'ms'`, there is
+ * no display unit, and `threshold` is always `Infinity` (a timestamp
+ * cannot meaningfully cross a threshold).
+ */
+export interface TimestampExtendedOptions extends CommonExtendedOptions {
+    variant: 'timestamp';
+    measurement: 'timestamp';
+    sourceUnit: 'ms';
+}
+export type ExtendedSensorOptions = NumericExtendedOptions | TimestampExtendedOptions;
 /**
  * Base class for every extended (non-native) sensor type. Wraps a
  * `MotionSensor` service and bolts on three custom characteristics
@@ -75,7 +122,8 @@ export declare abstract class ExtendedSensorBase implements SensorAccessory {
     private readonly valueChar;
     private readonly lastUpdatedChar;
     private readonly intensityChar;
-    constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory, options: ExtendedSensorOptions);
+    private readonly rowDriven;
+    constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory, options: ExtendedSensorOptions, row?: EffectiveSensorRow);
     setBatteryLow(batteryLow: boolean): void;
     /**
      * Polling/realtime loop entry point — same signature as every other
@@ -148,4 +196,5 @@ export declare abstract class ExtendedSensorBase implements SensorAccessory {
      */
     private maybeUpdateTileName;
 }
+export {};
 //# sourceMappingURL=extendedSensorBase.d.ts.map

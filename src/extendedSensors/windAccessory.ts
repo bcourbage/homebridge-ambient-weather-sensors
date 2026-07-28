@@ -1,7 +1,12 @@
 import { PlatformAccessory } from 'homebridge';
 
 import { AmbientWeatherSensorsPlatform } from '../platform.js';
-import { ExtendedDisplayMode, ExtendedSensorBase } from './extendedSensorBase.js';
+import type { NumericSensorRow } from '../sensorMap/types.js';
+import {
+  ExtendedSensorBase,
+  extendedDisplayModeFor,
+  thresholdFor,
+} from './extendedSensorBase.js';
 import { beaufort, toCardinal } from './intensityBuckets.js';
 import { convertSpeed, SpeedUnit } from './unitConversions.js';
 
@@ -25,32 +30,38 @@ abstract class WindSpeedLikeAccessory extends ExtendedSensorBase {
     sensorLabel: string,
     awnKey: string,
     thresholdMph: number,
+    // Row-driven (finding #4). When present, name / threshold /
+    // display unit / embed mode come from the row; the raw mph reading
+    // is canonical for AWN so the base's toCanonical is a no-op.
+    row?: NumericSensorRow,
   ) {
-    const displayMode: ExtendedDisplayMode =
-      platform.config.extendedDisplayMode === 'embed' ? 'embed' : 'static';
-    const speedUnit: SpeedUnit = (platform.config.units?.windSpeed as SpeedUnit) || 'mph';
+    const speedUnit: SpeedUnit = row
+      ? (row.displayUnit as SpeedUnit)
+      : ((platform.config.units?.windSpeed as SpeedUnit) || 'mph');
 
     super(platform, accessory, {
-      sensorLabel,
-      awnKey,
-      threshold: thresholdMph,  // threshold stays in mph internally (AWN's native unit)
-      displayMode,
-    });
+      variant: 'numeric',
+      sensorLabel: row?.name ?? sensorLabel,
+      awnKey: row?.dataPoint ?? awnKey,
+      threshold: thresholdFor(row, thresholdMph),  // in mph (canonical for AWN)
+      displayMode: extendedDisplayModeFor(platform, row),
+      measurement: 'wind-speed',
+      sourceUnit: row?.sourceUnit ?? 'mph',
+    }, row);
 
     this.speedUnit = speedUnit;
     this.unitLabel = speedUnit;
   }
 
-  protected formatValue(rawMph: number): string {
-    const converted = convertSpeed(rawMph, this.speedUnit);
+  protected formatValue(canonicalMph: number): string {
+    const converted = convertSpeed(canonicalMph, this.speedUnit);
     return `${Math.round(converted)} ${this.unitLabel}`;
   }
 
-  protected formatIntensity(rawMph: number): string | undefined {
-    // Beaufort scale is anchored to mph — convert back if the user
-    // chose a different display unit so the bucket label stays
-    // accurate regardless of unit choice.
-    return beaufort(rawMph);
+  protected formatIntensity(canonicalMph: number): string | undefined {
+    // Beaufort scale is anchored to mph, which is the canonical unit —
+    // the base hands us the already-canonicalized value.
+    return beaufort(canonicalMph);
   }
 }
 
@@ -61,14 +72,15 @@ abstract class WindSpeedLikeAccessory extends ExtendedSensorBase {
  * automation trigger ("close the awning when it gets gusty").
  */
 export class WindSpeedAccessory extends WindSpeedLikeAccessory {
-  constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory) {
+  constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory, row?: NumericSensorRow) {
     // Blank threshold field in HB UI → undefined here → Infinity → base
     // class's Number.isFinite check returns false → MotionDetected
     // never fires. Accessory still exists for the value reading in Eve;
-    // only the automation trigger is disabled.
+    // only the automation trigger is disabled. (Legacy path only — a
+    // row supplies its own threshold.)
     const raw = platform.config.thresholds?.windSpeedMph;
     const threshold = typeof raw === 'number' ? raw : Infinity;
-    super(platform, accessory, 'Wind Speed', 'windspeedmph', threshold);
+    super(platform, accessory, 'Wind Speed', 'windspeedmph', threshold, row);
   }
 }
 
@@ -79,10 +91,10 @@ export class WindSpeedAccessory extends WindSpeedLikeAccessory {
  * larger value to be alarming. Beaufort 7 territory.
  */
 export class WindGustAccessory extends WindSpeedLikeAccessory {
-  constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory) {
+  constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory, row?: NumericSensorRow) {
     const raw = platform.config.thresholds?.windGustMph;
     const threshold = typeof raw === 'number' ? raw : Infinity;
-    super(platform, accessory, 'Wind Gust', 'windgustmph', threshold);
+    super(platform, accessory, 'Wind Gust', 'windgustmph', threshold, row);
   }
 }
 
@@ -93,10 +105,10 @@ export class WindGustAccessory extends WindSpeedLikeAccessory {
  * fundamental measurement.
  */
 export class WindMaxDailyGustAccessory extends WindSpeedLikeAccessory {
-  constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory) {
+  constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory, row?: NumericSensorRow) {
     const raw = platform.config.thresholds?.windGustMph;
     const threshold = typeof raw === 'number' ? raw : Infinity;
-    super(platform, accessory, 'Max Daily Gust', 'maxdailygust', threshold);
+    super(platform, accessory, 'Max Daily Gust', 'maxdailygust', threshold, row);
   }
 }
 
@@ -118,16 +130,17 @@ abstract class WindDirectionLikeAccessory extends ExtendedSensorBase {
     accessory: PlatformAccessory,
     sensorLabel: string,
     awnKey: string,
+    row?: NumericSensorRow,
   ) {
-    const displayMode: ExtendedDisplayMode =
-      platform.config.extendedDisplayMode === 'embed' ? 'embed' : 'static';
-
     super(platform, accessory, {
-      sensorLabel,
-      awnKey,
+      variant: 'numeric',
+      sensorLabel: row?.name ?? sensorLabel,
+      awnKey: row?.dataPoint ?? awnKey,
       threshold: Infinity,  // never triggers MotionDetected
-      displayMode,
-    });
+      displayMode: extendedDisplayModeFor(platform, row),
+      measurement: 'direction',
+      sourceUnit: row?.sourceUnit ?? 'degrees',
+    }, row);
   }
 
   protected formatValue(rawDegrees: number): string {
@@ -145,8 +158,8 @@ abstract class WindDirectionLikeAccessory extends ExtendedSensorBase {
  * enable the 10m-averaged variant below.
  */
 export class WindDirectionAccessory extends WindDirectionLikeAccessory {
-  constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory) {
-    super(platform, accessory, 'Wind Direction', 'winddir');
+  constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory, row?: NumericSensorRow) {
+    super(platform, accessory, 'Wind Direction', 'winddir', row);
   }
 }
 
@@ -156,7 +169,7 @@ export class WindDirectionAccessory extends WindDirectionLikeAccessory {
  * users in variable-wind locations.
  */
 export class WindDirection10mAccessory extends WindDirectionLikeAccessory {
-  constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory) {
-    super(platform, accessory, 'Wind Direction 10m Avg', 'winddir_avg10m');
+  constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory, row?: NumericSensorRow) {
+    super(platform, accessory, 'Wind Direction 10m Avg', 'winddir_avg10m', row);
   }
 }

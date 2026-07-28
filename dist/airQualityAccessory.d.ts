@@ -1,12 +1,13 @@
 import { PlatformAccessory } from 'homebridge';
 import { AmbientWeatherSensorsPlatform, SensorAccessory } from './platform.js';
+import type { NumericSensorRow } from './sensorMap/types.js';
 export declare class AirQualityAccessory implements SensorAccessory {
     private readonly platform;
     private readonly accessory;
     private service;
     private readonly variant;
     private readonly batterySetter?;
-    constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory);
+    constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory, row?: NumericSensorRow);
     setBatteryLow(batteryLow: boolean): void;
     /**
      * AWN reports particulate density in μg/m³ directly. HomeKit's

@@ -57,6 +57,28 @@ const KNOWN_UNITS: ReadonlySet<SensorUnit> = new Set<SensorUnit>([
 const TRIGGER_DIRECTIONS: ReadonlySet<'above' | 'below'> = new Set(['above', 'below']);
 
 /**
+ * Measurements whose wrapper is a NATIVE HAP sensor — it writes the
+ * canonical value into a fixed-unit HomeKit characteristic and ignores
+ * `displayUnit`. `validateOverrideBody` warn-and-strips `displayUnit`
+ * on these so a shipped schema doesn't silently accept an ineffective
+ * field. `displayUnit` remains meaningful only for the extended
+ * (motion-family) measurements. See finding-#4 wrapper parameterization.
+ */
+const NATIVE_HAP_MEASUREMENTS: ReadonlyArray<Measurement> = [
+  'temperature', 'humidity', 'illuminance', 'co2', 'pm25', 'pm10',
+];
+
+/**
+ * Measurements that are `kind: motion` but cannot cross a threshold —
+ * their wrappers hardcode `threshold: Infinity`. `validateOverrideBody`
+ * warn-strips threshold / triggerEnabled / triggerDirection on these so
+ * a user-supplied value isn't silently ignored. See finding-#4 review.
+ */
+const NON_TRIGGERING_MEASUREMENTS: ReadonlyArray<Measurement> = [
+  'direction', 'timestamp', 'boolean',
+];
+
+/**
  * The 13 fields users may set on a SensorMapOverride. Any key outside
  * this set on a hand-edited entry is a typo (e.g. `triggerEnabledd`)
  * or an attempt to control internal state we don't expose. Reject
@@ -376,6 +398,31 @@ export function validateOverrideBody(
     }
   }
 
+  // displayUnit is presentation-only and ONLY the extended
+  // (motion-family) wrappers consume it. Native HAP wrappers write the
+  // canonical value into a fixed-unit HomeKit characteristic
+  // (CurrentTemperature = °C, CurrentRelativeHumidity = %,
+  // CurrentAmbientLightLevel = lux, CarbonDioxideLevel = ppm,
+  // PM2_5Density / PM10Density = µg/m³) and MUST ignore displayUnit —
+  // writing e.g. fahrenheit into CurrentTemperature would make HomeKit
+  // report 68 °C. Warn-and-strip on those measurements so a shipped
+  // schema doesn't silently accept an ineffective field (matching how
+  // motion-only fields are handled on non-motion rows). Done before the
+  // legality checks so a native row never errors on displayUnit.
+  // See docs/future/wrapper-parameterization.md §"Unit conversion chain".
+  if (
+    out.displayUnit !== undefined
+    && effectiveMeasurement !== undefined
+    && NATIVE_HAP_MEASUREMENTS.includes(effectiveMeasurement)
+  ) {
+    warnings.push({
+      code: 'ignored-native-displayunit',
+      field: 'displayUnit',
+      message: `displayUnit on ${dp} is ignored: ${effectiveMeasurement} renders in a fixed HomeKit unit.`,
+    });
+    delete out.displayUnit;
+  }
+
   if (isCustom) {
     // Custom sensor: kind + measurement required.
     if (!out.kind) {
@@ -497,6 +544,41 @@ export function validateOverrideBody(
         message: `embedName on non-motion row ${dp} ignored.`,
       });
       delete out.embedName;
+    }
+  }
+
+  // Non-triggering measurements (finding-#4 review): some measurements
+  // are `kind: motion` but cannot meaningfully cross a threshold — wind
+  // direction (a compass bearing) and the timestamp fields (last-rain,
+  // last-strike). Their wrappers hardcode `threshold: Infinity`, so a
+  // user-supplied threshold / triggerDirection / triggerEnabled would be
+  // SILENTLY ignored. Warn-and-strip them here — same contract as the
+  // non-motion block — so the schema never accepts an ineffective field.
+  // `embedName` stays valid (these tiles still show a value to embed).
+  if (effectiveMeasurement !== undefined && NON_TRIGGERING_MEASUREMENTS.includes(effectiveMeasurement)) {
+    if (out.threshold !== undefined) {
+      warnings.push({
+        code: 'ignored-non-triggering-threshold',
+        field: 'threshold',
+        message: `threshold on ${effectiveMeasurement} row ${dp} ignored: this measurement cannot trigger motion.`,
+      });
+      delete out.threshold;
+    }
+    if (out.triggerEnabled !== undefined) {
+      warnings.push({
+        code: 'ignored-non-triggering-triggerenabled',
+        field: 'triggerEnabled',
+        message: `triggerEnabled on ${effectiveMeasurement} row ${dp} ignored: this measurement cannot trigger motion.`,
+      });
+      delete out.triggerEnabled;
+    }
+    if (out.triggerDirection !== undefined) {
+      warnings.push({
+        code: 'ignored-non-triggering-triggerdirection',
+        field: 'triggerDirection',
+        message: `triggerDirection on ${effectiveMeasurement} row ${dp} ignored: this measurement cannot trigger motion.`,
+      });
+      delete out.triggerDirection;
     }
   }
 

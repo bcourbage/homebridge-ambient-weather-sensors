@@ -47,13 +47,28 @@ describe('WrapperDescriptor registry', () => {
     expect(wrapperFor('occupancy', 'boolean')).toBeUndefined();
   });
 
-  it('wrapperFor() returns the canonical wrapper for each (kind, measurement)', () => {
-    expect(wrapperFor('temperature', 'temperature')?.id).toBe('temperature');
-    expect(wrapperFor('humidity', 'humidity')?.id).toBe('humidity');
-    expect(wrapperFor('light', 'illuminance')?.id).toBe('solar-radiation');
-    expect(wrapperFor('motion', 'wind-speed')?.id).toBe('wind-speed');
-    expect(wrapperFor('motion', 'timestamp')?.id).toBe('last-rain');
-    expect(wrapperFor('motion', 'count')?.id).toBe('lightning-day');
+  // ---- finding-#4 Stage 0: resolution table is EMPTY ----
+  //
+  // The custom-sensor `(kind, measurement)` → wrapper table is
+  // intentionally empty until Stage 4 restores it (after Stages 1–3
+  // wire the factory registry, row-consuming constructors, and value
+  // routing). This regression test guards against a well-meaning
+  // restore slipping in without that wiring. See
+  // docs/future/wrapper-parameterization.md §"Stage 0".
+  it('WRAPPER_FOR_KIND_AND_MEASUREMENT is EMPTY (Stage 0 interim safety)', () => {
+    expect(Object.keys(WRAPPER_FOR_KIND_AND_MEASUREMENT)).toHaveLength(0);
+  });
+
+  it('wrapperFor() returns undefined for EVERY previously-supported combination (table empty)', () => {
+    // These all resolved to a wrapper before Stage 0. They now
+    // return undefined — custom sensors are non-user-facing until
+    // Stage 4.
+    expect(wrapperFor('temperature', 'temperature')).toBeUndefined();
+    expect(wrapperFor('humidity', 'humidity')).toBeUndefined();
+    expect(wrapperFor('light', 'illuminance')).toBeUndefined();
+    expect(wrapperFor('motion', 'wind-speed')).toBeUndefined();
+    expect(wrapperFor('motion', 'timestamp')).toBeUndefined();
+    expect(wrapperFor('motion', 'count')).toBeUndefined();
   });
 
   // ---- Review finding #14: freeze the wrapper vocabulary ----

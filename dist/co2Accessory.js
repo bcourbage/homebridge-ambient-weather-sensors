@@ -1,7 +1,14 @@
 import { setupBatteryService } from './batteryService.js';
 import { co2Reading } from './nativeConversions.js';
+import { batteryOptionsFor } from './sensorMap/batterySeed.js';
 export class Co2Accessory {
-    constructor(platform, accessory) {
+    constructor(platform, accessory, 
+    // Row-driven (finding #4). CO₂ is reported in ppm (canonical), so
+    // there is no unit conversion, and the 1000-ppm alert threshold
+    // stays hardcoded per the design (CO₂ isn't a motion kind, so
+    // row.threshold is contractually absent). The row supplies name +
+    // battery ownership only.
+    row) {
         this.platform = platform;
         this.accessory = accessory;
         this.accessory.getService(this.platform.Service.AccessoryInformation)
@@ -11,7 +18,7 @@ export class Co2Accessory {
         this.service = this.accessory.getService(this.platform.Service.CarbonDioxideSensor)
             || this.accessory.addService(this.platform.Service.CarbonDioxideSensor);
         this.service.setCharacteristic(this.platform.Characteristic.Name, accessory.context.device.displayName);
-        this.batterySetter = setupBatteryService(this.platform, this.accessory);
+        this.batterySetter = setupBatteryService(this.platform, this.accessory, batteryOptionsFor(row, accessory));
         if (typeof accessory.context.device.value === 'number') {
             this.setValue(accessory.context.device.value);
         }

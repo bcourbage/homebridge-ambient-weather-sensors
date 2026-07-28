@@ -3,10 +3,8 @@ import { describe, expect, it } from 'vitest';
 import { batteryFieldForSensor, isCanonicalSensorForBattery } from '../../../src/batteryFields';
 import { DEFAULT_SENSOR_MAP, defaultRowFor } from '../../../src/sensorMap/defaultMap';
 import { LEGAL_UNITS_FOR_MEASUREMENT } from '../../../src/sensorMap/units';
-import {
-  ALL_WRAPPERS,
-  WRAPPER_FOR_KIND_AND_MEASUREMENT,
-} from '../../../src/sensorMap/wrappers';
+import { ALL_WRAPPERS } from '../../../src/sensorMap/wrappers';
+import { WRAPPER_SPEC } from '../../../src/sensorMap/wrapperFactories';
 
 describe('DEFAULT_SENSOR_MAP shape', () => {
   it('has expected row count (41 static + 28 numbered probes = 69)', () => {
@@ -24,27 +22,18 @@ describe('DEFAULT_SENSOR_MAP shape', () => {
     }
   });
 
-  it('every row\'s (kind, measurement) matches its wrapper', () => {
+  it('every row\'s wrapper.id agrees with its (kind, measurement) per WRAPPER_SPEC', () => {
+    // finding-#4 review (P1): derive DIRECTLY from WRAPPER_SPEC — the
+    // single source of truth for wrapperId → (kind, measurement) — so
+    // this stays meaningful independent of the (Stage-0-empty) custom
+    // resolution table. Every default row's wrapper must have a spec
+    // whose kind/measurement matches the row's; the effective-map
+    // wrapper-mismatch guard drops any row that violates this.
     for (const row of DEFAULT_SENSOR_MAP) {
-      const expected = WRAPPER_FOR_KIND_AND_MEASUREMENT[`${row.kind}|${row.measurement}`];
-      if (expected) {
-        // For kind+measurement combos that have a single canonical wrapper
-        // (temperature, humidity, co2, pm25, pm10, light) this must match.
-        // For kinds with multiple wrappers per measurement (motion +
-        // rain-accumulation, motion + count, motion + timestamp) we relax:
-        // we only require the wrapper's kind/measurement family to line up,
-        // not the specific object identity.
-        // Enforce identity when the lookup produces one — most rows.
-        if (row.kind !== 'motion' || ['direction', 'pressure', 'wind-speed'].includes(row.measurement)) {
-          // Multi-wrapper motion measurements (wind-speed has 3, direction 2,
-          // pressure 2) still don't have identity match; skip identity for those.
-          if (row.measurement !== 'wind-speed'
-              && row.measurement !== 'direction'
-              && row.measurement !== 'pressure') {
-            expect(row.wrapper).toBe(expected);
-          }
-        }
-      }
+      const spec = WRAPPER_SPEC[row.wrapper.id];
+      expect(spec, `no WRAPPER_SPEC entry for ${row.dataPoint}'s wrapper '${row.wrapper.id}'`).toBeDefined();
+      expect(spec.kind, `${row.dataPoint} (${row.wrapper.id}) kind`).toBe(row.kind);
+      expect(spec.measurement, `${row.dataPoint} (${row.wrapper.id}) measurement`).toBe(row.measurement);
     }
   });
 });

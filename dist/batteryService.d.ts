@@ -26,5 +26,22 @@ import type { AmbientWeatherSensorsPlatform } from './platform.js';
  * convention for battery-powered devices (the same way an Eve
  * Motion sensor exposes its own battery).
  */
-export declare function setupBatteryService(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory): ((low: boolean) => void) | undefined;
+/**
+ * Row-driven attach contract (finding-#4 Stage 2). Under the row model
+ * the HAP graph is a property of the effective map, NOT of transient
+ * telemetry — a row whose signature says `battery:1` must get a Battery
+ * sub-service even if AWN happened to omit the field on the discovery
+ * tick. Callers that have a resolved row pass this shape:
+ *
+ *   - `attach`: `row.hasBatterySubService` — attach unconditionally
+ *     when true; remove any existing sub-service when false.
+ *   - `initialLow`: the seed value. `'unknown'` (no cached reading yet)
+ *     seeds HAP's NORMAL placeholder; the first real `setBatteryLow`
+ *     overrides it.
+ */
+export interface BatteryServiceOptions {
+    attach: boolean;
+    initialLow: boolean | 'unknown';
+}
+export declare function setupBatteryService(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory, options?: BatteryServiceOptions): ((low: boolean) => void) | undefined;
 //# sourceMappingURL=batteryService.d.ts.map

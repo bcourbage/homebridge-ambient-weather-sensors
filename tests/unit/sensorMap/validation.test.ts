@@ -11,6 +11,40 @@ import {
 
 const KNOWN = defaultRowFor('tempf')!;
 const KNOWN_WIND = defaultRowFor('windspeedmph')!;
+const KNOWN_DIR = defaultRowFor('winddir')!;
+const KNOWN_LASTRAIN = defaultRowFor('lastRain')!;
+
+describe('validateOverrideBody — non-triggering measurements (finding-#4 review, P1-B)', () => {
+  it('warn-strips threshold / triggerDirection / triggerEnabled on a direction row', () => {
+    const r = validateOverride(
+      { dataPoint: 'winddir', threshold: 90, triggerDirection: 'below', triggerEnabled: false },
+      KNOWN_DIR,
+    );
+    expect(r.status).toBe('ok');
+    expect(r.warnings.some(w => w.code === 'ignored-non-triggering-threshold')).toBe(true);
+    expect(r.warnings.some(w => w.code === 'ignored-non-triggering-triggerdirection')).toBe(true);
+    expect(r.warnings.some(w => w.code === 'ignored-non-triggering-triggerenabled')).toBe(true);
+    if (r.status === 'ok') {
+      expect(r.validated.threshold).toBeUndefined();
+      expect(r.validated.triggerDirection).toBeUndefined();
+      expect(r.validated.triggerEnabled).toBeUndefined();
+    }
+  });
+
+  it('warn-strips threshold on a timestamp row (last-rain)', () => {
+    const r = validateOverride({ dataPoint: 'lastRain', threshold: 5 }, KNOWN_LASTRAIN);
+    expect(r.status).toBe('ok');
+    expect(r.warnings.some(w => w.code === 'ignored-non-triggering-threshold')).toBe(true);
+    if (r.status === 'ok') expect(r.validated.threshold).toBeUndefined();
+  });
+
+  it('does NOT strip threshold on a triggering motion measurement (wind-speed)', () => {
+    const r = validateOverride({ dataPoint: 'windspeedmph', threshold: 30 }, KNOWN_WIND);
+    expect(r.status).toBe('ok');
+    expect(r.warnings.some(w => w.code.startsWith('ignored-non-triggering'))).toBe(false);
+    if (r.status === 'ok') expect(r.validated.threshold).toBe(30);
+  });
+});
 
 describe('STATION_MAC_REGEX', () => {
   it('accepts uppercase and lowercase MACs', () => {
@@ -81,16 +115,29 @@ describe('validateOverride — known dataPoint', () => {
     expect(r.status).toBe('ok');
   });
 
-  it('rejects illegal displayUnit', () => {
-    const o: SensorMapOverride = { dataPoint: 'tempf', displayUnit: 'percent' };
-    const r = validateOverride(o, KNOWN);
+  it('rejects illegal displayUnit on an extended (motion-family) dataPoint', () => {
+    // wind-speed's displayUnit IS consumed by the wrapper, so an
+    // illegal value is a hard error.
+    const o: SensorMapOverride = { dataPoint: 'windspeedmph', displayUnit: 'percent' };
+    const r = validateOverride(o, KNOWN_WIND);
     expect(r.status).toBe('error');
   });
 
-  it('accepts legal displayUnit', () => {
+  it('accepts legal displayUnit on an extended dataPoint', () => {
+    const o: SensorMapOverride = { dataPoint: 'windspeedmph', displayUnit: 'kph' };
+    const r = validateOverride(o, KNOWN_WIND);
+    expect(r.status).toBe('ok');
+    // Extended displayUnit is meaningful — NOT stripped.
+    expect(r.warnings.some(w => w.code === 'ignored-native-displayunit')).toBe(false);
+  });
+
+  it('warn-strips displayUnit on a native-HAP dataPoint (finding #4)', () => {
+    // temperature renders in a fixed HomeKit unit (°C); displayUnit is
+    // ignored regardless of whether the value is otherwise legal.
     const o: SensorMapOverride = { dataPoint: 'tempf', displayUnit: 'celsius' };
     const r = validateOverride(o, KNOWN);
     expect(r.status).toBe('ok');
+    expect(r.warnings.some(w => w.code === 'ignored-native-displayunit')).toBe(true);
   });
 
   it('warns on sourceUnit override for known datapoints', () => {

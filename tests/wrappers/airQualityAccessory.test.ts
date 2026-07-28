@@ -8,6 +8,7 @@ import {
   makeMockAccessory,
   makeMockPlatform,
 } from '../helpers/mockHomebridge';
+import { makeNumericRow } from '../helpers/effectiveRow';
 
 describe('AirQualityAccessory (PM2.5 variant)', () => {
   it('constructs cleanly and defaults to PM2.5 when type is not PM10', () => {
@@ -109,5 +110,50 @@ describe('AirQualityAccessory (PM10 variant)', () => {
     wrapper.setValue(density);
     const svc = accessory.getService(MockServices.AirQualitySensor)!;
     expect(svc.readCharacteristic(MockCharacteristics.AirQuality)).toBe(expectedLevel);
+  });
+});
+
+// ---- finding-#4 Stage 2: row-driven construction ----
+describe('AirQualityAccessory — row-driven (finding #4)', () => {
+  function pmRow(measurement: 'pm25' | 'pm10', overrides = {}) {
+    return makeNumericRow({
+      kind: measurement === 'pm10' ? 'air-quality-pm10' : 'air-quality-pm25',
+      measurement, sourceUnit: 'ugm3', displayUnit: 'ugm3',
+      wrapperId: measurement === 'pm10' ? 'air-quality-pm10' : 'air-quality-pm25',
+      dataPoint: measurement === 'pm10' ? 'pm10_in' : 'pm25', name: 'Air Quality',
+      ...overrides,
+    });
+  }
+
+  it('takes the PM variant from row.measurement, NOT context.device.type', () => {
+    const platform = makeMockPlatform();
+    // context says PM2.5 but the row (which the factory routed here as
+    // air-quality-pm10) is authoritative → PM10Density must be written.
+    const accessory = makeMockAccessory({ uniqueId: 'MAC-pm10', displayName: 'AQ', type: 'PM25' });
+    const wrapper = new AirQualityAccessory(
+      platform as unknown as AmbientWeatherSensorsPlatform,
+      accessory as never,
+      pmRow('pm10'),
+    );
+    wrapper.setValue(60);
+    const svc = accessory.getService(MockServices.AirQualitySensor)!;
+    expect(svc.readCharacteristic(MockCharacteristics.PM10Density)).toBe(60);
+    expect(svc.readCharacteristic(MockCharacteristics.PM2_5Density)).toBeUndefined();
+    // Model string reflects the row-derived variant.
+    const info = accessory.getService(MockServices.AccessoryInformation)!;
+    expect(info.readCharacteristic(MockCharacteristics.Model)).toBe('PM10 Sensor');
+  });
+
+  it('keeps Name platform-owned (displayName) and attaches battery per row', () => {
+    const platform = makeMockPlatform();
+    const accessory = makeMockAccessory({ uniqueId: 'MAC-pm25', displayName: 'Indoor Air Quality' });
+    new AirQualityAccessory(
+      platform as unknown as AmbientWeatherSensorsPlatform,
+      accessory as never,
+      pmRow('pm25', { name: 'Air Quality', hasBatterySubService: true, batteryField: 'batt_25' }),
+    );
+    const svc = accessory.getService(MockServices.AirQualitySensor)!;
+    expect(svc.readCharacteristic(MockCharacteristics.Name)).toBe('Indoor Air Quality');
+    expect(accessory.getService(MockServices.Battery)).toBeDefined();
   });
 });
