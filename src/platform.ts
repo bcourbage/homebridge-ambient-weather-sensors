@@ -1293,24 +1293,25 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
         }
         const uniqueId = `${raw.macAddress}-${row.dataPoint}`;
 
-        // Initial value (review finding 7): an uncoercible reading must
-        // never fabricate a REAL zero observation (false temperature /
-        // air-quality / trigger state). Seed only from a successful
-        // coercion; otherwise fall back to the cached accessory's last
-        // numeric value, else leave the value UNSET (the seed loop and
-        // the wrapper constructors both guard on `typeof === 'number'`).
-        // Timestamp rows keep v1.7's exact invalid-lastRain behavior
-        // (unparseable → 0) separately.
-        let value = coerceValue(row, raw.lastData[row.dataPoint]);
-        if (value === undefined) {
-          if (row.measurement === 'timestamp') {
-            value = 0;    // v1.7 parity: invalid lastRain parsed to 0
-          } else {
-            const cachedUuid = this.api.hap.uuid.generate(uniqueId);
-            const cachedValue = this.accessories
-              .find(a => a.UUID === cachedUuid)?.context?.device?.value;
-            value = typeof cachedValue === 'number' ? cachedValue : undefined;
-          }
+        // Initial value (review finding 7 + round 6): an uncoercible
+        // reading must never fabricate a REAL zero observation (false
+        // temperature / air-quality / trigger state). Seed only from a
+        // successful coercion; otherwise leave the value UNSET — no
+        // seed fires (every seed path guards on `typeof === 'number'`),
+        // so a restored accessory's RETAINED HAP characteristic — which
+        // can be newer than any context snapshot, since poll/realtime
+        // update the characteristic without rewriting context — is what
+        // the user keeps seeing (R6-3: a cached-context fallback here
+        // re-seeded stale values over newer retained readings).
+        //
+        // The single v1.7-parity exception (R6-2): an invalid lastRain
+        // STRING parsed to 0 in v1.7 ("never"). Only that dataPoint and
+        // only the string shape — other timestamp rows (lightning_time,
+        // future customs) had no such special case and stay unset.
+        const rawReading = raw.lastData[row.dataPoint];
+        let value = coerceValue(row, rawReading);
+        if (value === undefined && row.dataPoint === 'lastRain' && typeof rawReading === 'string') {
+          value = 0;
         }
 
         // uniqueId keeps AWN's original MAC casing so the generated UUID
@@ -1376,6 +1377,21 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
       const accessoryByRoutingUid = new Map<string, PlatformAccessory>();
       const deviceByRoutingUid = new Map<string, V2Device>();
       const newAccessories: Array<{ accessory: PlatformAccessory; row: ConfiguredEffectiveRow }> = [];
+      // Structural replacements are STAGED (review R6-1): the candidate
+      // accessory is built and its wrapper constructed FIRST; only when
+      // that succeeds is the old accessory unregistered, the notice
+      // written, and the candidate registered. Unregistering eagerly
+      // meant a throwing replacement wrapper cost the user the
+      // accessory, its room placement, and its automations — plus a
+      // misleading structural-change notice.
+      interface StagedReplacement {
+        old: PlatformAccessory;
+        candidate: PlatformAccessory;
+        row: ConfiguredEffectiveRow;
+        cachedSignature: string;
+        displayName: string;
+      }
+      const stagedReplacements: StagedReplacement[] = [];
       for (const { row, device, routingUid } of reconciled) {
         const uuid = this.api.hap.uuid.generate(device.uniqueId);
         const existingAccessory = this.accessories.find(accessory => accessory.UUID === uuid);
@@ -1398,21 +1414,18 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
             // matches the row's frozen signature (e.g. the user set
             // `batteryField: null`, detaching the Battery sub-service).
             // Mutating the graph in place leaves HomeKit clients with a
-            // stale accessory shape — re-register instead, and record a
-            // notice so the UI can explain why room placement was lost.
-            this.log.warn(
-              `Structural change for [${device.displayName}]: `
-              + `"${cachedSignature}" -> "${row.structuralSignature}". Re-registering the accessory.`,
-            );
-            this.api.unregisterPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [existingAccessory]);
-            const idx = this.accessories.indexOf(existingAccessory);
-            if (idx >= 0) {
-              this.accessories.splice(idx, 1);
-            }
-            await this.appendStructuralNoticeV2(row, cachedSignature);
-            accessory = new this.api.platformAccessory(device.displayName, uuid);
-            accessory.context.device = v2Context;
-            newAccessories.push({ accessory, row });
+            // stale accessory shape — stage a replacement; the swap
+            // happens after wrapper construction proves out (R6-1).
+            const candidate = new this.api.platformAccessory(device.displayName, uuid);
+            candidate.context.device = v2Context;
+            stagedReplacements.push({
+              old: existingAccessory,
+              candidate,
+              row,
+              cachedSignature,
+              displayName: device.displayName,
+            });
+            accessory = candidate;
           } else {
             this.log.info('Restoring existing accessory from cache:', existingAccessory.displayName);
             if (existingAccessory.displayName !== device.displayName) {
@@ -1485,6 +1498,37 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
           continue;
         }
         this.api.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [accessory]);
+      }
+
+      // Complete the STAGED structural replacements (review R6-1). The
+      // candidate's wrapper has now either constructed (its routing
+      // entry exists) or failed. Success: unregister the old accessory,
+      // record the structural-change notice, register the candidate.
+      // Failure: the OLD accessory stays registered with its full
+      // cached graph (frozen at last-known values — no routing entry),
+      // and NO notice is written; a throwing replacement wrapper never
+      // costs the user the accessory.
+      for (const staged of stagedReplacements) {
+        const key = routingKey(staged.row.stationMac, staged.row.dataPoint);
+        if (!this.v2Routing.has(key)) {
+          this.log.warn(
+            `Keeping cached accessory [${staged.old.displayName}]: its structural replacement's `
+            + 'wrapper failed to construct (see the [routing] error above). The accessory stays '
+            + 'registered with last-known values; no structural change was applied.',
+          );
+          continue;
+        }
+        this.log.warn(
+          `Structural change for [${staged.displayName}]: `
+          + `"${staged.cachedSignature}" -> "${staged.row.structuralSignature}". Re-registering the accessory.`,
+        );
+        this.api.unregisterPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [staged.old]);
+        const idx = this.accessories.indexOf(staged.old);
+        if (idx >= 0) {
+          this.accessories.splice(idx, 1);
+        }
+        await this.appendStructuralNoticeV2(staged.row, staged.cachedSignature);
+        this.api.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [staged.candidate]);
       }
 
       this.startDataSource();

@@ -752,22 +752,29 @@ describe('discoverDevicesV2 — safe mode and custom rows', () => {
     }
   });
 
-  it('an uncoercible reading preserves the cached value instead of fabricating 0 (finding 7)', async () => {
+  it('an uncoercible reading leaves the RETAINED characteristic untouched (finding 7 + R6-3)', async () => {
     const { platform, api } = makePlatform({ _sensorMapV2: true, temperatureSensors: true });
     const cached = cacheAccessory(platform, `${MAC}-tempf`, 'Temperature', 'Outdoor Temperature', tempWithBattery);
-    // Cached last-known reading: 20°F.
+    // The reviewer's exact stale-context lifecycle: context carries the
+    // PREVIOUS startup's reading (20°F) while the retained HAP
+    // characteristic holds a NEWER value (70°F) — poll/realtime update
+    // the characteristic without rewriting context.
     (cached.context.device as Record<string, unknown>).value = 20;
+    cached.getService(MockServices.TemperatureSensor)!
+      .getCharacteristic(MockCharacteristics.CurrentTemperature)
+      .updateValue(F_TO_C(70));
     // AWN reports garbage for tempf this tick (plus a healthy battery).
     mockFetch([{ macAddress: MAC, info: { name: 'Home' }, lastData: { tempf: 'garbage', battout: 1 } }]);
     stubTimer();
     try {
       await reconcile(platform, 'legacy');
 
-      // Context keeps the cached numeric value - never a fabricated 0.
-      expect((cached.context.device as Record<string, unknown>).value).toBe(20);
-      // The wrapper was seeded with the preserved 20°F (-6.67°C), not 0°F.
+      // The NEWER retained reading survives: no seed fired, so neither
+      // a fabricated 0 nor the STALE context 20°F overwrote 70°F.
       const svc = cached.getService(MockServices.TemperatureSensor)!;
-      expect(svc.readCharacteristic(MockCharacteristics.CurrentTemperature)).toBeCloseTo((20 - 32) * 5 / 9, 3);
+      expect(svc.readCharacteristic(MockCharacteristics.CurrentTemperature)).toBeCloseTo(F_TO_C(70), 3);
+      // The fresh context leaves value unset until a real reading lands.
+      expect((cached.context.device as Record<string, unknown>).value).toBeUndefined();
     } finally {
       rmSync((api as unknown as { user: { storagePath(): string } }).user.storagePath(), { recursive: true, force: true });
     }
@@ -791,16 +798,83 @@ describe('discoverDevicesV2 — safe mode and custom rows', () => {
     }
   });
 
-  it('timestamp rows keep the v1.7 invalid-lastRain behavior: unparseable string seeds 0 (finding 7)', async () => {
+  it('the v1.7 zero exception applies to lastRain STRINGS only (finding 7 + R6-2)', async () => {
+    const { platform, api } = makePlatform({
+      _sensorMapV2: true, extendedSensors: true, rainSensors: true, lightningSensors: true,
+    });
+    mockFetch([{ macAddress: MAC, info: { name: 'Home' }, lastData: {
+      lastRain: 'not-a-date',        // v1.7 parity: invalid STRING → 0
+      lightning_time: 'corrupted',   // also a timestamp row — NO special case
+    } }]);
+    stubTimer();
+    try {
+      await reconcile(platform, 'legacy');
+      const lr = api.registered.find(a => a.context.device.uniqueId === `${MAC}-lastRain`)!;
+      expect((lr.context.device as Record<string, unknown>).value).toBe(0);
+      // lightning_time must NOT be overwritten to 0/"never" — v1.7 only
+      // special-cased lastRain strings; other timestamps stay unset.
+      const lt = api.registered.find(a => a.context.device.uniqueId === `${MAC}-lightning_time`)!;
+      expect(lt).toBeDefined();
+      expect((lt.context.device as Record<string, unknown>).value).toBeUndefined();
+    } finally {
+      rmSync((api as unknown as { user: { storagePath(): string } }).user.storagePath(), { recursive: true, force: true });
+    }
+  });
+
+  it('a NON-string malformed lastRain does not zero either (R6-2)', async () => {
     const { platform, api } = makePlatform({ _sensorMapV2: true, extendedSensors: true, rainSensors: true });
-    mockFetch([{ macAddress: MAC, info: { name: 'Home' }, lastData: { lastRain: 'not-a-date' } }]);
+    mockFetch([{ macAddress: MAC, info: { name: 'Home' }, lastData: { lastRain: { unexpected: true } } }]);
     stubTimer();
     try {
       await reconcile(platform, 'legacy');
       const lr = api.registered.find(a => a.context.device.uniqueId === `${MAC}-lastRain`)!;
       expect(lr).toBeDefined();
-      expect((lr.context.device as Record<string, unknown>).value).toBe(0);
+      // v1.7 passed non-string raws through and its typeof-number seed
+      // guard skipped them — no zero, no seed.
+      expect((lr.context.device as Record<string, unknown>).value).toBeUndefined();
     } finally {
+      rmSync((api as unknown as { user: { storagePath(): string } }).user.storagePath(), { recursive: true, force: true });
+    }
+  });
+
+  it('a staged structural replacement whose wrapper throws keeps the old accessory (R6-1)', async () => {
+    const { platform, api, log } = makePlatform({
+      _sensorMapV2: true,
+      configVersion: 2,
+      sensorMap: [{ dataPoint: 'tempf', batteryField: null }],
+    });
+    // v1.7 cache WITH battery; the batteryField:null row (battery:0)
+    // makes this a structural mismatch → staged replacement.
+    const cached = cacheAccessory(platform, `${MAC}-tempf`, 'Temperature', 'Outdoor Temperature', tempWithBattery);
+    // Poison the temperature factory: the REPLACEMENT wrapper throws.
+    const { FACTORIES } = await import('../../src/sensorMap/wrapperFactories');
+    const original = FACTORIES.temperature;
+    (FACTORIES as Record<string, unknown>).temperature = () => {
+      throw new Error('boom: replacement constructor failure under test');
+    };
+    mockFetch([{ macAddress: MAC, info: { name: 'Home' }, lastData: { tempf: 68, battout: 1 } }]);
+    stubTimer();
+    try {
+      await reconcile(platform, 'v2');
+
+      // ZERO unregisters: the user keeps the accessory, its room, its
+      // automations. The candidate never registered.
+      expect(api.unregistered).toHaveLength(0);
+      expect(api.registered).toHaveLength(0);
+      expect(platform.accessories).toContain(cached);
+      // The cached graph is intact (Battery still attached).
+      expect(cached.getService(MockServices.Battery)).toBeDefined();
+      // No misleading structural-change notice was written.
+      const storageRoot = (api as unknown as { user: { storagePath(): string } }).user.storagePath();
+      const noticesFile = nodePath.join(storageRoot, 'plugin-data', 'ambient-weather', 'notices.json');
+      expect(existsSync(noticesFile)).toBe(false);
+      // Both the routing error and the keep-cached warn surfaced.
+      expect(log.find('error', 'failed to instantiate wrapper').length).toBeGreaterThan(0);
+      expect(log.find('warn', 'Keeping cached accessory').length).toBeGreaterThan(0);
+      // And no "Re-registering" line was logged for the failed swap.
+      expect(log.find('warn', 'Re-registering the accessory')).toHaveLength(0);
+    } finally {
+      (FACTORIES as Record<string, unknown>).temperature = original;
       rmSync((api as unknown as { user: { storagePath(): string } }).user.storagePath(), { recursive: true, force: true });
     }
   });
