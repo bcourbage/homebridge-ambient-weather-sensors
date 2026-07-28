@@ -1177,19 +1177,38 @@ export class AmbientWeatherSensorsPlatform {
             }
             const data = await response.json();
             if (!Array.isArray(data)) {
-                return [];
+                // Non-array body with a JSON content-type: a malformed snapshot,
+                // not an empty inventory. v1.7's parseDevices treated non-array
+                // input as zero stations, but v2's reconciler DEREGISTERS from
+                // its inventory — so treat it as a failed fetch and retry rather
+                // than wiping the cache off a transient API glitch.
+                this.log.warn('AWN response is not a station array; treating as a failed snapshot (no reconciliation this attempt).');
+                return undefined;
             }
             const stations = [];
             for (const s of data) {
+                // ANY invalid station entry in a non-empty response marks the
+                // whole snapshot as failed. Silently skipping the bad entry
+                // would let a transiently malformed payload (e.g. `[{}]` during
+                // an AWN incident) masquerade as an authoritative inventory —
+                // and the reconciler would unregister every cached accessory,
+                // destroying HomeKit rooms/automations. v1.7's parseDevices
+                // THREW on the same input (Object.entries(undefined)) and
+                // preserved the cache via the retry path; match that outcome.
+                // A genuinely empty array (`[]`) is still authoritative: AWN is
+                // healthy and reports no devices — same as v1.7.
                 if (!s || typeof s !== 'object') {
-                    continue;
+                    this.log.warn('AWN response contains a non-object station entry; treating as a failed snapshot (no reconciliation this attempt).');
+                    return undefined;
                 }
                 const rec = s;
-                if (typeof rec.macAddress !== 'string') {
-                    continue;
+                if (typeof rec.macAddress !== 'string' || rec.macAddress.length === 0) {
+                    this.log.warn('AWN response contains a station without a macAddress; treating as a failed snapshot (no reconciliation this attempt).');
+                    return undefined;
                 }
-                if (!rec.lastData || typeof rec.lastData !== 'object') {
-                    continue;
+                if (!rec.lastData || typeof rec.lastData !== 'object' || Array.isArray(rec.lastData)) {
+                    this.log.warn(`AWN response station ${rec.macAddress} has no lastData object; treating as a failed snapshot (no reconciliation this attempt).`);
+                    return undefined;
                 }
                 stations.push({
                     macAddress: rec.macAddress,

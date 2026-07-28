@@ -288,6 +288,81 @@ describe('discoverDevicesV2 — flag ON lifecycle', () => {
   });
 });
 
+describe('discoverDevicesV2 — malformed AWN responses (failed snapshot, not empty inventory)', () => {
+  function malformedCases(): Array<{ label: string; payload: unknown }> {
+    return [
+      { label: 'wholly malformed: [{}]', payload: [{}] },
+      { label: 'partially malformed: [valid, {}]', payload: [
+        { macAddress: MAC, info: { name: 'Home' }, lastData: { tempf: 68 } },
+        {},
+      ] },
+      { label: 'station without macAddress', payload: [{ info: { name: 'Home' }, lastData: { tempf: 68 } }] },
+      { label: 'station without lastData', payload: [{ macAddress: MAC, info: { name: 'Home' } }] },
+      { label: 'non-array body', payload: { error: 'maintenance' } },
+    ];
+  }
+
+  it('fetchRawStations returns undefined for every malformed shape (empty array stays valid)', async () => {
+    const { platform } = makePlatform({ _sensorMapV2: true });
+    const fetchRaw = (platform as unknown as { fetchRawStations(): Promise<unknown> });
+    for (const { label, payload } of malformedCases()) {
+      mockFetch(payload);
+      expect(await fetchRaw.fetchRawStations(), label).toBeUndefined();
+      vi.restoreAllMocks();
+    }
+    // Contrast: [] is an authoritative empty inventory (AWN healthy, no
+    // devices) — same as v1.7.
+    mockFetch([]);
+    expect(await fetchRaw.fetchRawStations()).toEqual([]);
+  });
+
+  it('a transient malformed snapshot never unregisters the cache; the retry reconciles normally', async () => {
+    const { platform, api } = makePlatform({ _sensorMapV2: true, temperatureSensors: true });
+    const cached = cacheAccessory(platform, `${MAC}-tempf`, 'Temperature', 'Outdoor Temperature', (a) => {
+      const svc = a.addService(MockServices.TemperatureSensor);
+      svc.addCharacteristic(MockCharacteristics.CurrentTemperature);
+    });
+
+    // First fetch: AWN incident shape [{}] — v1.7 threw and retried;
+    // v2 must also fail the snapshot. Second fetch: healthy payload.
+    let call = 0;
+    vi.spyOn(global, 'fetch').mockImplementation(async () => {
+      call += 1;
+      const body = call === 1 ? [{}] : [{ macAddress: MAC, info: { name: 'Home' }, lastData: { tempf: 68 } }];
+      return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
+    });
+    // Collapse the 60s retry backoff.
+    vi.spyOn(platform as unknown as { sleep(ms: number): Promise<void> }, 'sleep').mockResolvedValue(undefined);
+    stubTimer();
+
+    await reconcile(platform, 'legacy');
+
+    // The malformed tick performed ZERO reconciliation...
+    expect(api.unregistered).toHaveLength(0);
+    // ...and the retry restored the cached accessory normally.
+    expect(platform.accessories).toContain(cached);
+    expect(routing(platform)!.has(`${MAC}|tempf`)).toBe(true);
+  });
+
+  it('a malformed poll-tick payload is dropped without touching wrappers', async () => {
+    const { platform } = makePlatform({ _sensorMapV2: true, temperatureSensors: true });
+    const cached = cacheAccessory(platform, `${MAC}-tempf`, 'Temperature', 'Outdoor Temperature', (a) => {
+      const svc = a.addService(MockServices.TemperatureSensor);
+      svc.addCharacteristic(MockCharacteristics.CurrentTemperature);
+    });
+    mockFetch([{ macAddress: MAC, info: { name: 'Home' }, lastData: { tempf: 68 } }]);
+    stubTimer();
+    await reconcile(platform, 'legacy');
+    const tempSvc = cached.getService(MockServices.TemperatureSensor)!;
+    const before = tempSvc.readCharacteristic(MockCharacteristics.CurrentTemperature);
+
+    mockFetch([{}]);
+    await (platform as unknown as { pollAndDistribute(): Promise<void> }).pollAndDistribute();
+    // Value untouched by the malformed tick.
+    expect(tempSvc.readCharacteristic(MockCharacteristics.CurrentTemperature)).toBe(before);
+  });
+});
+
 describe('discoverDevicesV2 — safe mode and custom rows', () => {
   it('safe mode (flag on) performs no register/unregister/update and keeps cached-wrapper bindings', () => {
     const { platform, api } = makePlatform({
