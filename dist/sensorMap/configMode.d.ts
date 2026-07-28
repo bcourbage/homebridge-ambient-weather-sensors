@@ -31,6 +31,8 @@ export interface ModeDetectionResult {
 export interface ConfigInputShape {
     configVersion?: unknown;
     sensorMap?: unknown;
+    /** Mirror metadata stamped by the v2 UI save flow (finding 5). */
+    _legacyMirror?: unknown;
     temperatureSensors?: unknown;
     humiditySensors?: unknown;
     solarRadiationSensors?: unknown;

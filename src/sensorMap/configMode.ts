@@ -13,6 +13,8 @@
  * editability is preferable to losing every accessory in HomeKit.
  */
 
+import { recognizeMirror } from './legacyMirror.js';
+
 export const CURRENT_CONFIG_VERSION = 2;
 
 export type ConfigMode = 'legacy' | 'v2' | 'safe-mode';
@@ -35,6 +37,8 @@ export interface ModeDetectionResult {
 export interface ConfigInputShape {
   configVersion?: unknown;
   sensorMap?: unknown;
+  /** Mirror metadata stamped by the v2 UI save flow (finding 5). */
+  _legacyMirror?: unknown;
   // Legacy toggles the detector inspects for the "ambiguous" warning.
   temperatureSensors?: unknown;
   humiditySensors?: unknown;
@@ -100,13 +104,32 @@ export function detectConfigMode(config: ConfigInputShape | undefined): ModeDete
   }
 
   // configVersion === 2.
-  // Ambiguous: v2 + legacy toggles set. v2 wins, warn once per key.
+  // Legacy toggles alongside v2: three cases (finding 5).
+  //   - A RECOGNIZED legacy mirror (hash-matching `_legacyMirror`
+  //     metadata written by the v2 UI save flow) is the downgrade-safety
+  //     projection, deliberately present: no warning, v2 drives.
+  //   - STALE mirror metadata (hash mismatch — someone hand-edited
+  //     sensorMap or the mirrored fields): warn with both hashes so the
+  //     drift is diagnosable; v2 still drives, but a v1.7 downgrade
+  //     would see the stale projection.
+  //   - No mirror metadata: the original ambiguity warning.
   const legacySet = LEGACY_TOGGLE_KEYS.filter(k => config[k] !== undefined);
   if (legacySet.length > 0) {
-    warnings.push(
-      `Both configVersion: 2 and legacy toggle(s) [${legacySet.join(', ')}] are set. `
-      + 'configVersion: 2 takes precedence; the legacy toggles are ignored.',
-    );
+    const mirror = recognizeMirror(config as Record<string, unknown>);
+    if (mirror.state === 'stale') {
+      warnings.push(
+        `The legacy config mirror is STALE (expected hash ${mirror.expectedHash.slice(0, 12)}…, `
+        + `actual ${mirror.actualHash.slice(0, 12)}…). The sensorMap or the mirrored legacy fields were `
+        + 'edited by hand since the last UI save. configVersion: 2 still drives this plugin, but a '
+        + 'downgrade to 1.x would run the stale projection. Re-save through the UI to refresh the mirror.',
+      );
+    } else if (mirror.state === 'absent') {
+      warnings.push(
+        `Both configVersion: 2 and legacy toggle(s) [${legacySet.join(', ')}] are set. `
+        + 'configVersion: 2 takes precedence; the legacy toggles are ignored.',
+      );
+    }
+    // 'recognized': the maintained downgrade mirror — intentionally silent.
   }
   return { mode: 'v2', warnings };
 }
