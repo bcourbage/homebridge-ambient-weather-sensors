@@ -125,18 +125,21 @@ const ENTRIES: Entry[] = [
   },
   {
     key: 'motion|uv-index',
-    // Threshold in sourceUnit + a value above it → motion fires (R10-1:
-    // the direction must actually reach the wrapper).
-    override: { dataPoint: 'barn_uv', kind: 'motion', measurement: 'uv-index', sourceUnit: 'index', name: 'Barn UV', threshold: 7 },
-    wrapperId: 'uv', value: 8,
-    assert: extendedState('8', true),
+    // AUTHORED 'below' (R11): 5 ≤ the 7 threshold fires ONLY if UV
+    // forwards the direction — a dropped direction reads 'above' and
+    // stays quiet.
+    override: { dataPoint: 'barn_uv', kind: 'motion', measurement: 'uv-index', sourceUnit: 'index', name: 'Barn UV', threshold: 7, triggerDirection: 'below' },
+    wrapperId: 'uv', value: 5,
+    assert: extendedState('5', true),
   },
   {
     key: 'motion|wind-speed',
-    // kph source → canonical mph → mps display: 30 kph = 8.33 m/s → "8 mps".
-    override: { dataPoint: 'barn_wind', kind: 'motion', measurement: 'wind-speed', sourceUnit: 'kph', displayUnit: 'mps', name: 'Barn Wind' },
+    // AUTHORED 'below' (R11) + unit conversion: 30 kph (18.6 mph
+    // canonical) ≤ the 40 kph (24.9 mph) threshold → motion fires ONLY
+    // with forwarding. Display: 30 kph = 8.33 m/s → "8 mps".
+    override: { dataPoint: 'barn_wind', kind: 'motion', measurement: 'wind-speed', sourceUnit: 'kph', displayUnit: 'mps', name: 'Barn Wind', threshold: 40, triggerDirection: 'below' },
     wrapperId: 'wind-speed', value: 30,
-    assert: extendedState('8 mps', false),
+    assert: extendedState('8 mps', true),
   },
   {
     key: 'motion|direction',
@@ -155,20 +158,22 @@ const ENTRIES: Entry[] = [
   },
   {
     key: 'motion|rain-rate',
-    // Metric source, NO displayUnit: the documented default (in_per_hr)
-    // must apply (R10-3) — 5 mm/hr = 0.20 in/hr, never "5.00 mm/hr".
-    // Threshold authored in sourceUnit (1 mm/hr) → motion fires.
-    override: { dataPoint: 'barn_rainrate', kind: 'motion', measurement: 'rain-rate', sourceUnit: 'mm_per_hr', name: 'Barn Rain Rate', threshold: 1 },
+    // AUTHORED 'below' (R11): 5 mm/hr ≤ the 10 mm/hr threshold fires
+    // ONLY with forwarding. Metric source, NO displayUnit: the
+    // documented default (in_per_hr) must apply (R10-3) — 5 mm/hr =
+    // 0.20 in/hr, never "5.00 mm/hr".
+    override: { dataPoint: 'barn_rainrate', kind: 'motion', measurement: 'rain-rate', sourceUnit: 'mm_per_hr', name: 'Barn Rain Rate', threshold: 10, triggerDirection: 'below' },
     wrapperId: 'rain-rate', value: 5,
     assert: extendedState('0.20 in/hr', true),
   },
   {
     key: 'motion|rain-accumulation',
-    // Metric source, NO displayUnit → documented default (in): 12 mm =
-    // 0.47 in (R10-3). No threshold → frozen-schema disabled → no motion.
-    override: { dataPoint: 'barn_rain', kind: 'motion', measurement: 'rain-accumulation', sourceUnit: 'mm', name: 'Barn Rain' },
+    // AUTHORED 'below' (R11): 12 mm ≤ the 25 mm threshold fires ONLY
+    // with forwarding. Metric source, NO displayUnit → documented
+    // default (in): 12 mm = 0.47 in (R10-3).
+    override: { dataPoint: 'barn_rain', kind: 'motion', measurement: 'rain-accumulation', sourceUnit: 'mm', name: 'Barn Rain', threshold: 25, triggerDirection: 'below' },
     wrapperId: 'rain-event', value: 12,
-    assert: extendedState('0.47 in', false),
+    assert: extendedState('0.47 in', true),
   },
   {
     key: 'motion|distance',
@@ -251,4 +256,47 @@ describe('test_custom_<entry> — full flow through the restored resolution tabl
       entry.assert(platform, accessory);
     });
   }
+});
+
+describe('measurement-aware direction fallback for pressure (review R10-2 / R11)', () => {
+  it('an OMITTED-direction custom pressure row defaults to below and fires on low pressure', () => {
+    // The table-sweep pressure entry authors 'above' (the R10-1 flip
+    // knob), so this case pins the FALLBACK independently: 1013 hPa
+    // (29.91 inHg) ≤ the 1020 hPa (30.12 inHg) threshold — 'below'
+    // fires. Dropping `pressure` from the measurement-aware condition
+    // would resolve 'above' and stay quiet.
+    const platform = makeMockPlatform();
+    const override: SensorMapOverride = {
+      dataPoint: 'barn_baro', kind: 'motion', measurement: 'pressure',
+      sourceUnit: 'hPa', displayUnit: 'inHg', name: 'Barn Baro', threshold: 1020,
+      // NO triggerDirection — the fallback under test.
+    };
+    const map = buildEffectiveSensorMap({
+      userOverrides: [override],
+      discovery: { schemaVersion: 1, entries: [] },
+      uiState: { schemaVersion: 1, dismissedNoticeIds: [], forgottenFields: [] },
+      stations: [{ macAddress: MAC, name: 'Home' }],
+      configMode: 'v2',
+    });
+    expect(map.errors).toHaveLength(0);
+    const row = map.rows.find(r => r.dataPoint === 'barn_baro');
+    expect(row).toBeDefined();
+    if (!row || row.kind === 'unrecognized') {
+      throw new Error('unreachable');
+    }
+    expect(row.triggerDirection).toBe('below');
+
+    const accessory = makeMockAccessory({ uniqueId: `${MAC}-barn_baro`, displayName: 'Barn Baro' });
+    const routing = buildWrapperRouting(
+      platform as unknown as AmbientWeatherSensorsPlatform,
+      { rows: [row], errors: [], warnings: [], notes: [] },
+      () => accessory as never,
+    );
+    distributeViaRouting(
+      platform as unknown as AmbientWeatherSensorsPlatform,
+      routing,
+      [{ macAddress: MAC, lastData: { barn_baro: 1013 } }],
+    );
+    extendedState('29.91 inHg', true)(platform, accessory);
+  });
 });
