@@ -865,6 +865,14 @@ describe('discoverDevicesV2 — safe mode and custom rows', () => {
       // platform's list; the user is never left with nothing.
       expect(api.registered).toContain(cached);
       expect(platform.accessories).toContain(cached);
+      // The old accessory is the FINAL registered object.
+      expect(api.registered[api.registered.length - 1]).toBe(cached);
+      // Candidate cleanup ran (review R8): the rollback best-effort
+      // unregisters the candidate to clear any partial registration
+      // side effects before re-registering the old accessory.
+      const sameUuidUnregisters = api.unregistered.filter(a => a.UUID === cached.UUID);
+      expect(sameUuidUnregisters).toContain(cached);                    // the destructive swap
+      expect(sameUuidUnregisters.some(a => a !== cached)).toBe(true);   // the candidate cleanup
       // The candidate's routing entry was dropped (no values for an
       // unregistered accessory).
       expect(routing(platform)!.has(`${MAC}|tempf`)).toBe(false);
@@ -873,6 +881,49 @@ describe('discoverDevicesV2 — safe mode and custom rows', () => {
       const storageRoot = (api as unknown as { user: { storagePath(): string } }).user.storagePath();
       expect(existsSync(nodePath.join(storageRoot, 'plugin-data', 'ambient-weather', 'notices.json'))).toBe(false);
       expect(log.find('error', 'Failed to register the replacement').length).toBeGreaterThan(0);
+      expect(log.find('warn', 'Restored previous accessory').length).toBeGreaterThan(0);
+    } finally {
+      vi.restoreAllMocks();
+      rmSync((api as unknown as { user: { storagePath(): string } }).user.storagePath(), { recursive: true, force: true });
+    }
+  });
+
+  it('a registration that takes EFFECT before throwing is cleaned up before the restore (R8)', async () => {
+    const { platform, api, log } = makePlatform({
+      _sensorMapV2: true,
+      configVersion: 2,
+      sensorMap: [{ dataPoint: 'tempf', batteryField: null }],
+    });
+    const cached = cacheAccessory(platform, `${MAC}-tempf`, 'Temperature', 'Outdoor Temperature', tempWithBattery);
+    // Failure shape 2 (review R8): the first registration call performs
+    // its side effect (Homebridge caches the accessory before bridging)
+    // and THEN throws — the candidate is partially registered.
+    const realRegister = api.registerPlatformAccessories.bind(api);
+    let registerCalls = 0;
+    vi.spyOn(api, 'registerPlatformAccessories').mockImplementation((plugin, name, accessories) => {
+      registerCalls += 1;
+      realRegister(plugin, name, accessories);          // side effect lands first
+      if (registerCalls === 1) {
+        throw new Error('HAP bridge failure AFTER caching under test');
+      }
+    });
+    mockFetch([{ macAddress: MAC, info: { name: 'Home' }, lastData: { tempf: 68, battout: 1 } }]);
+    stubTimer();
+    try {
+      await reconcile(platform, 'v2');
+
+      // The partially-registered candidate was cleaned up: it appears
+      // in unregistered, and the OLD accessory is the final registered
+      // object (no false "Restored" over a lingering candidate).
+      const candidate = api.registered.find(a => a.UUID === cached.UUID && a !== cached)!;
+      expect(candidate).toBeDefined();
+      expect(api.unregistered).toContain(candidate);
+      expect(api.registered[api.registered.length - 1]).toBe(cached);
+      expect(platform.accessories).toContain(cached);
+      // Routing entry absent; no notice.
+      expect(routing(platform)!.has(`${MAC}|tempf`)).toBe(false);
+      const storageRoot = (api as unknown as { user: { storagePath(): string } }).user.storagePath();
+      expect(existsSync(nodePath.join(storageRoot, 'plugin-data', 'ambient-weather', 'notices.json'))).toBe(false);
       expect(log.find('warn', 'Restored previous accessory').length).toBeGreaterThan(0);
     } finally {
       vi.restoreAllMocks();

@@ -1547,6 +1547,21 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
             + 'Attempting to restore the previous accessory.',
           );
           this.v2Routing.delete(key);
+          // Best-effort candidate cleanup FIRST (review R8): a throwing
+          // registerPlatformAccessories is not side-effect-free —
+          // Homebridge adds the accessory to cachedPlatformAccessories
+          // before bridging it, so the candidate can remain partially
+          // cached/bridged under the SAME UUID and silently block the
+          // old accessory's re-registration (which would then log a
+          // false "Restored" success). Unregistering the candidate
+          // clears any partial state; when nothing actually registered
+          // it is a harmless no-op, and its own throw is swallowed.
+          try {
+            this.api.unregisterPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [staged.candidate]);
+          } catch (cleanupError) {
+            const cleanupMessage = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
+            this.log.debug(`Candidate cleanup after the failed registration reported: ${cleanupMessage}`);
+          }
           try {
             this.api.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [staged.old]);
             this.accessories.push(staged.old);
