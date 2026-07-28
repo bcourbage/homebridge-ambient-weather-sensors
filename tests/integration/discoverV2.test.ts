@@ -237,6 +237,48 @@ describe('discoverDevicesV2 — flag ON lifecycle', () => {
     expect(battSvc.readCharacteristic(MockCharacteristics.StatusLowBattery)).toBe(1);
   });
 
+  it('a known-row rename override drives the platform display name and HAP Name (P1-1)', async () => {
+    const { platform } = makePlatform({
+      _sensorMapV2: true,
+      configVersion: 2,
+      sensorMap: [{ dataPoint: 'tempf', name: 'Patio' }],
+    });
+    // Cached under the old default name — the rename must flow through
+    // the restore branch (displayName + AccessoryInformation.Name).
+    const cached = cacheAccessory(platform, `${MAC}-tempf`, 'Temperature', 'Outdoor Temperature', (a) => {
+      const svc = a.addService(MockServices.TemperatureSensor);
+      svc.addCharacteristic(MockCharacteristics.CurrentTemperature);
+    });
+    mockFetch([{ macAddress: MAC, info: { name: 'Home' }, lastData: { tempf: 68 } }]);
+    stubTimer();
+
+    await reconcile(platform, 'v2');
+
+    expect(cached.displayName).toBe('Patio');
+    expect(cached.context.device.displayName).toBe('Patio');
+    const info = cached.getService(MockServices.AccessoryInformation)!;
+    expect(info.getCharacteristic(MockCharacteristics.Name).value).toBe('Patio');
+    // UUID untouched by the rename — identity is uniqueId, not the name.
+    expect(cached.UUID).toBe(mockUuidGenerate(`${MAC}-tempf`));
+  });
+
+  it('multi-station rename composes station prefix + row name (P1-1)', async () => {
+    const { platform, api } = makePlatform({
+      _sensorMapV2: true,
+      configVersion: 2,
+      sensorMap: [{ dataPoint: 'tempf', name: 'Patio' }],
+    });
+    mockFetch([
+      { macAddress: '11:11:11:11:11:11', info: { name: 'Main House' }, lastData: { tempf: 70 } },
+      { macAddress: '22:22:22:22:22:22', info: { name: 'Cabin' }, lastData: { tempf: 65 } },
+    ]);
+    stubTimer();
+    await reconcile(platform, 'v2');
+
+    const names = api.registered.map(a => a.context.device.displayName).sort();
+    expect(names).toEqual(['Cabin Patio', 'Main House Patio']);
+  });
+
   it('stationFilter drops non-matching stations and post-filter naming is bare (v1 parity)', async () => {
     // Regression for the adversarial-review finding: the v2 reconciler
     // must apply stationFilter BEFORE building the inventory, and

@@ -48,13 +48,34 @@ export function composeDisplayName(
   sensorKey: string,
   isMultiStation: boolean,
 ): string {
-  const sensorLabel = friendlySensorName(sensorKey);
+  return composeRowDisplayName(station, friendlySensorName(sensorKey), isMultiStation);
+}
+
+/**
+ * Row-driven variant (finding-#4 Stage 4, review P1-1): identical
+ * station-prefix / MAC-fallback / truncation recipe, but the sensor
+ * label comes from the effective row's `name` instead of the static
+ * `friendlySensorName` table — so a user's `{ dataPoint: "tempf",
+ * name: "Patio" }` override actually renames the accessory tile, and
+ * the platform displayName agrees with the extended wrappers' service
+ * labels (which already read `row.name`).
+ *
+ * For every DEFAULT_SENSOR_MAP row, `hapClean(row.name)` equals
+ * `hapClean(friendlySensorName(row.dataPoint))` — asserted by a parity
+ * test — so flag-on with no rename override produces byte-identical
+ * display names to the v1.7 recipe (no rename storm on upgrade).
+ */
+export function composeRowDisplayName(
+  station: { macAddress: string; name: string },
+  rowName: string,
+  isMultiStation: boolean,
+): string {
   if (!isMultiStation) {
-    return hapClean(sensorLabel);
+    return hapClean(rowName);
   }
   const stationName = hapClean(station.name);
   const macFallback = station.macAddress.replaceAll(':', '');
   const baseName = stationName || macFallback;
-  const composed = hapClean(`${baseName} ${sensorLabel}`);
+  const composed = hapClean(`${baseName} ${rowName}`);
   return composed.length <= HAP_NAME_MAX ? composed : composed.slice(0, HAP_NAME_MAX).trim();
 }

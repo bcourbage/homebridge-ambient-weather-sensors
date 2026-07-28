@@ -17,7 +17,7 @@ import { RealtimeSource } from './realtimeSource.js';
 import { bindSafeMode } from './safeModeBinding.js';
 import { coerceValue } from './sensorMap/coerceValue.js';
 import { detectConfigMode } from './sensorMap/configMode.js';
-import { composeDisplayName as sharedComposeDisplayName, hapClean as sharedHapClean, } from './sensorMap/displayName.js';
+import { composeDisplayName as sharedComposeDisplayName, composeRowDisplayName, hapClean as sharedHapClean, } from './sensorMap/displayName.js';
 import { legacyTypeForWrapperId } from './sensorMap/legacyDeviceType.js';
 import { DISCOVERY_FILE, loadDiscoveryStore } from './sensorMap/persistence/discoveryStore.js';
 import { UI_STATE_FILE, loadUiStateStore } from './sensorMap/persistence/uiStateStore.js';
@@ -1019,7 +1019,12 @@ export class AmbientWeatherSensorsPlatform {
                 const device = {
                     macAddress: raw.macAddress,
                     uniqueId: `${raw.macAddress}-${row.dataPoint}`,
-                    displayName: this.composeDisplayName({ macAddress: raw.macAddress, info: { name: raw.info?.name } }, row.dataPoint, isMultiStation),
+                    // Row-driven naming (review P1-1): the label comes from
+                    // `row.name` — default-map name, or the user's rename override
+                    // — composed with the same station-prefix/truncation recipe as
+                    // v1.7. Keeps the platform displayName consistent with the
+                    // extended wrappers' service labels, which also read row.name.
+                    displayName: composeRowDisplayName({ macAddress: raw.macAddress, name: raw.info?.name ?? '' }, row.name, isMultiStation),
                     type: legacyTypeForWrapperId(row.wrapperId),
                     value: coerceValue(row, raw.lastData[row.dataPoint]) ?? 0,
                     batteryLow: row.hasBatterySubService && row.batteryField

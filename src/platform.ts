@@ -44,6 +44,7 @@ import { coerceValue } from './sensorMap/coerceValue.js';
 import { detectConfigMode, type ConfigMode } from './sensorMap/configMode.js';
 import {
   composeDisplayName as sharedComposeDisplayName,
+  composeRowDisplayName,
   hapClean as sharedHapClean,
 } from './sensorMap/displayName.js';
 import { legacyTypeForWrapperId } from './sensorMap/legacyDeviceType.js';
@@ -1214,9 +1215,14 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
         const device: DEVICE = {
           macAddress: raw.macAddress,
           uniqueId: `${raw.macAddress}-${row.dataPoint}`,
-          displayName: this.composeDisplayName(
-            { macAddress: raw.macAddress, info: { name: raw.info?.name } },
-            row.dataPoint,
+          // Row-driven naming (review P1-1): the label comes from
+          // `row.name` — default-map name, or the user's rename override
+          // — composed with the same station-prefix/truncation recipe as
+          // v1.7. Keeps the platform displayName consistent with the
+          // extended wrappers' service labels, which also read row.name.
+          displayName: composeRowDisplayName(
+            { macAddress: raw.macAddress, name: raw.info?.name ?? '' },
+            row.name,
             isMultiStation,
           ),
           type: legacyTypeForWrapperId(row.wrapperId),

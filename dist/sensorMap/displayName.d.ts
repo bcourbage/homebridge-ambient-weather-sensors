@@ -35,4 +35,22 @@ export declare function composeDisplayName(station: {
     macAddress: string;
     name: string;
 }, sensorKey: string, isMultiStation: boolean): string;
+/**
+ * Row-driven variant (finding-#4 Stage 4, review P1-1): identical
+ * station-prefix / MAC-fallback / truncation recipe, but the sensor
+ * label comes from the effective row's `name` instead of the static
+ * `friendlySensorName` table — so a user's `{ dataPoint: "tempf",
+ * name: "Patio" }` override actually renames the accessory tile, and
+ * the platform displayName agrees with the extended wrappers' service
+ * labels (which already read `row.name`).
+ *
+ * For every DEFAULT_SENSOR_MAP row, `hapClean(row.name)` equals
+ * `hapClean(friendlySensorName(row.dataPoint))` — asserted by a parity
+ * test — so flag-on with no rename override produces byte-identical
+ * display names to the v1.7 recipe (no rename storm on upgrade).
+ */
+export declare function composeRowDisplayName(station: {
+    macAddress: string;
+    name: string;
+}, rowName: string, isMultiStation: boolean): string;
 //# sourceMappingURL=displayName.d.ts.map
