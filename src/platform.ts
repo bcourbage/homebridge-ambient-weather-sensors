@@ -160,6 +160,16 @@ function normalizeUniqueId(uniqueId: string): string {
 type ConfiguredEffectiveRow = Exclude<EffectiveSensorRow, UnrecognizedRow>;
 
 /**
+ * The v2 reconciler's context shape: v1.7's DEVICE with an OPTIONAL
+ * `value` (review finding 7). An uncoercible reading with no cached
+ * fallback leaves the initial value unset rather than fabricating a
+ * real 0 observation; every seed path — the platform seed loop and the
+ * wrapper constructors — already guards on `typeof value === 'number'`,
+ * v1.7 included, so a downgrade tolerates the absent field.
+ */
+type V2Device = Omit<DEVICE, 'value'> & { value?: number };
+
+/**
  * A single AWN station as returned by the REST `/v1/devices` endpoint,
  * narrowed to the fields the v2 reconciler + router touch. Mirrors the
  * per-station shape `parseDevices` consumes.
@@ -1268,7 +1278,7 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
 
       // Build v1.7-compatible DEVICE contexts for every enabled, known,
       // AWN-reported row.
-      interface Reconciled { row: ConfiguredEffectiveRow; device: DEVICE; routingUid: string }
+      interface Reconciled { row: ConfiguredEffectiveRow; device: V2Device; routingUid: string }
       const reconciled: Reconciled[] = [];
       for (const row of effectiveMap.rows) {
         if (row.kind === 'unrecognized' || !row.enabled) {
@@ -1280,13 +1290,35 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
           // register it (v1.6.0 parity: it iterates reported fields only).
           continue;
         }
+        const uniqueId = `${raw.macAddress}-${row.dataPoint}`;
+
+        // Initial value (review finding 7): an uncoercible reading must
+        // never fabricate a REAL zero observation (false temperature /
+        // air-quality / trigger state). Seed only from a successful
+        // coercion; otherwise fall back to the cached accessory's last
+        // numeric value, else leave the value UNSET (the seed loop and
+        // the wrapper constructors both guard on `typeof === 'number'`).
+        // Timestamp rows keep v1.7's exact invalid-lastRain behavior
+        // (unparseable → 0) separately.
+        let value = coerceValue(row, raw.lastData[row.dataPoint]);
+        if (value === undefined) {
+          if (row.measurement === 'timestamp') {
+            value = 0;    // v1.7 parity: invalid lastRain parsed to 0
+          } else {
+            const cachedUuid = this.api.hap.uuid.generate(uniqueId);
+            const cachedValue = this.accessories
+              .find(a => a.UUID === cachedUuid)?.context?.device?.value;
+            value = typeof cachedValue === 'number' ? cachedValue : undefined;
+          }
+        }
+
         // uniqueId keeps AWN's original MAC casing so the generated UUID
         // matches what v1.7 registered — cached accessories are reused,
         // not orphaned. The routing lookup key uses the row's uppercased
         // MAC (distributeViaRouting uppercases the payload MAC too).
-        const device: DEVICE = {
+        const device: V2Device = {
           macAddress: raw.macAddress,
-          uniqueId: `${raw.macAddress}-${row.dataPoint}`,
+          uniqueId,
           // Row-driven naming (review P1-1): the label comes from
           // `row.name` — default-map name, or the user's rename override
           // — composed with the same station-prefix/truncation recipe as
@@ -1298,7 +1330,7 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
             isMultiStation,
           ),
           type: legacyTypeForWrapperId(row.wrapperId),
-          value: coerceValue(row, raw.lastData[row.dataPoint]) ?? 0,
+          value,
           batteryLow: row.hasBatterySubService && row.batteryField
             ? readBatteryLow(raw.lastData, row.batteryField)
             : undefined,
@@ -1341,7 +1373,7 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
       // AFTER wrapper construction (below) so HAP sees the full service
       // graph, matching the v1.6.0 ordering.
       const accessoryByRoutingUid = new Map<string, PlatformAccessory>();
-      const deviceByRoutingUid = new Map<string, DEVICE>();
+      const deviceByRoutingUid = new Map<string, V2Device>();
       const newAccessories: PlatformAccessory[] = [];
       for (const { row, device, routingUid } of reconciled) {
         const uuid = this.api.hap.uuid.generate(device.uniqueId);

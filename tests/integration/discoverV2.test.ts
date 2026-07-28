@@ -694,6 +694,59 @@ describe('discoverDevicesV2 — safe mode and custom rows', () => {
     expect(existsSync(nodePath.join(storageRoot, 'plugin-data', 'ambient-weather'))).toBe(false);
   });
 
+  it('an uncoercible reading preserves the cached value instead of fabricating 0 (finding 7)', async () => {
+    const { platform, api } = makePlatform({ _sensorMapV2: true, temperatureSensors: true });
+    const cached = cacheAccessory(platform, `${MAC}-tempf`, 'Temperature', 'Outdoor Temperature', tempWithBattery);
+    // Cached last-known reading: 20°F.
+    (cached.context.device as Record<string, unknown>).value = 20;
+    // AWN reports garbage for tempf this tick (plus a healthy battery).
+    mockFetch([{ macAddress: MAC, info: { name: 'Home' }, lastData: { tempf: 'garbage', battout: 1 } }]);
+    stubTimer();
+    try {
+      await reconcile(platform, 'legacy');
+
+      // Context keeps the cached numeric value - never a fabricated 0.
+      expect((cached.context.device as Record<string, unknown>).value).toBe(20);
+      // The wrapper was seeded with the preserved 20°F (-6.67°C), not 0°F.
+      const svc = cached.getService(MockServices.TemperatureSensor)!;
+      expect(svc.readCharacteristic(MockCharacteristics.CurrentTemperature)).toBeCloseTo((20 - 32) * 5 / 9, 3);
+    } finally {
+      rmSync((api as unknown as { user: { storagePath(): string } }).user.storagePath(), { recursive: true, force: true });
+    }
+  });
+
+  it('an uncoercible reading with NO cache leaves the value unset - no seed at all (finding 7)', async () => {
+    const { platform, api } = makePlatform({ _sensorMapV2: true, temperatureSensors: true });
+    mockFetch([{ macAddress: MAC, info: { name: 'Home' }, lastData: { tempf: 'garbage' } }]);
+    stubTimer();
+    try {
+      await reconcile(platform, 'legacy');
+
+      const fresh = api.registered.find(a => a.context.device.uniqueId === `${MAC}-tempf`)!;
+      expect(fresh).toBeDefined();
+      expect((fresh.context.device as Record<string, unknown>).value).toBeUndefined();
+      // CurrentTemperature was never seeded (mock default = null).
+      const svc = fresh.getService(MockServices.TemperatureSensor)!;
+      expect(svc.readCharacteristic(MockCharacteristics.CurrentTemperature) ?? null).toBeNull();
+    } finally {
+      rmSync((api as unknown as { user: { storagePath(): string } }).user.storagePath(), { recursive: true, force: true });
+    }
+  });
+
+  it('timestamp rows keep the v1.7 invalid-lastRain behavior: unparseable string seeds 0 (finding 7)', async () => {
+    const { platform, api } = makePlatform({ _sensorMapV2: true, extendedSensors: true, rainSensors: true });
+    mockFetch([{ macAddress: MAC, info: { name: 'Home' }, lastData: { lastRain: 'not-a-date' } }]);
+    stubTimer();
+    try {
+      await reconcile(platform, 'legacy');
+      const lr = api.registered.find(a => a.context.device.uniqueId === `${MAC}-lastRain`)!;
+      expect(lr).toBeDefined();
+      expect((lr.context.device as Record<string, unknown>).value).toBe(0);
+    } finally {
+      rmSync((api as unknown as { user: { storagePath(): string } }).user.storagePath(), { recursive: true, force: true });
+    }
+  });
+
   it('a malformed (non-array) sensorMap freezes: no reconciliation, cache preserved (finding 6)', async () => {
     for (const bad of ['oops', { dataPoint: 'tempf' }, 42, null]) {
       const { platform, api, log } = makePlatform({

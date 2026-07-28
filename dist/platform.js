@@ -1053,13 +1053,34 @@ export class AmbientWeatherSensorsPlatform {
                     // register it (v1.6.0 parity: it iterates reported fields only).
                     continue;
                 }
+                const uniqueId = `${raw.macAddress}-${row.dataPoint}`;
+                // Initial value (review finding 7): an uncoercible reading must
+                // never fabricate a REAL zero observation (false temperature /
+                // air-quality / trigger state). Seed only from a successful
+                // coercion; otherwise fall back to the cached accessory's last
+                // numeric value, else leave the value UNSET (the seed loop and
+                // the wrapper constructors both guard on `typeof === 'number'`).
+                // Timestamp rows keep v1.7's exact invalid-lastRain behavior
+                // (unparseable → 0) separately.
+                let value = coerceValue(row, raw.lastData[row.dataPoint]);
+                if (value === undefined) {
+                    if (row.measurement === 'timestamp') {
+                        value = 0; // v1.7 parity: invalid lastRain parsed to 0
+                    }
+                    else {
+                        const cachedUuid = this.api.hap.uuid.generate(uniqueId);
+                        const cachedValue = this.accessories
+                            .find(a => a.UUID === cachedUuid)?.context?.device?.value;
+                        value = typeof cachedValue === 'number' ? cachedValue : undefined;
+                    }
+                }
                 // uniqueId keeps AWN's original MAC casing so the generated UUID
                 // matches what v1.7 registered — cached accessories are reused,
                 // not orphaned. The routing lookup key uses the row's uppercased
                 // MAC (distributeViaRouting uppercases the payload MAC too).
                 const device = {
                     macAddress: raw.macAddress,
-                    uniqueId: `${raw.macAddress}-${row.dataPoint}`,
+                    uniqueId,
                     // Row-driven naming (review P1-1): the label comes from
                     // `row.name` — default-map name, or the user's rename override
                     // — composed with the same station-prefix/truncation recipe as
@@ -1067,7 +1088,7 @@ export class AmbientWeatherSensorsPlatform {
                     // extended wrappers' service labels, which also read row.name.
                     displayName: composeRowDisplayName({ macAddress: raw.macAddress, name: raw.info?.name ?? '' }, row.name, isMultiStation),
                     type: legacyTypeForWrapperId(row.wrapperId),
-                    value: coerceValue(row, raw.lastData[row.dataPoint]) ?? 0,
+                    value,
                     batteryLow: row.hasBatterySubService && row.batteryField
                         ? readBatteryLow(raw.lastData, row.batteryField)
                         : undefined,
