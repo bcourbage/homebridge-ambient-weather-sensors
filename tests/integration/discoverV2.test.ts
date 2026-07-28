@@ -207,6 +207,33 @@ describe('discoverDevicesV2 — flag ON lifecycle', () => {
     expect(tempSvc.readCharacteristic(MockCharacteristics.CurrentTemperature)).toBeCloseTo(F_TO_C(32), 4);
   });
 
+  it('a realtime battery-ONLY update flips StatusLowBattery (finding 9 — battery-bridge regression)', async () => {
+    const { platform, api } = makePlatform({ _sensorMapV2: true, temperatureSensors: true });
+    const cached = cacheAccessory(platform, `${MAC}-tempf`, 'Temperature', 'Outdoor Temperature', tempWithBattery);
+    mockFetch([{ macAddress: MAC, info: { name: 'Home' }, lastData: { tempf: 68, battout: 1 } }]);
+    stubTimer();
+    try {
+      await reconcile(platform, 'legacy');
+      const battSvc = cached.getService(MockServices.Battery)!;
+      expect(battSvc.readCharacteristic(MockCharacteristics.StatusLowBattery)).toBe(0);
+
+      // Realtime delivers ONLY the battery datapoint - no sensor value
+      // rides along (v1.7 could not update battery on such an event;
+      // the v2 battery bridge reads the row-resolved batteryField off
+      // the reconstructed payload).
+      (platform as unknown as { distribute(u: Array<{ uniqueId: string; value: number }>): void })
+        .distribute([{ uniqueId: `${MAC}-battout`, value: 0 }]);
+      expect(battSvc.readCharacteristic(MockCharacteristics.StatusLowBattery)).toBe(1);
+
+      // And back to normal on the next battery-only event.
+      (platform as unknown as { distribute(u: Array<{ uniqueId: string; value: number }>): void })
+        .distribute([{ uniqueId: `${MAC}-battout`, value: 1 }]);
+      expect(battSvc.readCharacteristic(MockCharacteristics.StatusLowBattery)).toBe(0);
+    } finally {
+      rmSync((api as unknown as { user: { storagePath(): string } }).user.storagePath(), { recursive: true, force: true });
+    }
+  });
+
   it('battery status flows (canonical owner) and extended wrappers get their initial seed', async () => {
     const { platform, api } = makePlatform({
       _sensorMapV2: true, temperatureSensors: true, extendedSensors: true, pressureSensors: true,
