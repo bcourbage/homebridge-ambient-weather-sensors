@@ -1251,6 +1251,9 @@ describe('buildEffectiveSensorMap — compound orphan state (review R13-2)', () 
       stations: [{ macAddress: MAC1, name: 'Home' }],
       userOverrides: [
         { dataPoint: 'tempf', enabled: false, batteryField: 'new_temp_batt' },  // 0
+        // An enabled claimant on the new field: it must KEEP the field
+        // — a disabled owner never enters the claimant ordering.
+        { dataPoint: 'custom_a', kind: 'temperature', measurement: 'temperature', sourceUnit: 'fahrenheit', batteryField: 'new_temp_batt' }, // 1
       ],
     });
     const orphans = result.notes.filter(n => n.code === 'orphan-battery-field');
@@ -1264,12 +1267,15 @@ describe('buildEffectiveSensorMap — compound orphan state (review R13-2)', () 
     expect(note.message).toContain('disabled AND was rebound');
     expect(note.message).toContain("re-enabled and restored to 'battout'");
     // Honest cache wording (R13-3 + R14-1): rows referencing the
-    // RESERVED field untouched; the owner itself may re-register; and
-    // (rebound) claimants on the NEW field may change under collision
-    // ordering.
+    // RESERVED field untouched; the owner itself may re-register.
     expect(note.message).toContain("no other row referencing 'battout' changes structural signature");
     expect(note.message).toContain('may re-register');
-    expect(note.message).toContain("Claimants on 'new_temp_batt' may change ownership or signature");
+    // R16-1: a DISABLED owner never competes, wherever it is rebound —
+    // no collision caveat, and the enabled claimant keeps the field.
+    expect(note.message).not.toContain('Claimants on');
+    const customA = result.rows.find(r => r.dataPoint === 'custom_a');
+    expect(customA && customA.kind !== 'unrecognized' ? customA.hasBatterySubService : null).toBe(true);
+    expect(customA && customA.kind !== 'unrecognized' ? customA.structuralSignature : '').toContain('battery:1');
   });
 
   it("the reviewer's rebind-collision case matches the narrowed wording (R14-1)", () => {

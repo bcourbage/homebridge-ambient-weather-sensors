@@ -469,16 +469,18 @@ export function buildEffectiveSensorMap(input) {
                 : ownerDisabled
                     ? `until '${ownerDp}' is re-enabled`
                     : `until '${ownerDp}' is restored to '${field}'`;
-            // Cache-consequence wording (reviews R13-3 + R14-1 + R15-1),
-            // stated precisely: ownership of the RESERVED field never rolls,
-            // so no other row REFERENCING THAT FIELD changes signature. The
-            // owner's OWN signature can change (losing battery:1 is a
+            // Cache-consequence wording (reviews R13-3 + R14-1 + R15-1 +
+            // R16-1), stated precisely: ownership of the RESERVED field never
+            // rolls, so no other row REFERENCING THAT FIELD changes signature.
+            // The owner's OWN signature can change (losing battery:1 is a
             // structural replacement for that one accessory). The collision
-            // caveat applies ONLY when the rebound owner actually enters the
-            // claimant ordering: a null field claims nothing, and a rebind to
-            // ANOTHER reserved field is rejected by the static reserved set —
-            // neither can disturb existing claimants.
+            // caveat mirrors the ownership pass's claimant-eligibility gate
+            // exactly: a disabled row never claims (regardless of rebind), a
+            // null field claims nothing, and a rebind to ANOTHER reserved
+            // field is rejected by the static reserved set — none of these
+            // can disturb existing claimants.
             const entersClaims = ownerRebound
+                && !ownerDisabled
                 && owner.batteryField !== null
                 && !RESERVED_BATTERY_FIELDS.has(owner.batteryField);
             const reboundCollisionClause = entersClaims
