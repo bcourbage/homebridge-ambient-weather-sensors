@@ -837,6 +837,49 @@ describe('discoverDevicesV2 — safe mode and custom rows', () => {
     }
   });
 
+  it('a replacement REGISTRATION failure restores the old accessory and writes no notice (R7)', async () => {
+    const { platform, api, log } = makePlatform({
+      _sensorMapV2: true,
+      configVersion: 2,
+      sensorMap: [{ dataPoint: 'tempf', batteryField: null }],
+    });
+    // v1.7 cache WITH battery; the batteryField:null row (battery:0) is
+    // a structural mismatch → staged replacement whose wrapper succeeds.
+    const cached = cacheAccessory(platform, `${MAC}-tempf`, 'Temperature', 'Outdoor Temperature', tempWithBattery);
+    // Registration of the CANDIDATE throws; the restore call succeeds.
+    const realRegister = api.registerPlatformAccessories.bind(api);
+    let registerCalls = 0;
+    vi.spyOn(api, 'registerPlatformAccessories').mockImplementation((plugin, name, accessories) => {
+      registerCalls += 1;
+      if (registerCalls === 1) {
+        throw new Error('HAP registration failure under test');
+      }
+      return realRegister(plugin, name, accessories);
+    });
+    mockFetch([{ macAddress: MAC, info: { name: 'Home' }, lastData: { tempf: 68, battout: 1 } }]);
+    stubTimer();
+    try {
+      await reconcile(platform, 'v2');
+
+      // The old accessory was restored: re-registered and back in the
+      // platform's list; the user is never left with nothing.
+      expect(api.registered).toContain(cached);
+      expect(platform.accessories).toContain(cached);
+      // The candidate's routing entry was dropped (no values for an
+      // unregistered accessory).
+      expect(routing(platform)!.has(`${MAC}|tempf`)).toBe(false);
+      // NO notice was written - a notice must only describe a change
+      // that actually completed.
+      const storageRoot = (api as unknown as { user: { storagePath(): string } }).user.storagePath();
+      expect(existsSync(nodePath.join(storageRoot, 'plugin-data', 'ambient-weather', 'notices.json'))).toBe(false);
+      expect(log.find('error', 'Failed to register the replacement').length).toBeGreaterThan(0);
+      expect(log.find('warn', 'Restored previous accessory').length).toBeGreaterThan(0);
+    } finally {
+      vi.restoreAllMocks();
+      rmSync((api as unknown as { user: { storagePath(): string } }).user.storagePath(), { recursive: true, force: true });
+    }
+  });
+
   it('a staged structural replacement whose wrapper throws keeps the old accessory (R6-1)', async () => {
     const { platform, api, log } = makePlatform({
       _sensorMapV2: true,

@@ -1522,13 +1522,47 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
           `Structural change for [${staged.displayName}]: `
           + `"${staged.cachedSignature}" -> "${staged.row.structuralSignature}". Re-registering the accessory.`,
         );
+        // The destructive swap is BACK-TO-BACK (review R7): no awaited
+        // filesystem I/O between unregister and register, so the
+        // no-accessory window is as narrow as HAP allows — a process
+        // exit mid-notice can no longer strand the user with neither
+        // accessory registered.
         this.api.unregisterPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [staged.old]);
         const idx = this.accessories.indexOf(staged.old);
         if (idx >= 0) {
           this.accessories.splice(idx, 1);
         }
+        try {
+          this.api.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [staged.candidate]);
+        } catch (error) {
+          // Registration failed after the unregister: drop the
+          // candidate's routing entry (its wrapper must not receive
+          // values for an unregistered accessory) and try to put the
+          // old accessory back so the user isn't left with nothing.
+          // NO notice is written — a notice must only ever describe a
+          // change that actually completed.
+          const message = error instanceof Error ? error.message : String(error);
+          this.log.error(
+            `Failed to register the replacement for [${staged.displayName}]: ${message}. `
+            + 'Attempting to restore the previous accessory.',
+          );
+          this.v2Routing.delete(key);
+          try {
+            this.api.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [staged.old]);
+            this.accessories.push(staged.old);
+            this.log.warn(`Restored previous accessory [${staged.old.displayName}] after the replacement failed to register.`);
+          } catch (restoreError) {
+            const restoreMessage = restoreError instanceof Error ? restoreError.message : String(restoreError);
+            this.log.error(
+              `Could not restore previous accessory [${staged.old.displayName}]: ${restoreMessage}. `
+              + 'Restart Homebridge to re-run reconciliation.',
+            );
+          }
+          continue;
+        }
+        // Auxiliary persistence strictly AFTER the swap completed: the
+        // notice describes a change that actually happened.
         await this.appendStructuralNoticeV2(staged.row, staged.cachedSignature);
-        this.api.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [staged.candidate]);
       }
 
       this.startDataSource();
