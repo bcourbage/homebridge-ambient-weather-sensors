@@ -66,6 +66,40 @@ export function hapClean(input: string): string {
 const HAP_NAME_MAX = 64;
 
 /**
+ * v2-config downgrade guard (1.7.1 backport from the 2.x line).
+ *
+ * A configuration written by plugin 2.x carries `configVersion: 2` and
+ * a `sensorMap` array, and its 1.x legacy toggles may have been removed
+ * entirely. If THIS (1.x) plugin ran its normal pipeline against such a
+ * config, every category toggle would read as false, `parseDevices`
+ * would return an empty device set, and `discoverDevices` would
+ * UNREGISTER the entire accessory cache on first boot — destroying the
+ * user's HomeKit room placement and automations before they could
+ * restore anything.
+ *
+ * Returns true when the config is from a newer plugin: `sensorMap` is
+ * present, or `configVersion` is set to 2+ (or to anything that isn't a
+ * plain integer — malformed values are treated as unsupported rather
+ * than guessed at). `configVersion: 1` and absent both mean a normal
+ * 1.x config.
+ *
+ * Exported for test coverage.
+ */
+export function isUnsupportedNewerConfig(config: { configVersion?: unknown; sensorMap?: unknown }): boolean {
+  if (config.sensorMap !== undefined) {
+    return true;
+  }
+  const raw = config.configVersion;
+  if (raw === undefined) {
+    return false;
+  }
+  if (typeof raw !== 'number' || !Number.isInteger(raw)) {
+    return true;
+  }
+  return raw >= 2;
+}
+
+/**
  * Normalize a string the user might have typed in their config for
  * matching against sensor identifiers. Trims whitespace and lowercases.
  * Empty / non-string values normalize to the empty string, which the
@@ -215,6 +249,28 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
 
     this.api.on('didFinishLaunching', () => {
       log.debug('Executed didFinishLaunching callback');
+
+      // v2-config downgrade guard (1.7.1): a config written by plugin
+      // 2.x must FREEZE this plugin, not run reconciliation — the
+      // normal pipeline would read every legacy toggle as false and
+      // unregister the whole accessory cache on first boot. Return
+      // BEFORE discovery, persistence initialization, network access,
+      // or any reconciliation. Cached accessories stay published with
+      // their last-known values.
+      if (isUnsupportedNewerConfig(this.config as { configVersion?: unknown; sensorMap?: unknown })) {
+        this.log.error(
+          'This configuration was written by plugin version 2.x '
+          + `(configVersion: ${String((this.config as { configVersion?: unknown }).configVersion ?? 'unset')}, `
+          + `sensorMap ${(this.config as { sensorMap?: unknown }).sensorMap !== undefined ? 'present' : 'absent'}). `
+          + 'This 1.x plugin version cannot interpret it safely, so discovery and reconciliation are DISABLED: '
+          + 'your cached accessories stay in HomeKit with their last-known values, but no updates will flow. '
+          + 'Either upgrade the plugin back to 2.x, or restore a 1.x configuration '
+          + '(see legacy-config-snapshot.json in the plugin data directory if you migrated via the UI) '
+          + 'and restart Homebridge.',
+        );
+        return;
+      }
+
       // Load persisted discovery state + log detected config mode.
       // Non-blocking: swallow errors so a broken persistence store
       // never prevents the plugin from starting.

@@ -11,6 +11,30 @@ import { DEVICE } from './types.js';
  */
 export declare function hapClean(input: string): string;
 /**
+ * v2-config downgrade guard (1.7.1 backport from the 2.x line).
+ *
+ * A configuration written by plugin 2.x carries `configVersion: 2` and
+ * a `sensorMap` array, and its 1.x legacy toggles may have been removed
+ * entirely. If THIS (1.x) plugin ran its normal pipeline against such a
+ * config, every category toggle would read as false, `parseDevices`
+ * would return an empty device set, and `discoverDevices` would
+ * UNREGISTER the entire accessory cache on first boot — destroying the
+ * user's HomeKit room placement and automations before they could
+ * restore anything.
+ *
+ * Returns true when the config is from a newer plugin: `sensorMap` is
+ * present, or `configVersion` is set to 2+ (or to anything that isn't a
+ * plain integer — malformed values are treated as unsupported rather
+ * than guessed at). `configVersion: 1` and absent both mean a normal
+ * 1.x config.
+ *
+ * Exported for test coverage.
+ */
+export declare function isUnsupportedNewerConfig(config: {
+    configVersion?: unknown;
+    sensorMap?: unknown;
+}): boolean;
+/**
  * Normalize a string the user might have typed in their config for
  * matching against sensor identifiers. Trims whitespace and lowercases.
  * Empty / non-string values normalize to the empty string, which the
