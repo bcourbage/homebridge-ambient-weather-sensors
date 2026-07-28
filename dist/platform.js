@@ -19,7 +19,7 @@ import { coerceValue } from './sensorMap/coerceValue.js';
 import { detectConfigMode } from './sensorMap/configMode.js';
 import { composeDisplayName as sharedComposeDisplayName, composeRowDisplayName, hapClean as sharedHapClean, } from './sensorMap/displayName.js';
 import { legacyTypeForWrapperId } from './sensorMap/legacyDeviceType.js';
-import { DISCOVERY_FILE, loadDiscoveryStore } from './sensorMap/persistence/discoveryStore.js';
+import { DISCOVERY_FILE, DiscoveryTracker, cleanupStaleTempFiles, loadDiscoveryStore, } from './sensorMap/persistence/discoveryStore.js';
 import { UI_STATE_FILE, loadUiStateStore } from './sensorMap/persistence/uiStateStore.js';
 import { buildPlatformEffectiveMap, } from './sensorMap/platformEffectiveMap.js';
 import { buildWrapperRouting, distributeViaRouting, } from './sensorMap/routing.js';
@@ -153,9 +153,12 @@ export class AmbientWeatherSensorsPlatform {
         // startup and never re-evaluated. Drives which startup pipeline
         // runs:
         //
-        //   'legacy' / 'v2' — normal operation via `discoverDevices()`
-        //                     (v1.6.0 code path drives everything; v2 is a
-        //                     shadow observer until task #65's flag flip).
+        //   'legacy' / 'v2' — normal operation via `discoverDevices()`.
+        //                     With `_sensorMapV2` OFF (default) the v1.6.0
+        //                     code path drives everything; with it ON the
+        //                     flag-gated `discoverDevicesV2` reconciler runs
+        //                     the row-driven construction + routing pipeline
+        //                     instead (finding-#4 Stage 4).
         //   'safe-mode'    — safe mode is contractually reconciliation-free
         //                     per sensor-map.md §17.2. `discoverDevices()`
         //                     is NOT called; `safeModeStart()` runs the
@@ -238,7 +241,9 @@ export class AmbientWeatherSensorsPlatform {
                 this.pollTimer = undefined;
             }
             // Force-flush any pending discovery writes before Homebridge
-            // finishes tearing down.
+            // finishes tearing down — the live v2 tracker and (legacy) the
+            // shadow observer's tracker respectively.
+            this.v2Tracker?.flush(true).catch(e => this.log.warn(`[sensor-map v2] shutdown discovery flush failed: ${e.message}`));
             this.shadow?.shutdown().catch(e => this.log.warn(`[sensor-map v2 shadow] shutdown flush failed: ${e.message}`));
         });
     }
@@ -937,12 +942,16 @@ export class AmbientWeatherSensorsPlatform {
      * (default OFF, so shipping behaviour is unchanged).
      *
      * Pipeline:
-     *   1. Fetch the raw AWN station payloads.
-     *   2. Load the discovery + ui-state stores from
+     *   1. Fetch the raw AWN station payloads; apply stationFilter.
+     *   2. Initialize persistence under
      *      `storagePath()/plugin-data/ambient-weather/` (NEVER
-     *      `persistPath()` — HAP-scan / EISDIR hazard).
-     *   3. Assemble the effective sensor map (pure) — compat overrides for
-     *      legacy configs, `config.sensorMap` for v2.
+     *      `persistPath()` — HAP-scan / EISDIR hazard): stale-temp
+     *      cleanup, ui-state load, and the platform-owned
+     *      DiscoveryTracker (review P1-4) fed with this snapshot's
+     *      post-filter observations.
+     *   3. Assemble the effective sensor map (pure) from the tracker's
+     *      merged discovery view — compat overrides for legacy configs,
+     *      `config.sensorMap` for v2.
      *   4. For every enabled, KNOWN, AWN-reported row: build a
      *      v1.7-compatible `context.device` (so a downgrade finds a
      *      recognisable cache), restore-or-create its accessory reusing the
@@ -983,9 +992,13 @@ export class AmbientWeatherSensorsPlatform {
                 name: s.info?.name ?? '',
             }));
             const isMultiStation = stations.length > 1;
-            // Load persistence (reads only). Side effect kept OUT of the pure
+            // Initialize persistence + feed the tracker with this snapshot's
+            // post-filter observations, then take the merged (persisted +
+            // live) discovery view. All I/O stays here, OUT of the pure
             // assembly helper below.
-            const { discovery, uiState } = await this.loadV2Stores();
+            const { uiState } = await this.initV2Persistence();
+            this.observeV2Stations(rawStations);
+            const discovery = this.v2Tracker.snapshot();
             // Assemble the effective map (pure).
             const effectiveMap = buildPlatformEffectiveMap({
                 config: this.config,
@@ -1230,21 +1243,57 @@ export class AmbientWeatherSensorsPlatform {
         }
     }
     /**
-     * Load the discovery + ui-state stores for the v2 path. Reads only.
+     * Initialize v2 persistence: clean stale temp files, load the
+     * discovery store into a platform-owned DiscoveryTracker (review
+     * P1-4 — the live pipeline is the producer of the plugin's discovery
+     * registry, a role the retired shadow observer used to fill), and
+     * load the ui-state store. Idempotent — the tracker is created once
+     * and survives the discover-retry recursion.
+     *
      * The persist dir is `storagePath()/plugin-data/ambient-weather/` — we
      * deliberately avoid `persistPath()` because HAP-NodeJS scans that tree
      * and a subdirectory there crashes it with EISDIR (v2.0.0-beta.1).
+     * Never called in safe mode (didFinishLaunching routes to
+     * safeModeStart first), so safe mode still performs zero persistence
+     * reads or writes.
      */
-    async loadV2Stores() {
+    async initV2Persistence() {
         const persistDir = path.join(this.api.user.storagePath(), 'plugin-data', 'ambient-weather');
         const persistLog = {
             info: (m) => this.log.info(m),
             warn: (m) => this.log.warn(m),
             debug: (m) => this.log.debug(m),
         };
-        const discovery = await loadDiscoveryStore(path.join(persistDir, DISCOVERY_FILE), persistLog);
+        if (!this.v2Tracker) {
+            await cleanupStaleTempFiles(persistDir, persistLog);
+            const initial = await loadDiscoveryStore(path.join(persistDir, DISCOVERY_FILE), persistLog);
+            this.v2Tracker = new DiscoveryTracker({
+                filePath: path.join(persistDir, DISCOVERY_FILE),
+                log: persistLog,
+                initial,
+            });
+        }
         const uiState = await loadUiStateStore(path.join(persistDir, UI_STATE_FILE), persistLog);
-        return { discovery, uiState };
+        return { uiState };
+    }
+    /**
+     * Feed every post-filter (station, dataPoint) pair into the discovery
+     * tracker and kick a throttled flush. Called at discovery and on each
+     * v2 poll tick — the same cadence the shadow observer used, so
+     * discovery.json keeps accumulating under the live path.
+     */
+    observeV2Stations(stations) {
+        if (!this.v2Tracker) {
+            return;
+        }
+        for (const s of stations) {
+            for (const dp of Object.keys(s.lastData)) {
+                this.v2Tracker.observe(s.macAddress, s.info?.name ?? '', dp);
+            }
+        }
+        // Fire-and-forget; the tracker throttles lastSeen-only writes and
+        // logs its own failures.
+        this.v2Tracker.flush().catch(() => { });
     }
     /**
      * Surface effective-map diagnostics. Config-attributable errors (e.g.
@@ -1648,8 +1697,12 @@ export class AmbientWeatherSensorsPlatform {
                 // stations that appear mid-session and keeps a filtered-out
                 // station's payload from ever reaching the router (its rows
                 // aren't in the routing map anyway — defense in depth).
-                this.distributeViaV2Routing(this.applyStationFilterV2(stations)
-                    .map(s => ({ macAddress: s.macAddress, lastData: s.lastData })));
+                const filtered = this.applyStationFilterV2(stations);
+                // Keep the discovery registry accumulating (review P1-4): a
+                // field AWN starts reporting mid-session lands in
+                // discovery.json so the UI can surface it.
+                this.observeV2Stations(filtered);
+                this.distributeViaV2Routing(filtered.map(s => ({ macAddress: s.macAddress, lastData: s.lastData })));
             }
             return;
         }

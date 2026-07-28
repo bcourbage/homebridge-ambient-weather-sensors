@@ -14,7 +14,7 @@
  * before the table is restored.
  */
 
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync } from 'node:fs';
 import * as nodePath from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -327,6 +327,91 @@ describe('discoverDevicesV2 — flag ON lifecycle', () => {
     const motion = press.getService(MockServices.MotionSensor)!;
     expect(motion.getCharacteristic(MockCharacteristics.Name).value).toBe('Pressure Station');
     expect(motion.getCharacteristic(MockCharacteristics.ConfiguredName).value).toBe('Pressure Station');
+  });
+});
+
+describe('discoverDevicesV2 — discovery tracker ownership (review P1-4)', () => {
+  function storageDir(api: MockAPI): string {
+    return (api as unknown as { user: { storagePath(): string } }).user.storagePath();
+  }
+  function discoveryPath(api: MockAPI): string {
+    return nodePath.join(storageDir(api), 'plugin-data', 'ambient-weather', 'discovery.json');
+  }
+
+  it('discovery writes discovery.json with post-filter observations (incl. batt* + unknown fields)', async () => {
+    const { platform, api } = makePlatform({
+      _sensorMapV2: true, temperatureSensors: true, stationFilter: ['Home'],
+    });
+    mockFetch([
+      { macAddress: MAC, info: { name: 'Home' }, lastData: { tempf: 68, battout: 1, weird_new_field: 3 } },
+      { macAddress: '99:99:99:99:99:99', info: { name: 'Neighbor' }, lastData: { tempf: 50 } },
+    ]);
+    stubTimer();
+    try {
+      await reconcile(platform, 'legacy');
+
+      // The discovery-time flush is fire-and-forget; drain it so the
+      // on-disk assertion is deterministic.
+      await (platform as unknown as { v2Tracker: { flush(force: boolean): Promise<void> } }).v2Tracker.flush(true);
+      expect(existsSync(discoveryPath(api))).toBe(true);
+      const store = JSON.parse(readFileSync(discoveryPath(api), 'utf8')) as {
+        entries: Array<{ stationMac: string; dataPoint: string }>;
+      };
+      const pairs = new Set(store.entries.map(e => `${e.stationMac}|${e.dataPoint}`));
+      // Every raw field of the MATCHING station is observed — including
+      // battery fields and fields the map doesn't know.
+      expect(pairs.has(`${MAC}|tempf`)).toBe(true);
+      expect(pairs.has(`${MAC}|battout`)).toBe(true);
+      expect(pairs.has(`${MAC}|weird_new_field`)).toBe(true);
+      // The filtered-out station is NOT recorded.
+      expect([...pairs].some(p => p.startsWith('99:99:99:99:99:99'))).toBe(false);
+    } finally {
+      rmSync(storageDir(api), { recursive: true, force: true });
+    }
+  });
+
+  it('a poll tick observes newly-appearing fields; shutdown force-flushes them to disk', async () => {
+    const { platform, api } = makePlatform({ _sensorMapV2: true, temperatureSensors: true });
+    mockFetch([{ macAddress: MAC, info: { name: 'Home' }, lastData: { tempf: 68 } }]);
+    stubTimer();
+    try {
+      await reconcile(platform, 'legacy');
+
+      // Poll tick reports a field the discovery store has never seen.
+      mockFetch([{ macAddress: MAC, info: { name: 'Home' }, lastData: { tempf: 68, brand_new: 1 } }]);
+      await (platform as unknown as { pollAndDistribute(): Promise<void> }).pollAndDistribute();
+
+      // In-memory registry has it immediately.
+      const tracker = (platform as unknown as { v2Tracker: { snapshot(): { entries: Array<{ dataPoint: string }> } } }).v2Tracker;
+      expect(tracker.snapshot().entries.some(e => e.dataPoint === 'brand_new')).toBe(true);
+
+      // Shutdown force-flush drains it to disk.
+      api.emit('shutdown');
+      await new Promise(r => setTimeout(r, 20));
+      const store = JSON.parse(readFileSync(discoveryPath(api), 'utf8')) as {
+        entries: Array<{ dataPoint: string }>;
+      };
+      expect(store.entries.some(e => e.dataPoint === 'brand_new')).toBe(true);
+    } finally {
+      rmSync(storageDir(api), { recursive: true, force: true });
+    }
+  });
+
+  it('flag-off and safe mode never create the tracker', async () => {
+    // Flag off: v1 path.
+    const off = makePlatform({ temperatureSensors: true });
+    mockFetch([{ macAddress: MAC, info: { name: 'Home' }, lastData: { tempf: 68 } }]);
+    stubTimer();
+    await reconcile(off.platform, 'legacy');
+    expect((off.platform as unknown as { v2Tracker: unknown }).v2Tracker).toBeUndefined();
+    vi.restoreAllMocks();
+
+    // Safe mode with flag on: didFinishLaunching gates before persistence.
+    const safe = makePlatform({ _sensorMapV2: true, configVersion: 999 });
+    stubTimer();
+    safe.api.emit('didFinishLaunching');
+    expect((safe.platform as unknown as { v2Tracker: unknown }).v2Tracker).toBeUndefined();
+    expect(existsSync(nodePath.join(storageDir(safe.api), 'plugin-data'))).toBe(false);
   });
 });
 

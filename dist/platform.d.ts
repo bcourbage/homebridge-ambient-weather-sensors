@@ -68,6 +68,7 @@ export declare class AmbientWeatherSensorsPlatform implements DynamicPlatformPlu
     private readonly shadow;
     private readonly sensorMapV2;
     private v2Routing;
+    private v2Tracker;
     private configMode;
     constructor(log: Logger, config: PlatformConfig, api: API);
     configureAccessory(accessory: PlatformAccessory): void;
@@ -183,12 +184,16 @@ export declare class AmbientWeatherSensorsPlatform implements DynamicPlatformPlu
      * (default OFF, so shipping behaviour is unchanged).
      *
      * Pipeline:
-     *   1. Fetch the raw AWN station payloads.
-     *   2. Load the discovery + ui-state stores from
+     *   1. Fetch the raw AWN station payloads; apply stationFilter.
+     *   2. Initialize persistence under
      *      `storagePath()/plugin-data/ambient-weather/` (NEVER
-     *      `persistPath()` — HAP-scan / EISDIR hazard).
-     *   3. Assemble the effective sensor map (pure) — compat overrides for
-     *      legacy configs, `config.sensorMap` for v2.
+     *      `persistPath()` — HAP-scan / EISDIR hazard): stale-temp
+     *      cleanup, ui-state load, and the platform-owned
+     *      DiscoveryTracker (review P1-4) fed with this snapshot's
+     *      post-filter observations.
+     *   3. Assemble the effective sensor map (pure) from the tracker's
+     *      merged discovery view — compat overrides for legacy configs,
+     *      `config.sensorMap` for v2.
      *   4. For every enabled, KNOWN, AWN-reported row: build a
      *      v1.7-compatible `context.device` (so a downgrade finds a
      *      recognisable cache), restore-or-create its accessory reusing the
@@ -230,12 +235,28 @@ export declare class AmbientWeatherSensorsPlatform implements DynamicPlatformPlu
      */
     private fetchRawStations;
     /**
-     * Load the discovery + ui-state stores for the v2 path. Reads only.
+     * Initialize v2 persistence: clean stale temp files, load the
+     * discovery store into a platform-owned DiscoveryTracker (review
+     * P1-4 — the live pipeline is the producer of the plugin's discovery
+     * registry, a role the retired shadow observer used to fill), and
+     * load the ui-state store. Idempotent — the tracker is created once
+     * and survives the discover-retry recursion.
+     *
      * The persist dir is `storagePath()/plugin-data/ambient-weather/` — we
      * deliberately avoid `persistPath()` because HAP-NodeJS scans that tree
      * and a subdirectory there crashes it with EISDIR (v2.0.0-beta.1).
+     * Never called in safe mode (didFinishLaunching routes to
+     * safeModeStart first), so safe mode still performs zero persistence
+     * reads or writes.
      */
-    private loadV2Stores;
+    private initV2Persistence;
+    /**
+     * Feed every post-filter (station, dataPoint) pair into the discovery
+     * tracker and kick a throttled flush. Called at discovery and on each
+     * v2 poll tick — the same cadence the shadow observer used, so
+     * discovery.json keeps accumulating under the live path.
+     */
+    private observeV2Stations;
     /**
      * Surface effective-map diagnostics. Config-attributable errors (e.g.
      * a custom row's `no-wrapper` while the resolution table is empty) log
