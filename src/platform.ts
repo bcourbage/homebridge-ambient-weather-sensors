@@ -63,6 +63,7 @@ import {
 import { UI_STATE_FILE, loadUiStateStore } from './sensorMap/persistence/uiStateStore.js';
 import {
   buildPlatformEffectiveMap,
+  sensorMapShapeError,
   type EffectiveMapConfig,
 } from './sensorMap/platformEffectiveMap.js';
 import {
@@ -1205,6 +1206,17 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
    */
   private async discoverDevicesV2(): Promise<void> {
     try {
+      // Malformed v2 sensorMap (review finding 6): a PRESENT non-array
+      // value is a hand-edit mistake. Treating it as empty would
+      // register the FULL default exposure off a config error —
+      // instead, freeze: no fetch, no persistence, no reconciliation,
+      // cached accessories preserved. Checked before any side effect.
+      const shapeError = sensorMapShapeError(this.config as unknown as EffectiveMapConfig, this.configMode);
+      if (shapeError) {
+        this.log.error(shapeError);
+        return;
+      }
+
       const fetched = await this.fetchRawStations();
       if (!fetched) {
         this.log.debug('No devices returned from the AWN API. Retrying in 60 seconds');

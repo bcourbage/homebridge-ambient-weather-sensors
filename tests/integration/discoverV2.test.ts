@@ -694,6 +694,49 @@ describe('discoverDevicesV2 — safe mode and custom rows', () => {
     expect(existsSync(nodePath.join(storageRoot, 'plugin-data', 'ambient-weather'))).toBe(false);
   });
 
+  it('a malformed (non-array) sensorMap freezes: no reconciliation, cache preserved (finding 6)', async () => {
+    for (const bad of ['oops', { dataPoint: 'tempf' }, 42, null]) {
+      const { platform, api, log } = makePlatform({
+        _sensorMapV2: true, configVersion: 2, sensorMap: bad,
+      });
+      const cached = cacheAccessory(platform, `${MAC}-tempf`, 'Temperature', 'Outdoor Temperature', tempWithBattery);
+      const fetchSpy = vi.spyOn(global, 'fetch').mockImplementation(async () => {
+        throw new Error('no network under the freeze');
+      });
+      stubTimer();
+
+      await reconcile(platform, 'v2');
+
+      // Cache-preserving hard stop: zero HAP calls, zero fetches, no
+      // routing, no persist dir - and the full default exposure was
+      // NOT registered off the config error.
+      expect(api.registered, String(bad)).toHaveLength(0);
+      expect(api.unregistered, String(bad)).toHaveLength(0);
+      expect(api.updated, String(bad)).toHaveLength(0);
+      expect(fetchSpy, String(bad)).not.toHaveBeenCalled();
+      expect(routing(platform), String(bad)).toBeUndefined();
+      expect(platform.accessories).toContain(cached);
+      expect(log.find('error', 'not an array').length, String(bad)).toBeGreaterThan(0);
+      const storageRoot = (api as unknown as { user: { storagePath(): string } }).user.storagePath();
+      expect(existsSync(nodePath.join(storageRoot, 'plugin-data'))).toBe(false);
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('an ABSENT sensorMap in v2 mode still reconciles the default exposure (finding 6 contrast)', async () => {
+    const { platform, api } = makePlatform({ _sensorMapV2: true, configVersion: 2 });
+    mockFetch([{ macAddress: MAC, info: { name: 'Home' }, lastData: { tempf: 68, battout: 1 } }]);
+    stubTimer();
+    try {
+      await reconcile(platform, 'v2');
+      expect(routing(platform)!.has(`${MAC}|tempf`)).toBe(true);
+      expect(api.registered.some(a => a.context.device.uniqueId === `${MAC}-tempf`)).toBe(true);
+    } finally {
+      const storageRoot = (api as unknown as { user: { storagePath(): string } }).user.storagePath();
+      rmSync(storageRoot, { recursive: true, force: true });
+    }
+  });
+
   it('a custom dataPoint produces no-wrapper and never registers while the table is empty', async () => {
     const { platform, api, log } = makePlatform({
       _sensorMapV2: true,

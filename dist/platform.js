@@ -23,7 +23,7 @@ import { legacyTypeForWrapperId } from './sensorMap/legacyDeviceType.js';
 import { DISCOVERY_FILE, DiscoveryTracker, cleanupStaleTempFiles, loadDiscoveryStore, } from './sensorMap/persistence/discoveryStore.js';
 import { NOTICES_FILE, appendNotice, loadNoticeStore, } from './sensorMap/persistence/noticesStore.js';
 import { UI_STATE_FILE, loadUiStateStore } from './sensorMap/persistence/uiStateStore.js';
-import { buildPlatformEffectiveMap, } from './sensorMap/platformEffectiveMap.js';
+import { buildPlatformEffectiveMap, sensorMapShapeError, } from './sensorMap/platformEffectiveMap.js';
 import { buildWrapperRouting, distributeViaRouting, } from './sensorMap/routing.js';
 import { createShadowMode, shadowModeEnabled } from './sensorMap/shadowMode.js';
 import { computeStructuralSignature } from './sensorMap/structuralSignature.js';
@@ -989,6 +989,16 @@ export class AmbientWeatherSensorsPlatform {
      */
     async discoverDevicesV2() {
         try {
+            // Malformed v2 sensorMap (review finding 6): a PRESENT non-array
+            // value is a hand-edit mistake. Treating it as empty would
+            // register the FULL default exposure off a config error —
+            // instead, freeze: no fetch, no persistence, no reconciliation,
+            // cached accessories preserved. Checked before any side effect.
+            const shapeError = sensorMapShapeError(this.config, this.configMode);
+            if (shapeError) {
+                this.log.error(shapeError);
+                return;
+            }
             const fetched = await this.fetchRawStations();
             if (!fetched) {
                 this.log.debug('No devices returned from the AWN API. Retrying in 60 seconds');

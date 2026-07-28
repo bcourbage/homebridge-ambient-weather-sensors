@@ -41,7 +41,22 @@ export interface EffectiveMapInputs {
     uiState: UiStateStore;
 }
 /**
+ * Detect a malformed v2 `sensorMap` (review finding 6). In v2 mode an
+ * ABSENT sensorMap is legitimate — §5's "start from v2 defaults" — but
+ * a PRESENT non-array value (string, object, number, null) is a
+ * hand-edit mistake. Silently coercing it to `[]` would expose the
+ * FULL default map: dozens of accessories the user never configured,
+ * registered off a config error. Returns the error message to surface,
+ * or undefined when the shape is fine. The caller must treat a
+ * non-undefined result as a cache-preserving hard stop (no
+ * reconciliation), not a warning.
+ */
+export declare function sensorMapShapeError(config: EffectiveMapConfig, configMode: ConfigMode): string | undefined;
+/**
  * Select the `userOverrides` array for the detected config mode. Pure.
+ * v2 callers must have already gated on `sensorMapShapeError` — by the
+ * time this runs, a v2 sensorMap is either absent (default exposure)
+ * or a real array.
  */
 export declare function selectUserOverrides(config: EffectiveMapConfig, configMode: ConfigMode, stations: StationInventory): ReadonlyArray<unknown>;
 /**
