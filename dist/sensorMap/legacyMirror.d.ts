@@ -136,10 +136,14 @@ export declare function recognizeMirror(config: Record<string, unknown>): Mirror
  *      AWAIT success BEFORE touching config.json.
  *   2. Persist `nextConfig` through the Homebridge UI config API.
  *
- * `snapshot` carries the legacy sensor fields currently in the config
- * (the ones migration removes) — undefined when none are present (an
- * already-migrated config; the immutable snapshot from the first
- * conversion still exists on disk).
+ * `snapshot` carries the legacy sensor fields currently in the config —
+ * but ONLY when `currentConfig` is a TRUE legacy-mode config (no
+ * `configVersion: 2+`, no `sensorMap`, no mirror metadata). On every
+ * subsequent v2 save the legacy fields present are the SYNCHRONIZED
+ * MIRROR, not user-authored v1 configuration — snapshotting those would
+ * let a deleted snapshot be silently "recreated" from the projection,
+ * corrupting the permanent rollback/audit record (review R3-5). For a
+ * non-legacy input, `snapshot` is always undefined.
  */
 export declare function composeV2ConfigSave(currentConfig: Record<string, unknown>, sensorMap: unknown[], effectiveMap: EffectiveSensorMap): {
     snapshot: Record<string, unknown> | undefined;
@@ -148,9 +152,16 @@ export declare function composeV2ConfigSave(currentConfig: Record<string, unknow
 /**
  * Write the first-conversion snapshot — IMMUTABLE: if the file already
  * exists it is left untouched and `'exists'` is returned. Contains only
- * `LEGACY_SENSOR_FIELDS` (never API secrets). Uses the atomic
- * persistence helper. Callers MUST await this before mutating
- * config.json.
+ * `LEGACY_SENSOR_FIELDS` (never API secrets). Callers MUST await this
+ * before mutating config.json.
+ *
+ * Atomic EXCLUSIVE-create (review R3-5): the payload is fully written
+ * to a unique temp file, then `link(2)`ed to the final name — link
+ * fails with EEXIST if the snapshot already exists, so concurrent first
+ * writes cannot overwrite one another (an access()-then-rename check
+ * would race: rename replaces an existing destination). Exactly one
+ * writer wins; every other caller gets 'exists' and the winner's
+ * payload stays intact.
  */
 export declare function writeLegacySnapshot(persistDir: string, legacyFields: Record<string, unknown>, log: Logger, clock?: Clock): Promise<'written' | 'exists'>;
 //# sourceMappingURL=legacyMirror.d.ts.map

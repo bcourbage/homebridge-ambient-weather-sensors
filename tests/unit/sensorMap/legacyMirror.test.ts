@@ -216,6 +216,23 @@ describe('composeV2ConfigSave', () => {
     const { snapshot } = composeV2ConfigSave({ apiKey: 'k', configVersion: 2, sensorMap: [] }, [], map);
     expect(snapshot).toBeUndefined();
   });
+
+  it('re-saving its OWN prior nextConfig never re-emits a snapshot (mirror is not legacy input)', () => {
+    // R3-5: the mirror fields present on a v2 config are the projection,
+    // not user-authored v1 configuration. Feeding composeV2ConfigSave
+    // its own output must NOT produce a snapshot payload that could
+    // "recreate" a deleted snapshot from the mirror.
+    const map = v2Map([]);
+    const first = composeV2ConfigSave({ apiKey: 'k', temperatureSensors: true }, [], map);
+    expect(first.snapshot).toBeDefined();               // true legacy conversion
+    const second = composeV2ConfigSave(first.nextConfig, [], map);
+    expect(second.snapshot).toBeUndefined();            // subsequent v2 save
+    // Even a hand-gutted variant (metadata removed but sensorMap kept)
+    // is not a legacy conversion.
+    const gutted = { ...first.nextConfig };
+    delete gutted[LEGACY_MIRROR_KEY];
+    expect(composeV2ConfigSave(gutted, [], map).snapshot).toBeUndefined();
+  });
 });
 
 describe('writeLegacySnapshot (immutable, atomic, no secrets)', () => {
@@ -244,6 +261,28 @@ describe('writeLegacySnapshot (immutable, atomic, no secrets)', () => {
     for (const key of Object.keys(raw.legacy)) {
       expect(LEGACY_SENSOR_FIELDS).toContain(key as never);
     }
+  });
+
+  it('concurrent first writes: exactly one wins, the loser reports exists, the winner payload stays intact', async () => {
+    // R3-5: exclusive-create (link(2)) — an access()-then-write check
+    // would race and let the second writer clobber the first.
+    const results = await Promise.all([
+      writeLegacySnapshot(dir, { temperatureSensors: true }, log),
+      writeLegacySnapshot(dir, { temperatureSensors: false, humiditySensors: true }, log),
+    ]);
+    expect(results.filter(r => r === 'written')).toHaveLength(1);
+    expect(results.filter(r => r === 'exists')).toHaveLength(1);
+
+    const raw = JSON.parse(await fs.readFile(nodePath.join(dir, LEGACY_SNAPSHOT_FILE), 'utf8')) as {
+      legacy: Record<string, unknown>;
+    };
+    // The file is EXACTLY one of the two payloads — never a torn mix.
+    const isFirst = raw.legacy.temperatureSensors === true && raw.legacy.humiditySensors === undefined;
+    const isSecond = raw.legacy.temperatureSensors === false && raw.legacy.humiditySensors === true;
+    expect(isFirst || isSecond).toBe(true);
+    // No orphan temp files left behind.
+    const entries = await fs.readdir(dir);
+    expect(entries.filter(e => e.endsWith('.tmp'))).toHaveLength(0);
   });
 });
 

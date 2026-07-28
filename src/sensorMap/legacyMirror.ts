@@ -84,7 +84,6 @@ import type {
   SensorUnit,
 } from './types.js';
 import {
-  writeJsonStore,
   REAL_CLOCK,
   type Clock,
   type Logger,
@@ -439,16 +438,29 @@ export function recognizeMirror(config: Record<string, unknown>): MirrorRecognit
  *      AWAIT success BEFORE touching config.json.
  *   2. Persist `nextConfig` through the Homebridge UI config API.
  *
- * `snapshot` carries the legacy sensor fields currently in the config
- * (the ones migration removes) — undefined when none are present (an
- * already-migrated config; the immutable snapshot from the first
- * conversion still exists on disk).
+ * `snapshot` carries the legacy sensor fields currently in the config —
+ * but ONLY when `currentConfig` is a TRUE legacy-mode config (no
+ * `configVersion: 2+`, no `sensorMap`, no mirror metadata). On every
+ * subsequent v2 save the legacy fields present are the SYNCHRONIZED
+ * MIRROR, not user-authored v1 configuration — snapshotting those would
+ * let a deleted snapshot be silently "recreated" from the projection,
+ * corrupting the permanent rollback/audit record (review R3-5). For a
+ * non-legacy input, `snapshot` is always undefined.
  */
 export function composeV2ConfigSave(
   currentConfig: Record<string, unknown>,
   sensorMap: unknown[],
   effectiveMap: EffectiveSensorMap,
 ): { snapshot: Record<string, unknown> | undefined; nextConfig: Record<string, unknown> } {
+  // True legacy conversion = the config predates v2: no v2 version
+  // marker, no sensorMap, no mirror metadata. (Deliberately inline
+  // rather than importing detectConfigMode — configMode.ts imports this
+  // module, and the three-field check is the total overlap.)
+  const cv = currentConfig.configVersion;
+  const isLegacyConversion = currentConfig.sensorMap === undefined
+    && currentConfig[LEGACY_MIRROR_KEY] === undefined
+    && (cv === undefined || cv === 1);
+
   const legacyPresent: Record<string, unknown> = {};
   let hasLegacy = false;
   for (const key of LEGACY_SENSOR_FIELDS) {
@@ -457,6 +469,7 @@ export function composeV2ConfigSave(
       hasLegacy = true;
     }
   }
+  hasLegacy = hasLegacy && isLegacyConversion;
 
   const mirror = projectLegacyMirror(effectiveMap);
   const next: Record<string, unknown> = { ...currentConfig };
@@ -479,9 +492,16 @@ export function composeV2ConfigSave(
 /**
  * Write the first-conversion snapshot — IMMUTABLE: if the file already
  * exists it is left untouched and `'exists'` is returned. Contains only
- * `LEGACY_SENSOR_FIELDS` (never API secrets). Uses the atomic
- * persistence helper. Callers MUST await this before mutating
- * config.json.
+ * `LEGACY_SENSOR_FIELDS` (never API secrets). Callers MUST await this
+ * before mutating config.json.
+ *
+ * Atomic EXCLUSIVE-create (review R3-5): the payload is fully written
+ * to a unique temp file, then `link(2)`ed to the final name — link
+ * fails with EEXIST if the snapshot already exists, so concurrent first
+ * writes cannot overwrite one another (an access()-then-rename check
+ * would race: rename replaces an existing destination). Exactly one
+ * writer wins; every other caller gets 'exists' and the winner's
+ * payload stays intact.
  */
 export async function writeLegacySnapshot(
   persistDir: string,
@@ -490,22 +510,37 @@ export async function writeLegacySnapshot(
   clock: Clock = REAL_CLOCK,
 ): Promise<'written' | 'exists'> {
   const file = path.join(persistDir, LEGACY_SNAPSHOT_FILE);
-  try {
-    await fs.access(file);
-    return 'exists';
-  } catch {
-    // Not present — first conversion.
-  }
   const subset: Record<string, unknown> = {};
   for (const key of LEGACY_SENSOR_FIELDS) {
     if (legacyFields[key] !== undefined) {
       subset[key] = legacyFields[key];
     }
   }
-  await writeJsonStore(file, {
+  const body = JSON.stringify({
     schemaVersion: 1,
     savedAt: clock.iso(),
     legacy: subset,
-  }, log);
-  return 'written';
+  }, null, 2);
+
+  await fs.mkdir(persistDir, { recursive: true });
+  const tmp = path.join(
+    persistDir,
+    `${LEGACY_SNAPSHOT_FILE}.${process.pid}.${Math.floor(Math.random() * 1e9).toString(36)}.tmp`,
+  );
+  await fs.writeFile(tmp, body, { encoding: 'utf8', mode: 0o640 });
+  try {
+    await fs.link(tmp, file);
+    log.info(`Legacy config snapshot written to ${file}.`);
+    return 'written';
+  } catch (e) {
+    const err = e as NodeJS.ErrnoException;
+    if (err.code === 'EEXIST') {
+      // Another writer (or a previous conversion) won — immutable.
+      return 'exists';
+    }
+    log.warn(`Legacy config snapshot write failed: ${err.message}`);
+    throw err;
+  } finally {
+    await fs.unlink(tmp).catch(() => { /* best-effort */ });
+  }
 }
