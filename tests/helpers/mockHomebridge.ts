@@ -405,10 +405,11 @@ export class MockAPI extends EventEmitter {
   public readonly user = {
     storagePath: (): string => nodePath.join(os.tmpdir(), `aws-mock-storage-${this.storageId}`),
   };
-  private readonly storageId = createHash('sha256')
-    .update(String(MockAPI.instanceCounter++))
-    .digest('hex')
-    .slice(0, 12);
+  // Unique per PROCESS AND per instance. A deterministic counter alone
+  // is not enough: tmpdir leftovers from a previous run (or another
+  // worker) would collide with this run's instance N and break
+  // "directory was never created" assertions when test ordering shifts.
+  private readonly storageId = `${process.pid}-${MockAPI.instanceCounter++}`;
   private static instanceCounter = 0;
 
   public readonly registered: MockPlatformAccessory[] = [];

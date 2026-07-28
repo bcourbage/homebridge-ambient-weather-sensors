@@ -565,6 +565,34 @@ describe('discoverDevicesV2 — bootstrap + structural-signature reconciliation 
     }
   });
 
+  it('legacy normalization (R3-4): a signature-less cache missing only the telemetry-conditioned Battery adopts in place', async () => {
+    const { platform, api } = makePlatform({ _sensorMapV2: true, temperatureSensors: true });
+    // v1.7 cache whose discovery tick happened to omit battout: NO
+    // Battery sub-service, NO stored signature. The user changed
+    // nothing — this must NOT be a destructive re-registration.
+    const cached = cacheAccessory(platform, `${MAC}-tempf`, 'Temperature', 'Outdoor Temperature', (a) => {
+      const svc = a.addService(MockServices.TemperatureSensor);
+      svc.addCharacteristic(MockCharacteristics.CurrentTemperature);
+    });
+    mockFetch([{ macAddress: MAC, info: { name: 'Home' }, lastData: { tempf: 68, battout: 1 } }]);
+    stubTimer();
+    try {
+      await reconcile(platform, 'legacy');
+
+      // Adopted in place: zero unregisters, same accessory object.
+      expect(api.unregistered).toHaveLength(0);
+      expect(api.updated).toContain(cached);
+      expect(platform.accessories).toContain(cached);
+      // The row-driven wrapper attached the Battery sub-service in
+      // place (what v1.7 itself did on the next battery-reporting tick).
+      expect(cached.getService(MockServices.Battery)).toBeDefined();
+      // Context adopted the row's battery:1 signature.
+      expect(String((cached.context.device as Record<string, unknown>).structuralSignature)).toContain('battery:1');
+    } finally {
+      rmSync(storageDir(api), { recursive: true, force: true });
+    }
+  });
+
   it('a v2-written cache with a stale STORED signature also re-registers', async () => {
     const { platform, api } = makePlatform({ _sensorMapV2: true, temperatureSensors: true });
     const cached = cacheAccessory(platform, `${MAC}-tempf`, 'Temperature', 'Outdoor Temperature', tempWithBattery);

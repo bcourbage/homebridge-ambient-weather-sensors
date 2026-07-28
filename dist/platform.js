@@ -1404,7 +1404,25 @@ export class AmbientWeatherSensorsPlatform {
             return undefined;
         }
         const hasBattery = accessory.getService(this.Service.Battery) !== undefined;
-        return computeStructuralSignature(inference.kind, inference.measurement, hasBattery, wrapperById(row.wrapperId));
+        const derived = computeStructuralSignature(inference.kind, inference.measurement, hasBattery, wrapperById(row.wrapperId));
+        // Legacy-normalization exception (review R3-4): v1.7 attached the
+        // Battery sub-service only when telemetry happened to report the
+        // batt* field on the discovery tick, so a perfectly valid canonical
+        // cache can lack `battery:1` through no configuration change of the
+        // user's. When a SIGNATURE-LESS cache differs from the row ONLY by
+        // that missing battery, adopt the row's signature and let the
+        // row-driven wrapper attach the Battery service in place — exactly
+        // what v1.7 itself would have done on the next battery-reporting
+        // tick. Applies strictly to the derived (v1.7-cache) path and the
+        // missing→present direction: stored v2 signatures and battery
+        // REMOVAL (`batteryField: null`) still re-register.
+        if (!hasBattery
+            && derived.replace('|battery:0|', '|battery:1|') === row.structuralSignature) {
+            this.log.debug(`Adopting signature-less cache for [${accessory.displayName}]: differs only by the `
+                + 'telemetry-conditioned Battery sub-service, which the wrapper attaches in place.');
+            return row.structuralSignature;
+        }
+        return derived;
     }
     /**
      * Record a structural-change notice (sensor-map §8.4) so the UI can
