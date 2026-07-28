@@ -33,13 +33,19 @@ function addCached(platform: AmbientWeatherSensorsPlatform, uniqueId: string): v
 }
 
 describe('isUnsupportedNewerConfig', () => {
-  it('detects configVersion >= 2, malformed configVersion, and sensorMap presence', () => {
+  it('freezes on every defined configVersion except 1, and on sensorMap presence', () => {
+    // Newer-plugin markers.
     expect(isUnsupportedNewerConfig({ configVersion: 2 })).toBe(true);
     expect(isUnsupportedNewerConfig({ configVersion: 3 })).toBe(true);
-    expect(isUnsupportedNewerConfig({ configVersion: '2' })).toBe(true);   // malformed → unsupported
-    expect(isUnsupportedNewerConfig({ configVersion: 1.5 })).toBe(true);   // non-integer → unsupported
     expect(isUnsupportedNewerConfig({ sensorMap: [] })).toBe(true);
     expect(isUnsupportedNewerConfig({ sensorMap: [{ dataPoint: 'tempf' }] })).toBe(true);
+    // Malformed values — none may reach the destructive 1.x path.
+    expect(isUnsupportedNewerConfig({ configVersion: '2' })).toBe(true);
+    expect(isUnsupportedNewerConfig({ configVersion: 1.5 })).toBe(true);
+    expect(isUnsupportedNewerConfig({ configVersion: 0 })).toBe(true);
+    expect(isUnsupportedNewerConfig({ configVersion: -1 })).toBe(true);
+    expect(isUnsupportedNewerConfig({ configVersion: null })).toBe(true);
+    expect(isUnsupportedNewerConfig({ configVersion: NaN })).toBe(true);
   });
 
   it('passes normal 1.x configs through', () => {
@@ -54,6 +60,12 @@ describe('didFinishLaunching guard', () => {
     ['configVersion: 2', { configVersion: 2 }],
     ['sensorMap only', { sensorMap: [{ dataPoint: 'tempf', name: 'Patio' }] }],
     ['full migrated config', { configVersion: 2, sensorMap: [], temperatureSensors: true }],
+    // Malformed versions without legacy toggles: the exact shape that
+    // would otherwise reconcile to an empty set and wipe the cache.
+    ['malformed configVersion: 0', { configVersion: 0 }],
+    ['malformed configVersion: -1', { configVersion: -1 }],
+    ['malformed configVersion: null', { configVersion: null }],
+    ['malformed configVersion: NaN', { configVersion: NaN }],
   ];
 
   for (const [label, cfg] of V2_SHAPES) {

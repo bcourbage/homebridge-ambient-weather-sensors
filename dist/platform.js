@@ -49,11 +49,14 @@ const HAP_NAME_MAX = 64;
  * user's HomeKit room placement and automations before they could
  * restore anything.
  *
- * Returns true when the config is from a newer plugin: `sensorMap` is
- * present, or `configVersion` is set to 2+ (or to anything that isn't a
- * plain integer — malformed values are treated as unsupported rather
- * than guessed at). `configVersion: 1` and absent both mean a normal
- * 1.x config.
+ * Returns true when the config is from a newer plugin OR malformed:
+ * `sensorMap` is present, or `configVersion` is defined as ANYTHING
+ * other than the integer `1`. There is deliberately no "harmless"
+ * malformed value: `0`, negative integers, `null`, `NaN`, strings —
+ * none of them are a 1.x vocabulary this plugin can interpret, and a
+ * malformed config without legacy toggles would reconcile to an empty
+ * set and unregister the complete cache, the exact failure this guard
+ * exists to prevent. Only `configVersion` absent or `=== 1` proceeds.
  *
  * Exported for test coverage.
  */
@@ -65,10 +68,7 @@ export function isUnsupportedNewerConfig(config) {
     if (raw === undefined) {
         return false;
     }
-    if (typeof raw !== 'number' || !Number.isInteger(raw)) {
-        return true;
-    }
-    return raw >= 2;
+    return raw !== 1;
 }
 /**
  * Normalize a string the user might have typed in their config for
