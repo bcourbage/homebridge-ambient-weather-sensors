@@ -535,6 +535,18 @@ v1.7.1 guard release (configVersion/sensorMap detected → freeze, no
 reconciliation) is the safety net for downgrades that land on a mirror-less
 config.
 
+**RELEASE GATE (Stage 8 / GA — reviewer finding 5, round 3):** the
+`legacyMirror.ts` package is GROUNDWORK until it has a production caller.
+Today no shipped path performs a v2 conversion — the custom UI is read-only
+and schema-driven saves cannot produce `sensorMap` — so the snapshot/mirror
+contracts cannot yet be violated in the field. The gate: **no release may
+ship a UI (or any code path) capable of writing `configVersion: 2` /
+`sensorMap` into config.json unless that path routes through
+`composeV2ConfigSave` + `writeLegacySnapshot`, with an integration test
+proving snapshot-write → config-mutation ordering at the real save
+boundary.** Until that release, finding 5 remains OPEN as a tracked gate,
+not a resolved item. (Task #65's flag-flip milestone inherits this gate.)
+
 ## 6. Compat layer (legacy-mode only)
 
 Legacy fields translate to internal sensor-map state. Deterministic, one-shot per boot, nothing written back.
