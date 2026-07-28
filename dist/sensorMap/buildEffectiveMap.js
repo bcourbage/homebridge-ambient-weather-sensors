@@ -109,12 +109,15 @@ export function buildEffectiveSensorMap(input) {
                 }
             }
         }
-        if (batteryAuthor !== undefined) {
-            batteryFieldAuthor.set(`${key.stationMac ?? '*'}|${key.dataPoint}`, batteryAuthor);
-        }
-        if (provenance.enabled !== undefined) {
-            enabledProvenance.set(`${key.stationMac ?? '*'}|${key.dataPoint}`, provenance.enabled);
-        }
+        // NOTE (review R13-1): the semantic side-tables — batteryFieldAuthor,
+        // enabledProvenance, rowScopeProvenance — are committed only AFTER
+        // body validation succeeds (below). A body-REJECTED merge contributes
+        // nothing to the effective map, so it must not leak ordering keys or
+        // attribution indexes either: a rejected station-scoped fragment
+        // previously donated its (earlier) index to a row resolved from the
+        // valid global scope, flipping battery ownership and structural
+        // signatures. The local `provenance` map keeps serving the rejected
+        // merge's OWN error/warning attribution within this iteration.
         // Warn once per duplicated key, per §3.3.2. Whole-row warning —
         // attributed to the FIRST fragment because that's the one users
         // typically scroll to first when auditing their config.
@@ -134,7 +137,6 @@ export function buildEffectiveSensorMap(input) {
         // has no field (whole-row warning), fall back to the last
         // fragment.
         const lastFragmentIndex = fragments[fragments.length - 1].originalIndex;
-        rowScopeProvenance.set(`${key.stationMac ?? '*'}|${key.dataPoint}`, lastFragmentIndex);
         for (const w of result.warnings) {
             const attributionIndex = w.field !== undefined && provenance[w.field] !== undefined
                 ? provenance[w.field]
@@ -181,6 +183,15 @@ export function buildEffectiveSensorMap(input) {
                 stationOverrides.set(validated.stationMac, m);
             }
             m.set(validated.dataPoint, validated);
+        }
+        // Semantic side-tables — committed only for VALID merges (R13-1).
+        const sideTableKey = `${key.stationMac ?? '*'}|${key.dataPoint}`;
+        rowScopeProvenance.set(sideTableKey, lastFragmentIndex);
+        if (batteryAuthor !== undefined) {
+            batteryFieldAuthor.set(sideTableKey, batteryAuthor);
+        }
+        if (provenance.enabled !== undefined) {
+            enabledProvenance.set(sideTableKey, provenance.enabled);
         }
     }
     // ---- 2. Build lookup for discovery entries.
@@ -421,8 +432,11 @@ export function buildEffectiveSensorMap(input) {
             if (!owner || owner.kind === 'unrecognized') {
                 continue;
             }
+            // Disabled and rebound are INDEPENDENT states (review R13-2): a
+            // canonical owner can be both at once, and the remedy must name
+            // everything that has to be undone.
             const ownerDisabled = !owner.enabled;
-            const ownerRebound = owner.enabled && owner.batteryField !== field;
+            const ownerRebound = owner.batteryField !== field;
             if (!ownerDisabled && !ownerRebound) {
                 continue;
             }
@@ -432,6 +446,8 @@ export function buildEffectiveSensorMap(input) {
             }
             // Attribution: the fragment that disabled the owner, or (rebind)
             // the fragment that authored the owner's NEW batteryField value.
+            // Compound state prefers the disable fragment (either is a real,
+            // actionable config entry).
             const disabledBy = enabledProvenance.get(`${mac}|${ownerDp}`)
                 ?? enabledProvenance.get(`*|${ownerDp}`);
             const reboundBy = [
@@ -439,24 +455,33 @@ export function buildEffectiveSensorMap(input) {
                 batteryFieldAuthor.get(`*|${ownerDp}`),
             ].filter((e) => e !== undefined && e.value === owner.batteryField)
                 .reduce((min, e) => (min === undefined || e.index < min ? e.index : min), undefined);
-            const attribution = ownerDisabled ? disabledBy : reboundBy;
-            const cause = ownerDisabled
-                ? `is disabled`
-                : `was rebound to batteryField '${String(owner.batteryField)}'`;
-            const remedy = ownerDisabled
-                ? `until '${ownerDp}' is re-enabled`
-                : `until '${ownerDp}' is restored to '${field}'`;
+            const attribution = (ownerDisabled ? disabledBy : undefined) ?? (ownerRebound ? reboundBy : undefined);
+            const cause = ownerDisabled && ownerRebound
+                ? `is disabled AND was rebound to batteryField '${String(owner.batteryField)}'`
+                : ownerDisabled
+                    ? 'is disabled'
+                    : `was rebound to batteryField '${String(owner.batteryField)}'`;
+            const remedy = ownerDisabled && ownerRebound
+                ? `until '${ownerDp}' is re-enabled and restored to '${field}'`
+                : ownerDisabled
+                    ? `until '${ownerDp}' is re-enabled`
+                    : `until '${ownerDp}' is restored to '${field}'`;
             notes.push({
                 code: 'orphan-battery-field',
                 source: attribution !== undefined ? 'override' : 'default-map',
                 overrideIndex: attribution,
                 dataPoint: ownerDp,
                 stationMac: mac,
+                // Cache-consequence wording (review R13-3): ownership never
+                // rolls, so OTHER rows' signatures are untouched — but the
+                // owner's OWN signature can change (losing battery:1 is a
+                // structural replacement for that one accessory).
                 message: `'${ownerDp}' on ${mac} ${cause}, but it is the reserved owner of batteryField `
                     + `'${field}', which ${referencing.length} enabled row(s) still reference `
                     + `(${referencing.map(r => `'${r.dataPoint}'`).join(', ')}). The field has no HAP Battery `
-                    + `sub-service on this station ${remedy} — ownership never rolls to another row, so this `
-                    + 'change cannot invalidate accessory caches.',
+                    + `sub-service on this station ${remedy} — ownership never rolls to another row, so no `
+                    + `OTHER row's structural signature changes; '${ownerDp}' itself may re-register if its `
+                    + 'own Battery sub-service was added or removed by this change.',
             });
         }
     }

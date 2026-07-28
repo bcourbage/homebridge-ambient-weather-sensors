@@ -220,7 +220,8 @@ default map has NO override to point at — inventing an index would
 make the UI highlight an unrelated config entry the user didn't
 write. Same problem for the `orphan-battery-field` note the
 battery-ownership pass produces when a user disables the reserved
-canonical owner: there's no natural "config index" to attach it to.
+canonical owner or rebinds it to a different batteryField: there's
+no natural "config index" to attach it to.
 
 Solution — grow `EffectiveSensorMap` with a THIRD diagnostic channel
 dedicated to internal-invariant / attribution-free notes:
@@ -269,12 +270,16 @@ Enforcement + routing:
   Startup does not crash.
 
 - **`orphan-battery-field`** (from the battery-ownership pass):
-  the user disabled a reserved canonical owner while other rows
-  still reference the field. Push a note with `source: 'override'`
-  and the `overrideIndex` of the fragment that disabled the row.
-  If no override was involved (a plugin update disabled the row
-  via defaults — hypothetical), fall back to `source: 'default-map'`
-  with no index.
+  the user disabled a reserved canonical owner — or rebound it to a
+  different batteryField, or both — while other enabled rows still
+  reference the reserved field. Push a note with `source: 'override'`
+  and the `overrideIndex` of the fragment that disabled the row (or,
+  rebind-only, the fragment that authored the owner's new
+  batteryField value, via the value-aware authorship table). The
+  compound state names both causes and the FULL remedy (re-enable
+  AND restore the field). If no override was involved (a plugin
+  update disabled the row via defaults — hypothetical), fall back to
+  `source: 'default-map'` with no index.
 
 Registration-time throw handling is a general contract, not just
 for this check — a wrapper constructor throwing for any reason
@@ -535,8 +540,9 @@ described below in full, is a BEHAVIORAL CHANGE on top of PR #20:
   channel — that channel keeps carrying config-attributable
   warnings; internal-invariant + attribution-free notes move to
   the new channel.
-- Disabled reserved-owner rows produce an `orphan-battery-field`
-  info-level note when other rows still reference the field
+- Reserved-owner rows that are DISABLED or REBOUND away from their
+  reserved field (or both) produce an `orphan-battery-field`
+  info-level note when other enabled rows still reference the field
   (PR #20 leaves the field silently sub-serviceless).
 
 Runtime-side work is additive to those effective-map changes:
@@ -621,16 +627,23 @@ for all three cases):
   the winner. Warnings fire ONLY on user-authored conflicts —
   never on default-map sharing.
 
-- **Disabled rows** — disabled rows do not participate in
-  ownership. Disabling the reserved canonical owner does NOT roll
-  ownership to the next default-map candidate (structural
-  signatures would drift as users toggle enable state) and does
-  not promote a user row to owner. The battery field simply gets
-  no HAP sub-service on that station until the reserved owner is
-  re-enabled. `buildEffectiveSensorMap` emits an
-  `orphan-battery-field` info-level note when a user disables the
-  reserved owner while other rows still reference the field, so
-  users understand why the sub-service went away.
+- **Disabled or rebound owners** — disabled rows do not participate
+  in ownership, and neither disabling the reserved canonical owner
+  nor rebinding its batteryField to a novel value rolls ownership
+  to the next default-map candidate (structural signatures would
+  drift as users toggle state) or promotes a user row to owner —
+  the reserved set statically blocks every other claimant. The
+  battery field simply gets no HAP sub-service on that station
+  until the owner is re-enabled and/or restored to the reserved
+  field. `buildEffectiveSensorMap` emits an `orphan-battery-field`
+  info-level note whenever an orphaning state exists while other
+  enabled rows still reference the field — attributed to the
+  disabling fragment, or (rebind-only) to the fragment that
+  authored the new batteryField value; the compound
+  disabled-and-rebound state names both causes and the full remedy.
+  Ownership never rolling means no OTHER row's signature changes;
+  the owner's own signature can change when its Battery sub-service
+  is added or removed by the same edit.
 
 The pass runs BEFORE `structuralSignature` is computed on the row,
 so signature stability is a function of resolved ownership, not the

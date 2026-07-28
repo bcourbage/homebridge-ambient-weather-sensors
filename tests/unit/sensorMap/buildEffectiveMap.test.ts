@@ -1198,3 +1198,74 @@ describe('buildEffectiveSensorMap — orphan note covers a REBOUND owner (review
     expect(result.notes.filter(n => n.code === 'orphan-battery-field')).toHaveLength(0);
   });
 });
+
+describe('buildEffectiveSensorMap — rejected fragments cannot influence the map (review R13-1)', () => {
+  it("a body-REJECTED station fragment donates no ordering key (reviewer's counterexample)", () => {
+    const result = buildEffectiveSensorMap({
+      ...baseInput(),
+      stations: [{ macAddress: MAC1, name: 'Home' }],
+      userOverrides: [
+        // REJECTED: name must be a string. Its station-scoped key must
+        // not leak index 0 into custom_a's ownership ordering.
+        { dataPoint: 'custom_a', stationMac: MAC1, batteryField: 'shared_batt', name: 42 as unknown as string }, // 0
+        { dataPoint: 'custom_b', kind: 'humidity', measurement: 'humidity', sourceUnit: 'percent', batteryField: 'shared_batt' }, // 1
+        { dataPoint: 'custom_a', kind: 'temperature', measurement: 'temperature', sourceUnit: 'fahrenheit', batteryField: 'shared_batt' }, // 2 (valid, global)
+      ],
+    });
+    // The rejection itself is surfaced.
+    expect(result.errors.some(e => e.code === 'invalid-name' && e.overrideIndex === 0)).toBe(true);
+    // custom_b wins at VALID index 1; custom_a's valid authorship is 2.
+    const a = result.rows.find(r => r.dataPoint === 'custom_a');
+    const b = result.rows.find(r => r.dataPoint === 'custom_b');
+    expect(b && b.kind !== 'unrecognized' ? b.hasBatterySubService : null).toBe(true);
+    expect(a && a.kind !== 'unrecognized' ? a.hasBatterySubService : null).toBe(false);
+    const note = result.notes.find(n => n.code === 'duplicate-battery-owner');
+    expect(note?.dataPoint).toBe('custom_a');
+    expect(note?.overrideIndex).toBe(2);   // the VALID fragment, never the rejected one
+    // Signatures follow the corrected ownership.
+    expect(b && b.kind !== 'unrecognized' ? b.structuralSignature : '').toContain('battery:1');
+    expect(a && a.kind !== 'unrecognized' ? a.structuralSignature : '').toContain('battery:0');
+  });
+
+  it('a rejected fragment cannot disable-attribute or enable/disable anything either', () => {
+    const result = buildEffectiveSensorMap({
+      ...baseInput(),
+      stations: [{ macAddress: MAC1, name: 'Home' }],
+      userOverrides: [
+        // REJECTED station fragment that would have disabled tempf.
+        { dataPoint: 'tempf', stationMac: MAC1, enabled: false, name: 42 as unknown as string },  // 0
+      ],
+    });
+    const tempf = result.rows.find(r => r.dataPoint === 'tempf');
+    // The rejected merge contributed nothing: tempf stays enabled and
+    // no orphan note fires.
+    expect(tempf && tempf.kind !== 'unrecognized' ? tempf.enabled : null).toBe(true);
+    expect(result.notes.filter(n => n.code === 'orphan-battery-field')).toHaveLength(0);
+  });
+});
+
+describe('buildEffectiveSensorMap — compound orphan state (review R13-2)', () => {
+  it('an owner both DISABLED and REBOUND gets the compound cause and the full remedy', () => {
+    const result = buildEffectiveSensorMap({
+      ...baseInput(),
+      stations: [{ macAddress: MAC1, name: 'Home' }],
+      userOverrides: [
+        { dataPoint: 'tempf', enabled: false, batteryField: 'new_temp_batt' },  // 0
+      ],
+    });
+    const orphans = result.notes.filter(n => n.code === 'orphan-battery-field');
+    expect(orphans).toHaveLength(1);
+    const note = orphans[0];
+    expect(note.dataPoint).toBe('tempf');
+    expect(note.source).toBe('override');
+    expect(note.overrideIndex).toBe(0);
+    // Compound cause + FULL remedy: re-enabling alone would leave the
+    // field rebound and still hostless.
+    expect(note.message).toContain('disabled AND was rebound');
+    expect(note.message).toContain("re-enabled and restored to 'battout'");
+    // Honest cache wording (R13-3): other rows untouched, the owner
+    // itself may re-register.
+    expect(note.message).toContain("no OTHER row's structural signature changes");
+    expect(note.message).toContain('may re-register');
+  });
+});
