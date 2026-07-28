@@ -694,6 +694,37 @@ describe('discoverDevicesV2 — safe mode and custom rows', () => {
     expect(existsSync(nodePath.join(storageRoot, 'plugin-data', 'ambient-weather'))).toBe(false);
   });
 
+  it('a wrapper-constructor failure drops ONLY that new accessory from registration (finding 8)', async () => {
+    const { platform, api, log } = makePlatform({
+      _sensorMapV2: true, temperatureSensors: true, humiditySensors: true,
+    });
+    // Poison the humidity factory so its constructor throws; tempf's
+    // stays healthy. Both rows are NEW (no cache).
+    const { FACTORIES } = await import('../../src/sensorMap/wrapperFactories');
+    const original = FACTORIES.humidity;
+    (FACTORIES as Record<string, unknown>).humidity = () => {
+      throw new Error('boom: constructor failure under test');
+    };
+    mockFetch([{ macAddress: MAC, info: { name: 'Home' }, lastData: { tempf: 68, humidity: 40, battout: 1 } }]);
+    stubTimer();
+    try {
+      await reconcile(platform, 'legacy');
+
+      // The healthy row registered; the failed row did NOT - no
+      // incomplete-graph accessory reaches HAP.
+      expect(api.registered.some(a => a.context.device.uniqueId === `${MAC}-tempf`)).toBe(true);
+      expect(api.registered.some(a => a.context.device.uniqueId === `${MAC}-humidity`)).toBe(false);
+      // Routing has only the healthy row; both failures were surfaced.
+      expect(routing(platform)!.has(`${MAC}|tempf`)).toBe(true);
+      expect(routing(platform)!.has(`${MAC}|humidity`)).toBe(false);
+      expect(log.find('error', 'failed to instantiate wrapper').length).toBeGreaterThan(0);
+      expect(log.find('warn', 'Not registering new accessory').length).toBeGreaterThan(0);
+    } finally {
+      (FACTORIES as Record<string, unknown>).humidity = original;
+      rmSync((api as unknown as { user: { storagePath(): string } }).user.storagePath(), { recursive: true, force: true });
+    }
+  });
+
   it('an uncoercible reading preserves the cached value instead of fabricating 0 (finding 7)', async () => {
     const { platform, api } = makePlatform({ _sensorMapV2: true, temperatureSensors: true });
     const cached = cacheAccessory(platform, `${MAC}-tempf`, 'Temperature', 'Outdoor Temperature', tempWithBattery);

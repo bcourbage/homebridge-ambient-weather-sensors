@@ -69,6 +69,7 @@ import {
 import {
   buildWrapperRouting,
   distributeViaRouting,
+  routingKey,
   type RoutingEntry,
   type StationPayload,
 } from './sensorMap/routing.js';
@@ -1374,7 +1375,7 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
       // graph, matching the v1.6.0 ordering.
       const accessoryByRoutingUid = new Map<string, PlatformAccessory>();
       const deviceByRoutingUid = new Map<string, V2Device>();
-      const newAccessories: PlatformAccessory[] = [];
+      const newAccessories: Array<{ accessory: PlatformAccessory; row: ConfiguredEffectiveRow }> = [];
       for (const { row, device, routingUid } of reconciled) {
         const uuid = this.api.hap.uuid.generate(device.uniqueId);
         const existingAccessory = this.accessories.find(accessory => accessory.UUID === uuid);
@@ -1411,7 +1412,7 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
             await this.appendStructuralNoticeV2(row, cachedSignature);
             accessory = new this.api.platformAccessory(device.displayName, uuid);
             accessory.context.device = v2Context;
-            newAccessories.push(accessory);
+            newAccessories.push({ accessory, row });
           } else {
             this.log.info('Restoring existing accessory from cache:', existingAccessory.displayName);
             if (existingAccessory.displayName !== device.displayName) {
@@ -1428,7 +1429,7 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
           this.log.info('Adding new accessory:', device.displayName);
           accessory = new this.api.platformAccessory(device.displayName, uuid);
           accessory.context.device = v2Context;
-          newAccessories.push(accessory);
+          newAccessories.push({ accessory, row });
         }
         accessoryByRoutingUid.set(routingUid, accessory);
         deviceByRoutingUid.set(routingUid, device);
@@ -1465,8 +1466,24 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
         }
       }
 
-      // Register the new accessories now that their service graphs exist.
-      for (const accessory of newAccessories) {
+      // Register the new accessories now that their service graphs
+      // exist — but ONLY those whose wrapper actually constructed
+      // (review finding 8). buildWrapperRouting isolates a throwing
+      // constructor by dropping that row from the routing map; the
+      // matching new accessory must be dropped too, or it would be
+      // registered with an incomplete HAP graph and no way to ever
+      // receive a value. (RESTORED accessories with a failed wrapper
+      // stay registered — they're already in HomeKit with a full cached
+      // graph; v1.7 behaved the same when createSensorWrapper returned
+      // undefined.)
+      for (const { accessory, row } of newAccessories) {
+        if (!this.v2Routing.has(routingKey(row.stationMac, row.dataPoint))) {
+          this.log.warn(
+            `Not registering new accessory [${accessory.displayName}]: its wrapper failed to `
+            + 'construct (see the [routing] error above), so its HAP graph is incomplete.',
+          );
+          continue;
+        }
         this.api.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [accessory]);
       }
 
