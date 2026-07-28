@@ -888,37 +888,69 @@ describe('discoverDevicesV2 — safe mode and custom rows', () => {
     }
   });
 
-  it('a registration that takes EFFECT before throwing is cleaned up before the restore (R8)', async () => {
+  it('a registration that takes EFFECT before throwing is cleaned up BEFORE the restore (R8/R9)', async () => {
     const { platform, api, log } = makePlatform({
       _sensorMapV2: true,
       configVersion: 2,
       sensorMap: [{ dataPoint: 'tempf', batteryField: null }],
     });
     const cached = cacheAccessory(platform, `${MAC}-tempf`, 'Temperature', 'Outdoor Temperature', tempWithBattery);
-    // Failure shape 2 (review R8): the first registration call performs
-    // its side effect (Homebridge caches the accessory before bridging)
-    // and THEN throws — the candidate is partially registered.
-    const realRegister = api.registerPlatformAccessories.bind(api);
+
+    // Stateful UUID registry with Homebridge semantics (review R9):
+    // registration REPLACES nothing — a UUID that is already registered
+    // is silently SKIPPED (Homebridge's duplicate-UUID behavior), so a
+    // restore attempted while the lingering candidate still occupies
+    // the UUID would be a no-op. A shared ordered event log proves the
+    // cleanup-precedes-restore ordering; plain history arrays cannot
+    // (they'd pass with the operations reversed).
+    const currentByUuid = new Map<string, MockPlatformAccessory>();
+    currentByUuid.set(cached.UUID, cached);               // seeded: the cache is registered
+    const events: string[] = [];
+    const label = (a: MockPlatformAccessory) => (a === cached ? 'old' : 'candidate');
     let registerCalls = 0;
-    vi.spyOn(api, 'registerPlatformAccessories').mockImplementation((plugin, name, accessories) => {
+    vi.spyOn(api, 'registerPlatformAccessories').mockImplementation(((_p: string, _n: string, accessories: MockPlatformAccessory[]) => {
       registerCalls += 1;
-      realRegister(plugin, name, accessories);          // side effect lands first
+      for (const a of accessories) {
+        if (currentByUuid.has(a.UUID)) {
+          events.push(`register-skipped:${label(a)}`);    // HB duplicate-UUID skip
+          continue;
+        }
+        currentByUuid.set(a.UUID, a);
+        events.push(`register:${label(a)}`);
+      }
       if (registerCalls === 1) {
+        // Failure shape 2: the side effect LANDED (candidate cached),
+        // THEN the bridge throws — the candidate is partially registered.
         throw new Error('HAP bridge failure AFTER caching under test');
       }
-    });
+    }) as never);
+    vi.spyOn(api, 'unregisterPlatformAccessories').mockImplementation(((_p: string, _n: string, accessories: MockPlatformAccessory[]) => {
+      for (const a of accessories) {
+        if (currentByUuid.get(a.UUID) === a) {
+          currentByUuid.delete(a.UUID);
+        }
+        events.push(`unregister:${label(a)}`);
+      }
+    }) as never);
+
     mockFetch([{ macAddress: MAC, info: { name: 'Home' }, lastData: { tempf: 68, battout: 1 } }]);
     stubTimer();
     try {
       await reconcile(platform, 'v2');
 
-      // The partially-registered candidate was cleaned up: it appears
-      // in unregistered, and the OLD accessory is the final registered
-      // object (no false "Restored" over a lingering candidate).
-      const candidate = api.registered.find(a => a.UUID === cached.UUID && a !== cached)!;
-      expect(candidate).toBeDefined();
-      expect(api.unregistered).toContain(candidate);
-      expect(api.registered[api.registered.length - 1]).toBe(cached);
+      // Ordering: swap-unregister → candidate register (throws after
+      // effect) → candidate CLEANUP → old restore. Cleanup strictly
+      // precedes restoration.
+      expect(events).toEqual([
+        'unregister:old',
+        'register:candidate',
+        'unregister:candidate',
+        'register:old',
+      ]);
+      // Final registry state: the OLD accessory occupies the UUID. Had
+      // the code restored before cleaning up, the restore would have
+      // been duplicate-skipped and cleanup would leave the UUID EMPTY.
+      expect(currentByUuid.get(cached.UUID)).toBe(cached);
       expect(platform.accessories).toContain(cached);
       // Routing entry absent; no notice.
       expect(routing(platform)!.has(`${MAC}|tempf`)).toBe(false);
