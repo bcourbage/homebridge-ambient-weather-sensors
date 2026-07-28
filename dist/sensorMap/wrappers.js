@@ -258,6 +258,17 @@ export const WRAPPER_FOR_KIND_AND_MEASUREMENT = {
 export function wrapperFor(kind, measurement) {
     return WRAPPER_FOR_KIND_AND_MEASUREMENT[`${kind}|${measurement}`];
 }
+// id → descriptor lookup. Used by the platform's structural-signature
+// reconciliation (finding-#4 Stage 4, review P1-2) to derive a cached
+// accessory's signature when its context predates v2 (no stored
+// signature). Keyed by the frozen WrapperId union, so an unregistered
+// id is a compile error at the call site.
+const WRAPPER_BY_ID = new Map(ALL_WRAPPERS.map(w => [w.id, w]));
+export function wrapperById(id) {
+    // Every WrapperId has exactly one ALL_WRAPPERS entry (locked by the
+    // registry snapshot test), so the lookup cannot miss at runtime.
+    return WRAPPER_BY_ID.get(id);
+}
 // Deep-freeze the registry so any code path that receives a
 // descriptor (including untyped MCP boundaries or future dynamic
 // lookups) cannot mutate `id` or `schemaVersion`. Applied once at

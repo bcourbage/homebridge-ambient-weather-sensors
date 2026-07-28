@@ -111,4 +111,5 @@ export declare const ALL_WRAPPERS: ReadonlyArray<WrapperDescriptor>;
  */
 export declare const WRAPPER_FOR_KIND_AND_MEASUREMENT: Readonly<Partial<Record<`${Exclude<SensorKind, 'unrecognized'>}|${Measurement}`, WrapperDescriptor>>>;
 export declare function wrapperFor(kind: Exclude<SensorKind, 'unrecognized'>, measurement: Measurement): WrapperDescriptor | undefined;
+export declare function wrapperById(id: WrapperDescriptor['id']): WrapperDescriptor;
 //# sourceMappingURL=wrappers.d.ts.map

@@ -64,6 +64,22 @@ function cacheAccessory(
   return a;
 }
 
+/**
+ * Realistic v1.7 cache shape for a canonical temperature accessory:
+ * TemperatureSensor + Battery sub-service (canonical rows host the
+ * battery, and v1.7 attached it whenever AWN reported battout — the
+ * overwhelmingly common case). The v2 row model treats battery
+ * ownership as a map property (`battery:1` in the signature), so a
+ * canonical cache WITHOUT the Battery service is a structural mismatch
+ * by design — see the P1-2 suite.
+ */
+function tempWithBattery(a: MockPlatformAccessory): void {
+  const svc = a.addService(MockServices.TemperatureSensor);
+  svc.addCharacteristic(MockCharacteristics.CurrentTemperature);
+  const batt = a.addService(MockServices.Battery);
+  batt.addCharacteristic(MockCharacteristics.StatusLowBattery);
+}
+
 function mockFetch(payload: unknown): void {
   vi.spyOn(global, 'fetch').mockImplementation(async () => new Response(JSON.stringify(payload), {
     status: 200, headers: { 'content-type': 'application/json' },
@@ -93,10 +109,7 @@ describe('discoverDevicesV2 — flag OFF stays on the v1.7 path', () => {
   it('does not build a v2 routing map, keeps the v1 wrappers map + shadow off', async () => {
     // No _sensorMapV2 → the v1.6.0 discoverDevices path runs unchanged.
     const { platform } = makePlatform({ temperatureSensors: true });
-    cacheAccessory(platform, `${MAC}-tempf`, 'Temperature', 'Outdoor Temperature', (a) => {
-      const svc = a.addService(MockServices.TemperatureSensor);
-      svc.addCharacteristic(MockCharacteristics.CurrentTemperature);
-    });
+    cacheAccessory(platform, `${MAC}-tempf`, 'Temperature', 'Outdoor Temperature', tempWithBattery);
     mockFetch([{ macAddress: MAC, info: { name: 'Home' }, lastData: { tempf: 68 } }]);
     stubTimer();
 
@@ -126,10 +139,7 @@ describe('discoverDevicesV2 — flag ON lifecycle', () => {
   it('restores a cached row, registers a new row, and builds routing for known rows only', async () => {
     const { platform, api } = makePlatform({ _sensorMapV2: true, temperatureSensors: true, humiditySensors: true });
     // tempf is cached (restore path); humidity is new (register path).
-    const cachedTemp = cacheAccessory(platform, `${MAC}-tempf`, 'Temperature', 'Outdoor Temperature', (a) => {
-      const svc = a.addService(MockServices.TemperatureSensor);
-      svc.addCharacteristic(MockCharacteristics.CurrentTemperature);
-    });
+    const cachedTemp = cacheAccessory(platform, `${MAC}-tempf`, 'Temperature', 'Outdoor Temperature', tempWithBattery);
     mockFetch([{ macAddress: MAC, info: { name: 'Home' }, lastData: { tempf: 68, humidity: 40, battout: 1 } }]);
     stubTimer();
 
@@ -164,10 +174,7 @@ describe('discoverDevicesV2 — flag ON lifecycle', () => {
   it('reuses the v1.7 cached UUID without deregistration or a UUID change', async () => {
     const { platform, api } = makePlatform({ _sensorMapV2: true, temperatureSensors: true });
     const uuidBefore = mockUuidGenerate(`${MAC}-tempf`);
-    const cached = cacheAccessory(platform, `${MAC}-tempf`, 'Temperature', 'Outdoor Temperature', (a) => {
-      const svc = a.addService(MockServices.TemperatureSensor);
-      svc.addCharacteristic(MockCharacteristics.CurrentTemperature);
-    });
+    const cached = cacheAccessory(platform, `${MAC}-tempf`, 'Temperature', 'Outdoor Temperature', tempWithBattery);
     expect(cached.UUID).toBe(uuidBefore);
     mockFetch([{ macAddress: MAC, info: { name: 'Home' }, lastData: { tempf: 68 } }]);
     stubTimer();
@@ -183,10 +190,7 @@ describe('discoverDevicesV2 — flag ON lifecycle', () => {
 
   it('polling and realtime each route a fresh AWN value through distributeViaRouting', async () => {
     const { platform } = makePlatform({ _sensorMapV2: true, temperatureSensors: true });
-    const cached = cacheAccessory(platform, `${MAC}-tempf`, 'Temperature', 'Outdoor Temperature', (a) => {
-      const svc = a.addService(MockServices.TemperatureSensor);
-      svc.addCharacteristic(MockCharacteristics.CurrentTemperature);
-    });
+    const cached = cacheAccessory(platform, `${MAC}-tempf`, 'Temperature', 'Outdoor Temperature', tempWithBattery);
     mockFetch([{ macAddress: MAC, info: { name: 'Home' }, lastData: { tempf: 68 } }]);
     stubTimer();
     await reconcile(platform, 'legacy');
@@ -208,10 +212,7 @@ describe('discoverDevicesV2 — flag ON lifecycle', () => {
       _sensorMapV2: true, temperatureSensors: true, extendedSensors: true, pressureSensors: true,
     });
     // tempf is canonical for battout → owns the Battery sub-service.
-    const temp = cacheAccessory(platform, `${MAC}-tempf`, 'Temperature', 'Outdoor Temperature', (a) => {
-      const svc = a.addService(MockServices.TemperatureSensor);
-      svc.addCharacteristic(MockCharacteristics.CurrentTemperature);
-    });
+    const temp = cacheAccessory(platform, `${MAC}-tempf`, 'Temperature', 'Outdoor Temperature', tempWithBattery);
     mockFetch([{ macAddress: MAC, info: { name: 'Home' }, lastData: { tempf: 68, battout: 1, baromabsin: 29.92 } }]);
     stubTimer();
     await reconcile(platform, 'legacy');
@@ -245,10 +246,7 @@ describe('discoverDevicesV2 — flag ON lifecycle', () => {
     });
     // Cached under the old default name — the rename must flow through
     // the restore branch (displayName + AccessoryInformation.Name).
-    const cached = cacheAccessory(platform, `${MAC}-tempf`, 'Temperature', 'Outdoor Temperature', (a) => {
-      const svc = a.addService(MockServices.TemperatureSensor);
-      svc.addCharacteristic(MockCharacteristics.CurrentTemperature);
-    });
+    const cached = cacheAccessory(platform, `${MAC}-tempf`, 'Temperature', 'Outdoor Temperature', tempWithBattery);
     mockFetch([{ macAddress: MAC, info: { name: 'Home' }, lastData: { tempf: 68 } }]);
     stubTimer();
 
@@ -448,10 +446,7 @@ describe('discoverDevicesV2 — malformed AWN responses (failed snapshot, not em
 
   it('a transient malformed snapshot never unregisters the cache; the retry reconciles normally', async () => {
     const { platform, api } = makePlatform({ _sensorMapV2: true, temperatureSensors: true });
-    const cached = cacheAccessory(platform, `${MAC}-tempf`, 'Temperature', 'Outdoor Temperature', (a) => {
-      const svc = a.addService(MockServices.TemperatureSensor);
-      svc.addCharacteristic(MockCharacteristics.CurrentTemperature);
-    });
+    const cached = cacheAccessory(platform, `${MAC}-tempf`, 'Temperature', 'Outdoor Temperature', tempWithBattery);
 
     // First fetch: AWN incident shape [{}] — v1.7 threw and retried;
     // v2 must also fail the snapshot. Second fetch: healthy payload.
@@ -476,10 +471,7 @@ describe('discoverDevicesV2 — malformed AWN responses (failed snapshot, not em
 
   it('a malformed poll-tick payload is dropped without touching wrappers', async () => {
     const { platform } = makePlatform({ _sensorMapV2: true, temperatureSensors: true });
-    const cached = cacheAccessory(platform, `${MAC}-tempf`, 'Temperature', 'Outdoor Temperature', (a) => {
-      const svc = a.addService(MockServices.TemperatureSensor);
-      svc.addCharacteristic(MockCharacteristics.CurrentTemperature);
-    });
+    const cached = cacheAccessory(platform, `${MAC}-tempf`, 'Temperature', 'Outdoor Temperature', tempWithBattery);
     mockFetch([{ macAddress: MAC, info: { name: 'Home' }, lastData: { tempf: 68 } }]);
     stubTimer();
     await reconcile(platform, 'legacy');
@@ -490,6 +482,131 @@ describe('discoverDevicesV2 — malformed AWN responses (failed snapshot, not em
     await (platform as unknown as { pollAndDistribute(): Promise<void> }).pollAndDistribute();
     // Value untouched by the malformed tick.
     expect(tempSvc.readCharacteristic(MockCharacteristics.CurrentTemperature)).toBe(before);
+  });
+});
+
+describe('discoverDevicesV2 — bootstrap + structural-signature reconciliation (review P1-2)', () => {
+  function storageDir(api: MockAPI): string {
+    return (api as unknown as { user: { storagePath(): string } }).user.storagePath();
+  }
+
+  it('batteryField:null is a structural change: re-register + notice, never an in-place graph mutation', async () => {
+    const { platform, api } = makePlatform({
+      _sensorMapV2: true,
+      configVersion: 2,
+      sensorMap: [{ dataPoint: 'tempf', batteryField: null }],
+    });
+    // v1.7-written cache: tempf WITH a Battery sub-service (no stored
+    // signature — the derived path must detect battery:1 vs battery:0).
+    const cached = cacheAccessory(platform, `${MAC}-tempf`, 'Temperature', 'Outdoor Temperature', (a) => {
+      const svc = a.addService(MockServices.TemperatureSensor);
+      svc.addCharacteristic(MockCharacteristics.CurrentTemperature);
+      const batt = a.addService(MockServices.Battery);
+      batt.addCharacteristic(MockCharacteristics.StatusLowBattery);
+    });
+    mockFetch([{ macAddress: MAC, info: { name: 'Home' }, lastData: { tempf: 68, battout: 1 } }]);
+    stubTimer();
+    try {
+      await reconcile(platform, 'v2');
+
+      // Old accessory re-registered: unregister + fresh registration.
+      expect(api.unregistered).toContain(cached);
+      const fresh = api.registered.find(a => a.context.device.uniqueId === `${MAC}-tempf`)!;
+      expect(fresh).toBeDefined();
+      expect(fresh).not.toBe(cached);
+      // The fresh accessory has NO Battery sub-service and carries the
+      // new signature + row identity fields alongside the legacy type.
+      expect(fresh.getService(MockServices.Battery)).toBeUndefined();
+      const ctx = fresh.context.device as Record<string, unknown>;
+      expect(ctx.type).toBe('Temperature');
+      expect(ctx.kind).toBe('temperature');
+      expect(ctx.measurement).toBe('temperature');
+      expect(String(ctx.structuralSignature)).toContain('battery:0');
+
+      // Structural-change notice persisted.
+      const noticesFile = nodePath.join(storageDir(api), 'plugin-data', 'ambient-weather', 'notices.json');
+      const store = JSON.parse(readFileSync(noticesFile, 'utf8')) as {
+        notices: Array<{ dataPoint: string; oldSignature?: string; newSignature: string }>;
+      };
+      const notice = store.notices.find(n => n.dataPoint === 'tempf')!;
+      expect(notice).toBeDefined();
+      expect(notice.oldSignature).toContain('battery:1');
+      expect(notice.newSignature).toContain('battery:0');
+    } finally {
+      rmSync(storageDir(api), { recursive: true, force: true });
+    }
+  });
+
+  it('a matching cached graph restores in place and adopts the row identity fields', async () => {
+    const { platform, api } = makePlatform({ _sensorMapV2: true, temperatureSensors: true });
+    // v1.7 cache: canonical tempf WITH battery — matches the default
+    // row's battery:1 signature, so no re-registration.
+    const cached = cacheAccessory(platform, `${MAC}-tempf`, 'Temperature', 'Outdoor Temperature', (a) => {
+      const svc = a.addService(MockServices.TemperatureSensor);
+      svc.addCharacteristic(MockCharacteristics.CurrentTemperature);
+      const batt = a.addService(MockServices.Battery);
+      batt.addCharacteristic(MockCharacteristics.StatusLowBattery);
+    });
+    mockFetch([{ macAddress: MAC, info: { name: 'Home' }, lastData: { tempf: 68, battout: 1 } }]);
+    stubTimer();
+    try {
+      await reconcile(platform, 'legacy');
+
+      expect(api.unregistered).toHaveLength(0);
+      expect(api.updated).toContain(cached);
+      const ctx = cached.context.device as Record<string, unknown>;
+      expect(ctx.kind).toBe('temperature');
+      expect(ctx.measurement).toBe('temperature');
+      expect(String(ctx.structuralSignature)).toContain('battery:1');
+      // Battery sub-service intact.
+      expect(cached.getService(MockServices.Battery)).toBeDefined();
+    } finally {
+      rmSync(storageDir(api), { recursive: true, force: true });
+    }
+  });
+
+  it('a v2-written cache with a stale STORED signature also re-registers', async () => {
+    const { platform, api } = makePlatform({ _sensorMapV2: true, temperatureSensors: true });
+    const cached = cacheAccessory(platform, `${MAC}-tempf`, 'Temperature', 'Outdoor Temperature', tempWithBattery);
+    // Simulate a v2-written cache whose stored signature predates a
+    // structural change (battery:0 stored; the default row owns battery:1).
+    (cached.context.device as Record<string, unknown>).structuralSignature =
+      'temperature|measurement:temperature|battery:0|wrapper:temperature:v1';
+    mockFetch([{ macAddress: MAC, info: { name: 'Home' }, lastData: { tempf: 68, battout: 1 } }]);
+    stubTimer();
+    try {
+      await reconcile(platform, 'legacy');
+      expect(api.unregistered).toContain(cached);
+      const fresh = api.registered.find(a => a.context.device.uniqueId === `${MAC}-tempf`)!;
+      expect(String((fresh.context.device as Record<string, unknown>).structuralSignature)).toContain('battery:1');
+    } finally {
+      rmSync(storageDir(api), { recursive: true, force: true });
+    }
+  });
+
+  it('preserve-cached: an uninferable cached accessory is NEVER unregistered; inferable orphans still are', async () => {
+    const { platform, api } = makePlatform({ _sensorMapV2: true, temperatureSensors: true });
+    // Uninferable: unknown type, dataPoint outside the default map.
+    const mystery = cacheAccessory(platform, `${MAC}-mystery_dp`, 'MysteryFutureType', 'Mystery');
+    // Inferable orphan: a Humidity accessory whose category is off.
+    const humidity = cacheAccessory(platform, `${MAC}-humidity`, 'Humidity', 'Outdoor Humidity', (a) => {
+      const svc = a.addService(MockServices.HumiditySensor);
+      svc.addCharacteristic(MockCharacteristics.CurrentRelativeHumidity);
+    });
+    mockFetch([{ macAddress: MAC, info: { name: 'Home' }, lastData: { tempf: 68, humidity: 40 } }]);
+    stubTimer();
+    try {
+      await reconcile(platform, 'legacy');
+
+      // The uninferable cache is preserved in HomeKit...
+      expect(api.unregistered).not.toContain(mystery);
+      expect(platform.accessories).toContain(mystery);
+      // ...while the inferable disabled-category orphan is removed,
+      // exactly as v1.7 would.
+      expect(api.unregistered).toContain(humidity);
+    } finally {
+      rmSync(storageDir(api), { recursive: true, force: true });
+    }
   });
 });
 

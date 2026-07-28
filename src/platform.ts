@@ -40,6 +40,7 @@ import {
 import { HumidityAccessory } from './humidityAccessory.js';
 import { RealtimeSource } from './realtimeSource.js';
 import { bindSafeMode, type SafeModeBinding } from './safeModeBinding.js';
+import { inferForCachedAccessory } from './sensorMap/bootstrap.js';
 import { coerceValue } from './sensorMap/coerceValue.js';
 import { detectConfigMode, type ConfigMode } from './sensorMap/configMode.js';
 import {
@@ -54,6 +55,11 @@ import {
   cleanupStaleTempFiles,
   loadDiscoveryStore,
 } from './sensorMap/persistence/discoveryStore.js';
+import {
+  NOTICES_FILE,
+  appendNotice,
+  loadNoticeStore,
+} from './sensorMap/persistence/noticesStore.js';
 import { UI_STATE_FILE, loadUiStateStore } from './sensorMap/persistence/uiStateStore.js';
 import {
   buildPlatformEffectiveMap,
@@ -66,13 +72,16 @@ import {
   type StationPayload,
 } from './sensorMap/routing.js';
 import { createShadowMode, shadowModeEnabled, type ShadowMode } from './sensorMap/shadowMode.js';
+import { computeStructuralSignature } from './sensorMap/structuralSignature.js';
 import type {
   DiscoveryStore,
   EffectiveSensorMap,
   EffectiveSensorRow,
   StationRecord,
   UiStateStore,
+  UnrecognizedRow,
 } from './sensorMap/types.js';
+import { wrapperById } from './sensorMap/wrappers.js';
 import { friendlySensorName, sensorKeyByFriendlyName } from './sensorNames.js';
 import { PLATFORM_NAME, PLUGIN_NAME } from './settings.js';
 import { SolarRadiationAccessory } from './solarRadiationAccessory.js';
@@ -141,6 +150,13 @@ function normalizeUniqueId(uniqueId: string): string {
   }
   return uniqueId.slice(0, 17).toUpperCase() + uniqueId.slice(17);
 }
+
+/**
+ * An effective row that is neither unrecognized nor synthetic — the only
+ * shape the v2 reconciler registers. Narrowing once here keeps the
+ * reconcile loop free of repeated `kind === 'unrecognized'` guards.
+ */
+type ConfiguredEffectiveRow = Exclude<EffectiveSensorRow, UnrecognizedRow>;
 
 /**
  * A single AWN station as returned by the REST `/v1/devices` endpoint,
@@ -277,6 +293,11 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
   // that makes `pollAndDistribute` / `distribute` fan values out through
   // `distributeViaRouting` instead of the v1.6.0 uniqueId lookup.
   private v2Routing: Map<string, RoutingEntry> | undefined;
+
+  // Per-session log-once set for preserve-cached accessories (review
+  // P1-2 / sensor-map §17.3): cached accessories whose kind/measurement
+  // can't be inferred are kept, not unregistered, and announced once.
+  private readonly loggedPreservedAccessories = new Set<string>();
 
   // Discovery tracker for the live v2 path (review P1-4): the platform
   // now OWNS the plugin's discovery registry — the shadow observer that
@@ -1155,12 +1176,22 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
    *   3. Assemble the effective sensor map (pure) from the tracker's
    *      merged discovery view — compat overrides for legacy configs,
    *      `config.sensorMap` for v2.
-   *   4. For every enabled, KNOWN, AWN-reported row: build a
-   *      v1.7-compatible `context.device` (so a downgrade finds a
-   *      recognisable cache), restore-or-create its accessory reusing the
-   *      v1.7 UUID, instantiate the row-driven wrapper, and register it.
-   *   5. Build the `(mac, dataPoint) → wrapper` routing map and seed each
-   *      wrapper's current value.
+   *   4. Reconcile the cache (review P1-2): orphans are unregistered
+   *      EXCEPT preserve-cached accessories (kind/measurement not
+   *      inferable — kept with last-known values per §17.3); restored
+   *      accessories have their cached structural signature (stored, or
+   *      derived via `inferForCachedAccessory` + Battery-service
+   *      presence) compared against the row's frozen signature — a
+   *      mismatch re-registers the accessory and records a
+   *      structural-change notice (§8.4/§9) instead of mutating the HAP
+   *      graph in place.
+   *   5. For every enabled, KNOWN, AWN-reported row: build a
+   *      v1.7-compatible `context.device` carrying `type` (downgrade
+   *      cache recognition) plus `kind`/`measurement`/
+   *      `structuralSignature`, restore-or-create its accessory reusing
+   *      the v1.7 UUID, instantiate the row-driven wrapper, and register
+   *      it. Build the `(mac, dataPoint) → wrapper` routing map and seed
+   *      each wrapper's current value.
    *   6. Start the poll / realtime data source; both fan out through
    *      `distributeViaRouting` (see distributeViaV2Routing).
    *
@@ -1225,7 +1256,7 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
 
       // Build v1.7-compatible DEVICE contexts for every enabled, known,
       // AWN-reported row.
-      interface Reconciled { row: EffectiveSensorRow; device: DEVICE; routingUid: string }
+      interface Reconciled { row: ConfiguredEffectiveRow; device: DEVICE; routingUid: string }
       const reconciled: Reconciled[] = [];
       for (const row of effectiveMap.rows) {
         if (row.kind === 'unrecognized' || !row.enabled) {
@@ -1264,8 +1295,35 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
       }
 
       // Unregister cached accessories no longer backed by a reconciled
-      // row (matches by uniqueId — stable across renames).
-      this.deregisterAccessories(reconciled.map(r => r.device));
+      // row (matches by uniqueId — stable across renames) — EXCEPT
+      // preserve-cached accessories (review P1-2 / §17.3): a cached
+      // accessory whose kind + measurement can't be inferred stays in
+      // HomeKit with last-known values rather than being destroyed. It
+      // re-enters normal reconciliation once it becomes inferable (e.g.
+      // AWN starts reporting its dataPoint again) on a later reconcile.
+      const currentUniqueIds = new Set(reconciled.map(r => r.device.uniqueId));
+      const orphans = this.accessories.filter((accessory) => {
+        const uniqueId = accessory.context?.device?.uniqueId;
+        return !uniqueId || !currentUniqueIds.has(uniqueId);
+      });
+      for (const orphan of orphans) {
+        if (inferForCachedAccessory(orphan).status === 'preserve-cached') {
+          const uid = orphan.context?.device?.uniqueId ?? orphan.displayName;
+          if (!this.loggedPreservedAccessories.has(uid)) {
+            this.loggedPreservedAccessories.add(uid);
+            this.log.info(`Preserving cached accessory [${orphan.displayName}]: its sensor kind/measurement `
+              + 'cannot be inferred yet. It stays in HomeKit with last-known values (sensor-map §17.3).');
+          }
+          continue;
+        }
+        this.log.info(`De-registering accessory [${orphan.displayName}]. It was either not found in the API response, `
+          + 'or the sensor type has been disabled in the plugin configuration');
+        this.api.unregisterPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [orphan]);
+        const idx = this.accessories.indexOf(orphan);
+        if (idx >= 0) {
+          this.accessories.splice(idx, 1);
+        }
+      }
 
       // Restore-or-create each accessory. New accessories are registered
       // AFTER wrapper construction (below) so HAP sees the full service
@@ -1273,25 +1331,59 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
       const accessoryByRoutingUid = new Map<string, PlatformAccessory>();
       const deviceByRoutingUid = new Map<string, DEVICE>();
       const newAccessories: PlatformAccessory[] = [];
-      for (const { device, routingUid } of reconciled) {
+      for (const { row, device, routingUid } of reconciled) {
         const uuid = this.api.hap.uuid.generate(device.uniqueId);
         const existingAccessory = this.accessories.find(accessory => accessory.UUID === uuid);
+        // The v2 context retains the legacy `type` (downgrade cache
+        // recognition) ALONGSIDE the row identity fields: `kind`,
+        // `measurement`, and the frozen `structuralSignature` (review
+        // P1-2), so subsequent boots compare signatures instead of
+        // re-deriving from the HAP graph.
+        const v2Context = {
+          ...device,
+          kind: row.kind,
+          measurement: row.measurement,
+          structuralSignature: row.structuralSignature,
+        };
         let accessory: PlatformAccessory;
         if (existingAccessory) {
-          this.log.info('Restoring existing accessory from cache:', existingAccessory.displayName);
-          if (existingAccessory.displayName !== device.displayName) {
-            this.log.info(`Renaming accessory: "${existingAccessory.displayName}" -> "${device.displayName}"`);
-            existingAccessory.displayName = device.displayName;
+          const cachedSignature = this.cachedSignatureFor(existingAccessory, row);
+          if (cachedSignature !== undefined && cachedSignature !== row.structuralSignature) {
+            // Structural change (§9): the cached HAP graph no longer
+            // matches the row's frozen signature (e.g. the user set
+            // `batteryField: null`, detaching the Battery sub-service).
+            // Mutating the graph in place leaves HomeKit clients with a
+            // stale accessory shape — re-register instead, and record a
+            // notice so the UI can explain why room placement was lost.
+            this.log.warn(
+              `Structural change for [${device.displayName}]: `
+              + `"${cachedSignature}" -> "${row.structuralSignature}". Re-registering the accessory.`,
+            );
+            this.api.unregisterPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [existingAccessory]);
+            const idx = this.accessories.indexOf(existingAccessory);
+            if (idx >= 0) {
+              this.accessories.splice(idx, 1);
+            }
+            await this.appendStructuralNoticeV2(row, cachedSignature);
+            accessory = new this.api.platformAccessory(device.displayName, uuid);
+            accessory.context.device = v2Context;
+            newAccessories.push(accessory);
+          } else {
+            this.log.info('Restoring existing accessory from cache:', existingAccessory.displayName);
+            if (existingAccessory.displayName !== device.displayName) {
+              this.log.info(`Renaming accessory: "${existingAccessory.displayName}" -> "${device.displayName}"`);
+              existingAccessory.displayName = device.displayName;
+            }
+            existingAccessory.getService(this.Service.AccessoryInformation)
+              ?.updateCharacteristic(this.Characteristic.Name, device.displayName);
+            existingAccessory.context.device = v2Context;
+            this.api.updatePlatformAccessories([existingAccessory]);
+            accessory = existingAccessory;
           }
-          existingAccessory.getService(this.Service.AccessoryInformation)
-            ?.updateCharacteristic(this.Characteristic.Name, device.displayName);
-          existingAccessory.context.device = device;
-          this.api.updatePlatformAccessories([existingAccessory]);
-          accessory = existingAccessory;
         } else {
           this.log.info('Adding new accessory:', device.displayName);
           accessory = new this.api.platformAccessory(device.displayName, uuid);
-          accessory.context.device = device;
+          accessory.context.device = v2Context;
           newAccessories.push(accessory);
         }
         accessoryByRoutingUid.set(routingUid, accessory);
@@ -1482,13 +1574,21 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
    * safeModeStart first), so safe mode still performs zero persistence
    * reads or writes.
    */
-  private async initV2Persistence(): Promise<{ uiState: UiStateStore }> {
-    const persistDir = path.join(this.api.user.storagePath(), 'plugin-data', 'ambient-weather');
-    const persistLog = {
+  private v2PersistDir(): string {
+    return path.join(this.api.user.storagePath(), 'plugin-data', 'ambient-weather');
+  }
+
+  private v2PersistLog(): { info(m: string): void; warn(m: string): void; debug(m: string): void } {
+    return {
       info: (m: string) => this.log.info(m),
       warn: (m: string) => this.log.warn(m),
       debug: (m: string) => this.log.debug(m),
     };
+  }
+
+  private async initV2Persistence(): Promise<{ uiState: UiStateStore }> {
+    const persistDir = this.v2PersistDir();
+    const persistLog = this.v2PersistLog();
     if (!this.v2Tracker) {
       await cleanupStaleTempFiles(persistDir, persistLog);
       const initial = await loadDiscoveryStore(path.join(persistDir, DISCOVERY_FILE), persistLog);
@@ -1520,6 +1620,52 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
     // Fire-and-forget; the tracker throttles lastSeen-only writes and
     // logs its own failures.
     this.v2Tracker.flush().catch(() => { /* logged internally */ });
+  }
+
+  /**
+   * Resolve the structural signature of a CACHED accessory for
+   * comparison against its row's frozen signature (review P1-2 / §9).
+   *
+   * v2-written caches carry the signature verbatim in
+   * `context.device.structuralSignature`. v1.7-written caches don't —
+   * derive one from the same inputs the signature hashes: inferred
+   * kind + measurement, Battery sub-service presence on the actual HAP
+   * graph, and the row's wrapper descriptor. Derivation necessarily
+   * uses the CURRENT wrapper schemaVersion (the old one is unknowable),
+   * so a schemaVersion bump re-registers only v2-written caches —
+   * v1.7 caches adopt the current version silently. Returns undefined
+   * when nothing can be derived (uninferable cache) — the caller then
+   * adopts the row's signature without re-registration.
+   */
+  private cachedSignatureFor(accessory: PlatformAccessory, row: ConfiguredEffectiveRow): string | undefined {
+    const stored = (accessory.context?.device as { structuralSignature?: unknown } | undefined)?.structuralSignature;
+    if (typeof stored === 'string' && stored.length > 0) {
+      return stored;
+    }
+    const inference = inferForCachedAccessory(accessory);
+    if (inference.status !== 'inferred') {
+      return undefined;
+    }
+    const hasBattery = accessory.getService(this.Service.Battery) !== undefined;
+    return computeStructuralSignature(inference.kind, inference.measurement, hasBattery, wrapperById(row.wrapperId));
+  }
+
+  /**
+   * Record a structural-change notice (sensor-map §8.4) so the UI can
+   * explain why an accessory was re-registered (and its HomeKit room /
+   * automations detached). Best-effort: a persistence failure logs and
+   * never blocks reconciliation.
+   */
+  private async appendStructuralNoticeV2(row: ConfiguredEffectiveRow, oldSignature: string): Promise<void> {
+    try {
+      const persistLog = this.v2PersistLog();
+      const file = path.join(this.v2PersistDir(), NOTICES_FILE);
+      const current = await loadNoticeStore(file, persistLog);
+      await appendNotice(file, current, row.stationMac, row.dataPoint, oldSignature, row.structuralSignature, persistLog);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.log.warn(`Failed to record structural-change notice for ${row.stationMac}|${row.dataPoint}: ${message}`);
+    }
   }
 
   /**

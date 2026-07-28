@@ -168,6 +168,13 @@ function inferKindFromServices(
 }
 
 function kindForServiceUuid(service: ServiceShape): Exclude<SensorKind, 'unrecognized'> | undefined {
+  // Duck-typed input: `services` iterables can yield shapes without a
+  // string UUID (e.g. a Map's [key, value] entries). Treat anything
+  // that isn't a UUID-bearing service as unrecognizable rather than
+  // throwing inside the reconcile loop.
+  if (typeof service?.UUID !== 'string') {
+    return undefined;
+  }
   const uuid = normUuid(service.UUID);
   switch (uuid) {
     case normUuid(HAP_SERVICE_UUIDS.TEMPERATURE_SENSOR):     return 'temperature';

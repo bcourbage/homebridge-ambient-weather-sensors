@@ -68,6 +68,7 @@ export declare class AmbientWeatherSensorsPlatform implements DynamicPlatformPlu
     private readonly shadow;
     private readonly sensorMapV2;
     private v2Routing;
+    private readonly loggedPreservedAccessories;
     private v2Tracker;
     private configMode;
     constructor(log: Logger, config: PlatformConfig, api: API);
@@ -194,12 +195,22 @@ export declare class AmbientWeatherSensorsPlatform implements DynamicPlatformPlu
      *   3. Assemble the effective sensor map (pure) from the tracker's
      *      merged discovery view — compat overrides for legacy configs,
      *      `config.sensorMap` for v2.
-     *   4. For every enabled, KNOWN, AWN-reported row: build a
-     *      v1.7-compatible `context.device` (so a downgrade finds a
-     *      recognisable cache), restore-or-create its accessory reusing the
-     *      v1.7 UUID, instantiate the row-driven wrapper, and register it.
-     *   5. Build the `(mac, dataPoint) → wrapper` routing map and seed each
-     *      wrapper's current value.
+     *   4. Reconcile the cache (review P1-2): orphans are unregistered
+     *      EXCEPT preserve-cached accessories (kind/measurement not
+     *      inferable — kept with last-known values per §17.3); restored
+     *      accessories have their cached structural signature (stored, or
+     *      derived via `inferForCachedAccessory` + Battery-service
+     *      presence) compared against the row's frozen signature — a
+     *      mismatch re-registers the accessory and records a
+     *      structural-change notice (§8.4/§9) instead of mutating the HAP
+     *      graph in place.
+     *   5. For every enabled, KNOWN, AWN-reported row: build a
+     *      v1.7-compatible `context.device` carrying `type` (downgrade
+     *      cache recognition) plus `kind`/`measurement`/
+     *      `structuralSignature`, restore-or-create its accessory reusing
+     *      the v1.7 UUID, instantiate the row-driven wrapper, and register
+     *      it. Build the `(mac, dataPoint) → wrapper` routing map and seed
+     *      each wrapper's current value.
      *   6. Start the poll / realtime data source; both fan out through
      *      `distributeViaRouting` (see distributeViaV2Routing).
      *
@@ -249,6 +260,8 @@ export declare class AmbientWeatherSensorsPlatform implements DynamicPlatformPlu
      * safeModeStart first), so safe mode still performs zero persistence
      * reads or writes.
      */
+    private v2PersistDir;
+    private v2PersistLog;
     private initV2Persistence;
     /**
      * Feed every post-filter (station, dataPoint) pair into the discovery
@@ -257,6 +270,29 @@ export declare class AmbientWeatherSensorsPlatform implements DynamicPlatformPlu
      * discovery.json keeps accumulating under the live path.
      */
     private observeV2Stations;
+    /**
+     * Resolve the structural signature of a CACHED accessory for
+     * comparison against its row's frozen signature (review P1-2 / §9).
+     *
+     * v2-written caches carry the signature verbatim in
+     * `context.device.structuralSignature`. v1.7-written caches don't —
+     * derive one from the same inputs the signature hashes: inferred
+     * kind + measurement, Battery sub-service presence on the actual HAP
+     * graph, and the row's wrapper descriptor. Derivation necessarily
+     * uses the CURRENT wrapper schemaVersion (the old one is unknowable),
+     * so a schemaVersion bump re-registers only v2-written caches —
+     * v1.7 caches adopt the current version silently. Returns undefined
+     * when nothing can be derived (uninferable cache) — the caller then
+     * adopts the row's signature without re-registration.
+     */
+    private cachedSignatureFor;
+    /**
+     * Record a structural-change notice (sensor-map §8.4) so the UI can
+     * explain why an accessory was re-registered (and its HomeKit room /
+     * automations detached). Best-effort: a persistence failure logs and
+     * never blocks reconciliation.
+     */
+    private appendStructuralNoticeV2;
     /**
      * Surface effective-map diagnostics. Config-attributable errors (e.g.
      * a custom row's `no-wrapper` while the resolution table is empty) log
