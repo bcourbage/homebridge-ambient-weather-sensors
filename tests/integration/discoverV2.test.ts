@@ -113,6 +113,12 @@ describe('discoverDevicesV2 — flag OFF stays on the v1.7 path', () => {
       readCharacteristic(c: unknown): unknown;
     };
     expect(svc.readCharacteristic(MockCharacteristics.CurrentTemperature)).toBeCloseTo(F_TO_C(68), 4);
+
+    // No persistence side effects on the flag-off path: the v2 stores
+    // are never loaded, so the plugin-data dir is never created.
+    const storageRoot = ((platform as unknown as { api: { user: { storagePath(): string } } })
+      .api.user.storagePath());
+    expect(existsSync(nodePath.join(storageRoot, 'plugin-data'))).toBe(false);
   });
 });
 
@@ -229,6 +235,31 @@ describe('discoverDevicesV2 — flag ON lifecycle', () => {
     mockFetch([{ macAddress: MAC, info: { name: 'Home' }, lastData: { tempf: 68, battout: 0 } }]);
     await (platform as unknown as { pollAndDistribute(): Promise<void> }).pollAndDistribute();
     expect(battSvc.readCharacteristic(MockCharacteristics.StatusLowBattery)).toBe(1);
+  });
+
+  it('stationFilter drops non-matching stations and post-filter naming is bare (v1 parity)', async () => {
+    // Regression for the adversarial-review finding: the v2 reconciler
+    // must apply stationFilter BEFORE building the inventory, and
+    // isMultiStation must be recomputed post-filter (one station left →
+    // bare tile names), exactly as parseDevices does.
+    const { platform, api } = makePlatform({
+      _sensorMapV2: true, temperatureSensors: true, stationFilter: ['Cabin'],
+    });
+    mockFetch([
+      { macAddress: '11:11:11:11:11:11', info: { name: 'Main House' }, lastData: { tempf: 70 } },
+      { macAddress: '22:22:22:22:22:22', info: { name: 'Cabin' }, lastData: { tempf: 65 } },
+    ]);
+    stubTimer();
+    await reconcile(platform, 'legacy');
+
+    const r = routing(platform)!;
+    expect(r.has('22:22:22:22:22:22|tempf')).toBe(true);
+    expect(r.has('11:11:11:11:11:11|tempf')).toBe(false);
+    // Only the matching station's accessory registered, with a BARE name
+    // (post-filter single station → no station prefix).
+    expect(api.registered).toHaveLength(1);
+    expect(api.registered[0].context.device.uniqueId).toBe('22:22:22:22:22:22-tempf');
+    expect(api.registered[0].context.device.displayName).toBe('Outdoor Temperature');
   });
 
   it('pressure naming pins display name, AccessoryInformation Name/Model, and MotionSensor Name/ConfiguredName', async () => {

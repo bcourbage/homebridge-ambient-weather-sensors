@@ -208,6 +208,19 @@ export declare class AmbientWeatherSensorsPlatform implements DynamicPlatformPlu
      */
     private discoverDevicesV2;
     /**
+     * v2 twin of parseDevices' station-level filtering. Announces each
+     * discovered station once per restart (users learn the exact
+     * `stationFilter` strings from these lines), then applies the filter
+     * with v1's matching rules (info.name OR MAC, case-insensitive,
+     * whitespace-trimmed). Log strings and the per-session log-once sets
+     * are shared with the v1 path verbatim — only one path runs per boot,
+     * so the sets never collide. `stationFilter` is applied uniformly in
+     * legacy AND v2 config modes: it's a platform-instance concern (multi-
+     * Home child bridges), not a sensor-map concern, and configMode
+     * detection deliberately doesn't classify it as a legacy toggle.
+     */
+    private applyStationFilterV2;
+    /**
      * Fetch the raw AWN station payloads for the v2 path. Same endpoint,
      * throttle handling, and content-type guard as `fetchDevices`, but
      * returns the un-parsed per-station shape (macAddress + info + lastData)

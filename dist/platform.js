@@ -962,14 +962,22 @@ export class AmbientWeatherSensorsPlatform {
      */
     async discoverDevicesV2() {
         try {
-            const rawStations = await this.fetchRawStations();
-            if (!rawStations) {
+            const fetched = await this.fetchRawStations();
+            if (!fetched) {
                 this.log.debug('No devices returned from the AWN API. Retrying in 60 seconds');
                 await this.sleep(60000);
                 return this.discoverDevicesV2();
             }
-            // Station inventory (every station AWN returned). isMultiStation
-            // drives the displayName recipe exactly as the v1.6.0 path does.
+            // Apply stationFilter at the station level BEFORE building the
+            // inventory — v1 parity (parseDevices filters stations first, and
+            // the shadow observer received the post-filter inventory). Without
+            // this, a multi-Home child-bridge setup would register EVERY
+            // station's accessories on each instance.
+            const rawStations = this.applyStationFilterV2(fetched);
+            // Station inventory (post-filter). isMultiStation drives the
+            // displayName recipe exactly as the v1.6.0 path does — recomputed
+            // AFTER stationFilter so a one-station-per-instance multi-Home
+            // setup gets bare tile names.
             const stations = rawStations.map(s => ({
                 macAddress: s.macAddress,
                 name: s.info?.name ?? '',
@@ -1092,6 +1100,58 @@ export class AmbientWeatherSensorsPlatform {
             const message = error instanceof Error ? error.message : String(error);
             this.log.error('ERROR:', message);
         }
+    }
+    /**
+     * v2 twin of parseDevices' station-level filtering. Announces each
+     * discovered station once per restart (users learn the exact
+     * `stationFilter` strings from these lines), then applies the filter
+     * with v1's matching rules (info.name OR MAC, case-insensitive,
+     * whitespace-trimmed). Log strings and the per-session log-once sets
+     * are shared with the v1 path verbatim — only one path runs per boot,
+     * so the sets never collide. `stationFilter` is applied uniformly in
+     * legacy AND v2 config modes: it's a platform-instance concern (multi-
+     * Home child bridges), not a sensor-map concern, and configMode
+     * detection deliberately doesn't classify it as a legacy toggle.
+     */
+    applyStationFilterV2(stations) {
+        for (const station of stations) {
+            if (!this.loggedDiscoveredStations.has(station.macAddress)) {
+                const sensorCount = Object.keys(station.lastData ?? {}).length;
+                this.log.info(`Discovered station "${station.info?.name ?? '(unnamed)'}" `
+                    + `(MAC: ${station.macAddress}) — ${sensorCount} sensor fields reported`);
+                this.loggedDiscoveredStations.add(station.macAddress);
+            }
+        }
+        const stationMatchers = toMatcherSet(this.config.stationFilter);
+        if (stationMatchers.size === 0) {
+            return stations;
+        }
+        const matched = [];
+        for (const station of stations) {
+            const nameKey = normalizeMatchKey(station.info?.name ?? '');
+            const macKey = normalizeMatchKey(station.macAddress ?? '');
+            const hit = (nameKey.length > 0 && stationMatchers.has(nameKey))
+                || (macKey.length > 0 && stationMatchers.has(macKey));
+            if (hit) {
+                matched.push(station);
+            }
+            else if (!this.loggedStationFilterDrops.has(station.macAddress)) {
+                this.log.info(`Station "${station.info?.name ?? '(unnamed)'}" (MAC: ${station.macAddress}) `
+                    + 'filtered out by stationFilter');
+                this.loggedStationFilterDrops.add(station.macAddress);
+            }
+        }
+        if (matched.length === 0 && !this.warnedStationFilterEmpty) {
+            this.log.warn(`stationFilter is set but matched zero stations in the AWN response. `
+                + `Filter values: [${[...stationMatchers].join(', ')}]. No accessories will be exposed by this platform instance.`);
+            this.warnedStationFilterEmpty = true;
+        }
+        else if (matched.length > 0 && !this.loggedStationFilterSummary) {
+            this.log.info(`stationFilter active: [${[...stationMatchers].join(', ')}] — `
+                + `${matched.length} of ${stations.length} station(s) passed`);
+            this.loggedStationFilterSummary = true;
+        }
+        return matched;
     }
     /**
      * Fetch the raw AWN station payloads for the v2 path. Same endpoint,
@@ -1560,7 +1620,12 @@ export class AmbientWeatherSensorsPlatform {
         if (this.v2Routing) {
             const stations = await this.fetchRawStations();
             if (stations) {
-                this.distributeViaV2Routing(stations.map(s => ({ macAddress: s.macAddress, lastData: s.lastData })));
+                // Filter every tick, like v1's parseDevices does: announces
+                // stations that appear mid-session and keeps a filtered-out
+                // station's payload from ever reaching the router (its rows
+                // aren't in the routing map anyway — defense in depth).
+                this.distributeViaV2Routing(this.applyStationFilterV2(stations)
+                    .map(s => ({ macAddress: s.macAddress, lastData: s.lastData })));
             }
             return;
         }
