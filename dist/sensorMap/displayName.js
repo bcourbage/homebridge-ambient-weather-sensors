@@ -72,14 +72,50 @@ export function composeRowDisplayName(station, rowName, isMultiStation) {
     return truncateHapName(hapClean(`${baseName} ${label}`));
 }
 /**
- * Right-truncate to HAP 2.x's 64-char Name limit. Exported (review
- * R4-2) so EVERY HAP string sink shares the one policy — the extended
- * sensors' service names (`composeStaticName` / `composeEmbeddedName`)
- * and the `AccessoryInformation.Model` assignment, not just the
- * accessory displayName. Deliberately does NOT sanitize: Model keeps
- * characters like parentheses that tile names strip.
+ * Right-truncate to HAP 2.x's 64-char (UTF-16 code unit) Name limit.
+ * Exported (review R4-2) so EVERY HAP string sink shares the one policy
+ * — the extended sensors' service names (`composeStaticName` /
+ * `composeEmbeddedName`) and the `AccessoryInformation.Model`
+ * assignment, not just the accessory displayName. Deliberately does NOT
+ * sanitize: Model keeps characters like parentheses that tile names
+ * strip.
+ *
+ * R5-2 hardening: leading/trailing whitespace is trimmed BEFORE
+ * truncation (70 spaces + a name previously truncated to all-spaces →
+ * empty), and the cut is code-point-aware — a naive UTF-16 slice at the
+ * limit can split a surrogate pair and leave an unpaired high surrogate
+ * at an emoji boundary. The result always fits the 64-code-unit limit.
  */
 export function truncateHapName(name) {
-    return name.length <= HAP_NAME_MAX ? name : name.slice(0, HAP_NAME_MAX).trim();
+    const trimmed = name.trim();
+    if (trimmed.length <= HAP_NAME_MAX) {
+        return trimmed;
+    }
+    let cut = trimmed.slice(0, HAP_NAME_MAX);
+    const last = cut.charCodeAt(cut.length - 1);
+    if (last >= 0xd800 && last <= 0xdbff) {
+        // Unpaired high surrogate: the slice split a code point. Drop it.
+        cut = cut.slice(0, -1);
+    }
+    return cut.trim();
+}
+/**
+ * Normalize a string for HAP's `AccessoryInformation.Model`
+ * characteristic (review R5-2). Model shares the 64-unit ceiling but
+ * ALSO has a floor: HAP-NodeJS rejects values shorter than 2 characters
+ * and silently keeps "Default-Model". Validation accepts a
+ * one-character row name ("X") — legal as a tile name — so the Model
+ * sink needs its own fallback chain: the truncated label if it still
+ * has ≥ 2 characters, else the fallback (the row's dataPoint / AWN key,
+ * always ≥ 2 in the AWN vocabulary), else a generic constant. Never
+ * sanitized — parentheses etc. are Model-legal.
+ */
+export function hapModelValue(label, fallback) {
+    const primary = truncateHapName(label);
+    if (primary.length >= 2) {
+        return primary;
+    }
+    const secondary = truncateHapName(fallback);
+    return secondary.length >= 2 ? secondary : 'Ambient Weather Sensor';
 }
 //# sourceMappingURL=displayName.js.map

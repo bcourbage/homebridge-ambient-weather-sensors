@@ -224,9 +224,14 @@ describe('DiscoveryTracker — write serialization (review R4-1)', () => {
     }) as never);
 
     try {
-      // Write #1 starts (snapshot: [a]) and stalls at its rename.
+      // Write #1 starts (snapshot: [a]) and stalls at its rename. Wait
+      // until it has actually TAKEN its snapshot (payload recorded) so
+      // the later observation deterministically lands mid-write — the
+      // chain defers doFlush to a microtask, and observing earlier
+      // would (correctly) coalesce everything into one write.
       t.observe('AA:BB:CC:DD:EE:01', 'Home', 'a');
       const f1 = t.flush();
+      await vi.waitFor(() => expect(payloadSizes).toHaveLength(1));
       // Observation lands DURING the in-flight write...
       t.observe('AA:BB:CC:DD:EE:01', 'Home', 'b');
       // ...and both a normal poll flush and a shutdown-style forced
@@ -239,6 +244,10 @@ describe('DiscoveryTracker — write serialization (review R4-1)', () => {
 
       // Strictly serialized: never more than one rename in flight.
       expect(maxInFlight).toBe(1);
+      // Coalesced (R5-3): write #1 ([a]) + the queued flush ([a,b]).
+      // The forced flush behind them found nothing pending and wrote
+      // NOTHING — force bypasses the throttle, not the no-work check.
+      expect(payloadSizes).toEqual([1, 2]);
       // Monotone: no write ever carried FEWER entries than one queued
       // before it (an older snapshot can no longer land last).
       for (let i = 1; i < payloadSizes.length; i += 1) {
@@ -251,5 +260,25 @@ describe('DiscoveryTracker — write serialization (review R4-1)', () => {
     } finally {
       spy.mockRestore();
     }
+  });
+});
+
+describe('DiscoveryTracker — forced-flush coalescing (review R5-3)', () => {
+  it('a forced flush with nothing pending performs no redundant write', async () => {
+    const p = path.join(tmpRoot, 'd.json');
+    const t = new DiscoveryTracker({ filePath: p, log: silentLog });
+
+    t.observe('AA:BB:CC:DD:EE:01', 'Home', 'tempf');
+    await t.flush();                                  // persists everything
+    const before = (await fs.stat(p)).mtimeMs;
+    await new Promise(r => setTimeout(r, 5));         // ensure an mtime delta would show
+
+    await t.flush(true);                              // shutdown-style force, nothing pending
+    expect((await fs.stat(p)).mtimeMs).toBe(before);  // coalesced: no write
+
+    // But force still bypasses the THROTTLE when work IS pending.
+    t.observe('AA:BB:CC:DD:EE:01', 'Home', 'tempf');  // lastSeen-only, inside the window
+    await t.flush(true);
+    expect((await fs.stat(p)).mtimeMs).not.toBe(before);
   });
 });

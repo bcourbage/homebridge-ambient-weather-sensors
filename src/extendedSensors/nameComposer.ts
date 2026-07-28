@@ -18,7 +18,7 @@
  * deliberately avoid that by using a plain space as the separator.
  */
 
-import { truncateHapName } from '../sensorMap/displayName.js';
+import { HAP_NAME_MAX, truncateHapName } from '../sensorMap/displayName.js';
 
 /** Characters allowed in a tile name. Anything else is stripped. */
 const SAFE_CHARS_REGEX = /[^A-Za-z0-9 '\-.]/g;
@@ -65,10 +65,24 @@ export function composeStaticName(sensorLabel: string): string {
  * aren't constrained by tile-name validation.
  */
 export function composeEmbeddedName(sensorLabel: string, valueStr: string): string {
-  // Truncate AFTER appending the value (review R4-2) so the combined
-  // label + reading also respects HAP's 64-char Name limit; the label
-  // gets right-truncated in preference to overflowing.
-  return truncateHapName(sanitizeForTileName(`${sensorLabel} ${valueStr}`));
+  // Embed mode's entire purpose is showing the READING on the tile, so
+  // the value must survive truncation (review R5-1): sanitize label and
+  // value separately, reserve room for the value suffix, and truncate
+  // only the LABEL to fit HAP's 64-char Name limit.
+  const label = sanitizeForTileName(sensorLabel);
+  const value = sanitizeForTileName(valueStr);
+  if (value.length === 0) {
+    return truncateHapName(label);
+  }
+  const suffix = ` ${value}`;
+  if (suffix.length >= HAP_NAME_MAX) {
+    // Degenerate: the reading alone exceeds the limit — keep as much
+    // of it as fits rather than emitting nothing.
+    return truncateHapName(value);
+  }
+  const room = HAP_NAME_MAX - suffix.length;
+  const head = label.length <= room ? label : label.slice(0, room).trim();
+  return head.length > 0 ? `${head}${suffix}` : truncateHapName(value);
 }
 
 /**

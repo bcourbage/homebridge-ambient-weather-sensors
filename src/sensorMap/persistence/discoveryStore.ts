@@ -164,8 +164,11 @@ export class DiscoveryTracker {
   }
 
   /**
-   * Flush to disk if a write is due. `force: true` bypasses throttling
-   * (SIGTERM path). Fire-and-forget by default — errors log a warn but
+   * Flush to disk if a write is due. `force: true` bypasses the
+   * lastSeen THROTTLE (SIGTERM path) — but not the no-pending check: a
+   * flush (forced or not) queued behind one that already persisted
+   * every pending observation returns without a redundant write
+   * (review R5-3). Fire-and-forget by default — errors log a warn but
    * don't propagate; callers who need to observe completion await the
    * return value.
    */
@@ -188,11 +191,16 @@ export class DiscoveryTracker {
    */
   private async doFlush(force: boolean): Promise<void> {
     const now = this.clock.now();
+    // Nothing pending — a predecessor in the chain already persisted
+    // everything, so writing again would be byte-identical redundant
+    // I/O. This coalescing applies to FORCED flushes too (review R5-3):
+    // `force` bypasses only the lastSeen THROTTLE below, never the
+    // no-work check — shutdown's force-flush behind a poll flush that
+    // just wrote becomes a no-op.
+    if (!this.pendingStructural && !this.pendingLastSeenOnly) {
+      return;
+    }
     if (!force) {
-      if (!this.pendingStructural && !this.pendingLastSeenOnly) {
-        // Nothing pending — a predecessor in the chain already wrote it.
-        return;
-      }
       // The 15-minute throttle applies ONLY to lastSeen-only work.
       // Structural discoveries (new pairs) always write immediately —
       // even when the same tick also refreshed existing entries (R3-7).
