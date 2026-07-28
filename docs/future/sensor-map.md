@@ -357,11 +357,17 @@ Two things the example above makes explicit (they matter for Stage 4 — do not 
 - **`name` mirrors the v1.7 service label exactly.** The pressure rows are
   `'Pressure (Station)'` / `'Pressure (Sea Level)'` (with parentheses), because
   the extended wrappers derive their label from `row.name` (`row?.name ??
-  legacyLabel`) and the Model characteristic uses the raw label. A default
-  known row must therefore reproduce the v1.7 label byte-for-byte, or the
-  migration renames existing accessories. (The sanitized accessory *display*
-  name — via `composeStaticName`, which strips the parentheses — stays
-  `Pressure Station`; only the extended-service label keeps them.)
+  legacyLabel`) and the `AccessoryInformation.Model` characteristic uses the
+  raw label. A default known row must therefore reproduce the v1.7 label
+  byte-for-byte, or the migration renames existing accessories. Precisely,
+  for `baromabsin` the v1.7.0 golden-parity test locks two distinct strings:
+  `AccessoryInformation.Model = "Pressure (Station)"` (raw label, parens kept)
+  and the MotionSensor service `Name` / `ConfiguredName = "Pressure Station"`
+  (via `composeStaticName`, which strips the parentheses). The golden harness
+  pins the accessory's own name to a fixed value, so it does NOT exercise the
+  platform-supplied `PlatformAccessory.displayName` or the real
+  `AccessoryInformation.Name` — the Stage 4 platform-lifecycle test is the gate
+  for those.
 
 - **`threshold` on the built-in default row is set ONLY for the families whose
   v1.7 default fired without user config** — rain-accumulation (`0.01`) and
