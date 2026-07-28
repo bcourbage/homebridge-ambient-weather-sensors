@@ -2,7 +2,7 @@ import { promises as fs } from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { Clock, Logger } from '../../../../src/sensorMap/persistence/atomicWrite';
 import {
@@ -189,5 +189,67 @@ describe('DiscoveryTracker — structural flush is never throttled (review R3-7)
     t.observe('AA:BB:CC:DD:EE:01', 'Home', 'tempf');       // existing only
     await t.flush();
     expect((await fs.stat(p)).mtimeMs).toBe(before);        // throttled, no write
+  });
+});
+
+describe('DiscoveryTracker — write serialization (review R4-1)', () => {
+  it('overlapping normal + forced flushes never overwrite a newer snapshot with an older one', async () => {
+    const p = path.join(tmpRoot, 'd.json');
+    const t = new DiscoveryTracker({ filePath: p, log: silentLog });
+
+    // Deterministic delayed-rename harness: hold the FIRST write's
+    // rename open while more observations and flushes pile up, record
+    // every write's payload size and the max rename concurrency.
+    const realRename = fs.rename.bind(fs);
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const payloadSizes: number[] = [];
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    let renameCalls = 0;
+    const spy = vi.spyOn(fs, 'rename').mockImplementation((async (src: string, dest: string) => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      try {
+        const body = JSON.parse(await fs.readFile(src, 'utf8')) as { entries: unknown[] };
+        payloadSizes.push(body.entries.length);
+        renameCalls += 1;
+        if (renameCalls === 1) {
+          await firstGate;                    // hold write #1 mid-flight
+        }
+        return await realRename(src, dest);
+      } finally {
+        inFlight -= 1;
+      }
+    }) as never);
+
+    try {
+      // Write #1 starts (snapshot: [a]) and stalls at its rename.
+      t.observe('AA:BB:CC:DD:EE:01', 'Home', 'a');
+      const f1 = t.flush();
+      // Observation lands DURING the in-flight write...
+      t.observe('AA:BB:CC:DD:EE:01', 'Home', 'b');
+      // ...and both a normal poll flush and a shutdown-style forced
+      // flush arrive while write #1 is still open — the exact overlap
+      // that previously released both waiters into concurrent writes.
+      const f2 = t.flush();
+      const f3 = t.flush(true);
+      releaseFirst();
+      await Promise.all([f1, f2, f3]);
+
+      // Strictly serialized: never more than one rename in flight.
+      expect(maxInFlight).toBe(1);
+      // Monotone: no write ever carried FEWER entries than one queued
+      // before it (an older snapshot can no longer land last).
+      for (let i = 1; i < payloadSizes.length; i += 1) {
+        expect(payloadSizes[i]).toBeGreaterThanOrEqual(payloadSizes[i - 1]);
+      }
+      // Disk ends equal to memory.
+      const disk = await loadDiscoveryStore(p, silentLog);
+      expect(disk.entries.map(e => e.dataPoint).sort()).toEqual(['a', 'b']);
+      expect(disk.entries).toHaveLength(t.snapshot().entries.length);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

@@ -46,7 +46,7 @@ export declare class DiscoveryTracker {
     private lastFlushAt;
     private pendingLastSeenOnly;
     private pendingStructural;
-    private inflight;
+    private writeChain;
     constructor(opts: TrackerOptions);
     /**
      * Record an observation. Returns true if this call would trigger a
@@ -66,6 +66,14 @@ export declare class DiscoveryTracker {
      * return value.
      */
     flush(force?: boolean): Promise<void>;
+    /**
+     * The serialized body — only ever one execution in flight, in strict
+     * enqueue order. Pending state and the snapshot are read AT THIS
+     * FLUSH'S TURN, so a queued flush behind a write that already
+     * persisted everything simply returns, and a write can never carry an
+     * older snapshot than a write queued before it.
+     */
+    private doFlush;
 }
 export { cleanupStaleTempFiles };
 //# sourceMappingURL=discoveryStore.d.ts.map

@@ -72,7 +72,16 @@ export class DiscoveryTracker {
         // or shutdown (lost entirely on a crash). Structural work always
         // flushes immediately.
         this.pendingStructural = false;
-        this.inflight = null;
+        // Write MUTEX (review R4-1): every flush is appended to this promise
+        // chain, so at most ONE write is ever in flight and writes land in
+        // strict enqueue order. The previous await-the-inflight-then-proceed
+        // shape released ALL waiters at once — a normal poll flush and
+        // shutdown's forced flush could both start writes after the same
+        // await, and the OLDER snapshot could finish last, overwriting the
+        // newer one on disk. Each queued flush re-evaluates pending state and
+        // takes its snapshot only when its turn comes, so it always writes
+        // the newest state (or returns because a predecessor already did).
+        this.writeChain = Promise.resolve();
         this.filePath = opts.filePath;
         this.log = opts.log;
         this.clock = opts.clock ?? REAL_CLOCK;
@@ -126,50 +135,51 @@ export class DiscoveryTracker {
      * return value.
      */
     async flush(force = false) {
-        // Serialize concurrent flushes.
-        if (this.inflight) {
-            await this.inflight;
-            if (!force && !this.pendingLastSeenOnly && !this.pendingStructural) {
+        // Append to the write chain (mutex). `.catch` on the tail keeps a
+        // failed write from poisoning the chain for later flushes; the
+        // returned promise still reflects THIS flush's outcome (doFlush
+        // logs its own failures and never rejects).
+        const run = this.writeChain.then(() => this.doFlush(force));
+        this.writeChain = run.catch(() => { });
+        return run;
+    }
+    /**
+     * The serialized body — only ever one execution in flight, in strict
+     * enqueue order. Pending state and the snapshot are read AT THIS
+     * FLUSH'S TURN, so a queued flush behind a write that already
+     * persisted everything simply returns, and a write can never carry an
+     * older snapshot than a write queued before it.
+     */
+    async doFlush(force) {
+        const now = this.clock.now();
+        if (!force) {
+            if (!this.pendingStructural && !this.pendingLastSeenOnly) {
+                // Nothing pending — a predecessor in the chain already wrote it.
                 return;
             }
-        }
-        const now = this.clock.now();
-        // The 15-minute throttle applies ONLY to lastSeen-only work.
-        // Structural discoveries (new pairs) always write immediately —
-        // even when the same tick also refreshed existing entries (R3-7).
-        if (!force && !this.pendingStructural && this.pendingLastSeenOnly) {
-            if (now - this.lastFlushAt < this.lastSeenIntervalMs) {
+            // The 15-minute throttle applies ONLY to lastSeen-only work.
+            // Structural discoveries (new pairs) always write immediately —
+            // even when the same tick also refreshed existing entries (R3-7).
+            if (!this.pendingStructural && now - this.lastFlushAt < this.lastSeenIntervalMs) {
                 return;
             }
         }
         // Capture-and-clear the pending flags SYNCHRONOUSLY, in the same
-        // tick the snapshot is taken. Clearing them when the write FINISHES
-        // (the previous shape) lost updates: an observe() landing between
-        // this write's snapshot and its completion would set a flag that
-        // the completion then wiped — a structural discovery could vanish
-        // from the pending state without ever reaching disk (surfaced by
-        // the R3-7 tests). On failure the captured work is restored.
+        // tick the snapshot is taken (R3-7): an observe() landing during
+        // the write sets fresh flags that the next queued flush picks up.
+        // On failure the captured work is restored so it isn't lost.
         const hadLastSeen = this.pendingLastSeenOnly;
         const hadStructural = this.pendingStructural;
         this.pendingLastSeenOnly = false;
         this.pendingStructural = false;
-        const p = (async () => {
-            try {
-                await saveDiscoveryStore(this.filePath, this.snapshot(), this.log);
-                this.lastFlushAt = now;
-            }
-            catch (e) {
-                this.pendingLastSeenOnly = this.pendingLastSeenOnly || hadLastSeen;
-                this.pendingStructural = this.pendingStructural || hadStructural;
-                this.log.warn(`Discovery store flush failed: ${e.message}`);
-            }
-        })();
-        this.inflight = p;
         try {
-            await p;
+            await saveDiscoveryStore(this.filePath, this.snapshot(), this.log);
+            this.lastFlushAt = now;
         }
-        finally {
-            this.inflight = null;
+        catch (e) {
+            this.pendingLastSeenOnly = this.pendingLastSeenOnly || hadLastSeen;
+            this.pendingStructural = this.pendingStructural || hadStructural;
+            this.log.warn(`Discovery store flush failed: ${e.message}`);
         }
     }
 }
