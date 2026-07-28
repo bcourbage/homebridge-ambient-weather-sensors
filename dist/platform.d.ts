@@ -68,6 +68,7 @@ export declare class AmbientWeatherSensorsPlatform implements DynamicPlatformPlu
     private readonly shadow;
     private readonly sensorMapV2;
     private v2Routing;
+    private v2EffectiveMap;
     private readonly loggedPreservedAccessories;
     private v2Tracker;
     private configMode;
@@ -304,15 +305,18 @@ export declare class AmbientWeatherSensorsPlatform implements DynamicPlatformPlu
      */
     private logEffectiveMapDiagnostics;
     /**
-     * v2 value distribution. Sensor VALUES go through the Stage-3 routing
-     * mechanism (`distributeViaRouting`); the BATTERY bridge handles the
-     * standalone batt* datapoints the router deliberately ignores.
+     * v2 value distribution — the single boundary BOTH transports
+     * converge on: polling delivers raw station payloads here directly,
+     * and realtime reconstructs its per-update stream back into the same
+     * payload shape (`updatesToStationPayloads`) first.
      *
-     * Until the shared `resolveBatteryField` helper lands (a later Stage-4
-     * commit), the bridge preserves the legacy known-field battery path:
-     * for every row that owns a Battery sub-service it reads the row's
-     * already-resolved `batteryField` off the same payload and pushes
-     * HomeKit's `true = low` boolean, so battery updates don't regress.
+     * Sensor VALUES go through the Stage-3 routing mechanism
+     * (`distributeViaRouting`); the standalone batt* datapoints the
+     * router deliberately ignores are read per routing entry through the
+     * shared `resolveBatteryField(effectiveMap, mac, dp)` reader — the
+     * same ownership-adjudicated authority the wrapper's Battery
+     * sub-service was built from — and pushed as HomeKit's `true = low`
+     * boolean.
      */
     private distributeViaV2Routing;
     /**
@@ -321,7 +325,7 @@ export declare class AmbientWeatherSensorsPlatform implements DynamicPlatformPlu
      * through the SAME `distributeViaRouting` boundary the poll path uses.
      * The realtime source emits every numeric field — including the batt*
      * fields — as its own update, so the reconstructed `lastData` carries
-     * the battery datapoints the bridge needs.
+     * the battery datapoints the shared battery reader consumes.
      */
     private updatesToStationPayloads;
     /**

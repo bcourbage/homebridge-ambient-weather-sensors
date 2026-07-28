@@ -223,10 +223,14 @@ export class RealtimeSource {
                 }
                 // Bundle the corresponding probe battery state with each
                 // sensor's update so the wrapper's Battery sub-service stays
-                // synchronized with the value updates. readBatteryLow already
-                // inverts AWN's 0=low/1=good polarity to HomeKit's
-                // true=low/false=normal convention.
-                const batteryField = batteryFieldForSensor(key);
+                // synchronized with the value updates. Field resolution goes
+                // through the platform-injected shared reader when provided
+                // (row-aware in v2 mode); readBatteryLow already inverts AWN's
+                // 0=low/1=good polarity to HomeKit's true=low/false=normal
+                // convention.
+                const batteryField = this.opts.resolveBatteryField
+                    ? this.opts.resolveBatteryField(macAddress, key) ?? undefined
+                    : batteryFieldForSensor(key);
                 const batteryLow = readBatteryLow(lastData, batteryField);
                 updates.push({
                     uniqueId: `${macAddress}-${key}`,

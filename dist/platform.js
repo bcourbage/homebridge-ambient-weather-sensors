@@ -25,6 +25,7 @@ import { NOTICES_FILE, appendNotice, loadNoticeStore, } from './sensorMap/persis
 import { UI_STATE_FILE, loadUiStateStore } from './sensorMap/persistence/uiStateStore.js';
 import { buildPlatformEffectiveMap, sensorMapShapeError, } from './sensorMap/platformEffectiveMap.js';
 import { buildWrapperRouting, distributeViaRouting, routingKey, } from './sensorMap/routing.js';
+import { resolveBatteryField } from './sensorMap/resolveBatteryField.js';
 import { createShadowMode, shadowModeEnabled } from './sensorMap/shadowMode.js';
 import { computeStructuralSignature } from './sensorMap/structuralSignature.js';
 import { wrapperById } from './sensorMap/wrappers.js';
@@ -696,8 +697,10 @@ export class AmbientWeatherSensorsPlatform {
                     // tiles in Apple Home (one per accessory); with dedup,
                     // each physical probe shows ONE battery status on its
                     // most representative sensor (canonical mapping in
-                    // batteryFields.ts).
-                    const batteryField = batteryFieldForSensor(sensorKey);
+                    // batteryFields.ts). Resolution goes through the shared
+                    // reader: with the v2 flag off `v2EffectiveMap` is always
+                    // undefined, so this is exactly the v1.6.0 static lookup.
+                    const batteryField = resolveBatteryField(this.v2EffectiveMap, obj.macAddress, sensorKey) ?? undefined;
                     const batteryLow = (batteryField
                         && isCanonicalSensorForBattery(sensorKey, batteryField)
                         && !suppressedBatteries.has(batteryField))
@@ -1199,6 +1202,10 @@ export class AmbientWeatherSensorsPlatform {
                 errors: [], warnings: [], notes: [],
             };
             this.v2Routing = buildWrapperRouting(this, reconciledMap, (uid) => accessoryByRoutingUid.get(uid));
+            // Retain the reconciled map for the shared battery-field reader —
+            // every routing entry's row is in it, so runtime resolution always
+            // finds the same adjudicated row the wrapper was built from.
+            this.v2EffectiveMap = reconciledMap;
             // Seed each freshly-constructed wrapper with its current value so
             // HomeKit has something to display before the first poll/realtime
             // tick. This is the ONLY seed path for extended wrappers — their
@@ -1592,15 +1599,18 @@ export class AmbientWeatherSensorsPlatform {
         }
     }
     /**
-     * v2 value distribution. Sensor VALUES go through the Stage-3 routing
-     * mechanism (`distributeViaRouting`); the BATTERY bridge handles the
-     * standalone batt* datapoints the router deliberately ignores.
+     * v2 value distribution — the single boundary BOTH transports
+     * converge on: polling delivers raw station payloads here directly,
+     * and realtime reconstructs its per-update stream back into the same
+     * payload shape (`updatesToStationPayloads`) first.
      *
-     * Until the shared `resolveBatteryField` helper lands (a later Stage-4
-     * commit), the bridge preserves the legacy known-field battery path:
-     * for every row that owns a Battery sub-service it reads the row's
-     * already-resolved `batteryField` off the same payload and pushes
-     * HomeKit's `true = low` boolean, so battery updates don't regress.
+     * Sensor VALUES go through the Stage-3 routing mechanism
+     * (`distributeViaRouting`); the standalone batt* datapoints the
+     * router deliberately ignores are read per routing entry through the
+     * shared `resolveBatteryField(effectiveMap, mac, dp)` reader — the
+     * same ownership-adjudicated authority the wrapper's Battery
+     * sub-service was built from — and pushed as HomeKit's `true = low`
+     * boolean.
      */
     distributeViaV2Routing(stations) {
         const routing = this.v2Routing;
@@ -1613,18 +1623,19 @@ export class AmbientWeatherSensorsPlatform {
             lastDataByMac.set(s.macAddress.toUpperCase(), s.lastData);
         }
         for (const entry of routing.values()) {
-            const row = entry.row;
-            if (row.kind === 'unrecognized' || !row.hasBatterySubService || !row.batteryField) {
-                continue;
-            }
             if (!entry.wrapper.setBatteryLow) {
                 continue;
             }
-            const lastData = lastDataByMac.get(row.stationMac);
+            const row = entry.row;
+            const field = resolveBatteryField(this.v2EffectiveMap, row.stationMac, row.dataPoint);
+            if (!field) {
+                continue;
+            }
+            const lastData = lastDataByMac.get(row.stationMac.toUpperCase());
             if (!lastData) {
                 continue;
             }
-            const low = readBatteryLow(lastData, row.batteryField);
+            const low = readBatteryLow(lastData, field);
             if (low !== undefined) {
                 entry.wrapper.setBatteryLow(low);
             }
@@ -1636,7 +1647,7 @@ export class AmbientWeatherSensorsPlatform {
      * through the SAME `distributeViaRouting` boundary the poll path uses.
      * The realtime source emits every numeric field — including the batt*
      * fields — as its own update, so the reconstructed `lastData` carries
-     * the battery datapoints the bridge needs.
+     * the battery datapoints the shared battery reader consumes.
      */
     updatesToStationPayloads(updates) {
         const byMac = new Map();
@@ -1957,6 +1968,11 @@ export class AmbientWeatherSensorsPlatform {
             applicationKey: this.config.applicationKey,
             log: this.log,
             onUpdates: (updates) => this.distribute(updates),
+            // Shared battery-field reader (lazy: reads the member at each
+            // resolution, so a reconcile that rebuilds the effective map is
+            // picked up without reconstructing the socket). Flag off →
+            // undefined map → the reader IS the legacy static lookup.
+            resolveBatteryField: (mac, dp) => resolveBatteryField(this.v2EffectiveMap, mac, dp),
         });
         this.realtimeSource.start();
     }
@@ -1968,7 +1984,7 @@ export class AmbientWeatherSensorsPlatform {
     async pollAndDistribute() {
         // v2 path: fetch raw stations and route them straight through
         // distributeViaRouting (which needs the un-parsed lastData — including
-        // the batt* fields parseDevices drops — for the battery bridge).
+        // the batt* fields parseDevices drops — for the battery reads).
         if (this.v2Routing) {
             const stations = await this.fetchRawStations();
             if (stations) {

@@ -735,30 +735,32 @@ the wrapper: the sub-service still exists, `StatusLowBattery` reads
 NORMAL initially, and the next tick's battery value flows through
 `setBatteryLow` normally.
 
-**4. Runtime updates.** Polling and realtime are TWO independent
-sources today and neither goes through a single shared reader.
-Polling calls `batteryFieldForSensor(sensorKey)` inside
-`parseDevices`; `RealtimeSource` (in `src/realtime/*.ts`)
-independently calls the same helper. A custom `batteryField` fixes
-polling if we swap that one lookup for `row.batteryField`, but
-realtime would still miss the field. Both need the fix.
+**4. Runtime updates.** (IMPLEMENTED — Stage 4 final commit.)
+Polling and realtime were TWO independent sources and neither went
+through a single shared reader: polling called
+`batteryFieldForSensor(sensorKey)` inside `parseDevices`;
+`RealtimeSource` independently called the same helper. A custom
+`batteryField` would have fixed polling by swapping that one lookup
+for `row.batteryField`, but realtime would still miss the field.
 
-The proposed change:
+The shipped change (`src/sensorMap/resolveBatteryField.ts`):
 
-- Introduce a shared row-aware battery-field resolver:
+- A shared row-aware battery-field resolver:
   `resolveBatteryField(effectiveMap, stationMac, dataPoint) →
-  string | null`. Prefers the row's `batteryField` when present;
-  falls back to `batteryFieldForSensor(dataPoint)` for
-  legacy-flag-off paths that don't yet have an effective map.
-- Polling (`parseDevices`) calls the shared resolver.
-- Realtime does one of the following (Stage 2 picks whichever is
-  smaller):
-  - refactor `RealtimeSource` to deliver its raw station payloads
-    to a platform-owned handler that runs the same reader as
-    polling; OR
-  - inject the shared resolver into `RealtimeSource` at
-    construction, replacing its direct `batteryFieldForSensor`
-    call.
+  string | null`. With an effective map, the adjudicated row is the
+  SOLE authority (`hasBatterySubService && batteryField`; collision
+  losers, suppressed owners, and unmapped dataPoints resolve null —
+  never the legacy fallback). Without one (legacy flag-off paths),
+  it IS `batteryFieldForSensor(dataPoint)`.
+- Polling (`parseDevices`) calls the shared resolver (flag off →
+  no effective map → static lookup, byte-identical).
+- Realtime got BOTH proposed shapes, at different layers: the v2
+  transport already delivers reconstructed station payloads to the
+  platform-owned `distributeViaV2Routing`, whose per-entry battery
+  reads run the shared resolver (same reader as polling); and the
+  shared resolver is also injected into `RealtimeSource` at
+  construction, replacing its direct `batteryFieldForSensor` call
+  for the per-update `batteryLow` it bundles on the v1 path.
 
 Both replacements keep the existing "0 means low" semantics AWN
 uses on its battery fields — the plugin's `readBatteryLow` helper

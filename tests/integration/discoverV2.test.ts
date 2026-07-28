@@ -207,7 +207,7 @@ describe('discoverDevicesV2 — flag ON lifecycle', () => {
     expect(tempSvc.readCharacteristic(MockCharacteristics.CurrentTemperature)).toBeCloseTo(F_TO_C(32), 4);
   });
 
-  it('a realtime battery-ONLY update flips StatusLowBattery (finding 9 — battery-bridge regression)', async () => {
+  it('a realtime battery-ONLY update flips StatusLowBattery (finding 9 — shared battery reader)', async () => {
     const { platform, api } = makePlatform({ _sensorMapV2: true, temperatureSensors: true });
     const cached = cacheAccessory(platform, `${MAC}-tempf`, 'Temperature', 'Outdoor Temperature', tempWithBattery);
     mockFetch([{ macAddress: MAC, info: { name: 'Home' }, lastData: { tempf: 68, battout: 1 } }]);
@@ -219,8 +219,8 @@ describe('discoverDevicesV2 — flag ON lifecycle', () => {
 
       // Realtime delivers ONLY the battery datapoint - no sensor value
       // rides along (v1.7 could not update battery on such an event;
-      // the v2 battery bridge reads the row-resolved batteryField off
-      // the reconstructed payload).
+      // the shared resolveBatteryField reader resolves the row's
+      // adjudicated field and reads it off the reconstructed payload).
       (platform as unknown as { distribute(u: Array<{ uniqueId: string; value: number }>): void })
         .distribute([{ uniqueId: `${MAC}-battout`, value: 0 }]);
       expect(battSvc.readCharacteristic(MockCharacteristics.StatusLowBattery)).toBe(1);
@@ -259,7 +259,7 @@ describe('discoverDevicesV2 — flag ON lifecycle', () => {
       .characteristics.values()].find(c => c.displayName === 'Value');
     expect(valueChar?.value).toContain('inHg');
 
-    // A subsequent low reading flips StatusLowBattery via the battery bridge.
+    // A subsequent low reading flips StatusLowBattery via the shared battery reader.
     mockFetch([{ macAddress: MAC, info: { name: 'Home' }, lastData: { tempf: 68, battout: 0 } }]);
     await (platform as unknown as { pollAndDistribute(): Promise<void> }).pollAndDistribute();
     expect(battSvc.readCharacteristic(MockCharacteristics.StatusLowBattery)).toBe(1);
@@ -1086,8 +1086,9 @@ describe('discoverDevicesV2 — safe mode and custom rows', () => {
       await (platform as unknown as { pollAndDistribute(): Promise<void> }).pollAndDistribute();
       expect(svc.readCharacteristic(MockCharacteristics.CurrentTemperature)).toBeCloseTo(25, 4);
 
-      // The CUSTOM battery field flows through the bridge: barn_batt=0
-      // (AWN low) flips StatusLowBattery on the custom-owned sub-service.
+      // The CUSTOM battery field resolves through the shared reader:
+      // barn_batt=0 (AWN low) flips StatusLowBattery on the custom-owned
+      // sub-service.
       const battSvc = acc.getService(MockServices.Battery)!;
       expect(battSvc).toBeDefined();
       expect(battSvc.readCharacteristic(MockCharacteristics.StatusLowBattery)).toBe(1);

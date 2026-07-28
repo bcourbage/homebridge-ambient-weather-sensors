@@ -50,6 +50,13 @@ export interface RealtimeOptions {
    * broad filter here costs nothing.
    */
   isSensorKey?: (key: string) => boolean;
+  /**
+   * Row-aware battery-field resolver injected by the platform (the
+   * shared `resolveBatteryField(effectiveMap, mac, dp)` reader).
+   * Defaults to the v1.6.0 static `batteryFieldForSensor` lookup when
+   * absent, so a bare construction keeps legacy behavior.
+   */
+  resolveBatteryField?: (stationMac: string, dataPoint: string) => string | null;
 }
 
 const INITIAL_BACKOFF_MS = 1_000;
@@ -276,10 +283,14 @@ export class RealtimeSource {
         }
         // Bundle the corresponding probe battery state with each
         // sensor's update so the wrapper's Battery sub-service stays
-        // synchronized with the value updates. readBatteryLow already
-        // inverts AWN's 0=low/1=good polarity to HomeKit's
-        // true=low/false=normal convention.
-        const batteryField = batteryFieldForSensor(key);
+        // synchronized with the value updates. Field resolution goes
+        // through the platform-injected shared reader when provided
+        // (row-aware in v2 mode); readBatteryLow already inverts AWN's
+        // 0=low/1=good polarity to HomeKit's true=low/false=normal
+        // convention.
+        const batteryField = this.opts.resolveBatteryField
+          ? this.opts.resolveBatteryField(macAddress, key) ?? undefined
+          : batteryFieldForSensor(key);
         const batteryLow = readBatteryLow(lastData as Record<string, unknown>, batteryField);
         updates.push({
           uniqueId: `${macAddress}-${key}`,
