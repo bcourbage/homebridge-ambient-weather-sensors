@@ -1,0 +1,1 @@
+{"version":3,"file":"legacyDeviceType.d.ts","sourceRoot":"","sources":["../../src/sensorMap/legacyDeviceType.ts"],"names":[],"mappings":"AAAA;;;;;;;;;;;;;;;;GAgBG;AAEH,OAAO,KAAK,EAAE,SAAS,EAAE,MAAM,YAAY,CAAC;AAE5C,eAAO,MAAM,0BAA0B,EAAE,MAAM,CAAC,SAAS,EAAE,MAAM,CA0BhE,CAAC;AAEF,oEAAoE;AACpE,wBAAgB,sBAAsB,CAAC,SAAS,EAAE,SAAS,GAAG,MAAM,CAEnE"}

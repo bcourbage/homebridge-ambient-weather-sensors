@@ -21,6 +21,8 @@
 
 import { EventEmitter } from 'node:events';
 import { createHash } from 'node:crypto';
+import * as os from 'node:os';
+import * as nodePath from 'node:path';
 
 /**
  * Base class for both stock and custom characteristics. Identity is
@@ -286,6 +288,14 @@ export class MockPlatformAccessory {
   constructor(displayName: string, uuid: string) {
     this.displayName = displayName;
     this.UUID = uuid;
+    // Real Homebridge auto-attaches an AccessoryInformation service to
+    // every PlatformAccessory at construction time; wrapper code assumes
+    // it's present and uses a non-null assertion on the getService
+    // lookup. Match that so the platform's create-path (which builds
+    // accessories via `api.platformAccessory(...)`) can construct
+    // wrappers in tests. `makeMockAccessory` re-adds it (same UUID →
+    // idempotent).
+    this.services.set(MockServices.AccessoryInformation.UUID, new MockServices.AccessoryInformation());
   }
 
   getService(svcCtor: typeof MockService): MockService | undefined {
@@ -386,6 +396,20 @@ export class MockAPI extends EventEmitter {
   public readonly platformAccessory = MockPlatformAccessory as unknown as {
     new (displayName: string, uuid: string): MockPlatformAccessory;
   };
+
+  // Homebridge's `api.user.storagePath()` — the sensor-map v2 path reads
+  // its discovery / ui-state stores from `<storagePath>/plugin-data/
+  // ambient-weather/`. Point it at a per-instance temp dir; the v2 first
+  // commit only READS these files (missing → empty store, no write), so
+  // nothing is actually created on disk during tests.
+  public readonly user = {
+    storagePath: (): string => nodePath.join(os.tmpdir(), `aws-mock-storage-${this.storageId}`),
+  };
+  private readonly storageId = createHash('sha256')
+    .update(String(MockAPI.instanceCounter++))
+    .digest('hex')
+    .slice(0, 12);
+  private static instanceCounter = 0;
 
   public readonly registered: MockPlatformAccessory[] = [];
   public readonly unregistered: MockPlatformAccessory[] = [];
