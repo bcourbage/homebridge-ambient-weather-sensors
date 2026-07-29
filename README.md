@@ -24,12 +24,12 @@
 </SPAN>
 
 
-## Sensor-map v2.0 preview (beta, opt-in)
+## Sensor-map v2.0 (beta, opt-in)
 
-v2.0.0-beta.0 ships a new sensor-map architecture that unifies which
+The v2.0 betas ship a new sensor-map architecture that unifies which
 sensors expose, how they're named, and which HomeKit types they use.
-**The new pipeline is OFF by default; users who don't opt in see zero
-behavior change from v1.6.0.**
+**The new pipeline is OFF by default; for legacy-compatible configs,
+leaving the flag off preserves v1.7.0 runtime behavior.**
 
 Opt in one of two ways:
 
@@ -38,16 +38,38 @@ Opt in one of two ways:
 - Enable `_sensorMapV2` under the "Advanced (v2.0 preview)"
   fieldset in the plugin's config UI.
 
-Then restart Homebridge. The plugin log will begin emitting
-`[sensor-map v2 shadow]` lines. The v1.6.0 code path still owns every
-accessory-registration decision; the v2 layer runs in parallel and
-logs divergences to help catch pipeline drift before the flag flips
-to on-by-default (planned for v2.1.0). A read-only preview page is
-also accessible from the plugin's UI in Homebridge Config UI X.
+Then restart Homebridge.
 
-**Rollback:** unset the flag and restart. Shadow mode never writes
-to `config.json` or the accessory cache, so the flip-back is clean.
-Same for downgrading v2.0.0-beta.x → v1.6.0.
+**What the flag does (since v2.0.0-beta.8):** it selects the LIVE v2
+reconciliation path. Accessory registration, naming, and value
+routing are driven by the v2 sensor map, and the plugin may
+re-register an accessory when its structure changes — each such
+change is recorded as a notice, visible on the plugin's page in
+Homebridge Config UI X. (In beta.0 through beta.7 the same flag ran
+a compare-only "shadow mode" that logged divergences without ever
+touching registration; that observer has been retired in favor of
+the real thing.)
+
+**Rollback (legacy-compatible configs — the normal case):** beta.8
+never migrates your config or generates `sensorMap` on its own, so
+unless you hand-authored `configVersion: 2` / `sensorMap` fields,
+turning the flag off and restarting cleanly returns you to v1.7
+behavior. Accessories the v2 path structurally re-registered while
+it was on may need their room assignments redone in Apple Home.
+Downgrading to the 1.7.x line is safe under the same condition.
+
+**Rollback with a hand-authored v2 config:** if you added
+`configVersion: 2` + `sensorMap` yourself, restore a 1.x-compatible
+config BEFORE disabling the flag or downgrading — with the flag
+off, the v1 path cannot read `sensorMap` and can deregister your
+cached accessories. No 1.x release can operate or update custom
+v2-only sensors: v1.7.1's emergency freeze preserves their cached
+tiles at last-known values, and restoring a legacy config and
+resuming normal 1.x reconciliation removes them. For an emergency
+downgrade while a v2 config is still in place, install **v1.7.1**
+(not v1.7.0 or earlier): it freezes safely — cached accessories
+are preserved but stop updating — until you restore a legacy
+config.
 
 See `docs/future/sensor-map.md` for the full design if you're
 curious about the shape of the v2 config.

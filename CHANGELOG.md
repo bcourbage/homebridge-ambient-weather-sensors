@@ -9,6 +9,25 @@ entries short and user-facing.
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/
 
+## [2.0.0-beta.8] — 2026-07-29
+
+The big handoff: the `_sensorMapV2` flag now selects the **live** sensor-map v2 path instead of the compare-only "shadow mode" of beta.0–beta.7.
+
+### Changed
+
+- **`_sensorMapV2` (or `SENSOR_MAP_V2=1`) now runs v2 for real.** With the flag on, accessory registration, naming, and value routing are driven by the v2 sensor map — including custom sensors declared via `configVersion: 2` + `sensorMap` — and the plugin may re-register an accessory when its structure changes. Each structural change is recorded as a notice, visible on the plugin's page in Homebridge Config UI X. The shadow-mode observer is retired.
+- **Flag off (the default) is unchanged:** behavior identical to v1.7.0, byte for byte. Beta.8 never migrates your config or generates `sensorMap` on its own, so unless you hand-authored `configVersion: 2`/`sensorMap`, rollback remains "turn it off and restart" (accessories the v2 path structurally re-registered may need room reassignment in Apple Home).
+- Config-schema, README, and plugin-UI text rewritten to describe the live behavior; the UI status field formerly named `shadowFlag` is now `v2Flag`.
+
+### Rollback warning for hand-authored v2 configs
+
+- If you added `configVersion: 2` + `sensorMap` to your config yourself, restore a 1.x-compatible config BEFORE disabling the flag or downgrading: with the flag off, the v1 path cannot read `sensorMap` and can deregister cached accessories. No 1.x release can operate or update custom v2-only sensors. v1.7.1's emergency freeze preserves their cached tiles at last-known values; restoring a legacy config and resuming normal 1.x reconciliation removes them.
+- An emergency downgrade while a v2 config is still in place must target **v1.7.1** (published on `latest`): it freezes safely — cached accessories are preserved but stop updating — until a legacy config is restored. v1.7.0 and earlier misread v2 configs and are not safe downgrade targets.
+
+### Notes
+
+- This beta still cannot WRITE a v2 config — the config-editing UI (and its snapshot-before-mutation safety machinery) is later 2.x work.
+
 ## [2.0.0-beta.7] — 2026-07-19
 
 Two-track release plan starts here. Same code shipping to `@latest` as **v1.7.0** (shadow-mode observer with the flag OFF, no UI change) and to `@beta` as v2.0.0-beta.7 (same code + the write-capable UI preview + `_sensorMapV2` config-schema field). Users on `@latest` are dormant testers of the observer's code-load path; users on `@beta` are active testers of the v2 UI + shadow-mode logging.

@@ -41,7 +41,7 @@ export interface HandlerDeps {
 
 export interface StatusPayload {
   version: string;
-  shadowFlag: {
+  v2Flag: {
     enabled: boolean;
     source: 'env' | 'config' | 'none';
   };
@@ -54,10 +54,10 @@ export interface StatusPayload {
 export async function handleGetStatus(deps: HandlerDeps, payload: unknown): Promise<StatusPayload> {
   const config = extractConfig(payload);
   const modeResult = detectConfigMode(config);
-  const flagSource = detectShadowFlagSource(config, deps.env ?? process.env);
+  const flagSource = detectV2FlagSource(config, deps.env ?? process.env);
   return {
     version: deps.version,
-    shadowFlag: {
+    v2Flag: {
       enabled: flagSource !== 'none',
       source: flagSource,
     },
@@ -92,7 +92,7 @@ function extractConfig(payload: unknown): ConfigInputShape {
   return {};
 }
 
-function detectShadowFlagSource(
+function detectV2FlagSource(
   config: ConfigInputShape | undefined,
   env: NodeJS.ProcessEnv,
 ): 'env' | 'config' | 'none' {

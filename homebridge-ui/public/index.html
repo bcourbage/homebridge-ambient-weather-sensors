@@ -58,17 +58,17 @@
   <table>
     <tbody>
       <tr><th>Config mode</th><td id="configMode">—</td></tr>
-      <tr><th>Sensor-map v2 flag</th><td id="shadowFlag">—</td></tr>
+      <tr><th>Sensor-map v2 flag</th><td id="v2Flag">—</td></tr>
       <tr><th>Plugin version</th><td id="pluginVersion">—</td></tr>
     </tbody>
   </table>
 
   <h2>Discovered stations &amp; datapoints</h2>
-  <p class="sub">Populated by the plugin as it observes AWN payloads. Empty until the sensor-map v2 flag has been on at least one poll tick.</p>
+  <p class="sub">Populated by the plugin as it observes AWN payloads. Empty until the first successful v2 discovery or poll with the sensor-map v2 flag on.</p>
   <div id="discovery"></div>
 
   <h2>Notices</h2>
-  <p class="sub">Structural-change notices are recorded when the plugin re-registers an accessory. None expected during the v2 shadow-mode beta.</p>
+  <p class="sub">Structural-change notices are recorded when the plugin re-registers an accessory whose structure changed (for example after a sensor-map edit). Expected whenever the v2 flag is on and structure changes. Existing notices remain visible after the flag is turned off; no new structural notices are generated while it is off.</p>
   <div id="notices"></div>
 
   <script>
@@ -112,7 +112,7 @@
         el.textContent = status.safeModeBanner || 'Plugin is in safe mode.';
       } else if (status.readOnly) {
         el.className = 'banner';
-        el.textContent = 'This preview page is read-only during the v2.0.0 beta. Configure the plugin through the main Homebridge UI settings panel; this page displays observed state only.';
+        el.textContent = 'The v2 observation panels below are read-only, and this beta cannot generate or save a sensorMap. Ordinary plugin settings (including the v2 flag) remain editable in the settings form above.';
       } else {
         el.className = 'banner info';
         el.textContent = 'v2 sensor map active.';
@@ -131,8 +131,8 @@
     function renderStatus(status) {
       document.getElementById('version').textContent = 'v' + status.version + ' preview';
       document.getElementById('configMode').textContent = status.configMode;
-      const flag = document.getElementById('shadowFlag');
-      const on = status.shadowFlag && status.shadowFlag.enabled;
+      const flag = document.getElementById('v2Flag');
+      const on = status.v2Flag && status.v2Flag.enabled;
       flag.innerHTML = '';
       const pill = document.createElement('span');
       pill.className = 'flag ' + (on ? 'on' : 'off');
@@ -142,7 +142,7 @@
         const src = document.createElement('span');
         src.style.marginLeft = '8px';
         src.style.color = '#666';
-        src.textContent = 'source: ' + status.shadowFlag.source;
+        src.textContent = 'source: ' + status.v2Flag.source;
         flag.appendChild(src);
       }
       document.getElementById('pluginVersion').textContent = status.version;

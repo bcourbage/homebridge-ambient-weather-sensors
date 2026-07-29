@@ -7,7 +7,7 @@
  *
  * Endpoints exposed:
  *
- *   /status      → { configMode, safeModeBanner?, shadowFlag, version, readOnly: true }
+ *   /status      → { configMode, safeModeBanner?, v2Flag, version, readOnly: true }
  *   /discovery   → contents of discovery.json (empty on absent)
  *   /notices     → contents of notices.json (empty on absent)
  *   /ui-state    → contents of ui-state.json (empty on absent)
@@ -27,9 +27,11 @@ import { handleGetDiscovery, handleGetNotices, handleGetStatus, handleGetUiState
  * Version stamp displayed in the UI header. Update on every release
  * (or wire to package.json at build time in a later stage — the
  * static string keeps the bridge from taking a runtime dependency
- * on package.json's on-disk path).
+ * on package.json's on-disk path). A unit test
+ * (tests/unit/homebridge-ui/versionSync.test.ts) fails the build if
+ * this drifts from package.json's version.
  */
-const PLUGIN_VERSION = '2.0.0-beta.7';
+const PLUGIN_VERSION = '2.0.0-beta.8';
 // stderr is captured in the Homebridge UI's log tab, so this is
 // where our bridge logs land. The plugin's `this.log.*` isn't
 // available here — the bridge runs in a subprocess separate from
