@@ -21,7 +21,7 @@ The big handoff: the `_sensorMapV2` flag now selects the **live** sensor-map v2 
 
 ### Rollback warning for hand-authored v2 configs
 
-- If you added `configVersion: 2` + `sensorMap` to your config yourself, restore a 1.x-compatible config BEFORE disabling the flag or downgrading: with the flag off, the v1 path cannot read `sensorMap` and can deregister cached accessories. Custom v2-only sensors cannot survive any 1.x rollback.
+- If you added `configVersion: 2` + `sensorMap` to your config yourself, restore a 1.x-compatible config BEFORE disabling the flag or downgrading: with the flag off, the v1 path cannot read `sensorMap` and can deregister cached accessories. No 1.x release can operate or update custom v2-only sensors. v1.7.1's emergency freeze preserves their cached tiles at last-known values; restoring a legacy config and resuming normal 1.x reconciliation removes them.
 - An emergency downgrade while a v2 config is still in place must target **v1.7.1** (published on `latest`): it freezes safely — cached accessories are preserved but stop updating — until a legacy config is restored. v1.7.0 and earlier misread v2 configs and are not safe downgrade targets.
 
 ### Notes

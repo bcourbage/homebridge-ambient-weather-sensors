@@ -28,8 +28,8 @@
 
 The v2.0 betas ship a new sensor-map architecture that unifies which
 sensors expose, how they're named, and which HomeKit types they use.
-**The new pipeline is OFF by default; users who don't opt in see zero
-behavior change from v1.7.x.**
+**The new pipeline is OFF by default; for legacy-compatible configs,
+leaving the flag off preserves v1.7.0 runtime behavior.**
 
 Opt in one of two ways:
 
@@ -62,11 +62,14 @@ Downgrading to the 1.7.x line is safe under the same condition.
 `configVersion: 2` + `sensorMap` yourself, restore a 1.x-compatible
 config BEFORE disabling the flag or downgrading — with the flag
 off, the v1 path cannot read `sensorMap` and can deregister your
-cached accessories, and custom v2-only sensors cannot survive any
-1.x rollback in any case. For an emergency downgrade while a v2
-config is still in place, install **v1.7.1** (not v1.7.0 or
-earlier): it freezes safely — cached accessories are preserved but
-stop updating — until you restore a legacy config.
+cached accessories. No 1.x release can operate or update custom
+v2-only sensors: v1.7.1's emergency freeze preserves their cached
+tiles at last-known values, and restoring a legacy config and
+resuming normal 1.x reconciliation removes them. For an emergency
+downgrade while a v2 config is still in place, install **v1.7.1**
+(not v1.7.0 or earlier): it freezes safely — cached accessories
+are preserved but stop updating — until you restore a legacy
+config.
 
 See `docs/future/sensor-map.md` for the full design if you're
 curious about the shape of the v2 config.
