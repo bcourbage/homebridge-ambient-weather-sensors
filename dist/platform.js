@@ -1095,9 +1095,12 @@ export class AmbientWeatherSensorsPlatform {
                     displayName: composeRowDisplayName({ macAddress: raw.macAddress, name: raw.info?.name ?? '' }, row.name, isMultiStation),
                     type: legacyTypeForWrapperId(row.wrapperId),
                     value,
-                    batteryLow: row.hasBatterySubService && row.batteryField
-                        ? readBatteryLow(raw.lastData, row.batteryField)
-                        : undefined,
+                    // Bootstrap battery seed resolves through the SAME shared
+                    // reader as polling/realtime (review R17-1) — the invariant
+                    // is every runtime battery read, including this first one,
+                    // so the initial context/HAP seed can never drift from what
+                    // later ticks resolve.
+                    batteryLow: readBatteryLow(raw.lastData, resolveBatteryField(effectiveMap, row.stationMac, row.dataPoint) ?? undefined),
                 };
                 reconciled.push({ row, device, routingUid: `${row.stationMac}-${row.dataPoint}` });
             }

@@ -647,9 +647,17 @@ for all three cases):
   disabling fragment, or (rebind-only) to the fragment that
   authored the new batteryField value; the compound
   disabled-and-rebound state names both causes and the full remedy.
-  Ownership never rolling means no OTHER row's signature changes;
-  the owner's own signature can change when its Battery sub-service
-  is added or removed by the same edit.
+  Ownership never rolling is scoped to the ORIGINAL reserved field:
+  no other row REFERENCING THAT FIELD changes signature. The owner's
+  own signature can change when its Battery sub-service is added or
+  removed by the same edit, and — enabled rebind to a novel field
+  only — the owner enters the collision ordering on its NEW field,
+  where an existing claimant can lose ownership and flip
+  `battery:1 → battery:0` (this matches the runtime
+  `orphan-battery-field` diagnostic's collision caveat exactly,
+  including its gates: a disabled owner never claims, a null field
+  claims nothing, and a rebind to another reserved field is
+  rejected by the static reserved set).
 
 The pass runs BEFORE `structuralSignature` is computed on the row,
 so signature stability is a function of resolved ownership, not the
@@ -679,17 +687,19 @@ resolve deterministically on `(stationMac, dataPoint)`
 lexicographic order — never on discovery iteration order, which
 would depend on observation history.
 
-**2. Platform parse pipeline** (unchanged for known dataPoints,
-extended for custom). Today's `parseDevices` calls
-`batteryFieldForSensor(sensorKey)` to look up which AWN battery
-field goes with a known sensor and reads that field off
-`station.lastData`. For custom rows the answer isn't in the built-in
-map — instead, parseDevices reads `row.batteryField` from the
-effective-map entry for the (station, dataPoint) pair. `batteryLow`
-is derived the same way (`readBatteryLow`); the resulting boolean
-is stamped into `accessory.context.device.batteryLow` BEFORE the
-wrapper constructor runs, so `setupBatteryService`'s existing
-initial-value seeding still works.
+**2. Platform bootstrap pipeline.** (IMPLEMENTED — as-built shape:
+the v2 path BYPASSES `parseDevices` entirely; it fetches raw
+stations and builds v1.7-compatible contexts inside
+`discoverDevicesV2`'s reconciler.) The bootstrap battery seed there
+resolves through the shared
+`resolveBatteryField(effectiveMap, mac, dp)` reader — custom rows
+resolve their user-authored field, known rows their adjudicated
+reserved field — and `readBatteryLow` stamps the boolean into
+`accessory.context.device.batteryLow` BEFORE the wrapper
+constructor runs, so `setupBatteryService`'s existing initial-value
+seeding works on the very first snapshot. `parseDevices` itself
+only serves the flag-off path and calls the same reader with no
+effective map, which IS the v1.6.0 static lookup.
 
 **3. Wrapper construction.** `setupBatteryService` today attaches
 the BatteryService when `context.device.batteryLow !== undefined`.
@@ -767,28 +777,29 @@ uses on its battery fields — the plugin's `readBatteryLow` helper
 converts that to a boolean and the wrapper's `setBatteryLow`
 consumes the boolean. No change to that reading.
 
-Stage 2's battery-family PR includes two integration tests, split
-by which lifecycle stage each transport can actually exercise:
+The custom-battery integration tests as shipped (in
+`tests/integration/discoverV2.test.ts`), split by which lifecycle
+stage each transport can actually exercise:
 
-- **Polling / bootstrap test** — proves the *initial* seeding path.
-  Seeds a custom row with `batteryField: 'my_barn_batt'`, runs the
-  first REST discovery cycle with `my_barn_batt === 0` in the
-  payload, and asserts:
-  - `context.device.batteryLow` was populated by parseDevices
-    BEFORE the constructor ran (so the Battery sub-service is
-    attached on the first tick, not the second);
-  - `wrapper.setBatteryLow(true)` fired.
+- **Bootstrap test** — proves the *initial* seeding path. A custom
+  row with `batteryField: 'barn_batt'` reconciles against a first
+  snapshot where `barn_batt === 0`, and the test asserts BOTH
+  `context.device.batteryLow === true` (populated before the
+  constructor ran, so the Battery sub-service attaches on the first
+  tick) AND `StatusLowBattery` reading LOW immediately after
+  discovery. The legacy static lookup does not know `barn_batt`, so
+  a bootstrap seed reverted to it fails this test.
 
-- **Realtime test** — proves the *update* path only. `RealtimeSource`
-  starts AFTER the initial REST discovery, so by the time its
-  subscription callback fires the wrapper is already constructed
-  and its sub-service already attached (or not) based on the
-  polling seed. The realtime test therefore starts with a
-  pre-constructed wrapper whose owner row's `batteryField` is
-  `my_barn_batt`, delivers a realtime payload where
-  `my_barn_batt === 0`, and asserts `setBatteryLow(true)` fired.
-  This exercises the row-aware realtime reader without pretending
-  realtime can seed a not-yet-existent wrapper.
+- **Realtime platform-boundary test** — proves the *update* path
+  through the REAL transport convergence: a battery-only
+  `${MAC}-barn_batt` update delivered via `platform.distribute`
+  (→ `updatesToStationPayloads` → `distributeViaV2Routing` →
+  shared reader) flips `StatusLowBattery` LOW, and a follow-up
+  event flips it back to NORMAL. The canonical-field twin (finding
+  9, `battout`) covers the same boundary for reserved fields, and
+  a `RealtimeSource` unit suite pins the injected-resolver
+  contract (default-lookup parity, custom field, null suppression,
+  argument pass-through) in isolation.
 
 The pre-first-payload "sub-service exists even when the field is
 missing" test (from the setupBatteryService contract change above)

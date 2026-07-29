@@ -1097,6 +1097,81 @@ describe('discoverDevicesV2 — safe mode and custom rows', () => {
     }
   });
 
+  it('a custom battery ALREADY LOW at first discovery seeds context + HAP through the shared reader (R17-1)', async () => {
+    const { platform, api } = makePlatform({
+      _sensorMapV2: true,
+      configVersion: 2,
+      sensorMap: [{
+        dataPoint: 'my_barn',
+        kind: 'temperature',
+        measurement: 'temperature',
+        sourceUnit: 'celsius',
+        displayUnit: 'celsius',
+        name: 'Barn Temp',
+        batteryField: 'barn_batt',
+      }],
+    });
+    // barn_batt is LOW in the very first snapshot — the bootstrap seed
+    // must resolve the custom field through the shared reader. The
+    // legacy static lookup does NOT know barn_batt, so a bootstrap
+    // branch reverted to it would seed batteryLow undefined and the
+    // Battery sub-service would show NORMAL until the next update.
+    mockFetch([{ macAddress: MAC, info: { name: 'Home' }, lastData: { my_barn: 21, barn_batt: 0 } }]);
+    stubTimer();
+    try {
+      await reconcile(platform, 'v2');
+
+      const acc = api.registered.find(a => a.context.device.uniqueId === `${MAC}-my_barn`)!;
+      expect(acc).toBeDefined();
+      expect((acc.context.device as Record<string, unknown>).batteryLow).toBe(true);
+      const battSvc = acc.getService(MockServices.Battery)!;
+      expect(battSvc).toBeDefined();
+      expect(battSvc.readCharacteristic(MockCharacteristics.StatusLowBattery)).toBe(1);
+    } finally {
+      rmSync((api as unknown as { user: { storagePath(): string } }).user.storagePath(), { recursive: true, force: true });
+    }
+  });
+
+  it('a battery-only realtime update on a CUSTOM field flips StatusLowBattery through the platform boundary (R17-2)', async () => {
+    const { platform, api } = makePlatform({
+      _sensorMapV2: true,
+      configVersion: 2,
+      sensorMap: [{
+        dataPoint: 'my_barn',
+        kind: 'temperature',
+        measurement: 'temperature',
+        sourceUnit: 'celsius',
+        displayUnit: 'celsius',
+        name: 'Barn Temp',
+        batteryField: 'barn_batt',
+      }],
+    });
+    mockFetch([{ macAddress: MAC, info: { name: 'Home' }, lastData: { my_barn: 21, barn_batt: 1 } }]);
+    stubTimer();
+    try {
+      await reconcile(platform, 'v2');
+      const acc = api.registered.find(a => a.context.device.uniqueId === `${MAC}-my_barn`)!;
+      const battSvc = acc.getService(MockServices.Battery)!;
+      expect(battSvc.readCharacteristic(MockCharacteristics.StatusLowBattery)).toBe(0);
+
+      // Realtime delivers ONLY the custom battery datapoint through the
+      // real platform boundary (distribute → updatesToStationPayloads →
+      // distributeViaV2Routing → shared reader). A regression that
+      // drops non-batt* custom fields during payload reconstruction, or
+      // a reader that stops resolving custom fields, breaks this.
+      (platform as unknown as { distribute(u: Array<{ uniqueId: string; value: number }>): void })
+        .distribute([{ uniqueId: `${MAC}-barn_batt`, value: 0 }]);
+      expect(battSvc.readCharacteristic(MockCharacteristics.StatusLowBattery)).toBe(1);
+
+      // And back to NORMAL on the next battery-only event.
+      (platform as unknown as { distribute(u: Array<{ uniqueId: string; value: number }>): void })
+        .distribute([{ uniqueId: `${MAC}-barn_batt`, value: 1 }]);
+      expect(battSvc.readCharacteristic(MockCharacteristics.StatusLowBattery)).toBe(0);
+    } finally {
+      rmSync((api as unknown as { user: { storagePath(): string } }).user.storagePath(), { recursive: true, force: true });
+    }
+  });
+
   it('a wrapper-less kind (leak) still produces no-wrapper and never registers', async () => {
     const { platform, api, log } = makePlatform({
       _sensorMapV2: true,
