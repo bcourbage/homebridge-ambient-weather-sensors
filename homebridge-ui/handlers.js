@@ -20,10 +20,10 @@ import { loadUiStateStore, } from '../dist/sensorMap/persistence/uiStateStore.js
 export async function handleGetStatus(deps, payload) {
     const config = extractConfig(payload);
     const modeResult = detectConfigMode(config);
-    const flagSource = detectShadowFlagSource(config, deps.env ?? process.env);
+    const flagSource = detectV2FlagSource(config, deps.env ?? process.env);
     return {
         version: deps.version,
-        shadowFlag: {
+        v2Flag: {
             enabled: flagSource !== 'none',
             source: flagSource,
         },
@@ -52,7 +52,7 @@ function extractConfig(payload) {
     }
     return {};
 }
-function detectShadowFlagSource(config, env) {
+function detectV2FlagSource(config, env) {
     if (env.SENSOR_MAP_V2 === '1' || env.SENSOR_MAP_V2 === 'true') {
         return 'env';
     }

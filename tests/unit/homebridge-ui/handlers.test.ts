@@ -41,8 +41,8 @@ describe('handleGetStatus', () => {
   it('returns legacy mode for a bare config', async () => {
     const r = await handleGetStatus(deps(), { config: {} });
     expect(r.configMode).toBe('legacy');
-    expect(r.shadowFlag.enabled).toBe(false);
-    expect(r.shadowFlag.source).toBe('none');
+    expect(r.v2Flag.enabled).toBe(false);
+    expect(r.v2Flag.source).toBe('none');
     expect(r.readOnly).toBe(true);
   });
 
@@ -60,19 +60,19 @@ describe('handleGetStatus', () => {
     expect(r.safeModeBanner).toMatch(/newer plugin version/);
   });
 
-  it('detects shadow flag from env', async () => {
+  it('detects the v2 flag from env', async () => {
     const r = await handleGetStatus(
       deps({ env: { SENSOR_MAP_V2: '1' } }),
       { config: {} },
     );
-    expect(r.shadowFlag.enabled).toBe(true);
-    expect(r.shadowFlag.source).toBe('env');
+    expect(r.v2Flag.enabled).toBe(true);
+    expect(r.v2Flag.source).toBe('env');
   });
 
-  it('detects shadow flag from config field', async () => {
+  it('detects the v2 flag from the config field', async () => {
     const r = await handleGetStatus(deps(), { config: { _sensorMapV2: true } });
-    expect(r.shadowFlag.enabled).toBe(true);
-    expect(r.shadowFlag.source).toBe('config');
+    expect(r.v2Flag.enabled).toBe(true);
+    expect(r.v2Flag.source).toBe('config');
   });
 
   it('env source wins when both env and config are set', async () => {
@@ -80,7 +80,7 @@ describe('handleGetStatus', () => {
       deps({ env: { SENSOR_MAP_V2: '1' } }),
       { config: { _sensorMapV2: true } },
     );
-    expect(r.shadowFlag.source).toBe('env');
+    expect(r.v2Flag.source).toBe('env');
   });
 
   it('handles missing payload gracefully', async () => {

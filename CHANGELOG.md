@@ -9,6 +9,21 @@ entries short and user-facing.
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/
 
+## [2.0.0-beta.8] — 2026-07-29
+
+The big handoff: the `_sensorMapV2` flag now selects the **live** sensor-map v2 path instead of the compare-only "shadow mode" of beta.0–beta.7.
+
+### Changed
+
+- **`_sensorMapV2` (or `SENSOR_MAP_V2=1`) now runs v2 for real.** With the flag on, accessory registration, naming, and value routing are driven by the v2 sensor map — including custom sensors declared via `configVersion: 2` + `sensorMap` — and the plugin may re-register an accessory when its structure changes. Each structural change is recorded as a notice, visible on the plugin's page in Homebridge Config UI X. The shadow-mode observer is retired.
+- **Flag off (the default) is unchanged:** behavior identical to v1.7.0, byte for byte. The flag still never writes to `config.json`; rollback remains "turn it off and restart" (accessories the v2 path structurally re-registered may need room reassignment in Apple Home).
+- Config-schema, README, and plugin-UI text rewritten to describe the live behavior; the UI status field formerly named `shadowFlag` is now `v2Flag`.
+
+### Notes
+
+- **v1.7.1** is published on the `latest` tag as the downgrade landing: it freezes cleanly (instead of misreading) if it ever encounters a config written by a future 2.x release.
+- This beta still cannot WRITE a v2 config — the config-editing UI (and its snapshot-before-mutation safety machinery) is later 2.x work.
+
 ## [2.0.0-beta.7] — 2026-07-19
 
 Two-track release plan starts here. Same code shipping to `@latest` as **v1.7.0** (shadow-mode observer with the flag OFF, no UI change) and to `@beta` as v2.0.0-beta.7 (same code + the write-capable UI preview + `_sensorMapV2` config-schema field). Users on `@latest` are dormant testers of the observer's code-load path; users on `@beta` are active testers of the v2 UI + shadow-mode logging.

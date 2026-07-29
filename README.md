@@ -24,12 +24,12 @@
 </SPAN>
 
 
-## Sensor-map v2.0 preview (beta, opt-in)
+## Sensor-map v2.0 (beta, opt-in)
 
-v2.0.0-beta.0 ships a new sensor-map architecture that unifies which
+The v2.0 betas ship a new sensor-map architecture that unifies which
 sensors expose, how they're named, and which HomeKit types they use.
 **The new pipeline is OFF by default; users who don't opt in see zero
-behavior change from v1.6.0.**
+behavior change from v1.7.x.**
 
 Opt in one of two ways:
 
@@ -38,16 +38,25 @@ Opt in one of two ways:
 - Enable `_sensorMapV2` under the "Advanced (v2.0 preview)"
   fieldset in the plugin's config UI.
 
-Then restart Homebridge. The plugin log will begin emitting
-`[sensor-map v2 shadow]` lines. The v1.6.0 code path still owns every
-accessory-registration decision; the v2 layer runs in parallel and
-logs divergences to help catch pipeline drift before the flag flips
-to on-by-default (planned for v2.1.0). A read-only preview page is
-also accessible from the plugin's UI in Homebridge Config UI X.
+Then restart Homebridge.
 
-**Rollback:** unset the flag and restart. Shadow mode never writes
-to `config.json` or the accessory cache, so the flip-back is clean.
-Same for downgrading v2.0.0-beta.x → v1.6.0.
+**What the flag does (since v2.0.0-beta.8):** it selects the LIVE v2
+reconciliation path. Accessory registration, naming, and value
+routing are driven by the v2 sensor map, and the plugin may
+re-register an accessory when its structure changes — each such
+change is recorded as a notice, visible on the plugin's page in
+Homebridge Config UI X. (In beta.0 through beta.7 the same flag ran
+a compare-only "shadow mode" that logged divergences without ever
+touching registration; that observer has been retired in favor of
+the real thing.)
+
+**Rollback:** turn the flag off and restart. The flag never writes
+to `config.json`, so the flip-back is clean at the config level —
+but any accessory the v2 path structurally re-registered while it
+was on may need its room assignment redone in Apple Home. Downgrade
+to the 1.7.x line is safe the same way; v1.7.1 additionally freezes
+(rather than misreads) if it ever encounters a config a future 2.x
+release has written.
 
 See `docs/future/sensor-map.md` for the full design if you're
 curious about the shape of the v2 config.

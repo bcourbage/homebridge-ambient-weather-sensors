@@ -275,10 +275,10 @@
         ]
       },
       "_sensorMapV2": {
-        "title": "Enable sensor-map v2.0 shadow mode (advanced)",
+        "title": "Enable sensor-map v2 live path (advanced, beta)",
         "type": "boolean",
         "default": false,
-        "description": "PREVIEW / TESTING ONLY. When on, the v2.0 sensor map runs in parallel to the v1.6.0 code path and logs divergences to the Homebridge log. Does NOT change accessory registration. The v2.0 UI preview page becomes accessible. Do not enable in production unless you're actively testing v2.0. Alternative: set environment variable SENSOR_MAP_V2=1."
+        "description": "BETA / TESTING ONLY. When on, the plugin uses the new sensor-map v2 pipeline for REAL: accessory registration, naming, and value routing are driven by the v2 sensor map, and the plugin MAY re-register an accessory when its structure changes (each such change is recorded as a notice, visible on the plugin's UI page). When off (default), behavior is identical to v1.7.0. This flag never writes to config.json; to roll back, turn it off and restart Homebridge — though accessories that were structurally re-registered while it was on may need their room assignments redone in Apple Home. Alternative: set environment variable SENSOR_MAP_V2=1. (Note: in v2.0.0-beta.0 through beta.7 this flag ran a compare-only 'shadow mode' that never touched registration; since beta.8 it selects the live v2 path.)"
       },
       "stationFilter": {
         "title": "Include Only These Stations (allowlist)",
@@ -482,7 +482,7 @@
       "items": [
         {
           "type": "help",
-          "helpvalue": "<p><strong>Sensor-map v2.0 shadow mode.</strong> The v2.0 sensor-map layer runs in parallel to the current v1.6.0 code and logs any divergence to the Homebridge log. Nothing user-visible changes; existing accessories are unaffected. Enabling this also makes the v2.0 UI preview page accessible.</p><p>Preview / testing only.</p>"
+          "helpvalue": "<p><strong>Sensor-map v2 live path (beta).</strong> Enabling this runs the new v2 pipeline for real: accessory registration, naming, and value routing are driven by the v2 sensor map, and an accessory may be re-registered when its structure changes (recorded as a notice on the plugin's UI page). Off (default) = v1.7.0 behavior, unchanged. Rolling back is turning it off and restarting, but structurally re-registered accessories may need room reassignment in Apple Home.</p><p>Beta / testing only.</p>"
         },
         "_sensorMapV2"
       ]

@@ -7,7 +7,7 @@
  *
  * Endpoints exposed:
  *
- *   /status      → { configMode, safeModeBanner?, shadowFlag, version, readOnly: true }
+ *   /status      → { configMode, safeModeBanner?, v2Flag, version, readOnly: true }
  *   /discovery   → contents of discovery.json (empty on absent)
  *   /notices     → contents of notices.json (empty on absent)
  *   /ui-state    → contents of ui-state.json (empty on absent)

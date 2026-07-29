@@ -58,7 +58,7 @@
   <table>
     <tbody>
       <tr><th>Config mode</th><td id="configMode">—</td></tr>
-      <tr><th>Sensor-map v2 flag</th><td id="shadowFlag">—</td></tr>
+      <tr><th>Sensor-map v2 flag</th><td id="v2Flag">—</td></tr>
       <tr><th>Plugin version</th><td id="pluginVersion">—</td></tr>
     </tbody>
   </table>
@@ -68,7 +68,7 @@
   <div id="discovery"></div>
 
   <h2>Notices</h2>
-  <p class="sub">Structural-change notices are recorded when the plugin re-registers an accessory. None expected during the v2 shadow-mode beta.</p>
+  <p class="sub">Structural-change notices are recorded when the plugin re-registers an accessory whose structure changed (for example after a sensor-map edit). Expected whenever the v2 flag is on and structure changes; the list stays empty while the flag is off.</p>
   <div id="notices"></div>
 
   <script>
@@ -131,8 +131,8 @@
     function renderStatus(status) {
       document.getElementById('version').textContent = 'v' + status.version + ' preview';
       document.getElementById('configMode').textContent = status.configMode;
-      const flag = document.getElementById('shadowFlag');
-      const on = status.shadowFlag && status.shadowFlag.enabled;
+      const flag = document.getElementById('v2Flag');
+      const on = status.v2Flag && status.v2Flag.enabled;
       flag.innerHTML = '';
       const pill = document.createElement('span');
       pill.className = 'flag ' + (on ? 'on' : 'off');
@@ -142,7 +142,7 @@
         const src = document.createElement('span');
         src.style.marginLeft = '8px';
         src.style.color = '#666';
-        src.textContent = 'source: ' + status.shadowFlag.source;
+        src.textContent = 'source: ' + status.v2Flag.source;
         flag.appendChild(src);
       }
       document.getElementById('pluginVersion').textContent = status.version;
