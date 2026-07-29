@@ -50,13 +50,23 @@ a compare-only "shadow mode" that logged divergences without ever
 touching registration; that observer has been retired in favor of
 the real thing.)
 
-**Rollback:** turn the flag off and restart. The flag never writes
-to `config.json`, so the flip-back is clean at the config level —
-but any accessory the v2 path structurally re-registered while it
-was on may need its room assignment redone in Apple Home. Downgrade
-to the 1.7.x line is safe the same way; v1.7.1 additionally freezes
-(rather than misreads) if it ever encounters a config a future 2.x
-release has written.
+**Rollback (legacy-compatible configs — the normal case):** beta.8
+never migrates your config or generates `sensorMap` on its own, so
+unless you hand-authored `configVersion: 2` / `sensorMap` fields,
+turning the flag off and restarting cleanly returns you to v1.7
+behavior. Accessories the v2 path structurally re-registered while
+it was on may need their room assignments redone in Apple Home.
+Downgrading to the 1.7.x line is safe under the same condition.
+
+**Rollback with a hand-authored v2 config:** if you added
+`configVersion: 2` + `sensorMap` yourself, restore a 1.x-compatible
+config BEFORE disabling the flag or downgrading — with the flag
+off, the v1 path cannot read `sensorMap` and can deregister your
+cached accessories, and custom v2-only sensors cannot survive any
+1.x rollback in any case. For an emergency downgrade while a v2
+config is still in place, install **v1.7.1** (not v1.7.0 or
+earlier): it freezes safely — cached accessories are preserved but
+stop updating — until you restore a legacy config.
 
 See `docs/future/sensor-map.md` for the full design if you're
 curious about the shape of the v2 config.
