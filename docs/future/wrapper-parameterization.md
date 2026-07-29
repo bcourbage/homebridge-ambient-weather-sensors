@@ -978,12 +978,21 @@ code PR, blocking the next one until it merges green.
     plus the v1.7-downgrade-safety fixture — all land here where their
     full-flow behavior is testable.
 
-- **Stage 5 — Retire the Stage-1 adapter form.** Every factory
-  entry is now row-aware, so the "Stage 1 adapter" description in
-  the code comments gets tightened and any unused legacy fallback
-  paths (a compat helper still reading from `platform.config.*`
-  where the row already carries the answer) get removed. Mostly
-  documentation + dead-code cleanup at this point.
+- **Stage 5 — Retire the Stage-1 adapter form.** (IMPLEMENTED.)
+  Every factory entry was already row-aware, so this stage reduced
+  to documentation: the `FACTORIES` registry comment (which still
+  described the interim "every entry is an ADAPTER" form) and the
+  factory unit-test comments (which claimed adapters "discard the
+  row") were rewritten to the shipped row-consuming reality. The
+  dead-code audit found NO removable legacy fallbacks: the
+  `platform.config.*` reads in the extended-sensor constructors and
+  the `thresholdFor`/`extendedDisplayModeFor` legacy branches are
+  the LIVE flag-off path (`row === undefined`), required for v1.7.0
+  flag-off parity — they retire with the flag itself, not before.
+  `compat.ts` is fully live (legacy-mode projection), and the
+  remaining exported-but-internally-consumed symbols
+  (`rowMatchesWrapperId`, `LEGACY_MIRROR_VERSION`) are deliberate
+  API surface for the dispatch boundary and the finding-5 package.
 
 Task #65's flag-flip gate does not lift until Stage 4's PR merges
 with `WRAPPER_FOR_KIND_AND_MEASUREMENT` fully populated and

@@ -25,11 +25,14 @@ const MAC = 'AA:BB:CC:DD:EE:FF';
  * Build a minimal-but-valid configured row for a given wrapperId,
  * pulling the `(kind, measurement)` straight from WRAPPER_SPEC so the
  * row is self-consistent by construction. Only numeric-family wrappers
- * use `sourceUnit`/`displayUnit`; the values are irrelevant to the
- * Stage-1 adapters (they discard the row), so we hand every row the
- * same dummy units — the discriminated-union type is satisfied because
- * WRAPPER_SPEC never pairs a numeric wrapperId with the timestamp /
- * boolean measurements that forbid units.
+ * read `sourceUnit`/`displayUnit`, and the row-consuming constructors
+ * DO consume them now — we still hand every row the same
+ * fahrenheit/celsius pair because `toCanonical`/`toDisplayUnit` treat
+ * a family-foreign unit as identity, so the dummy pair is harmless for
+ * non-temperature families and exact for temperature. The
+ * discriminated-union type is satisfied because WRAPPER_SPEC never
+ * pairs a numeric wrapperId with the timestamp / boolean measurements
+ * that forbid units.
  */
 function rowFor(wrapperId: WrapperId): EffectiveSensorRow {
   const spec = WRAPPER_SPEC[wrapperId];
@@ -47,11 +50,13 @@ function rowFor(wrapperId: WrapperId): EffectiveSensorRow {
     enabled: true,
     structuralSignature: `sig-${wrapperId}`,
     wrapperId,
-    // Units are only read by the discriminated-union type guards; the
-    // Stage-1 adapters never touch them. Timestamp/boolean measurements
-    // forbid units, but WRAPPER_SPEC pairs those measurements only with
-    // wrapperIds whose rows are still ConfiguredRowBase — the cast below
-    // papers over the fact that we hand every row numeric units.
+    // Numeric-family constructors consume these units for real (unit
+    // conversion + display formatting); a family-foreign unit converts
+    // as identity, so this fixed pair is harmless everywhere and exact
+    // for temperature. Timestamp/boolean measurements forbid units, but
+    // WRAPPER_SPEC pairs those measurements only with wrapperIds whose
+    // rows are still ConfiguredRowBase — the cast below papers over
+    // the fact that we hand every row numeric units.
     sourceUnit: 'fahrenheit',
     displayUnit: 'celsius',
   };
