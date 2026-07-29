@@ -9,7 +9,9 @@ entries short and user-facing.
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/
 
-## [Unreleased]
+## [2.0.0-beta.9] — 2026-07-29
+
+Documentation, metadata, and plugin-UI polish on top of beta.8; no runtime behavior change.
 
 ### Changed
 
