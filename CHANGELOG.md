@@ -11,6 +11,10 @@ entries short and user-facing.
 
 ## [Unreleased]
 
+### Changed
+
+- **Independent-maintenance framing.** The original project's compatibility pull requests were closed unmerged in June 2026, so the "temporary bridge" language is retired across the README, package description, and NOTICE: the plugin is now described as independently maintained, with the acknowledgment of Deac Karns' original work kept. The npm `funding` field (a Fund button pointing at the original author's PayPal) is removed.
+
 ### Fixed
 
 - **Plugin UI page is now legible in Homebridge UI's dark theme.** The custom-UI panels (status, discovered stations, notices) previously shipped light-theme-only colors that clashed with the theme stylesheet HB UI X injects into custom-UI iframes, producing dark-on-dark table headers and light-on-light banner text. The panels now carry explicit light AND dark palettes keyed off the `dark-mode` body class HB UI X sets, scoped so the injected theme can't half-override them; all text/background pairs meet WCAG AA contrast in both themes.
