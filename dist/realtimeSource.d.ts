@@ -43,6 +43,13 @@ export interface RealtimeOptions {
      * broad filter here costs nothing.
      */
     isSensorKey?: (key: string) => boolean;
+    /**
+     * Row-aware battery-field resolver injected by the platform (the
+     * shared `resolveBatteryField(effectiveMap, mac, dp)` reader).
+     * Defaults to the v1.6.0 static `batteryFieldForSensor` lookup when
+     * absent, so a bare construction keeps legacy behavior.
+     */
+    resolveBatteryField?: (stationMac: string, dataPoint: string) => string | null;
 }
 export declare class RealtimeSource {
     private readonly opts;

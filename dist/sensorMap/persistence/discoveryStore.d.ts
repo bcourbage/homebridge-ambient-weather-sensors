@@ -45,7 +45,8 @@ export declare class DiscoveryTracker {
     private readonly lastSeenIntervalMs;
     private lastFlushAt;
     private pendingLastSeenOnly;
-    private inflight;
+    private pendingStructural;
+    private writeChain;
     constructor(opts: TrackerOptions);
     /**
      * Record an observation. Returns true if this call would trigger a
@@ -59,12 +60,23 @@ export declare class DiscoveryTracker {
      */
     snapshot(): DiscoveryStore;
     /**
-     * Flush to disk if a write is due. `force: true` bypasses throttling
-     * (SIGTERM path). Fire-and-forget by default — errors log a warn but
+     * Flush to disk if a write is due. `force: true` bypasses the
+     * lastSeen THROTTLE (SIGTERM path) — but not the no-pending check: a
+     * flush (forced or not) queued behind one that already persisted
+     * every pending observation returns without a redundant write
+     * (review R5-3). Fire-and-forget by default — errors log a warn but
      * don't propagate; callers who need to observe completion await the
      * return value.
      */
     flush(force?: boolean): Promise<void>;
+    /**
+     * The serialized body — only ever one execution in flight, in strict
+     * enqueue order. Pending state and the snapshot are read AT THIS
+     * FLUSH'S TURN, so a queued flush behind a write that already
+     * persisted everything simply returns, and a write can never carry an
+     * older snapshot than a write queued before it.
+     */
+    private doFlush;
 }
 export { cleanupStaleTempFiles };
 //# sourceMappingURL=discoveryStore.d.ts.map

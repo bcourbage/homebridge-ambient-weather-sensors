@@ -471,13 +471,85 @@ Note the `windspeedmph` entry combines `threshold` and `displayUnit` — canonic
 This prevents an older plugin's UI from partially rewriting a newer configuration and corrupting it silently.
 
 **Migration event:** first UI save on a legacy config atomically:
+0. Writes the **immutable legacy snapshot** (see below) and awaits success BEFORE any config.json mutation
 1. Reads effective sensor map (compat-translated)
 2. Computes minimal-diff canonical serialization against v2 baseline (§11.3)
 3. Writes as sparse canonical `sensorMap[]`
-4. Removes legacy fields
-5. Sets `configVersion: 2`
+4. Removes legacy fields, re-emitting the **synchronized legacy mirror** (see below) in their place
+5. Sets `configVersion: 2` and stamps `_legacyMirror: { version, hash }`
 
 Users who never open the UI keep the legacy shape indefinitely. Compat layer runs forever.
+
+### Downgrade safety: snapshot + mirror (finding-#4 Stage 4, review finding 5)
+
+Once legacy fields are removed, a plugin downgraded to v1.7.0 reads every
+category toggle as false, produces an empty device set, and unregisters the
+whole accessory cache on its FIRST boot — destroying HomeKit room placement
+and automations before any manual restore can happen (re-registering the same
+UUIDs later does not resurrect them). Two artifacts close this, implemented in
+`src/sensorMap/legacyMirror.ts` (the mandatory entry points for the Stage-8
+save flow are `composeV2ConfigSave` + `writeLegacySnapshot`; the runtime
+plugin never rewrites config.json):
+
+**1. Immutable snapshot — permanent.** At the first v2 conversion, the legacy
+sensor-configuration fields being removed (`LEGACY_SENSOR_FIELDS` only — never
+API credentials) are written to `legacy-config-snapshot.json` in the plugin
+persist dir via the atomic persistence helper, BEFORE config.json is touched.
+Never overwritten (first conversion wins). This is the provenance record and
+the source of truth for the documented manual late-rollback procedure. Kept
+forever.
+
+**2. Synchronized legacy mirror — time-boxed.** Every automated v2 UI save
+re-emits legacy sensor fields alongside `configVersion: 2` + `sensorMap`,
+reverse-projected from the effective v2 map (`projectLegacyMirror`). A
+downgraded v1.7 reads them directly — zero restore step, no first-boot race.
+The projection is conservative around CACHE PRESERVATION: v1.7 must register
+exactly the v1.7-representable accessories the v2 map enables (zero
+unregister calls for those; verified by the downgrade lifecycle fixture and a
+projection property test). Specifics:
+
+- Enable/disable state is expressed via category toggles + `excludeSensors`
+  (bare dataPoint when disabled everywhere; `MAC-dataPoint` for
+  station-specific disables — both native v1.7 match forms).
+- Every CUSTOM row emits its station-scoped `MAC-dataPoint` exclusions AND
+  the bare dataPoint form, because v1.7's broad matchers
+  (`sensor.includes('temp')`) would otherwise construct a WRONG wrapper for
+  a custom dataPoint. Custom accessories are the explicit downgrade-loss
+  boundary.
+- Station-conflicting thresholds fall back to the lowest-station-MAC value;
+  family-mixed display units are omitted (v1.7 default applies); embed mode
+  mirrors only when every enabled motion row embeds. Behavioral only —
+  registration is unaffected.
+- The mirrored fields are stamped with `_legacyMirror: { version, hash }`.
+  The hash is a canonical SHA-256 over BOTH the canonical `sensorMap` AND the
+  mirrored legacy fields — the mirror is a projection of the sensorMap, so a
+  hand edit to EITHER side invalidates the pair. `detectConfigMode` suppresses
+  its both-shapes-present ambiguity warning ONLY for a recognized
+  (hash-matching) mirror; a hand-edited `sensorMap` or mirrored field (or
+  deleting the mirrored fields) produces a loud "mirror is STALE" warning
+  carrying both hashes, and present-but-malformed metadata produces an
+  equally loud "metadata is INVALID" warning. Manual config edits are the
+  user's responsibility to re-save through the UI.
+
+**Support window:** automatic 1.x rollback (the mirror) is maintained through
+the **2.1.x line and removed in 2.2.0**. The snapshot remains permanently;
+from 2.2.0 onward, rolling back below 2.0 is a documented manual procedure
+(restore the snapshot fields into config.json before downgrading). The
+v1.7.1 guard release (configVersion/sensorMap detected → freeze, no
+reconciliation) is the safety net for downgrades that land on a mirror-less
+config.
+
+**RELEASE GATE (Stage 8 / GA — reviewer finding 5, round 3):** the
+`legacyMirror.ts` package is GROUNDWORK until it has a production caller.
+Today no shipped path performs a v2 conversion — the custom UI is read-only
+and schema-driven saves cannot produce `sensorMap` — so the snapshot/mirror
+contracts cannot yet be violated in the field. The gate: **no release may
+ship a UI (or any code path) capable of writing `configVersion: 2` /
+`sensorMap` into config.json unless that path routes through
+`composeV2ConfigSave` + `writeLegacySnapshot`, with an integration test
+proving snapshot-write → config-mutation ordering at the real save
+boundary.** Until that release, finding 5 remains OPEN as a tracked gate,
+not a resolved item. (Task #65's flag-flip milestone inherits this gate.)
 
 ## 6. Compat layer (legacy-mode only)
 

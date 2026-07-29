@@ -24,9 +24,11 @@
  */
 export declare function sanitizeForTileName(input: string): string;
 /**
- * Compose a tile name in "static" mode — the sensor label, sanitized.
- * No value is appended; the user gets a stable tile they can rename
- * in Apple Home without it being overwritten.
+ * Compose a tile name in "static" mode — the sensor label, sanitized
+ * and truncated to HAP's 64-char Name limit (review R4-2: a 100-char
+ * row-name override must be over-length at NO HAP sink). No value is
+ * appended; the user gets a stable tile they can rename in Apple Home
+ * without it being overwritten.
  */
 export declare function composeStaticName(sensorLabel: string): string;
 /**

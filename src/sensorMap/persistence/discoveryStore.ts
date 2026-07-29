@@ -94,7 +94,24 @@ export class DiscoveryTracker {
   private readonly lastSeenIntervalMs: number;
   private lastFlushAt = 0;
   private pendingLastSeenOnly = false;
-  private inflight: Promise<void> | null = null;
+  // Structural work (a NEW pair observed) pending a write. Tracked
+  // SEPARATELY from lastSeen-only work (review R3-7): a tick that
+  // contains both an existing observation and a new pair previously set
+  // `pendingLastSeenOnly`, and the throttle then deferred the STRUCTURAL
+  // discovery too — leaving it memory-only until the 15-minute window
+  // or shutdown (lost entirely on a crash). Structural work always
+  // flushes immediately.
+  private pendingStructural = false;
+  // Write MUTEX (review R4-1): every flush is appended to this promise
+  // chain, so at most ONE write is ever in flight and writes land in
+  // strict enqueue order. The previous await-the-inflight-then-proceed
+  // shape released ALL waiters at once — a normal poll flush and
+  // shutdown's forced flush could both start writes after the same
+  // await, and the OLDER snapshot could finish last, overwriting the
+  // newer one on disk. Each queued flush re-evaluates pending state and
+  // takes its snapshot only when its turn comes, so it always writes
+  // the newest state (or returns because a predecessor already did).
+  private writeChain: Promise<void> = Promise.resolve();
 
   constructor(opts: TrackerOptions) {
     this.filePath = opts.filePath;
@@ -126,6 +143,7 @@ export class DiscoveryTracker {
         firstSeen: iso,
         lastSeen: iso,
       });
+      this.pendingStructural = true;
       return true;
     }
     existing.lastSeen = iso;
@@ -146,41 +164,66 @@ export class DiscoveryTracker {
   }
 
   /**
-   * Flush to disk if a write is due. `force: true` bypasses throttling
-   * (SIGTERM path). Fire-and-forget by default — errors log a warn but
+   * Flush to disk if a write is due. `force: true` bypasses the
+   * lastSeen THROTTLE (SIGTERM path) — but not the no-pending check: a
+   * flush (forced or not) queued behind one that already persisted
+   * every pending observation returns without a redundant write
+   * (review R5-3). Fire-and-forget by default — errors log a warn but
    * don't propagate; callers who need to observe completion await the
    * return value.
    */
   async flush(force = false): Promise<void> {
-    // Serialize concurrent flushes.
-    if (this.inflight) {
-      await this.inflight;
-      if (!force && !this.pendingLastSeenOnly) {
-        return;
-      }
-    }
+    // Append to the write chain (mutex). `.catch` on the tail keeps a
+    // failed write from poisoning the chain for later flushes; the
+    // returned promise still reflects THIS flush's outcome (doFlush
+    // logs its own failures and never rejects).
+    const run = this.writeChain.then(() => this.doFlush(force));
+    this.writeChain = run.catch(() => { /* never rejects; belt-and-suspenders */ });
+    return run;
+  }
 
+  /**
+   * The serialized body — only ever one execution in flight, in strict
+   * enqueue order. Pending state and the snapshot are read AT THIS
+   * FLUSH'S TURN, so a queued flush behind a write that already
+   * persisted everything simply returns, and a write can never carry an
+   * older snapshot than a write queued before it.
+   */
+  private async doFlush(force: boolean): Promise<void> {
     const now = this.clock.now();
-    if (!force && this.pendingLastSeenOnly) {
-      if (now - this.lastFlushAt < this.lastSeenIntervalMs) {
+    // Nothing pending — a predecessor in the chain already persisted
+    // everything, so writing again would be byte-identical redundant
+    // I/O. This coalescing applies to FORCED flushes too (review R5-3):
+    // `force` bypasses only the lastSeen THROTTLE below, never the
+    // no-work check — shutdown's force-flush behind a poll flush that
+    // just wrote becomes a no-op.
+    if (!this.pendingStructural && !this.pendingLastSeenOnly) {
+      return;
+    }
+    if (!force) {
+      // The 15-minute throttle applies ONLY to lastSeen-only work.
+      // Structural discoveries (new pairs) always write immediately —
+      // even when the same tick also refreshed existing entries (R3-7).
+      if (!this.pendingStructural && now - this.lastFlushAt < this.lastSeenIntervalMs) {
         return;
       }
     }
 
-    const p = (async () => {
-      try {
-        await saveDiscoveryStore(this.filePath, this.snapshot(), this.log);
-        this.lastFlushAt = now;
-        this.pendingLastSeenOnly = false;
-      } catch (e) {
-        this.log.warn(`Discovery store flush failed: ${(e as Error).message}`);
-      }
-    })();
-    this.inflight = p;
+    // Capture-and-clear the pending flags SYNCHRONOUSLY, in the same
+    // tick the snapshot is taken (R3-7): an observe() landing during
+    // the write sets fresh flags that the next queued flush picks up.
+    // On failure the captured work is restored so it isn't lost.
+    const hadLastSeen = this.pendingLastSeenOnly;
+    const hadStructural = this.pendingStructural;
+    this.pendingLastSeenOnly = false;
+    this.pendingStructural = false;
     try {
-      await p;
-    } finally {
-      this.inflight = null;
+      await saveDiscoveryStore(this.filePath, this.snapshot(), this.log);
+      this.lastFlushAt = now;
+    } catch (e) {
+      this.pendingLastSeenOnly = this.pendingLastSeenOnly || hadLastSeen;
+      this.pendingStructural = this.pendingStructural || hadStructural;
+      this.log.warn(`Discovery store flush failed: ${(e as Error).message}`);
     }
   }
 }

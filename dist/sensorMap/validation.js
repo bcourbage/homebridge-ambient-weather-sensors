@@ -24,6 +24,7 @@
  * attribute them to the specific merge fragment responsible and so
  * the UI can dedupe on `code` + `field` without parsing text.
  */
+import { hapClean } from './displayName.js';
 import { LEGAL_UNITS_FOR_MEASUREMENT, isCompatibleKind } from './units.js';
 /** Strict MAC-address regex per §3.3.1. Case-insensitive hex + colon. */
 export const STATION_MAC_REGEX = /^([0-9A-F]{2}:){5}[0-9A-F]{2}$/i;
@@ -195,12 +196,27 @@ export function validateOverrideBody(merged, identity, defaultRow) {
         }
         out.displayUnit = merged.displayUnit;
     }
-    // name: non-empty string.
+    // name: non-empty string that SURVIVES HAP sanitization (review
+    // R3-6). A non-empty value like "---" or whitespace sanitizes to the
+    // empty string and would produce an invalid/ambiguous HomeKit name.
+    // Warn-and-strip rather than reject: a cosmetic-field typo must never
+    // become a cache-destroying row rejection — the row loads with its
+    // default name.
     if (merged.name !== undefined) {
         if (typeof merged.name !== 'string' || merged.name.length === 0) {
             return err('invalid-name', `name on ${dp} must be a non-empty string.`, warnings, 'name');
         }
-        out.name = merged.name;
+        if (hapClean(merged.name).length === 0) {
+            warnings.push({
+                code: 'ignored-unsanitizable-name',
+                field: 'name',
+                message: `name '${merged.name}' on ${dp} contains no HAP-legal characters after sanitization; `
+                    + 'the field is ignored and the default name is used.',
+            });
+        }
+        else {
+            out.name = merged.name;
+        }
     }
     // threshold: number.
     if (merged.threshold !== undefined) {

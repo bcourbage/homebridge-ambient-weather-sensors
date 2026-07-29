@@ -218,12 +218,19 @@ doesn't fit: `RowValidationError.overrideIndex` is required (frozen
 in Group 1), and a wrapper mismatch caused by a bug in the built-in
 default map has NO override to point at — inventing an index would
 make the UI highlight an unrelated config entry the user didn't
-write. Same problem for the `orphan-battery-field` note the
-battery-ownership pass produces when a user disables the reserved
-canonical owner: there's no natural "config index" to attach it to.
+write.
 
-Solution — grow `EffectiveSensorMap` with a THIRD diagnostic channel
-dedicated to internal-invariant / attribution-free notes:
+Solution — grow `EffectiveSensorMap` with a THIRD diagnostic
+channel. `notes` is a MIXED channel distinguished by `source`: some
+notes are genuinely attribution-free (`source: 'default-map'` —
+internal invariants, plugin bugs, both-default collisions), while
+others deliberately carry a real `overrideIndex`
+(`source: 'override'` — the battery-ownership pass's
+`duplicate-battery-owner` and `orphan-battery-field`, which point at
+the fragment that lost the collision, disabled the owner, or rebound
+its field). What unifies the channel is that entries are NOT row
+rejections or field strips — they are ownership/health diagnostics —
+and that `overrideIndex` is optional rather than required:
 
 ```typescript
 export interface InternalInvariantNote {
@@ -241,7 +248,7 @@ export interface EffectiveSensorMap {
   rows: EffectiveSensorRow[];
   errors: RowValidationError[];       // config-attributable failures
   warnings: RowValidationWarning[];   // config-attributable warnings
-  notes: InternalInvariantNote[];     // NEW — no override attribution required
+  notes: InternalInvariantNote[];     // NEW — mixed diagnostics; attribution determined by `source`
 }
 ```
 
@@ -269,12 +276,16 @@ Enforcement + routing:
   Startup does not crash.
 
 - **`orphan-battery-field`** (from the battery-ownership pass):
-  the user disabled a reserved canonical owner while other rows
-  still reference the field. Push a note with `source: 'override'`
-  and the `overrideIndex` of the fragment that disabled the row.
-  If no override was involved (a plugin update disabled the row
-  via defaults — hypothetical), fall back to `source: 'default-map'`
-  with no index.
+  the user disabled a reserved canonical owner — or rebound it to a
+  different batteryField, or both — while other enabled rows still
+  reference the reserved field. Push a note with `source: 'override'`
+  and the `overrideIndex` of the fragment that disabled the row (or,
+  rebind-only, the fragment that authored the owner's new
+  batteryField value, via the value-aware authorship table). The
+  compound state names both causes and the FULL remedy (re-enable
+  AND restore the field). If no override was involved (a plugin
+  update disabled the row via defaults — hypothetical), fall back to
+  `source: 'default-map'` with no index.
 
 Registration-time throw handling is a general contract, not just
 for this check — a wrapper constructor throwing for any reason
@@ -533,10 +544,11 @@ described below in full, is a BEHAVIORAL CHANGE on top of PR #20:
   through `EffectiveSensorMap.notes` (`source: 'default-map' |
   'override'`) instead of the shipping RowValidationWarning
   channel — that channel keeps carrying config-attributable
-  warnings; internal-invariant + attribution-free notes move to
-  the new channel.
-- Disabled reserved-owner rows produce an `orphan-battery-field`
-  info-level note when other rows still reference the field
+  warnings; ownership/plugin-health diagnostics (attributed or
+  attribution-free, per `source`) move to the new channel.
+- Reserved-owner rows that are DISABLED or REBOUND away from their
+  reserved field (or both) produce an `orphan-battery-field`
+  info-level note when other enabled rows still reference the field
   (PR #20 leaves the field silently sub-serviceless).
 
 Runtime-side work is additive to those effective-map changes:
@@ -621,16 +633,31 @@ for all three cases):
   the winner. Warnings fire ONLY on user-authored conflicts —
   never on default-map sharing.
 
-- **Disabled rows** — disabled rows do not participate in
-  ownership. Disabling the reserved canonical owner does NOT roll
-  ownership to the next default-map candidate (structural
-  signatures would drift as users toggle enable state) and does
-  not promote a user row to owner. The battery field simply gets
-  no HAP sub-service on that station until the reserved owner is
-  re-enabled. `buildEffectiveSensorMap` emits an
-  `orphan-battery-field` info-level note when a user disables the
-  reserved owner while other rows still reference the field, so
-  users understand why the sub-service went away.
+- **Disabled or rebound owners** — disabled rows do not participate
+  in ownership, and neither disabling the reserved canonical owner
+  nor rebinding its batteryField to a novel value rolls ownership
+  to the next default-map candidate (structural signatures would
+  drift as users toggle state) or promotes a user row to owner —
+  the reserved set statically blocks every other claimant. The
+  battery field simply gets no HAP sub-service on that station
+  until the owner is re-enabled and/or restored to the reserved
+  field. `buildEffectiveSensorMap` emits an `orphan-battery-field`
+  info-level note whenever an orphaning state exists while other
+  enabled rows still reference the field — attributed to the
+  disabling fragment, or (rebind-only) to the fragment that
+  authored the new batteryField value; the compound
+  disabled-and-rebound state names both causes and the full remedy.
+  Ownership never rolling is scoped to the ORIGINAL reserved field:
+  no other row REFERENCING THAT FIELD changes signature. The owner's
+  own signature can change when its Battery sub-service is added or
+  removed by the same edit, and — enabled rebind to a novel field
+  only — the owner enters the collision ordering on its NEW field,
+  where an existing claimant can lose ownership and flip
+  `battery:1 → battery:0` (this matches the runtime
+  `orphan-battery-field` diagnostic's collision caveat exactly,
+  including its gates: a disabled owner never claims, a null field
+  claims nothing, and a rebind to another reserved field is
+  rejected by the static reserved set).
 
 The pass runs BEFORE `structuralSignature` is computed on the row,
 so signature stability is a function of resolved ownership, not the
@@ -660,17 +687,19 @@ resolve deterministically on `(stationMac, dataPoint)`
 lexicographic order — never on discovery iteration order, which
 would depend on observation history.
 
-**2. Platform parse pipeline** (unchanged for known dataPoints,
-extended for custom). Today's `parseDevices` calls
-`batteryFieldForSensor(sensorKey)` to look up which AWN battery
-field goes with a known sensor and reads that field off
-`station.lastData`. For custom rows the answer isn't in the built-in
-map — instead, parseDevices reads `row.batteryField` from the
-effective-map entry for the (station, dataPoint) pair. `batteryLow`
-is derived the same way (`readBatteryLow`); the resulting boolean
-is stamped into `accessory.context.device.batteryLow` BEFORE the
-wrapper constructor runs, so `setupBatteryService`'s existing
-initial-value seeding still works.
+**2. Platform bootstrap pipeline.** (IMPLEMENTED — as-built shape:
+the v2 path BYPASSES `parseDevices` entirely; it fetches raw
+stations and builds v1.7-compatible contexts inside
+`discoverDevicesV2`'s reconciler.) The bootstrap battery seed there
+resolves through the shared
+`resolveBatteryField(effectiveMap, mac, dp)` reader — custom rows
+resolve their user-authored field, known rows their adjudicated
+reserved field — and `readBatteryLow` stamps the boolean into
+`accessory.context.device.batteryLow` BEFORE the wrapper
+constructor runs, so `setupBatteryService`'s existing initial-value
+seeding works on the very first snapshot. `parseDevices` itself
+only serves the flag-off path and calls the same reader with no
+effective map, which IS the v1.6.0 static lookup.
 
 **3. Wrapper construction.** `setupBatteryService` today attaches
 the BatteryService when `context.device.batteryLow !== undefined`.
@@ -716,58 +745,61 @@ the wrapper: the sub-service still exists, `StatusLowBattery` reads
 NORMAL initially, and the next tick's battery value flows through
 `setBatteryLow` normally.
 
-**4. Runtime updates.** Polling and realtime are TWO independent
-sources today and neither goes through a single shared reader.
-Polling calls `batteryFieldForSensor(sensorKey)` inside
-`parseDevices`; `RealtimeSource` (in `src/realtime/*.ts`)
-independently calls the same helper. A custom `batteryField` fixes
-polling if we swap that one lookup for `row.batteryField`, but
-realtime would still miss the field. Both need the fix.
+**4. Runtime updates.** (IMPLEMENTED — Stage 4 final commit.)
+Polling and realtime were TWO independent sources and neither went
+through a single shared reader: polling called
+`batteryFieldForSensor(sensorKey)` inside `parseDevices`;
+`RealtimeSource` independently called the same helper. A custom
+`batteryField` would have fixed polling by swapping that one lookup
+for `row.batteryField`, but realtime would still miss the field.
 
-The proposed change:
+The shipped change (`src/sensorMap/resolveBatteryField.ts`):
 
-- Introduce a shared row-aware battery-field resolver:
+- A shared row-aware battery-field resolver:
   `resolveBatteryField(effectiveMap, stationMac, dataPoint) →
-  string | null`. Prefers the row's `batteryField` when present;
-  falls back to `batteryFieldForSensor(dataPoint)` for
-  legacy-flag-off paths that don't yet have an effective map.
-- Polling (`parseDevices`) calls the shared resolver.
-- Realtime does one of the following (Stage 2 picks whichever is
-  smaller):
-  - refactor `RealtimeSource` to deliver its raw station payloads
-    to a platform-owned handler that runs the same reader as
-    polling; OR
-  - inject the shared resolver into `RealtimeSource` at
-    construction, replacing its direct `batteryFieldForSensor`
-    call.
+  string | null`. With an effective map, the adjudicated row is the
+  SOLE authority (`hasBatterySubService && batteryField`; collision
+  losers, suppressed owners, and unmapped dataPoints resolve null —
+  never the legacy fallback). Without one (legacy flag-off paths),
+  it IS `batteryFieldForSensor(dataPoint)`.
+- Polling (`parseDevices`) calls the shared resolver (flag off →
+  no effective map → static lookup, byte-identical).
+- Realtime got BOTH proposed shapes, at different layers: the v2
+  transport already delivers reconstructed station payloads to the
+  platform-owned `distributeViaV2Routing`, whose per-entry battery
+  reads run the shared resolver (same reader as polling); and the
+  shared resolver is also injected into `RealtimeSource` at
+  construction, replacing its direct `batteryFieldForSensor` call
+  for the per-update `batteryLow` it bundles on the v1 path.
 
 Both replacements keep the existing "0 means low" semantics AWN
 uses on its battery fields — the plugin's `readBatteryLow` helper
 converts that to a boolean and the wrapper's `setBatteryLow`
 consumes the boolean. No change to that reading.
 
-Stage 2's battery-family PR includes two integration tests, split
-by which lifecycle stage each transport can actually exercise:
+The custom-battery integration tests as shipped (in
+`tests/integration/discoverV2.test.ts`), split by which lifecycle
+stage each transport can actually exercise:
 
-- **Polling / bootstrap test** — proves the *initial* seeding path.
-  Seeds a custom row with `batteryField: 'my_barn_batt'`, runs the
-  first REST discovery cycle with `my_barn_batt === 0` in the
-  payload, and asserts:
-  - `context.device.batteryLow` was populated by parseDevices
-    BEFORE the constructor ran (so the Battery sub-service is
-    attached on the first tick, not the second);
-  - `wrapper.setBatteryLow(true)` fired.
+- **Bootstrap test** — proves the *initial* seeding path. A custom
+  row with `batteryField: 'barn_batt'` reconciles against a first
+  snapshot where `barn_batt === 0`, and the test asserts BOTH
+  `context.device.batteryLow === true` (populated before the
+  constructor ran, so the Battery sub-service attaches on the first
+  tick) AND `StatusLowBattery` reading LOW immediately after
+  discovery. The legacy static lookup does not know `barn_batt`, so
+  a bootstrap seed reverted to it fails this test.
 
-- **Realtime test** — proves the *update* path only. `RealtimeSource`
-  starts AFTER the initial REST discovery, so by the time its
-  subscription callback fires the wrapper is already constructed
-  and its sub-service already attached (or not) based on the
-  polling seed. The realtime test therefore starts with a
-  pre-constructed wrapper whose owner row's `batteryField` is
-  `my_barn_batt`, delivers a realtime payload where
-  `my_barn_batt === 0`, and asserts `setBatteryLow(true)` fired.
-  This exercises the row-aware realtime reader without pretending
-  realtime can seed a not-yet-existent wrapper.
+- **Realtime platform-boundary test** — proves the *update* path
+  through the REAL transport convergence: a battery-only
+  `${MAC}-barn_batt` update delivered via `platform.distribute`
+  (→ `updatesToStationPayloads` → `distributeViaV2Routing` →
+  shared reader) flips `StatusLowBattery` LOW, and a follow-up
+  event flips it back to NORMAL. The canonical-field twin (finding
+  9, `battout`) covers the same boundary for reserved fields, and
+  a `RealtimeSource` unit suite pins the injected-resolver
+  contract (default-lookup parity, custom field, null suppression,
+  argument pass-through) in isolation.
 
 The pre-first-payload "sub-service exists even when the field is
 missing" test (from the setupBatteryService contract change above)

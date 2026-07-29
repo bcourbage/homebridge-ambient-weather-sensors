@@ -66,10 +66,15 @@ export declare class AmbientWeatherSensorsPlatform implements DynamicPlatformPlu
     private realtimeSource;
     private readonly safeModeBindings;
     private readonly shadow;
+    private readonly sensorMapV2;
+    private v2Routing;
+    private v2EffectiveMap;
+    private readonly loggedPreservedAccessories;
+    private v2Tracker;
     private configMode;
     constructor(log: Logger, config: PlatformConfig, api: API);
     configureAccessory(accessory: PlatformAccessory): void;
-    determineSensorType(sensor: string): "PM2.5" | "PM10" | "Solar Radiation" | "CO2" | "Temperature" | "Humidity" | "NOT_SUPPORTED" | "WindSpeed" | "WindGust" | "WindMaxDailyGust" | "WindDirection" | "WindDirection10m" | "RainRate" | "RainEvent" | "RainDaily" | "RainWeekly" | "RainMonthly" | "RainYearly" | "LastRain" | "PressureRelative" | "PressureAbsolute" | "UV" | "LightningDay" | "LightningHour" | "LightningDistance" | "LightningLastStrike";
+    determineSensorType(sensor: string): "PM2.5" | "PM10" | "Solar Radiation" | "CO2" | "Temperature" | "Humidity" | "UV" | "WindSpeed" | "WindGust" | "WindMaxDailyGust" | "WindDirection" | "WindDirection10m" | "PressureRelative" | "PressureAbsolute" | "RainRate" | "RainEvent" | "RainDaily" | "RainWeekly" | "RainMonthly" | "RainYearly" | "LastRain" | "LightningDay" | "LightningHour" | "LightningDistance" | "LightningLastStrike" | "NOT_SUPPORTED";
     /**
      * Compose a HAP-clean accessory displayName from station + sensor
      * metadata.
@@ -149,6 +154,180 @@ export declare class AmbientWeatherSensorsPlatform implements DynamicPlatformPlu
      */
     deregisterAccessories(Devices: DEVICE[]): void;
     discoverDevices(): any;
+    /**
+     * Choose how to keep the registered wrappers updated. Two data-source
+     * options:
+     *
+     *   "polling"  (default) — one platform-level setInterval, REST
+     *                          fetch every 2 minutes.
+     *   "realtime"           — opt-in; subscribe to AWN's socket.io
+     *                          endpoint and push updates as they arrive
+     *                          (~30s cadence indoors).
+     *
+     * CONSTRAINT (added in 1.6.0): embed display mode is incompatible with
+     * the realtime data source. The combination produces a flood of HAP
+     * Name-characteristic update notifications to every paired iOS
+     * controller, which has been observed to drain phone battery ~5×-7×
+     * faster than normal idle (solmssen, 2026-06-18, ~15 extended sensors
+     * active). Polling caps the notification volume to roughly one batch
+     * per 2 minutes, which keeps the drain negligible while still
+     * delivering live-ish tile values. If the user has selected both, we
+     * coerce to polling and warn — the user's intent ("live value in
+     * tile") is preserved at a slightly slower cadence, which is the right
+     * trade-off for an invisible side effect like battery drain.
+     *
+     * Shared by the v1.6.0 path and the v2 reconciler; the poll/realtime
+     * fanout branches on `this.v2Routing` presence downstream.
+     */
+    private startDataSource;
+    /**
+     * Flag-gated v2 reconciler (finding-#4 Stage 4, first commit). Runs in
+     * place of the v1.6.0 discoverDevices path when `sensorMapV2` is on
+     * (default OFF, so shipping behaviour is unchanged).
+     *
+     * Pipeline:
+     *   1. Fetch the raw AWN station payloads; apply stationFilter.
+     *   2. Initialize persistence under
+     *      `storagePath()/plugin-data/ambient-weather/` (NEVER
+     *      `persistPath()` — HAP-scan / EISDIR hazard): stale-temp
+     *      cleanup, ui-state load, and the platform-owned
+     *      DiscoveryTracker (review P1-4) fed with this snapshot's
+     *      post-filter observations.
+     *   3. Assemble the effective sensor map (pure) from the tracker's
+     *      merged discovery view — compat overrides for legacy configs,
+     *      `config.sensorMap` for v2.
+     *   4. Reconcile the cache (review P1-2): orphans are unregistered
+     *      EXCEPT preserve-cached accessories (kind/measurement not
+     *      inferable — kept with last-known values per §17.3); restored
+     *      accessories have their cached structural signature (stored, or
+     *      derived via `inferForCachedAccessory` + Battery-service
+     *      presence) compared against the row's frozen signature — a
+     *      mismatch re-registers the accessory and records a
+     *      structural-change notice (§8.4/§9) instead of mutating the HAP
+     *      graph in place.
+     *   5. For every enabled, KNOWN, AWN-reported row: build a
+     *      v1.7-compatible `context.device` carrying `type` (downgrade
+     *      cache recognition) plus `kind`/`measurement`/
+     *      `structuralSignature`, restore-or-create its accessory reusing
+     *      the v1.7 UUID, instantiate the row-driven wrapper, and register
+     *      it. Build the `(mac, dataPoint) → wrapper` routing map and seed
+     *      each wrapper's current value.
+     *   6. Start the poll / realtime data source; both fan out through
+     *      `distributeViaRouting` (see distributeViaV2Routing).
+     *
+     * Custom (non-default) dataPoints register through the RESTORED
+     * resolution table (Stage 4's table-restoration commit): a custom row
+     * declaring a `(kind, measurement)` with a concrete wrapper class
+     * resolves, registers, and routes like any known row. Kinds without a
+     * wrapper class (co, leak, contact, occupancy) still resolve
+     * `no-wrapper` and never register.
+     *
+     * Safe mode never reaches here — `didFinishLaunching` routes to
+     * `safeModeStart()` first, before any persistence read that could
+     * quarantine or write a file.
+     */
+    private discoverDevicesV2;
+    /**
+     * v2 twin of parseDevices' station-level filtering. Announces each
+     * discovered station once per restart (users learn the exact
+     * `stationFilter` strings from these lines), then applies the filter
+     * with v1's matching rules (info.name OR MAC, case-insensitive,
+     * whitespace-trimmed). Log strings and the per-session log-once sets
+     * are shared with the v1 path verbatim — only one path runs per boot,
+     * so the sets never collide. `stationFilter` is applied uniformly in
+     * legacy AND v2 config modes: it's a platform-instance concern (multi-
+     * Home child bridges), not a sensor-map concern, and configMode
+     * detection deliberately doesn't classify it as a legacy toggle.
+     */
+    private applyStationFilterV2;
+    /**
+     * Fetch the raw AWN station payloads for the v2 path. Same endpoint,
+     * throttle handling, and content-type guard as `fetchDevices`, but
+     * returns the un-parsed per-station shape (macAddress + info + lastData)
+     * so the row-driven router can read every field — including the batt*
+     * datapoints `parseDevices` drops. Returns `undefined` on fetch/parse
+     * failure (caller retries), or `[]` for an empty/non-array response.
+     */
+    private fetchRawStations;
+    /**
+     * Initialize v2 persistence: clean stale temp files, load the
+     * discovery store into a platform-owned DiscoveryTracker (review
+     * P1-4 — the live pipeline is the producer of the plugin's discovery
+     * registry, a role the retired shadow observer used to fill), and
+     * load the ui-state store. Idempotent — the tracker is created once
+     * and survives the discover-retry recursion.
+     *
+     * The persist dir is `storagePath()/plugin-data/ambient-weather/` — we
+     * deliberately avoid `persistPath()` because HAP-NodeJS scans that tree
+     * and a subdirectory there crashes it with EISDIR (v2.0.0-beta.1).
+     * Never called in safe mode (didFinishLaunching routes to
+     * safeModeStart first), so safe mode still performs zero persistence
+     * reads or writes.
+     */
+    private v2PersistDir;
+    private v2PersistLog;
+    private initV2Persistence;
+    /**
+     * Feed every post-filter (station, dataPoint) pair into the discovery
+     * tracker and kick a throttled flush. Called at discovery and on each
+     * v2 poll tick — the same cadence the shadow observer used, so
+     * discovery.json keeps accumulating under the live path.
+     */
+    private observeV2Stations;
+    /**
+     * Resolve the structural signature of a CACHED accessory for
+     * comparison against its row's frozen signature (review P1-2 / §9).
+     *
+     * v2-written caches carry the signature verbatim in
+     * `context.device.structuralSignature`. v1.7-written caches don't —
+     * derive one from the same inputs the signature hashes: inferred
+     * kind + measurement, Battery sub-service presence on the actual HAP
+     * graph, and the row's wrapper descriptor. Derivation necessarily
+     * uses the CURRENT wrapper schemaVersion (the old one is unknowable),
+     * so a schemaVersion bump re-registers only v2-written caches —
+     * v1.7 caches adopt the current version silently. Returns undefined
+     * when nothing can be derived (uninferable cache) — the caller then
+     * adopts the row's signature without re-registration.
+     */
+    private cachedSignatureFor;
+    /**
+     * Record a structural-change notice (sensor-map §8.4) so the UI can
+     * explain why an accessory was re-registered (and its HomeKit room /
+     * automations detached). Best-effort: a persistence failure logs and
+     * never blocks reconciliation.
+     */
+    private appendStructuralNoticeV2;
+    /**
+     * Surface effective-map diagnostics. Config-attributable errors (e.g.
+     * a custom row's `no-wrapper` for a kind without a concrete wrapper
+     * class) log at info so the user learns their sensor was rejected;
+     * warnings and attribution-free notes stay at debug.
+     */
+    private logEffectiveMapDiagnostics;
+    /**
+     * v2 value distribution — the single boundary BOTH transports
+     * converge on: polling delivers raw station payloads here directly,
+     * and realtime reconstructs its per-update stream back into the same
+     * payload shape (`updatesToStationPayloads`) first.
+     *
+     * Sensor VALUES go through the Stage-3 routing mechanism
+     * (`distributeViaRouting`); the standalone batt* datapoints the
+     * router deliberately ignores are read per routing entry through the
+     * shared `resolveBatteryField(effectiveMap, mac, dp)` reader — the
+     * same ownership-adjudicated authority the wrapper's Battery
+     * sub-service was built from — and pushed as HomeKit's `true = low`
+     * boolean.
+     */
+    private distributeViaV2Routing;
+    /**
+     * Reshape the realtime source's pre-digested `(uniqueId, value)`
+     * updates back into raw per-station payloads so the v2 path routes them
+     * through the SAME `distributeViaRouting` boundary the poll path uses.
+     * The realtime source emits every numeric field — including the batt*
+     * fields — as its own update, so the reconstructed `lastData` carries
+     * the battery datapoints the shared battery reader consumes.
+     */
+    private updatesToStationPayloads;
     /**
      * Safe-mode entrypoint — the reduced pipeline for
      * `configMode === 'safe-mode'` per sensor-map.md §17.2. Reads

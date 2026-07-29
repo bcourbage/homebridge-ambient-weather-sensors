@@ -212,8 +212,17 @@ export const ALL_WRAPPERS = [
     LIGHTNING_LAST_STRIKE_WRAPPER,
 ];
 /**
- * Custom-sensor wrapper resolution: given a user-declared
- * `(kind, measurement)`, return the wrapper the plugin should use.
+ * Custom-sensor `(kind, measurement)` → wrapper resolution table —
+ * RESTORED in finding-#4 Stage 4, after the interim Stage-0 emptying.
+ *
+ * Given a custom row's user-declared `(kind, measurement)`, this
+ * resolves the wrapper the plugin uses. The prerequisites that gated
+ * the restore are all live: Stage 1's factory registry, Stage 2's
+ * row-consuming constructors (a custom row's `dataPoint` / `threshold`
+ * / units / name all flow from the row, never a hardcoded AWN key),
+ * Stage 3's value routing, and Stage 4's platform boundary
+ * (`discoverDevicesV2` registers and routes custom rows end-to-end).
+ * The 15 entries are byte-identical to the pre-Stage-0 table.
  *
  * `motion`-kind rows disambiguate on measurement alone. Where a
  * measurement has multiple candidate wrappers (rain-accumulation
@@ -224,39 +233,48 @@ export const ALL_WRAPPERS = [
  * matching known dataPoint via the default map instead.
  *
  * Kinds without a concrete wrapper class (co, leak, contact,
- * occupancy) are absent — a custom row declaring one fails
- * validation with "no wrapper for (kind, measurement)".
- */
-/**
- * Custom-sensor `(kind, measurement)` → wrapper resolution table.
+ * occupancy) remain absent — a custom row declaring one still fails
+ * with a `no-wrapper` error until concrete classes land.
  *
- * INTENTIONALLY EMPTY as of finding-#4 Stage 0. Emptying it means a
- * custom row (one whose `dataPoint` is NOT in `DEFAULT_SENSOR_MAP`)
- * cannot resolve a wrapper and `buildEffectiveSensorMap` rejects it
- * with a `no-wrapper` error. This is the interim-safety measure
- * from `docs/future/wrapper-parameterization.md` §"Stage 0": the
- * wrapper classes do not yet consume the effective row
- * (row-driven `dataPoint` / `threshold` / unit / name), so routing
- * a custom row through a legacy wrapper would silently tie it to
- * that wrapper's hardcoded AWN key. Until Stage 4 restores this
- * table (after Stages 1–3 wire the factory registry, the
- * row-consuming constructors, and value routing), custom sensors
- * are not user-facing.
+ * KNOWN dataPoints never consult this table — they resolve their
+ * wrapper via `defaultMap.wrapper` (a direct descriptor reference on
+ * the default row).
  *
- * KNOWN dataPoints are UNAFFECTED — they resolve their wrapper via
- * `defaultMap.wrapper` (a direct descriptor reference on the
- * default row), never through this table. Compat-generated
- * overrides therefore keep working.
- *
- * A regression test (`wrappers.test.ts`) asserts this stays empty
- * so a well-meaning restore without the Stage-1..3 wiring can't
- * slip in unnoticed.
+ * `wrappers.test.ts` pins the exact 15-entry shape AND that every
+ * entry's descriptor agrees with the key's `(kind, measurement)` per
+ * `WRAPPER_SPEC`, so a drifted entry breaks CI instead of registering
+ * a mis-typed accessory.
  */
 export const WRAPPER_FOR_KIND_AND_MEASUREMENT = {
-// Deliberately empty — see the doc-comment above. Restored in Stage 4.
+    'temperature|temperature': TEMPERATURE_WRAPPER,
+    'humidity|humidity': HUMIDITY_WRAPPER,
+    'light|illuminance': SOLAR_RADIATION_WRAPPER,
+    'co2|co2': CO2_WRAPPER,
+    'air-quality-pm25|pm25': AIR_QUALITY_PM25_WRAPPER,
+    'air-quality-pm10|pm10': AIR_QUALITY_PM10_WRAPPER,
+    'motion|uv-index': UV_WRAPPER,
+    'motion|wind-speed': WIND_SPEED_WRAPPER,
+    'motion|direction': WIND_DIRECTION_WRAPPER,
+    'motion|pressure': PRESSURE_RELATIVE_WRAPPER,
+    'motion|rain-rate': RAIN_RATE_WRAPPER,
+    'motion|rain-accumulation': RAIN_EVENT_WRAPPER,
+    'motion|distance': LIGHTNING_DISTANCE_WRAPPER,
+    'motion|count': LIGHTNING_DAY_WRAPPER,
+    'motion|timestamp': LAST_RAIN_WRAPPER,
 };
 export function wrapperFor(kind, measurement) {
     return WRAPPER_FOR_KIND_AND_MEASUREMENT[`${kind}|${measurement}`];
+}
+// id → descriptor lookup. Used by the platform's structural-signature
+// reconciliation (finding-#4 Stage 4, review P1-2) to derive a cached
+// accessory's signature when its context predates v2 (no stored
+// signature). Keyed by the frozen WrapperId union, so an unregistered
+// id is a compile error at the call site.
+const WRAPPER_BY_ID = new Map(ALL_WRAPPERS.map(w => [w.id, w]));
+export function wrapperById(id) {
+    // Every WrapperId has exactly one ALL_WRAPPERS entry (locked by the
+    // registry snapshot test), so the lookup cannot miss at runtime.
+    return WRAPPER_BY_ID.get(id);
 }
 // Deep-freeze the registry so any code path that receives a
 // descriptor (including untyped MCP boundaries or future dynamic

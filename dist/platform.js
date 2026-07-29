@@ -1,3 +1,4 @@
+import * as path from 'path';
 import { AirQualityAccessory } from './airQualityAccessory.js';
 import { batteryFieldForSensor, isCanonicalSensorForBattery, readBatteryLow } from './batteryFields.js';
 // Battery field naming pattern, used to detect raw battery field
@@ -14,9 +15,20 @@ import { WindDirection10mAccessory, WindDirectionAccessory, WindGustAccessory, W
 import { HumidityAccessory } from './humidityAccessory.js';
 import { RealtimeSource } from './realtimeSource.js';
 import { bindSafeMode } from './safeModeBinding.js';
+import { inferForCachedAccessory } from './sensorMap/bootstrap.js';
+import { coerceValue } from './sensorMap/coerceValue.js';
 import { detectConfigMode } from './sensorMap/configMode.js';
-import { composeDisplayName as sharedComposeDisplayName, hapClean as sharedHapClean, } from './sensorMap/displayName.js';
-import { createShadowMode } from './sensorMap/shadowMode.js';
+import { composeDisplayName as sharedComposeDisplayName, composeRowDisplayName, hapClean as sharedHapClean, } from './sensorMap/displayName.js';
+import { legacyTypeForWrapperId } from './sensorMap/legacyDeviceType.js';
+import { DISCOVERY_FILE, DiscoveryTracker, cleanupStaleTempFiles, loadDiscoveryStore, } from './sensorMap/persistence/discoveryStore.js';
+import { NOTICES_FILE, appendNotice, loadNoticeStore, } from './sensorMap/persistence/noticesStore.js';
+import { UI_STATE_FILE, loadUiStateStore } from './sensorMap/persistence/uiStateStore.js';
+import { buildPlatformEffectiveMap, sensorMapShapeError, } from './sensorMap/platformEffectiveMap.js';
+import { buildWrapperRouting, distributeViaRouting, routingKey, } from './sensorMap/routing.js';
+import { resolveBatteryField } from './sensorMap/resolveBatteryField.js';
+import { createShadowMode, shadowModeEnabled } from './sensorMap/shadowMode.js';
+import { computeStructuralSignature } from './sensorMap/structuralSignature.js';
+import { wrapperById } from './sensorMap/wrappers.js';
 import { friendlySensorName, sensorKeyByFriendlyName } from './sensorNames.js';
 import { PLATFORM_NAME, PLUGIN_NAME } from './settings.js';
 import { SolarRadiationAccessory } from './solarRadiationAccessory.js';
@@ -142,13 +154,20 @@ export class AmbientWeatherSensorsPlatform {
         // sensor-map.md §17.2. Keyed by normalized uniqueId (MAC
         // uppercased). See src/safeModeBinding.ts for the mapping.
         this.safeModeBindings = new Map();
+        // Per-session log-once set for preserve-cached accessories (review
+        // P1-2 / sensor-map §17.3): cached accessories whose kind/measurement
+        // can't be inferred are kept, not unregistered, and announced once.
+        this.loggedPreservedAccessories = new Set();
         // Sensor-map v2.0 configVersion detection outcome, computed once at
         // startup and never re-evaluated. Drives which startup pipeline
         // runs:
         //
-        //   'legacy' / 'v2' — normal operation via `discoverDevices()`
-        //                     (v1.6.0 code path drives everything; v2 is a
-        //                     shadow observer until task #65's flag flip).
+        //   'legacy' / 'v2' — normal operation via `discoverDevices()`.
+        //                     With `_sensorMapV2` OFF (default) the v1.6.0
+        //                     code path drives everything; with it ON the
+        //                     flag-gated `discoverDevicesV2` reconciler runs
+        //                     the row-driven construction + routing pipeline
+        //                     instead (finding-#4 Stage 4).
         //   'safe-mode'    — safe mode is contractually reconciliation-free
         //                     per sensor-map.md §17.2. `discoverDevices()`
         //                     is NOT called; `safeModeStart()` runs the
@@ -168,13 +187,24 @@ export class AmbientWeatherSensorsPlatform {
         this.configMode = 'legacy';
         this.sleep = (delay) => new Promise((resolve) => setTimeout(resolve, delay));
         this.log.debug('Finished initializing platform:', this.config.platform);
-        // Instantiate the sensor-map shadow observer if the flag is set.
-        // Returns undefined when off, and platform.ts uses `?.` everywhere.
-        this.shadow = createShadowMode({
-            log: this.log,
+        // Detect the sensor-map v2 opt-in once. When on, the live v2 path
+        // (discoverDevicesV2) runs and the compare-only shadow observer is
+        // NOT instantiated — the two must not run together. When off, the
+        // shadow observer wouldn't be created anyway (createShadowMode
+        // returns undefined), so the flag-off path stays byte-identical.
+        this.sensorMapV2 = shadowModeEnabled({
             config: this.config,
-            api: this.api,
         });
+        // Instantiate the sensor-map shadow observer only when the live v2
+        // path is NOT active. Returns undefined when the flag is off, and
+        // platform.ts uses `?.` everywhere.
+        this.shadow = this.sensorMapV2
+            ? undefined
+            : createShadowMode({
+                log: this.log,
+                config: this.config,
+                api: this.api,
+            });
         this.api.on('didFinishLaunching', () => {
             log.debug('Executed didFinishLaunching callback');
             // Detect config mode ONCE at startup. This is the authoritative
@@ -220,7 +250,9 @@ export class AmbientWeatherSensorsPlatform {
                 this.pollTimer = undefined;
             }
             // Force-flush any pending discovery writes before Homebridge
-            // finishes tearing down.
+            // finishes tearing down — the live v2 tracker and (legacy) the
+            // shadow observer's tracker respectively.
+            this.v2Tracker?.flush(true).catch(e => this.log.warn(`[sensor-map v2] shutdown discovery flush failed: ${e.message}`));
             this.shadow?.shutdown().catch(e => this.log.warn(`[sensor-map v2 shadow] shutdown flush failed: ${e.message}`));
         });
     }
@@ -665,8 +697,10 @@ export class AmbientWeatherSensorsPlatform {
                     // tiles in Apple Home (one per accessory); with dedup,
                     // each physical probe shows ONE battery status on its
                     // most representative sensor (canonical mapping in
-                    // batteryFields.ts).
-                    const batteryField = batteryFieldForSensor(sensorKey);
+                    // batteryFields.ts). Resolution goes through the shared
+                    // reader: with the v2 flag off `v2EffectiveMap` is always
+                    // undefined, so this is exactly the v1.6.0 static lookup.
+                    const batteryField = resolveBatteryField(this.v2EffectiveMap, obj.macAddress, sensorKey) ?? undefined;
                     const batteryLow = (batteryField
                         && isCanonicalSensorForBattery(sensorKey, batteryField)
                         && !suppressedBatteries.has(batteryField))
@@ -764,6 +798,12 @@ export class AmbientWeatherSensorsPlatform {
         });
     }
     async discoverDevices() {
+        // Flag-gated v2 reconciler. Row-driven construction + routing,
+        // default OFF. See discoverDevicesV2 for the full contract.
+        if (this.sensorMapV2) {
+            await this.discoverDevicesV2();
+            return;
+        }
         try {
             const Devices = await this.fetchDevices();
             // if no devices were returned from the AWN API we can assume that either the user has no devices or the API is down
@@ -850,42 +890,8 @@ export class AmbientWeatherSensorsPlatform {
                 }
             }
             // Now that all wrappers are registered, choose how to keep them
-            // updated. Two data-source options:
-            //
-            //   "polling"  (default) — one platform-level setInterval, REST
-            //                          fetch every 2 minutes.
-            //   "realtime"           — opt-in; subscribe to AWN's socket.io
-            //                          endpoint and push updates as they
-            //                          arrive (~30s cadence indoors).
-            //
-            // CONSTRAINT (added in 1.6.0): embed display mode is incompatible
-            // with the realtime data source. The combination produces a flood
-            // of HAP Name-characteristic update notifications to every paired
-            // iOS controller, which has been observed to drain phone battery
-            // ~5×-7× faster than normal idle (solmssen, 2026-06-18, ~15
-            // extended sensors active). Polling caps the notification volume
-            // to roughly one batch per 2 minutes, which keeps the drain
-            // negligible while still delivering live-ish tile values. If the
-            // user has selected both, we coerce to polling and warn — the
-            // user's intent ("live value in tile") is preserved at a slightly
-            // slower cadence, which is the right trade-off for an invisible
-            // side effect like battery drain.
-            let dataSource = this.config.dataSource === 'realtime' ? 'realtime' : 'polling';
-            if (dataSource === 'realtime' && this.config.extendedDisplayMode === 'embed') {
-                this.log.warn('Embed display mode is incompatible with the realtime data source — '
-                    + 'the combination causes elevated iOS battery drain from HAP name-update '
-                    + 'notifications. Forcing polling for this run. To silence this warning, '
-                    + 'either switch the display mode to "Show generic names" or set the data '
-                    + 'source explicitly to "polling".');
-                dataSource = 'polling';
-            }
-            this.log.info(`Data source: ${dataSource}`);
-            if (dataSource === 'realtime') {
-                this.startRealtime();
-            }
-            else {
-                this.startPolling();
-            }
+            // updated (polling vs realtime). See startDataSource().
+            this.startDataSource();
         }
         catch (error) {
             let message;
@@ -897,6 +903,772 @@ export class AmbientWeatherSensorsPlatform {
             }
             this.log.error('ERROR:', message);
         }
+    }
+    /**
+     * Choose how to keep the registered wrappers updated. Two data-source
+     * options:
+     *
+     *   "polling"  (default) — one platform-level setInterval, REST
+     *                          fetch every 2 minutes.
+     *   "realtime"           — opt-in; subscribe to AWN's socket.io
+     *                          endpoint and push updates as they arrive
+     *                          (~30s cadence indoors).
+     *
+     * CONSTRAINT (added in 1.6.0): embed display mode is incompatible with
+     * the realtime data source. The combination produces a flood of HAP
+     * Name-characteristic update notifications to every paired iOS
+     * controller, which has been observed to drain phone battery ~5×-7×
+     * faster than normal idle (solmssen, 2026-06-18, ~15 extended sensors
+     * active). Polling caps the notification volume to roughly one batch
+     * per 2 minutes, which keeps the drain negligible while still
+     * delivering live-ish tile values. If the user has selected both, we
+     * coerce to polling and warn — the user's intent ("live value in
+     * tile") is preserved at a slightly slower cadence, which is the right
+     * trade-off for an invisible side effect like battery drain.
+     *
+     * Shared by the v1.6.0 path and the v2 reconciler; the poll/realtime
+     * fanout branches on `this.v2Routing` presence downstream.
+     */
+    startDataSource() {
+        let dataSource = this.config.dataSource === 'realtime' ? 'realtime' : 'polling';
+        if (dataSource === 'realtime' && this.config.extendedDisplayMode === 'embed') {
+            this.log.warn('Embed display mode is incompatible with the realtime data source — '
+                + 'the combination causes elevated iOS battery drain from HAP name-update '
+                + 'notifications. Forcing polling for this run. To silence this warning, '
+                + 'either switch the display mode to "Show generic names" or set the data '
+                + 'source explicitly to "polling".');
+            dataSource = 'polling';
+        }
+        this.log.info(`Data source: ${dataSource}`);
+        if (dataSource === 'realtime') {
+            this.startRealtime();
+        }
+        else {
+            this.startPolling();
+        }
+    }
+    /**
+     * Flag-gated v2 reconciler (finding-#4 Stage 4, first commit). Runs in
+     * place of the v1.6.0 discoverDevices path when `sensorMapV2` is on
+     * (default OFF, so shipping behaviour is unchanged).
+     *
+     * Pipeline:
+     *   1. Fetch the raw AWN station payloads; apply stationFilter.
+     *   2. Initialize persistence under
+     *      `storagePath()/plugin-data/ambient-weather/` (NEVER
+     *      `persistPath()` — HAP-scan / EISDIR hazard): stale-temp
+     *      cleanup, ui-state load, and the platform-owned
+     *      DiscoveryTracker (review P1-4) fed with this snapshot's
+     *      post-filter observations.
+     *   3. Assemble the effective sensor map (pure) from the tracker's
+     *      merged discovery view — compat overrides for legacy configs,
+     *      `config.sensorMap` for v2.
+     *   4. Reconcile the cache (review P1-2): orphans are unregistered
+     *      EXCEPT preserve-cached accessories (kind/measurement not
+     *      inferable — kept with last-known values per §17.3); restored
+     *      accessories have their cached structural signature (stored, or
+     *      derived via `inferForCachedAccessory` + Battery-service
+     *      presence) compared against the row's frozen signature — a
+     *      mismatch re-registers the accessory and records a
+     *      structural-change notice (§8.4/§9) instead of mutating the HAP
+     *      graph in place.
+     *   5. For every enabled, KNOWN, AWN-reported row: build a
+     *      v1.7-compatible `context.device` carrying `type` (downgrade
+     *      cache recognition) plus `kind`/`measurement`/
+     *      `structuralSignature`, restore-or-create its accessory reusing
+     *      the v1.7 UUID, instantiate the row-driven wrapper, and register
+     *      it. Build the `(mac, dataPoint) → wrapper` routing map and seed
+     *      each wrapper's current value.
+     *   6. Start the poll / realtime data source; both fan out through
+     *      `distributeViaRouting` (see distributeViaV2Routing).
+     *
+     * Custom (non-default) dataPoints register through the RESTORED
+     * resolution table (Stage 4's table-restoration commit): a custom row
+     * declaring a `(kind, measurement)` with a concrete wrapper class
+     * resolves, registers, and routes like any known row. Kinds without a
+     * wrapper class (co, leak, contact, occupancy) still resolve
+     * `no-wrapper` and never register.
+     *
+     * Safe mode never reaches here — `didFinishLaunching` routes to
+     * `safeModeStart()` first, before any persistence read that could
+     * quarantine or write a file.
+     */
+    async discoverDevicesV2() {
+        try {
+            // Malformed v2 sensorMap (review finding 6): a PRESENT non-array
+            // value is a hand-edit mistake. Treating it as empty would
+            // register the FULL default exposure off a config error —
+            // instead, freeze: no fetch, no persistence, no reconciliation,
+            // cached accessories preserved. Checked before any side effect.
+            const shapeError = sensorMapShapeError(this.config, this.configMode);
+            if (shapeError) {
+                this.log.error(shapeError);
+                return;
+            }
+            const fetched = await this.fetchRawStations();
+            if (!fetched) {
+                this.log.debug('No devices returned from the AWN API. Retrying in 60 seconds');
+                await this.sleep(60000);
+                return this.discoverDevicesV2();
+            }
+            // Apply stationFilter at the station level BEFORE building the
+            // inventory — v1 parity (parseDevices filters stations first, and
+            // the shadow observer received the post-filter inventory). Without
+            // this, a multi-Home child-bridge setup would register EVERY
+            // station's accessories on each instance.
+            const rawStations = this.applyStationFilterV2(fetched);
+            // Station inventory (post-filter). isMultiStation drives the
+            // displayName recipe exactly as the v1.6.0 path does — recomputed
+            // AFTER stationFilter so a one-station-per-instance multi-Home
+            // setup gets bare tile names.
+            const stations = rawStations.map(s => ({
+                macAddress: s.macAddress,
+                name: s.info?.name ?? '',
+            }));
+            const isMultiStation = stations.length > 1;
+            // Initialize persistence + feed the tracker with this snapshot's
+            // post-filter observations, then take the merged (persisted +
+            // live) discovery view. All I/O stays here, OUT of the pure
+            // assembly helper below.
+            const { uiState } = await this.initV2Persistence();
+            this.observeV2Stations(rawStations);
+            const discovery = this.v2Tracker.snapshot();
+            // Assemble the effective map (pure).
+            const effectiveMap = buildPlatformEffectiveMap({
+                config: this.config,
+                configMode: this.configMode,
+                stations,
+                discovery,
+                uiState,
+            });
+            this.logEffectiveMapDiagnostics(effectiveMap);
+            // Index raw stations by uppercased MAC for value/battery reads and
+            // reported-field gating.
+            const rawByMac = new Map();
+            for (const s of rawStations) {
+                rawByMac.set(s.macAddress.toUpperCase(), s);
+            }
+            const reconciled = [];
+            for (const row of effectiveMap.rows) {
+                if (row.kind === 'unrecognized' || !row.enabled) {
+                    continue;
+                }
+                const raw = rawByMac.get(row.stationMac);
+                if (!raw || !(row.dataPoint in raw.lastData)) {
+                    // The station didn't report this field this tick — don't
+                    // register it (v1.6.0 parity: it iterates reported fields only).
+                    continue;
+                }
+                const uniqueId = `${raw.macAddress}-${row.dataPoint}`;
+                // Initial value (review finding 7 + round 6): an uncoercible
+                // reading must never fabricate a REAL zero observation (false
+                // temperature / air-quality / trigger state). Seed only from a
+                // successful coercion; otherwise leave the value UNSET — no
+                // seed fires (every seed path guards on `typeof === 'number'`),
+                // so a restored accessory's RETAINED HAP characteristic — which
+                // can be newer than any context snapshot, since poll/realtime
+                // update the characteristic without rewriting context — is what
+                // the user keeps seeing (R6-3: a cached-context fallback here
+                // re-seeded stale values over newer retained readings).
+                //
+                // The single v1.7-parity exception (R6-2): an invalid lastRain
+                // STRING parsed to 0 in v1.7 ("never"). Only that dataPoint and
+                // only the string shape — other timestamp rows (lightning_time,
+                // future customs) had no such special case and stay unset.
+                const rawReading = raw.lastData[row.dataPoint];
+                let value = coerceValue(row, rawReading);
+                if (value === undefined && row.dataPoint === 'lastRain' && typeof rawReading === 'string') {
+                    value = 0;
+                }
+                // uniqueId keeps AWN's original MAC casing so the generated UUID
+                // matches what v1.7 registered — cached accessories are reused,
+                // not orphaned. The routing lookup key uses the row's uppercased
+                // MAC (distributeViaRouting uppercases the payload MAC too).
+                const device = {
+                    macAddress: raw.macAddress,
+                    uniqueId,
+                    // Row-driven naming (review P1-1): the label comes from
+                    // `row.name` — default-map name, or the user's rename override
+                    // — composed with the same station-prefix/truncation recipe as
+                    // v1.7. Keeps the platform displayName consistent with the
+                    // extended wrappers' service labels, which also read row.name.
+                    displayName: composeRowDisplayName({ macAddress: raw.macAddress, name: raw.info?.name ?? '' }, row.name, isMultiStation),
+                    type: legacyTypeForWrapperId(row.wrapperId),
+                    value,
+                    // Bootstrap battery seed resolves through the SAME shared
+                    // reader as polling/realtime (review R17-1) — the invariant
+                    // is every runtime battery read, including this first one,
+                    // so the initial context/HAP seed can never drift from what
+                    // later ticks resolve.
+                    batteryLow: readBatteryLow(raw.lastData, resolveBatteryField(effectiveMap, row.stationMac, row.dataPoint) ?? undefined),
+                };
+                reconciled.push({ row, device, routingUid: `${row.stationMac}-${row.dataPoint}` });
+            }
+            // Unregister cached accessories no longer backed by a reconciled
+            // row (matches by uniqueId — stable across renames) — EXCEPT
+            // preserve-cached accessories (review P1-2 / §17.3): a cached
+            // accessory whose kind + measurement can't be inferred stays in
+            // HomeKit with last-known values rather than being destroyed. It
+            // re-enters normal reconciliation once it becomes inferable (e.g.
+            // AWN starts reporting its dataPoint again) on a later reconcile.
+            const currentUniqueIds = new Set(reconciled.map(r => r.device.uniqueId));
+            const orphans = this.accessories.filter((accessory) => {
+                const uniqueId = accessory.context?.device?.uniqueId;
+                return !uniqueId || !currentUniqueIds.has(uniqueId);
+            });
+            for (const orphan of orphans) {
+                if (inferForCachedAccessory(orphan).status === 'preserve-cached') {
+                    const uid = orphan.context?.device?.uniqueId ?? orphan.displayName;
+                    if (!this.loggedPreservedAccessories.has(uid)) {
+                        this.loggedPreservedAccessories.add(uid);
+                        this.log.info(`Preserving cached accessory [${orphan.displayName}]: its sensor kind/measurement `
+                            + 'cannot be inferred yet. It stays in HomeKit with last-known values (sensor-map §17.3).');
+                    }
+                    continue;
+                }
+                this.log.info(`De-registering accessory [${orphan.displayName}]. It was either not found in the API response, `
+                    + 'or the sensor type has been disabled in the plugin configuration');
+                this.api.unregisterPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [orphan]);
+                const idx = this.accessories.indexOf(orphan);
+                if (idx >= 0) {
+                    this.accessories.splice(idx, 1);
+                }
+            }
+            // Restore-or-create each accessory. New accessories are registered
+            // AFTER wrapper construction (below) so HAP sees the full service
+            // graph, matching the v1.6.0 ordering.
+            const accessoryByRoutingUid = new Map();
+            const deviceByRoutingUid = new Map();
+            const newAccessories = [];
+            const stagedReplacements = [];
+            for (const { row, device, routingUid } of reconciled) {
+                const uuid = this.api.hap.uuid.generate(device.uniqueId);
+                const existingAccessory = this.accessories.find(accessory => accessory.UUID === uuid);
+                // The v2 context retains the legacy `type` (downgrade cache
+                // recognition) ALONGSIDE the row identity fields: `kind`,
+                // `measurement`, and the frozen `structuralSignature` (review
+                // P1-2), so subsequent boots compare signatures instead of
+                // re-deriving from the HAP graph.
+                const v2Context = {
+                    ...device,
+                    kind: row.kind,
+                    measurement: row.measurement,
+                    structuralSignature: row.structuralSignature,
+                };
+                let accessory;
+                if (existingAccessory) {
+                    const cachedSignature = this.cachedSignatureFor(existingAccessory, row);
+                    if (cachedSignature !== undefined && cachedSignature !== row.structuralSignature) {
+                        // Structural change (§9): the cached HAP graph no longer
+                        // matches the row's frozen signature (e.g. the user set
+                        // `batteryField: null`, detaching the Battery sub-service).
+                        // Mutating the graph in place leaves HomeKit clients with a
+                        // stale accessory shape — stage a replacement; the swap
+                        // happens after wrapper construction proves out (R6-1).
+                        const candidate = new this.api.platformAccessory(device.displayName, uuid);
+                        candidate.context.device = v2Context;
+                        stagedReplacements.push({
+                            old: existingAccessory,
+                            candidate,
+                            row,
+                            cachedSignature,
+                            displayName: device.displayName,
+                        });
+                        accessory = candidate;
+                    }
+                    else {
+                        this.log.info('Restoring existing accessory from cache:', existingAccessory.displayName);
+                        if (existingAccessory.displayName !== device.displayName) {
+                            this.log.info(`Renaming accessory: "${existingAccessory.displayName}" -> "${device.displayName}"`);
+                            existingAccessory.displayName = device.displayName;
+                        }
+                        existingAccessory.getService(this.Service.AccessoryInformation)
+                            ?.updateCharacteristic(this.Characteristic.Name, device.displayName);
+                        existingAccessory.context.device = v2Context;
+                        this.api.updatePlatformAccessories([existingAccessory]);
+                        accessory = existingAccessory;
+                    }
+                }
+                else {
+                    this.log.info('Adding new accessory:', device.displayName);
+                    accessory = new this.api.platformAccessory(device.displayName, uuid);
+                    accessory.context.device = v2Context;
+                    newAccessories.push({ accessory, row });
+                }
+                accessoryByRoutingUid.set(routingUid, accessory);
+                deviceByRoutingUid.set(routingUid, device);
+            }
+            // Instantiate row-driven wrappers + build the routing map. A single
+            // bad row is isolated inside buildWrapperRouting (logged + dropped).
+            const reconciledMap = {
+                rows: reconciled.map(r => r.row),
+                errors: [], warnings: [], notes: [],
+            };
+            this.v2Routing = buildWrapperRouting(this, reconciledMap, (uid) => accessoryByRoutingUid.get(uid));
+            // Retain the reconciled map for the shared battery-field reader —
+            // every routing entry's row is in it, so runtime resolution always
+            // finds the same adjudicated row the wrapper was built from.
+            this.v2EffectiveMap = reconciledMap;
+            // Seed each freshly-constructed wrapper with its current value so
+            // HomeKit has something to display before the first poll/realtime
+            // tick. This is the ONLY seed path for extended wrappers — their
+            // constructors deliberately don't self-seed (subclass formatter
+            // state isn't ready until after super() returns). Battery seeds from
+            // context at construction time (batteryOptionsFor), so no
+            // setBatteryLow here — matching the v1.6.0 discovery seed.
+            for (const entry of this.v2Routing.values()) {
+                const routingUid = `${entry.row.stationMac}-${entry.row.dataPoint}`;
+                const device = deviceByRoutingUid.get(routingUid);
+                if (!device || typeof device.value !== 'number') {
+                    continue;
+                }
+                try {
+                    entry.wrapper.setValue(device.value);
+                }
+                catch (error) {
+                    const message = error instanceof Error ? error.message : String(error);
+                    this.log.warn(`Initial value seed failed for ${device.displayName}: ${message}`);
+                }
+            }
+            // Register the new accessories now that their service graphs
+            // exist — but ONLY those whose wrapper actually constructed
+            // (review finding 8). buildWrapperRouting isolates a throwing
+            // constructor by dropping that row from the routing map; the
+            // matching new accessory must be dropped too, or it would be
+            // registered with an incomplete HAP graph and no way to ever
+            // receive a value. (RESTORED accessories with a failed wrapper
+            // stay registered — they're already in HomeKit with a full cached
+            // graph; v1.7 behaved the same when createSensorWrapper returned
+            // undefined.)
+            for (const { accessory, row } of newAccessories) {
+                if (!this.v2Routing.has(routingKey(row.stationMac, row.dataPoint))) {
+                    this.log.warn(`Not registering new accessory [${accessory.displayName}]: its wrapper failed to `
+                        + 'construct (see the [routing] error above), so its HAP graph is incomplete.');
+                    continue;
+                }
+                this.api.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [accessory]);
+            }
+            // Complete the STAGED structural replacements (review R6-1). The
+            // candidate's wrapper has now either constructed (its routing
+            // entry exists) or failed. Success: unregister the old accessory,
+            // record the structural-change notice, register the candidate.
+            // Failure: the OLD accessory stays registered with its full
+            // cached graph (frozen at last-known values — no routing entry),
+            // and NO notice is written; a throwing replacement wrapper never
+            // costs the user the accessory.
+            for (const staged of stagedReplacements) {
+                const key = routingKey(staged.row.stationMac, staged.row.dataPoint);
+                if (!this.v2Routing.has(key)) {
+                    this.log.warn(`Keeping cached accessory [${staged.old.displayName}]: its structural replacement's `
+                        + 'wrapper failed to construct (see the [routing] error above). The accessory stays '
+                        + 'registered with last-known values; no structural change was applied.');
+                    continue;
+                }
+                this.log.warn(`Structural change for [${staged.displayName}]: `
+                    + `"${staged.cachedSignature}" -> "${staged.row.structuralSignature}". Re-registering the accessory.`);
+                // The destructive swap is BACK-TO-BACK (review R7): no awaited
+                // filesystem I/O between unregister and register, so the
+                // no-accessory window is as narrow as HAP allows — a process
+                // exit mid-notice can no longer strand the user with neither
+                // accessory registered.
+                this.api.unregisterPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [staged.old]);
+                const idx = this.accessories.indexOf(staged.old);
+                if (idx >= 0) {
+                    this.accessories.splice(idx, 1);
+                }
+                try {
+                    this.api.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [staged.candidate]);
+                }
+                catch (error) {
+                    // Registration failed after the unregister: drop the
+                    // candidate's routing entry (its wrapper must not receive
+                    // values for an unregistered accessory) and try to put the
+                    // old accessory back so the user isn't left with nothing.
+                    // NO notice is written — a notice must only ever describe a
+                    // change that actually completed.
+                    const message = error instanceof Error ? error.message : String(error);
+                    this.log.error(`Failed to register the replacement for [${staged.displayName}]: ${message}. `
+                        + 'Attempting to restore the previous accessory.');
+                    this.v2Routing.delete(key);
+                    // Best-effort candidate cleanup FIRST (review R8): a throwing
+                    // registerPlatformAccessories is not side-effect-free —
+                    // Homebridge adds the accessory to cachedPlatformAccessories
+                    // before bridging it, so the candidate can remain partially
+                    // cached/bridged under the SAME UUID and silently block the
+                    // old accessory's re-registration (which would then log a
+                    // false "Restored" success). Unregistering the candidate
+                    // clears any partial state; when nothing actually registered
+                    // it is a harmless no-op, and its own throw is swallowed.
+                    try {
+                        this.api.unregisterPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [staged.candidate]);
+                    }
+                    catch (cleanupError) {
+                        const cleanupMessage = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
+                        this.log.debug(`Candidate cleanup after the failed registration reported: ${cleanupMessage}`);
+                    }
+                    try {
+                        this.api.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [staged.old]);
+                        this.accessories.push(staged.old);
+                        this.log.warn(`Restored previous accessory [${staged.old.displayName}] after the replacement failed to register.`);
+                    }
+                    catch (restoreError) {
+                        const restoreMessage = restoreError instanceof Error ? restoreError.message : String(restoreError);
+                        this.log.error(`Could not restore previous accessory [${staged.old.displayName}]: ${restoreMessage}. `
+                            + 'Restart Homebridge to re-run reconciliation.');
+                    }
+                    continue;
+                }
+                // Auxiliary persistence strictly AFTER the swap completed: the
+                // notice describes a change that actually happened.
+                await this.appendStructuralNoticeV2(staged.row, staged.cachedSignature);
+            }
+            this.startDataSource();
+        }
+        catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            this.log.error('ERROR:', message);
+        }
+    }
+    /**
+     * v2 twin of parseDevices' station-level filtering. Announces each
+     * discovered station once per restart (users learn the exact
+     * `stationFilter` strings from these lines), then applies the filter
+     * with v1's matching rules (info.name OR MAC, case-insensitive,
+     * whitespace-trimmed). Log strings and the per-session log-once sets
+     * are shared with the v1 path verbatim — only one path runs per boot,
+     * so the sets never collide. `stationFilter` is applied uniformly in
+     * legacy AND v2 config modes: it's a platform-instance concern (multi-
+     * Home child bridges), not a sensor-map concern, and configMode
+     * detection deliberately doesn't classify it as a legacy toggle.
+     */
+    applyStationFilterV2(stations) {
+        for (const station of stations) {
+            if (!this.loggedDiscoveredStations.has(station.macAddress)) {
+                const sensorCount = Object.keys(station.lastData ?? {}).length;
+                this.log.info(`Discovered station "${station.info?.name ?? '(unnamed)'}" `
+                    + `(MAC: ${station.macAddress}) — ${sensorCount} sensor fields reported`);
+                this.loggedDiscoveredStations.add(station.macAddress);
+            }
+        }
+        const stationMatchers = toMatcherSet(this.config.stationFilter);
+        if (stationMatchers.size === 0) {
+            return stations;
+        }
+        const matched = [];
+        for (const station of stations) {
+            const nameKey = normalizeMatchKey(station.info?.name ?? '');
+            const macKey = normalizeMatchKey(station.macAddress ?? '');
+            const hit = (nameKey.length > 0 && stationMatchers.has(nameKey))
+                || (macKey.length > 0 && stationMatchers.has(macKey));
+            if (hit) {
+                matched.push(station);
+            }
+            else if (!this.loggedStationFilterDrops.has(station.macAddress)) {
+                this.log.info(`Station "${station.info?.name ?? '(unnamed)'}" (MAC: ${station.macAddress}) `
+                    + 'filtered out by stationFilter');
+                this.loggedStationFilterDrops.add(station.macAddress);
+            }
+        }
+        if (matched.length === 0 && !this.warnedStationFilterEmpty) {
+            this.log.warn(`stationFilter is set but matched zero stations in the AWN response. `
+                + `Filter values: [${[...stationMatchers].join(', ')}]. No accessories will be exposed by this platform instance.`);
+            this.warnedStationFilterEmpty = true;
+        }
+        else if (matched.length > 0 && !this.loggedStationFilterSummary) {
+            this.log.info(`stationFilter active: [${[...stationMatchers].join(', ')}] — `
+                + `${matched.length} of ${stations.length} station(s) passed`);
+            this.loggedStationFilterSummary = true;
+        }
+        return matched;
+    }
+    /**
+     * Fetch the raw AWN station payloads for the v2 path. Same endpoint,
+     * throttle handling, and content-type guard as `fetchDevices`, but
+     * returns the un-parsed per-station shape (macAddress + info + lastData)
+     * so the row-driven router can read every field — including the batt*
+     * datapoints `parseDevices` drops. Returns `undefined` on fetch/parse
+     * failure (caller retries), or `[]` for an empty/non-array response.
+     */
+    async fetchRawStations() {
+        this.log.debug('Fetching sensors from Ambient Weather API');
+        try {
+            const url = `https://rt.ambientweather.net/v1/devices?applicationKey=${this.config.applicationKey}&apiKey=${this.config.apiKey}`;
+            const response = await fetch(url);
+            if (response.status === 429) {
+                this.log.debug('429 throttle waiting 1000ms to retry');
+                await this.sleep(1000);
+                return this.fetchRawStations();
+            }
+            if (!response.headers.get('content-type')?.includes('application/json')) {
+                throw new Error(`API response from AWN is not JSON.
+          This happens ocasionally due to the fragility of the AWN API and is usually resolved by retrying the request in a few minutes.`);
+            }
+            const data = await response.json();
+            if (!Array.isArray(data)) {
+                // Non-array body with a JSON content-type: a malformed snapshot,
+                // not an empty inventory. v1.7's parseDevices treated non-array
+                // input as zero stations, but v2's reconciler DEREGISTERS from
+                // its inventory — so treat it as a failed fetch and retry rather
+                // than wiping the cache off a transient API glitch.
+                this.log.warn('AWN response is not a station array; treating as a failed snapshot (no reconciliation this attempt).');
+                return undefined;
+            }
+            const stations = [];
+            for (const s of data) {
+                // ANY invalid station entry in a non-empty response marks the
+                // whole snapshot as failed. Silently skipping the bad entry
+                // would let a transiently malformed payload (e.g. `[{}]` during
+                // an AWN incident) masquerade as an authoritative inventory —
+                // and the reconciler would unregister every cached accessory,
+                // destroying HomeKit rooms/automations. v1.7's parseDevices
+                // THREW on the same input (Object.entries(undefined)) and
+                // preserved the cache via the retry path; match that outcome.
+                // A genuinely empty array (`[]`) is still authoritative: AWN is
+                // healthy and reports no devices — same as v1.7.
+                if (!s || typeof s !== 'object') {
+                    this.log.warn('AWN response contains a non-object station entry; treating as a failed snapshot (no reconciliation this attempt).');
+                    return undefined;
+                }
+                const rec = s;
+                if (typeof rec.macAddress !== 'string' || rec.macAddress.length === 0) {
+                    this.log.warn('AWN response contains a station without a macAddress; treating as a failed snapshot (no reconciliation this attempt).');
+                    return undefined;
+                }
+                if (!rec.lastData || typeof rec.lastData !== 'object' || Array.isArray(rec.lastData)) {
+                    this.log.warn(`AWN response station ${rec.macAddress} has no lastData object; treating as a failed snapshot (no reconciliation this attempt).`);
+                    return undefined;
+                }
+                stations.push({
+                    macAddress: rec.macAddress,
+                    info: rec.info,
+                    lastData: rec.lastData,
+                });
+            }
+            return stations;
+        }
+        catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            this.log.error('ERROR:', message);
+            return undefined;
+        }
+    }
+    /**
+     * Initialize v2 persistence: clean stale temp files, load the
+     * discovery store into a platform-owned DiscoveryTracker (review
+     * P1-4 — the live pipeline is the producer of the plugin's discovery
+     * registry, a role the retired shadow observer used to fill), and
+     * load the ui-state store. Idempotent — the tracker is created once
+     * and survives the discover-retry recursion.
+     *
+     * The persist dir is `storagePath()/plugin-data/ambient-weather/` — we
+     * deliberately avoid `persistPath()` because HAP-NodeJS scans that tree
+     * and a subdirectory there crashes it with EISDIR (v2.0.0-beta.1).
+     * Never called in safe mode (didFinishLaunching routes to
+     * safeModeStart first), so safe mode still performs zero persistence
+     * reads or writes.
+     */
+    v2PersistDir() {
+        return path.join(this.api.user.storagePath(), 'plugin-data', 'ambient-weather');
+    }
+    v2PersistLog() {
+        return {
+            info: (m) => this.log.info(m),
+            warn: (m) => this.log.warn(m),
+            debug: (m) => this.log.debug(m),
+        };
+    }
+    async initV2Persistence() {
+        const persistDir = this.v2PersistDir();
+        const persistLog = this.v2PersistLog();
+        if (!this.v2Tracker) {
+            await cleanupStaleTempFiles(persistDir, persistLog);
+            const initial = await loadDiscoveryStore(path.join(persistDir, DISCOVERY_FILE), persistLog);
+            this.v2Tracker = new DiscoveryTracker({
+                filePath: path.join(persistDir, DISCOVERY_FILE),
+                log: persistLog,
+                initial,
+            });
+        }
+        const uiState = await loadUiStateStore(path.join(persistDir, UI_STATE_FILE), persistLog);
+        return { uiState };
+    }
+    /**
+     * Feed every post-filter (station, dataPoint) pair into the discovery
+     * tracker and kick a throttled flush. Called at discovery and on each
+     * v2 poll tick — the same cadence the shadow observer used, so
+     * discovery.json keeps accumulating under the live path.
+     */
+    observeV2Stations(stations) {
+        if (!this.v2Tracker) {
+            return;
+        }
+        for (const s of stations) {
+            for (const dp of Object.keys(s.lastData)) {
+                this.v2Tracker.observe(s.macAddress, s.info?.name ?? '', dp);
+            }
+        }
+        // Fire-and-forget; the tracker throttles lastSeen-only writes and
+        // logs its own failures.
+        this.v2Tracker.flush().catch(() => { });
+    }
+    /**
+     * Resolve the structural signature of a CACHED accessory for
+     * comparison against its row's frozen signature (review P1-2 / §9).
+     *
+     * v2-written caches carry the signature verbatim in
+     * `context.device.structuralSignature`. v1.7-written caches don't —
+     * derive one from the same inputs the signature hashes: inferred
+     * kind + measurement, Battery sub-service presence on the actual HAP
+     * graph, and the row's wrapper descriptor. Derivation necessarily
+     * uses the CURRENT wrapper schemaVersion (the old one is unknowable),
+     * so a schemaVersion bump re-registers only v2-written caches —
+     * v1.7 caches adopt the current version silently. Returns undefined
+     * when nothing can be derived (uninferable cache) — the caller then
+     * adopts the row's signature without re-registration.
+     */
+    cachedSignatureFor(accessory, row) {
+        const stored = accessory.context?.device?.structuralSignature;
+        if (typeof stored === 'string' && stored.length > 0) {
+            return stored;
+        }
+        const inference = inferForCachedAccessory(accessory);
+        if (inference.status !== 'inferred') {
+            return undefined;
+        }
+        const hasBattery = accessory.getService(this.Service.Battery) !== undefined;
+        const derived = computeStructuralSignature(inference.kind, inference.measurement, hasBattery, wrapperById(row.wrapperId));
+        // Legacy-normalization exception (review R3-4): v1.7 attached the
+        // Battery sub-service only when telemetry happened to report the
+        // batt* field on the discovery tick, so a perfectly valid canonical
+        // cache can lack `battery:1` through no configuration change of the
+        // user's. When a SIGNATURE-LESS cache differs from the row ONLY by
+        // that missing battery, adopt the row's signature and let the
+        // row-driven wrapper attach the Battery service in place — exactly
+        // what v1.7 itself would have done on the next battery-reporting
+        // tick. Applies strictly to the derived (v1.7-cache) path and the
+        // missing→present direction: stored v2 signatures and battery
+        // REMOVAL (`batteryField: null`) still re-register.
+        if (!hasBattery
+            && derived.replace('|battery:0|', '|battery:1|') === row.structuralSignature) {
+            this.log.debug(`Adopting signature-less cache for [${accessory.displayName}]: differs only by the `
+                + 'telemetry-conditioned Battery sub-service, which the wrapper attaches in place.');
+            return row.structuralSignature;
+        }
+        return derived;
+    }
+    /**
+     * Record a structural-change notice (sensor-map §8.4) so the UI can
+     * explain why an accessory was re-registered (and its HomeKit room /
+     * automations detached). Best-effort: a persistence failure logs and
+     * never blocks reconciliation.
+     */
+    async appendStructuralNoticeV2(row, oldSignature) {
+        try {
+            const persistLog = this.v2PersistLog();
+            const file = path.join(this.v2PersistDir(), NOTICES_FILE);
+            const current = await loadNoticeStore(file, persistLog);
+            await appendNotice(file, current, row.stationMac, row.dataPoint, oldSignature, row.structuralSignature, persistLog);
+        }
+        catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            this.log.warn(`Failed to record structural-change notice for ${row.stationMac}|${row.dataPoint}: ${message}`);
+        }
+    }
+    /**
+     * Surface effective-map diagnostics. Config-attributable errors (e.g.
+     * a custom row's `no-wrapper` for a kind without a concrete wrapper
+     * class) log at info so the user learns their sensor was rejected;
+     * warnings and attribution-free notes stay at debug.
+     */
+    logEffectiveMapDiagnostics(map) {
+        for (const e of map.errors) {
+            this.log.info(`[sensor-map v2] override error (${e.code})${e.dataPoint ? ` for ${e.dataPoint}` : ''}: ${e.message}`);
+        }
+        for (const w of map.warnings) {
+            this.log.debug(`[sensor-map v2] override warning (${w.code}): ${w.message}`);
+        }
+        for (const n of map.notes) {
+            // Config-attributable notes (source 'override' — e.g. the Stage-4
+            // battery-ownership pass's duplicate-battery-owner and
+            // orphan-battery-field) are user-actionable: surface at info per
+            // the design doc. Internal-invariant default-map notes stay at
+            // debug.
+            if (n.source === 'override') {
+                this.log.info(`[sensor-map v2] note (${n.code}): ${n.message}`);
+            }
+            else {
+                this.log.debug(`[sensor-map v2] note (${n.code}/${n.source}): ${n.message}`);
+            }
+        }
+    }
+    /**
+     * v2 value distribution — the single boundary BOTH transports
+     * converge on: polling delivers raw station payloads here directly,
+     * and realtime reconstructs its per-update stream back into the same
+     * payload shape (`updatesToStationPayloads`) first.
+     *
+     * Sensor VALUES go through the Stage-3 routing mechanism
+     * (`distributeViaRouting`); the standalone batt* datapoints the
+     * router deliberately ignores are read per routing entry through the
+     * shared `resolveBatteryField(effectiveMap, mac, dp)` reader — the
+     * same ownership-adjudicated authority the wrapper's Battery
+     * sub-service was built from — and pushed as HomeKit's `true = low`
+     * boolean.
+     */
+    distributeViaV2Routing(stations) {
+        const routing = this.v2Routing;
+        if (!routing) {
+            return;
+        }
+        distributeViaRouting(this, routing, stations);
+        const lastDataByMac = new Map();
+        for (const s of stations) {
+            lastDataByMac.set(s.macAddress.toUpperCase(), s.lastData);
+        }
+        for (const entry of routing.values()) {
+            if (!entry.wrapper.setBatteryLow) {
+                continue;
+            }
+            const row = entry.row;
+            const field = resolveBatteryField(this.v2EffectiveMap, row.stationMac, row.dataPoint);
+            if (!field) {
+                continue;
+            }
+            const lastData = lastDataByMac.get(row.stationMac.toUpperCase());
+            if (!lastData) {
+                continue;
+            }
+            const low = readBatteryLow(lastData, field);
+            if (low !== undefined) {
+                entry.wrapper.setBatteryLow(low);
+            }
+        }
+    }
+    /**
+     * Reshape the realtime source's pre-digested `(uniqueId, value)`
+     * updates back into raw per-station payloads so the v2 path routes them
+     * through the SAME `distributeViaRouting` boundary the poll path uses.
+     * The realtime source emits every numeric field — including the batt*
+     * fields — as its own update, so the reconstructed `lastData` carries
+     * the battery datapoints the shared battery reader consumes.
+     */
+    updatesToStationPayloads(updates) {
+        const byMac = new Map();
+        for (const u of updates) {
+            const norm = normalizeUniqueId(u.uniqueId);
+            if (norm.length <= 18 || norm[17] !== '-') {
+                continue;
+            }
+            const mac = norm.slice(0, 17);
+            const dataPoint = norm.slice(18);
+            let lastData = byMac.get(mac);
+            if (!lastData) {
+                lastData = {};
+                byMac.set(mac, lastData);
+            }
+            lastData[dataPoint] = u.value;
+        }
+        return [...byMac.entries()].map(([macAddress, lastData]) => ({ macAddress, lastData }));
     }
     /**
      * Safe-mode entrypoint — the reduced pipeline for
@@ -1199,6 +1971,11 @@ export class AmbientWeatherSensorsPlatform {
             applicationKey: this.config.applicationKey,
             log: this.log,
             onUpdates: (updates) => this.distribute(updates),
+            // Shared battery-field reader (lazy: reads the member at each
+            // resolution, so a reconcile that rebuilds the effective map is
+            // picked up without reconstructing the socket). Flag off →
+            // undefined map → the reader IS the legacy static lookup.
+            resolveBatteryField: (mac, dp) => resolveBatteryField(this.v2EffectiveMap, mac, dp),
         });
         this.realtimeSource.start();
     }
@@ -1208,6 +1985,25 @@ export class AmbientWeatherSensorsPlatform {
      * this tick — HomeKit will keep showing the last known value.
      */
     async pollAndDistribute() {
+        // v2 path: fetch raw stations and route them straight through
+        // distributeViaRouting (which needs the un-parsed lastData — including
+        // the batt* fields parseDevices drops — for the battery reads).
+        if (this.v2Routing) {
+            const stations = await this.fetchRawStations();
+            if (stations) {
+                // Filter every tick, like v1's parseDevices does: announces
+                // stations that appear mid-session and keeps a filtered-out
+                // station's payload from ever reaching the router (its rows
+                // aren't in the routing map anyway — defense in depth).
+                const filtered = this.applyStationFilterV2(stations);
+                // Keep the discovery registry accumulating (review P1-4): a
+                // field AWN starts reporting mid-session lands in
+                // discovery.json so the UI can surface it.
+                this.observeV2Stations(filtered);
+                this.distributeViaV2Routing(filtered.map(s => ({ macAddress: s.macAddress, lastData: s.lastData })));
+            }
+            return;
+        }
         const Devices = await this.fetchDevices();
         if (!Devices) {
             return;
@@ -1221,6 +2017,13 @@ export class AmbientWeatherSensorsPlatform {
      * are silently ignored.
      */
     distribute(updates) {
+        // v2 path (realtime): reshape the pre-digested updates into raw
+        // station payloads and route them through the SAME distributeViaRouting
+        // boundary the poll path uses.
+        if (this.v2Routing) {
+            this.distributeViaV2Routing(this.updatesToStationPayloads(updates));
+            return;
+        }
         for (const update of updates) {
             const wrapper = this.wrappers.get(update.uniqueId);
             if (wrapper) {

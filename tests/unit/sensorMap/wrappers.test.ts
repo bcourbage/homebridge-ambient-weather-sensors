@@ -5,6 +5,7 @@ import {
   WRAPPER_FOR_KIND_AND_MEASUREMENT,
   wrapperFor,
 } from '../../../src/sensorMap/wrappers';
+import { WRAPPER_SPEC } from '../../../src/sensorMap/wrapperFactories';
 
 describe('WrapperDescriptor registry', () => {
   it('every wrapper has a non-empty kebab-case id', () => {
@@ -47,28 +48,55 @@ describe('WrapperDescriptor registry', () => {
     expect(wrapperFor('occupancy', 'boolean')).toBeUndefined();
   });
 
-  // ---- finding-#4 Stage 0: resolution table is EMPTY ----
+  // ---- finding-#4 Stage 4: resolution table RESTORED ----
   //
-  // The custom-sensor `(kind, measurement)` → wrapper table is
-  // intentionally empty until Stage 4 restores it (after Stages 1–3
-  // wire the factory registry, row-consuming constructors, and value
-  // routing). This regression test guards against a well-meaning
-  // restore slipping in without that wiring. See
-  // docs/future/wrapper-parameterization.md §"Stage 0".
-  it('WRAPPER_FOR_KIND_AND_MEASUREMENT is EMPTY (Stage 0 interim safety)', () => {
-    expect(Object.keys(WRAPPER_FOR_KIND_AND_MEASUREMENT)).toHaveLength(0);
+  // Replaces the Stage-0 stays-empty regression (same commit as the
+  // restore, per the review requirement). Two invariants:
+  //   1. The exact 15-entry shape is pinned — an entry silently added,
+  //      dropped, or remapped is a structural event, not a refactor.
+  //   2. Every entry's descriptor agrees with its key's
+  //      (kind, measurement) per WRAPPER_SPEC — a drifted entry would
+  //      otherwise be caught only at map-construction time
+  //      (wrapper-mismatch note) or registration (throw).
+  it('WRAPPER_FOR_KIND_AND_MEASUREMENT has EXACTLY the 15 restored entries', () => {
+    const expected: Record<string, string> = {
+      'temperature|temperature':  'temperature',
+      'humidity|humidity':        'humidity',
+      'light|illuminance':        'solar-radiation',
+      'co2|co2':                  'co2',
+      'air-quality-pm25|pm25':    'air-quality-pm25',
+      'air-quality-pm10|pm10':    'air-quality-pm10',
+      'motion|uv-index':          'uv',
+      'motion|wind-speed':        'wind-speed',
+      'motion|direction':         'wind-direction',
+      'motion|pressure':          'pressure-relative',
+      'motion|rain-rate':         'rain-rate',
+      'motion|rain-accumulation': 'rain-event',
+      'motion|distance':          'lightning-distance',
+      'motion|count':             'lightning-day',
+      'motion|timestamp':         'last-rain',
+    };
+    const actual = Object.fromEntries(
+      Object.entries(WRAPPER_FOR_KIND_AND_MEASUREMENT).map(([k, v]) => [k, v!.id]),
+    );
+    expect(actual).toEqual(expected);
+    expect(Object.keys(WRAPPER_FOR_KIND_AND_MEASUREMENT)).toHaveLength(15);
   });
 
-  it('wrapperFor() returns undefined for EVERY previously-supported combination (table empty)', () => {
-    // These all resolved to a wrapper before Stage 0. They now
-    // return undefined — custom sensors are non-user-facing until
-    // Stage 4.
-    expect(wrapperFor('temperature', 'temperature')).toBeUndefined();
-    expect(wrapperFor('humidity', 'humidity')).toBeUndefined();
-    expect(wrapperFor('light', 'illuminance')).toBeUndefined();
-    expect(wrapperFor('motion', 'wind-speed')).toBeUndefined();
-    expect(wrapperFor('motion', 'timestamp')).toBeUndefined();
-    expect(wrapperFor('motion', 'count')).toBeUndefined();
+  it('every table entry is spec-consistent: the key equals the wrapper\'s (kind, measurement)', () => {
+    for (const [key, descriptor] of Object.entries(WRAPPER_FOR_KIND_AND_MEASUREMENT)) {
+      const spec = WRAPPER_SPEC[descriptor!.id];
+      expect(`${spec.kind}|${spec.measurement}`, `entry ${key} → ${descriptor!.id}`).toBe(key);
+    }
+  });
+
+  it('wrapperFor() resolves every restored combination', () => {
+    expect(wrapperFor('temperature', 'temperature')?.id).toBe('temperature');
+    expect(wrapperFor('humidity', 'humidity')?.id).toBe('humidity');
+    expect(wrapperFor('light', 'illuminance')?.id).toBe('solar-radiation');
+    expect(wrapperFor('motion', 'wind-speed')?.id).toBe('wind-speed');
+    expect(wrapperFor('motion', 'timestamp')?.id).toBe('last-rain');
+    expect(wrapperFor('motion', 'count')?.id).toBe('lightning-day');
   });
 
   // ---- Review finding #14: freeze the wrapper vocabulary ----
