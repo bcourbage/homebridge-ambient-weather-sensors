@@ -202,13 +202,6 @@ export declare const FACTORIES: {
  */
 export declare function assertRowMatchesWrapperId(row: EffectiveSensorRow): void;
 /**
- * Non-throwing twin of `assertRowMatchesWrapperId`, used by
- * `buildEffectiveSensorMap` to DROP a mismatched row (and push a
- * `wrapper-mismatch` note) at map-construction time rather than throwing
- * at registration. Unrecognized rows have no wrapper and vacuously match.
- */
-export declare function rowMatchesWrapperId(row: EffectiveSensorRow): boolean;
-/**
  * Turn a resolved row into its concrete wrapper instance. The single
  * row-aware entry point the platform calls (Stage 3 onward).
  *

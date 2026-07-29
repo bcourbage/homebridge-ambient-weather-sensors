@@ -210,12 +210,14 @@ export function assertRowMatchesWrapperId(row: EffectiveSensorRow): void {
 }
 
 /**
- * Non-throwing twin of `assertRowMatchesWrapperId`, used by
- * `buildEffectiveSensorMap` to DROP a mismatched row (and push a
- * `wrapper-mismatch` note) at map-construction time rather than throwing
- * at registration. Unrecognized rows have no wrapper and vacuously match.
+ * Non-throwing predicate behind `assertRowMatchesWrapperId` — module
+ * internal. (`buildEffectiveSensorMap` performs its own equivalent
+ * check against `WRAPPER_SPEC` at map-construction time so a
+ * mismatched row is DROPPED with a `wrapper-mismatch` note; this twin
+ * exists only for the assert at the dispatch boundary.) Unrecognized
+ * rows have no wrapper and vacuously match.
  */
-export function rowMatchesWrapperId(row: EffectiveSensorRow): boolean {
+function rowMatchesWrapperId(row: EffectiveSensorRow): boolean {
   if (row.kind === 'unrecognized') {
     return true;
   }

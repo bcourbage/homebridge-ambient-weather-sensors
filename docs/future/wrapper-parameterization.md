@@ -989,10 +989,10 @@ code PR, blocking the next one until it merges green.
   the `thresholdFor`/`extendedDisplayModeFor` legacy branches are
   the LIVE flag-off path (`row === undefined`), required for v1.7.0
   flag-off parity — they retire with the flag itself, not before.
-  `compat.ts` is fully live (legacy-mode projection), and the
-  remaining exported-but-internally-consumed symbols
-  (`rowMatchesWrapperId`, `LEGACY_MIRROR_VERSION`) are deliberate
-  API surface for the dispatch boundary and the finding-5 package.
+  `compat.ts` is fully live (legacy-mode projection). Two accidental
+  exports the audit surfaced (`rowMatchesWrapperId`,
+  `LEGACY_MIRROR_VERSION`) had no consumers outside their defining
+  modules and were made module-internal rather than frozen as API.
 
 Task #65's flag-flip gate does not lift until Stage 4's PR merges
 with `WRAPPER_FOR_KIND_AND_MEASUREMENT` fully populated and

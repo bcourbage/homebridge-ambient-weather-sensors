@@ -79,7 +79,6 @@ import { type Clock, type Logger } from './persistence/atomicWrite.js';
 export declare const LEGACY_MIRROR_KEY = "_legacyMirror";
 /** Persist-dir filename of the immutable first-conversion snapshot. */
 export declare const LEGACY_SNAPSHOT_FILE = "legacy-config-snapshot.json";
-export declare const LEGACY_MIRROR_VERSION = 1;
 /**
  * The legacy sensor-configuration vocabulary the snapshot preserves and
  * the mirror maintains. Deliberately excludes API credentials
