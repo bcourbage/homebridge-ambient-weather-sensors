@@ -58,6 +58,7 @@
     }
     #awn .flag.on  { background: var(--on-bg);  color: var(--on-fg); }
     #awn .flag.off { background: var(--off-bg); color: var(--off-fg); }
+    #awn .flag-source { margin-left: 8px; color: var(--fg-sub); }
     #awn table  { border-collapse: collapse; width: 100%; font-size: 0.88rem; }
     #awn th, #awn td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--row-rule); color: var(--fg); }
     #awn th     { background: var(--panel-bg); font-weight: 600; }
@@ -179,8 +180,7 @@
       flag.appendChild(pill);
       if (on) {
         const src = document.createElement('span');
-        src.style.marginLeft = '8px';
-        src.style.color = '#666';
+        src.className = 'flag-source';
         src.textContent = 'source: ' + status.v2Flag.source;
         flag.appendChild(src);
       }
