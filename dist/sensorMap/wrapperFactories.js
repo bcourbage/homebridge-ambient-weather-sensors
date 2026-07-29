@@ -94,12 +94,16 @@ export const WRAPPER_SPEC = {
  * fails to compile). Each entry is obligated to accept exactly the row
  * shape `RowForWrapperId[K]` declares.
  *
- * STAGE 1: every entry is an ADAPTER — it ignores the row and calls the
- * wrapper's existing `(platform, accessory)` constructor. A 2-arg arrow
- * is assignable to the 3-arg `Factory` type (excess parameters are
- * allowed), so the row is simply never bound. Stage 2 replaces each
- * adapter with its row-consuming `(p, a, r) => new X(p, a, r)` form as
- * that family's constructor is migrated.
+ * Every entry is the row-consuming `(p, a, r) => new X(p, a, r)` form:
+ * the constructor reads its runtime knobs (name, threshold, trigger
+ * direction, units, battery ownership, embed mode) from the row. The
+ * row parameter is OPTIONAL on the constructors because the flag-off
+ * v1 path still constructs wrappers without one — with `row`
+ * undefined, each constructor falls back to the legacy
+ * `platform.config.*` reads, which is what keeps flag-off behavior
+ * identical to v1.7.0. (The interim "Stage 1 adapter" form, which
+ * discarded the row entirely, was retired when the constructors were
+ * migrated in Stage 2.)
  */
 export const FACTORIES = {
     'temperature': (p, a, r) => new TemperatureAccessory(p, a, r),
@@ -149,12 +153,14 @@ export function assertRowMatchesWrapperId(row) {
     }
 }
 /**
- * Non-throwing twin of `assertRowMatchesWrapperId`, used by
- * `buildEffectiveSensorMap` to DROP a mismatched row (and push a
- * `wrapper-mismatch` note) at map-construction time rather than throwing
- * at registration. Unrecognized rows have no wrapper and vacuously match.
+ * Non-throwing predicate behind `assertRowMatchesWrapperId` — module
+ * internal. (`buildEffectiveSensorMap` performs its own equivalent
+ * check against `WRAPPER_SPEC` at map-construction time so a
+ * mismatched row is DROPPED with a `wrapper-mismatch` note; this twin
+ * exists only for the assert at the dispatch boundary.) Unrecognized
+ * rows have no wrapper and vacuously match.
  */
-export function rowMatchesWrapperId(row) {
+function rowMatchesWrapperId(row) {
     if (row.kind === 'unrecognized') {
         return true;
     }

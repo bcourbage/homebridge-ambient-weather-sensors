@@ -98,7 +98,10 @@ export const LEGACY_MIRROR_KEY = '_legacyMirror';
 /** Persist-dir filename of the immutable first-conversion snapshot. */
 export const LEGACY_SNAPSHOT_FILE = 'legacy-config-snapshot.json';
 
-export const LEGACY_MIRROR_VERSION = 1;
+/** Mirror-metadata schema version — module internal (stamped into and
+ * validated against `_legacyMirror.version`; consumers interact with it
+ * only through `recognizeMirror`'s 'invalid' state). */
+const LEGACY_MIRROR_VERSION = 1;
 
 /**
  * The legacy sensor-configuration vocabulary the snapshot preserves and

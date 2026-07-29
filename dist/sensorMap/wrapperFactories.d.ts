@@ -174,12 +174,16 @@ type Factory<R> = (platform: AmbientWeatherSensorsPlatform, accessory: PlatformA
  * fails to compile). Each entry is obligated to accept exactly the row
  * shape `RowForWrapperId[K]` declares.
  *
- * STAGE 1: every entry is an ADAPTER — it ignores the row and calls the
- * wrapper's existing `(platform, accessory)` constructor. A 2-arg arrow
- * is assignable to the 3-arg `Factory` type (excess parameters are
- * allowed), so the row is simply never bound. Stage 2 replaces each
- * adapter with its row-consuming `(p, a, r) => new X(p, a, r)` form as
- * that family's constructor is migrated.
+ * Every entry is the row-consuming `(p, a, r) => new X(p, a, r)` form:
+ * the constructor reads its runtime knobs (name, threshold, trigger
+ * direction, units, battery ownership, embed mode) from the row. The
+ * row parameter is OPTIONAL on the constructors because the flag-off
+ * v1 path still constructs wrappers without one — with `row`
+ * undefined, each constructor falls back to the legacy
+ * `platform.config.*` reads, which is what keeps flag-off behavior
+ * identical to v1.7.0. (The interim "Stage 1 adapter" form, which
+ * discarded the row entirely, was retired when the constructors were
+ * migrated in Stage 2.)
  */
 export declare const FACTORIES: {
     [K in WrapperId]: Factory<RowForWrapperId[K]>;
@@ -197,13 +201,6 @@ export declare const FACTORIES: {
  * return early — callers reject them before this point.
  */
 export declare function assertRowMatchesWrapperId(row: EffectiveSensorRow): void;
-/**
- * Non-throwing twin of `assertRowMatchesWrapperId`, used by
- * `buildEffectiveSensorMap` to DROP a mismatched row (and push a
- * `wrapper-mismatch` note) at map-construction time rather than throwing
- * at registration. Unrecognized rows have no wrapper and vacuously match.
- */
-export declare function rowMatchesWrapperId(row: EffectiveSensorRow): boolean;
 /**
  * Turn a resolved row into its concrete wrapper instance. The single
  * row-aware entry point the platform calls (Stage 3 onward).
