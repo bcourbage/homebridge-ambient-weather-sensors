@@ -1,6 +1,6 @@
 # Ambient Weather for Homebridge
 
-> **This is a soft fork** of [peledies/homebridge-ambient-weather-sensors](https://github.com/peledies/homebridge-ambient-weather-sensors) maintained at [@bcourbage/homebridge-ambient-weather-sensors](https://www.npmjs.com/package/@bcourbage/homebridge-ambient-weather-sensors). The original work, design, and most of the code are by [Deac Karns](https://github.com/peledies). This fork adds **Homebridge 2.x / HAP 2.x compatibility** (closes upstream [#18](https://github.com/peledies/homebridge-ambient-weather-sensors/issues/18), [#19](https://github.com/peledies/homebridge-ambient-weather-sensors/issues/19)), plus multi-station naming, opt-in websocket realtime updates, CO2 / PM2.5 / PM10 sensor coverage, password-masked API key fields, and a polling refactor that consolidates per-accessory timers into one. Pull requests against upstream ([#21](https://github.com/peledies/homebridge-ambient-weather-sensors/pull/21), [#22](https://github.com/peledies/homebridge-ambient-weather-sensors/pull/22)) remain open; this fork exists so users on Homebridge 2 can use the plugin in the meantime.
+> **Originally a fork** of [homebridge-ambient-weather-sensors](https://github.com/peledies/homebridge-ambient-weather-sensors) by [Deac Karns](https://github.com/peledies), now independently maintained as [@bcourbage/homebridge-ambient-weather-sensors](https://www.npmjs.com/package/@bcourbage/homebridge-ambient-weather-sensors). This plugin adds **Homebridge 2.x / HAP 2.x compatibility**, multi-station naming, opt-in websocket realtime updates, CO2 / PM2.5 / PM10 sensor coverage, password-masked API key fields, and a polling engine that consolidates per-accessory timers into one.
 >
 > Install via the Homebridge UI plugin search, or:
 >
@@ -24,32 +24,19 @@
 </SPAN>
 
 
+## What's New in v1.7.1
+
+Safety release; no behavior change for normal 1.x configurations. If a future 2.x version of this plugin writes its new configuration format (`configVersion: 2` and a `sensorMap` section) and you later downgrade to 1.x, v1.7.1 freezes safely instead of misreading the config: cached accessories stay in HomeKit at their last-known values, data updates stop, and the log explains how to resume (restore a 1.x configuration, or upgrade back to 2.x). Earlier 1.x versions would instead deregister every cached accessory after such a downgrade, losing room assignments and automations.
+
 ## What's New in v1.7.0
 
 Preparatory release for the upcoming v2.0.0 sensor-map architecture. **No behavior change for standard users.** The new sensor-map code loads into memory but stays inert unless explicitly opted into via the environment variable `SENSOR_MAP_V2=1`. When enabled, a shadow-mode observer runs the v2 pipeline in parallel to the v1.6.0 code path and logs any divergence to Homebridge's log. The v1.6.0 code path still owns every accessory-registration decision; nothing on disk is modified by shadow mode.
 
-If you're curious to help validate v2.0.0 before it ships, install v1.7.0, add `SENSOR_MAP_V2=1` to Homebridge's environment, restart. To roll back, unset the variable and restart.
+If you're curious to help validate v2.0.0 before it ships, install v1.7.x, add `SENSOR_MAP_V2=1` to Homebridge's environment, and restart. To roll back, unset the variable and restart.
 
 The full v2.0.0 preview (including its new configuration UI) is developing on the `@beta` npm channel: `npm install -g @bcourbage/homebridge-ambient-weather-sensors@beta`.
 
-## What's New in v1.6.0
-
-Small, targeted release focused on iOS device battery life for users of the Extended Sensors embed display mode.
-
-- **Embed mode now forces the polling data source.** If both `extendedDisplayMode: "embed"` and `dataSource: "realtime"` are set, the plugin coerces the data source to `polling` at startup with a one-line warn log. The combination was observed to drain iOS phone battery 5-7× faster than normal idle because each tile-name update generates an HAP notification forwarded to every paired iOS device. Polling's 2-minute cadence keeps notification volume to a level that isn't noticeable.
-- **New `embedNameUpdateMinIntervalMinutes` config field** caps the per-accessory name-update rate in embed mode. Default 2 minutes matches the polling cadence — effectively a no-op for new installs. Can be increased (e.g. 5 or 10 minutes) for users who want to further reduce HAP notification volume, at the cost of less-frequent tile-name updates. Has no effect in static mode.
-
-Existing users of static display mode (the default) see no behavior change.
-
-## What's New in v1.5.0
-
-v1.5.0 is the largest release of this plugin. **Existing users see no behavior change unless they opt in to the new sensors**, except they automatically gain low-battery push notifications on every sensor they already have.
-
-- **Low-battery notifications for every probe** — Apple Home's built-in low-battery alerts now fire when AWN reports any sensor's battery as low. No setup needed.
-- **Feels-like + dew-point temperatures** appear as new Temperature accessories (if `Temperature Sensors` was already enabled).
-- **Extended Sensors (opt-in)** — wind, rain, barometric pressure, UV, and lightning, exposed as `MotionSensor` accessories with threshold-driven Apple Home automations. Live numeric values render in Eve / Controller for HomeKit.
-
-**Upgrading from v1.4.x?** See the [upgrade guide](./UPGRADING.md) for what changes, what to enable, and example automations.
+Release notes for earlier versions live in [CHANGELOG.md](./CHANGELOG.md). Upgrading from v1.4.x? See the [upgrade guide](./UPGRADING.md) for what changes, what to enable, and example automations.
 
 ## Plugin Information
 This plugin allows you to pull sensor data from your Ambient Weather weather station via its REST API and add those accessories to homebridge.
@@ -66,8 +53,8 @@ This plugin allows you to pull sensor data from your Ambient Weather weather sta
 ## Data Source
 The plugin can read sensor values one of two ways. Pick whichever fits your setup; both feed the same HomeKit accessories.
 
-- **Polling** *(default)* — fetches the AWN REST endpoint every 2 minutes. Predictable cadence, minimal moving parts, easy to reason about. Updates lag the real reading by up to 2 minutes.
-- **Realtime** *(opt-in via `dataSource: "realtime"`)* — opens a websocket to `rt2.ambientweather.net` and receives values as the station reports them (~30 second cadence indoors). Lower latency but more moving parts (a persistent connection with automatic reconnect).
+- **Polling** *(default)*: fetches the AWN REST endpoint every 2 minutes. Predictable cadence, minimal moving parts, easy to reason about. Updates lag the real reading by up to 2 minutes.
+- **Realtime** *(opt-in via `dataSource: "realtime"`)*: opens a websocket to `rt2.ambientweather.net` and receives values as the station reports them (~30 second cadence indoors). Lower latency but more moving parts (a persistent connection with automatic reconnect).
 
 Realtime is currently opt-in. The default will switch to realtime in a future release once it has been broadly validated.
 
@@ -77,19 +64,19 @@ Realtime is currently opt-in. The default will switch to realtime in a future re
 
 These map cleanly to native HomeKit accessory services. They render in Apple's Home app, Eve, and every other HomeKit client without any caveat.
 
-- **Temperature** — outdoor, indoor, and per-probe (`tempf`, `tempinf`, `temp{1..N}f`). As of v1.5.0 the matcher also covers AWN's pre-calculated **feels-like** (heat index / wind chill) and **dew point** fields (`feelsLike`, `feelsLike{N}`, `feelsLikein`, `dewPoint`, `dewPoint{N}`, `dewPointin`).
-- **Humidity** — outdoor, indoor, and per-probe.
-- **Solar Radiation** — exposed as lux on a `LightSensor`. See the conversion note below.
-- **CO2** — AWN's `co2_in_aqin` (AQIN module) and the standalone `co2` field.
-- **Particulate Matter** — PM2.5 and PM10 (AWN's `pm25_in_aqin`, `pm10_in_aqin`, and the outdoor `pm25` field). Reported with both raw density and an EPA-bucket-derived HomeKit AirQuality rating.
+- **Temperature**: outdoor, indoor, and per-probe (`tempf`, `tempinf`, `temp{1..N}f`). As of v1.5.0 the matcher also covers AWN's pre-calculated **feels-like** (heat index / wind chill) and **dew point** fields (`feelsLike`, `feelsLike{N}`, `feelsLikein`, `dewPoint`, `dewPoint{N}`, `dewPointin`).
+- **Humidity**: outdoor, indoor, and per-probe.
+- **Solar Radiation**: exposed as lux on a `LightSensor`. See the conversion note below.
+- **CO2**: AWN's `co2_in_aqin` (AQIN module) and the standalone `co2` field.
+- **Particulate Matter**: PM2.5 and PM10 (AWN's `pm25_in_aqin`, `pm10_in_aqin`, and the outdoor `pm25` field). Reported with both raw density and an EPA-bucket-derived HomeKit AirQuality rating.
 
 ### Battery status
 
-Every sensor whose physical probe reports a battery in AWN's payload also exposes a HomeKit `Battery` sub-service. Apple Home (and every third-party HomeKit client) will fire its built-in low-battery push notification when AWN reports a probe as low. Use this to build the automation *"When Outdoor Temperature battery is low, remind me to replace it"* — no Eve dependency, no manual checking the AWN dashboard.
+Every sensor whose physical probe reports a battery in AWN's payload also exposes a HomeKit `Battery` sub-service. Apple Home (and every third-party HomeKit client) will fire its built-in low-battery push notification when AWN reports a probe as low. Use this to build the automation *"When Outdoor Temperature battery is low, remind me to replace it"*: no Eve dependency, no manual checking of the AWN dashboard.
 
-Probes covered: outdoor base (powers wind, rain, solar, UV, outdoor temp/humid), indoor display (indoor temp/humid + pressure), WH31 numbered probes (per-channel), AQIN module (PM, CO2), and the WH31L lightning sensor (Ecowitt WH57 equivalent hardware). Each physical probe shows ONE battery sub-service in HomeKit (attached to its most-representative accessory), not one per accessory the probe powers — see the Troubleshooting section in [UPGRADING.md](./UPGRADING.md) for how this maps. Probes that AWN doesn't report a battery for get no Battery sub-service.
+Probes covered: outdoor base (powers wind, rain, solar, UV, outdoor temp/humid), indoor display (indoor temp/humid + pressure), WH31 numbered probes (per-channel), AQIN module (PM, CO2), and the WH31L lightning sensor (Ecowitt WH57 equivalent hardware). Each physical probe shows ONE battery sub-service in HomeKit (attached to its most-representative accessory), not one per accessory the probe powers. See the Troubleshooting section in [UPGRADING.md](./UPGRADING.md) for how this maps. Probes that AWN doesn't report a battery for get no Battery sub-service.
 
-**Note on the lightning sensor battery:** AWN's API has been observed to report the lightning sensor as low-battery (`batt_lightning = 0`) even when fresh batteries are installed and the AWN dashboard itself shows the sensor as healthy. The plugin reads what AWN's API returns — if your lightning Battery tile in HomeKit disagrees with the AWN dashboard, the issue is upstream of this plugin. Replacing the batteries doesn't help; consider it cosmetic until AWN fixes their API. To suppress the spurious low-battery notifications, add `batt_lightning` (or `Lightning Strikes Today-batt`) to the `Exclude Sensors` list in plugin config — see [UPGRADING.md](./UPGRADING.md) for details.
+**Note on the lightning sensor battery:** AWN's API has been observed to report the lightning sensor as low-battery (`batt_lightning = 0`) even when fresh batteries are installed and the AWN dashboard itself shows the sensor as healthy. The plugin reads what AWN's API returns. If your lightning Battery tile in HomeKit disagrees with the AWN dashboard, the issue is upstream of this plugin. Replacing the batteries doesn't help; consider it cosmetic until AWN fixes their API. To suppress the spurious low-battery notifications, add `batt_lightning` (or `Lightning Strikes Today-batt`) to the `Exclude Sensors` list in plugin config. See [UPGRADING.md](./UPGRADING.md) for details.
 
 ### Solar Radiation: W/m² ↔ lux
 
@@ -103,11 +90,11 @@ This factor assumes sunlight's spectral distribution, which matches the AWN sens
 
 ### Extended Sensors (v1.5.0+)
 
-Apple Home does not natively understand wind, rain, barometric pressure, UV, or lightning — there are no HAP services for those types. v1.5.0 adds them anyway using the same pattern as the verified [homebridge-ecowitt-weather-sensors](https://github.com/rhockenbury/homebridge-ecowitt-weather-sensors) plugin: each datapoint is exposed as a `MotionSensor` accessory with three additional custom characteristics:
+Apple Home does not natively understand wind, rain, barometric pressure, UV, or lightning: there are no HAP services for those types. v1.5.0 adds them anyway using the same pattern as the verified [homebridge-ecowitt-weather-sensors](https://github.com/rhockenbury/homebridge-ecowitt-weather-sensors) plugin: each datapoint is exposed as a `MotionSensor` accessory with three additional custom characteristics:
 
-- **Value** — the live numeric reading with units (e.g. `"14 mph"`, `"0.12 in/hr"`, `"315° (NW)"`)
-- **Intensity** — qualitative bucket (Beaufort for wind, EPA scale for UV, NWS descriptors for rain)
-- **Last Updated** — ISO-8601 timestamp of the most recent reading
+- **Value**: the live numeric reading with units (e.g. `"14 mph"`, `"0.12 in/hr"`, `"315° (NW)"`)
+- **Intensity**: qualitative bucket (Beaufort for wind, EPA scale for UV, NWS descriptors for rain)
+- **Last Updated**: ISO-8601 timestamp of the most recent reading
 
 | Sensor | AWN field(s) |
 |---|---|
@@ -123,41 +110,37 @@ Apple Home does not natively understand wind, rain, barometric pressure, UV, or 
 
 **How this looks in HomeKit:**
 
-- **Apple Home**: each extended sensor appears as a Motion Sensor tile labeled by sensor name (e.g. "Wind Speed"). The motion state toggles on/off based on a configurable threshold — so you can write a stock Home automation like *"When Wind Speed motion detected, close the awning"*. The live numeric value is not directly visible in Apple Home.
+- **Apple Home**: each extended sensor appears as a Motion Sensor tile labeled by sensor name (e.g. "Wind Speed"). The motion state toggles on/off based on a configurable threshold, so you can write a stock Home automation like *"When Wind Speed motion detected, close the awning"*. The live numeric value is not directly visible in Apple Home.
 - **Eve / Controller for HomeKit**: each tile shows the live Value, Intensity bucket, and Last Updated timestamp on the same accessory.
 
 **Optional embed-value mode:** if you want the live numeric value visible in Apple Home tiles too, switch the display mode in plugin settings. The tile name updates on every reading (e.g. *"Wind Speed 14 mph"*). Values are rounded to whole numbers to stay compatible with Apple Home's naming rules. Trade-offs are documented next to the setting.
 
 **All extended sensors are off by default.** Enable the master "Extended Sensors" toggle in the plugin settings, then pick which sub-categories you want. Threshold values and display units are configurable.
 
-**Why MotionSensor?** It's the only HAP service whose state (`MotionDetected`) is both native to Apple Home AND triggerable by an external value, which makes it work as a universal "this number crossed a threshold" sensor. Picking it puts you in good company — every comparable plugin (homebridge-ecowitt-weather-sensors, homebridge-weather-plus, homebridge-mqttthing's weather station) settled on the same idea.
+**Why MotionSensor?** It's the only HAP service whose state (`MotionDetected`) is both native to Apple Home AND triggerable by an external value, which makes it work as a universal "this number crossed a threshold" sensor. Picking it puts you in good company: every comparable plugin (homebridge-ecowitt-weather-sensors, homebridge-weather-plus, homebridge-mqttthing's weather station) settled on the same idea.
 
-**Hardware-aware (safe to over-enable):** the plugin only creates an accessory for a sensor field that's actually present in your station's AWN payload. If you enable a category whose hardware you don't have (e.g. Lightning without a WH31L, Air Quality without an AQIN, CO2 without an AQIN), the relevant fields are simply absent from AWN's response, no accessory is registered, and nothing appears in HomeKit. Enabling a category is a zero-cost no-op when the underlying hardware isn't installed — so when in doubt, leave it on.
+**Hardware-aware (safe to over-enable):** the plugin only creates an accessory for a sensor field that's actually present in your station's AWN payload. If you enable a category whose hardware you don't have (e.g. Lightning without a WH31L, Air Quality without an AQIN, CO2 without an AQIN), the relevant fields are simply absent from AWN's response, no accessory is registered, and nothing appears in HomeKit. Enabling a category is a zero-cost no-op when the underlying hardware isn't installed, so when in doubt, leave it on.
 
 ## Setup
 An ambientweather.net account is required (no paid subscription is needed) so that you can generate the two keys this plugin uses.
 
-You will need two keys to configre this plugin and they can both be generate on the [Ambient Weather Account Page](https://ambientweather.net/account). This part has been a point of confusion for many users.
+You will need two keys to configure this plugin; both can be generated on the [Ambient Weather Account Page](https://ambientweather.net/account). This part has been a point of confusion for many users.
 
-creating the API key is straight forward. click the `Create API Key` button and give it a name if you would like.
+Creating the API key is straightforward: click the `Create API Key` button and give it a name if you would like.
 
 Creating the Application key involves clicking the following link at the bottom of the 'API Keys' section.
 
 `Developers: An Application Key is also required for each application that you develop. Click here to create one.`
 
-A textbox will come up and you can either leave that blank or put a note in there (It doesn't appear to matter or get displayed anywhere) if you like and click `Create Application Key`.
+A textbox will come up; leave it blank or put a note in it (it doesn't appear to matter or get displayed anywhere), then click `Create Application Key`.
 
 These keys will get used when you setup the plugin in Homebridge.
 
 ## Credits and Acknowledgments
 
-The original work, design, and the vast majority of the code in this plugin are by **[Deac Karns (@peledies)](https://github.com/peledies)**, who created and maintained [homebridge-ambient-weather-sensors](https://github.com/peledies/homebridge-ambient-weather-sensors). The decision to use Ambient Weather's official REST API rather than scraping or BLE bridging is what made this plugin viable in the first place, and it's still the cleanest path to AWN data on HomeKit.
+This plugin began as a fork of [homebridge-ambient-weather-sensors](https://github.com/peledies/homebridge-ambient-weather-sensors) by **[Deac Karns (@peledies)](https://github.com/peledies)**. His original design, including the decision to build on Ambient Weather's official REST API rather than scraping or BLE bridging, remains at the heart of this plugin.
 
-This fork exists only because upstream activity has been quiet (last commit February 2025; pull requests [#21](https://github.com/peledies/homebridge-ambient-weather-sensors/pull/21) and [#22](https://github.com/peledies/homebridge-ambient-weather-sensors/pull/22) sat unmerged) and the plugin stopped working under Homebridge 2.0. Once upstream resumes activity and merges the compatibility PRs, this fork can be sunset — please consider it a temporary bridge, not a competitor.
-
-**If you find this plugin useful**, the appropriate place to donate or thank the author is Deac's PayPal link, preserved unchanged in `package.json`'s `funding` field: [paypal.me/deackarns](https://paypal.me/deackarns).
-
-### Changes in this fork beyond upstream v1.3.2
+### Changes beyond the original v1.3.2
 
 - Homebridge 2.x / HAP 2.x compatibility (engines bump to Node 22+, ESM migration, HAP v2 stricter `Name` validation)
 - Multi-station accessory naming using AWN's `info.name` (instead of bare MAC + sensor key)
@@ -168,11 +151,11 @@ This fork exists only because upstream activity has been quiet (last commit Febr
 - PM2.5 / PM10 (AQIN) support as HomeKit `AirQualitySensor` with EPA-bucket-derived AirQuality enum
 - API/application keys masked as password fields in homebridge-config-ui-x
 - Independent latent bug fixes (`Cache.isValid()` async-in-sync, ProductData characteristic on the wrong service, etc.)
-- **v1.5.0** — Extended sensors (wind, rain, barometric pressure, UV, lightning) exposed as `MotionSensor` accessories with custom Value/Intensity/Last-Updated characteristics; threshold-driven Apple Home automations; optional embed-value tile mode; per-unit selection; bonus native sensors (feels-like and dew point per probe); `stationFilter` field for assigning stations to separate HomeKit Homes via child bridges (see [MultiHome.md](./MultiHome.md))
+- **v1.5.0**: Extended sensors (wind, rain, barometric pressure, UV, lightning) exposed as `MotionSensor` accessories with custom Value/Intensity/Last-Updated characteristics; threshold-driven Apple Home automations; optional embed-value tile mode; per-unit selection; bonus native sensors (feels-like and dew point per probe); `stationFilter` field for assigning stations to separate HomeKit Homes via child bridges (see [MultiHome.md](./MultiHome.md))
 
 ### License
 
-Apache License 2.0 — preserved unchanged from upstream. See [LICENSE](./LICENSE) and [NOTICE](./NOTICE).
+Apache License 2.0, preserved unchanged from the original project. See [LICENSE](./LICENSE) and [NOTICE](./NOTICE).
 
 ### Trademark notice
 
