@@ -9,12 +9,6 @@
   "contributors": [
     "Deac Karns (https://github.com/peledies)"
   ],
-  "funding": [
-    {
-      "type": "paypal",
-      "url": "https://paypal.me/deackarns"
-    }
-  ],
   "repository": {
     "type": "git",
     "url": "https://github.com/bcourbage/homebridge-ambient-weather-sensors"

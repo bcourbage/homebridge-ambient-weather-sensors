@@ -1,6 +1,6 @@
 # Ambient Weather for Homebridge
 
-> **This is a soft fork** of [peledies/homebridge-ambient-weather-sensors](https://github.com/peledies/homebridge-ambient-weather-sensors) maintained at [@bcourbage/homebridge-ambient-weather-sensors](https://www.npmjs.com/package/@bcourbage/homebridge-ambient-weather-sensors). The original work, design, and most of the code are by [Deac Karns](https://github.com/peledies). This fork adds **Homebridge 2.x / HAP 2.x compatibility** (closes upstream [#18](https://github.com/peledies/homebridge-ambient-weather-sensors/issues/18), [#19](https://github.com/peledies/homebridge-ambient-weather-sensors/issues/19)), plus multi-station naming, opt-in websocket realtime updates, CO2 / PM2.5 / PM10 sensor coverage, password-masked API key fields, and a polling refactor that consolidates per-accessory timers into one. The compatibility pull requests against upstream ([#21](https://github.com/peledies/homebridge-ambient-weather-sensors/pull/21), [#22](https://github.com/peledies/homebridge-ambient-weather-sensors/pull/22)) were closed unmerged in June 2026, so this fork continues as the maintained path for Homebridge 2 users.
+> **Originally a fork** of [homebridge-ambient-weather-sensors](https://github.com/peledies/homebridge-ambient-weather-sensors) by [Deac Karns](https://github.com/peledies), now independently maintained as [@bcourbage/homebridge-ambient-weather-sensors](https://www.npmjs.com/package/@bcourbage/homebridge-ambient-weather-sensors). This plugin adds **Homebridge 2.x / HAP 2.x compatibility**, multi-station naming, opt-in websocket realtime updates, CO2 / PM2.5 / PM10 sensor coverage, password-masked API key fields, and a polling engine that consolidates per-accessory timers into one.
 >
 > Install via the Homebridge UI plugin search, or:
 >
@@ -138,13 +138,9 @@ These keys will get used when you setup the plugin in Homebridge.
 
 ## Credits and Acknowledgments
 
-The original work, design, and the vast majority of the code in this plugin are by **[Deac Karns (@peledies)](https://github.com/peledies)**, who created and maintained [homebridge-ambient-weather-sensors](https://github.com/peledies/homebridge-ambient-weather-sensors). The decision to use Ambient Weather's official REST API rather than scraping or BLE bridging is what made this plugin viable in the first place, and it's still the cleanest path to AWN data on HomeKit.
+This plugin began as a fork of [homebridge-ambient-weather-sensors](https://github.com/peledies/homebridge-ambient-weather-sensors) by **[Deac Karns (@peledies)](https://github.com/peledies)**. His original design, including the decision to build on Ambient Weather's official REST API rather than scraping or BLE bridging, remains at the heart of this plugin.
 
-This fork exists only because upstream activity has been quiet (last commit February 2025) and the plugin stopped working under Homebridge 2.0. The compatibility pull requests ([#21](https://github.com/peledies/homebridge-ambient-weather-sensors/pull/21), [#22](https://github.com/peledies/homebridge-ambient-weather-sensors/pull/22)) were closed unmerged in June 2026. If upstream resumes active maintenance, this fork can still be sunset in its favor. Please consider it a continuation, not a competitor.
-
-**If you find this plugin useful**, the appropriate place to donate or thank the author is Deac's PayPal link, preserved unchanged in `package.json`'s `funding` field: [paypal.me/deackarns](https://paypal.me/deackarns).
-
-### Changes in this fork beyond upstream v1.3.2
+### Changes beyond the original v1.3.2
 
 - Homebridge 2.x / HAP 2.x compatibility (engines bump to Node 22+, ESM migration, HAP v2 stricter `Name` validation)
 - Multi-station accessory naming using AWN's `info.name` (instead of bare MAC + sensor key)
@@ -159,7 +155,7 @@ This fork exists only because upstream activity has been quiet (last commit Febr
 
 ### License
 
-Apache License 2.0, preserved unchanged from upstream. See [LICENSE](./LICENSE) and [NOTICE](./NOTICE).
+Apache License 2.0, preserved unchanged from the original project. See [LICENSE](./LICENSE) and [NOTICE](./NOTICE).
 
 ### Trademark notice
 

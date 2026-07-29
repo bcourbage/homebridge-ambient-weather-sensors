@@ -16,6 +16,7 @@ Documentation-only release; no code change.
 ### Changed
 
 - **README refreshed for the npm page.** Release notes now cover v1.7.1 and v1.7.0 (earlier notes live in CHANGELOG.md, with the upgrade guide still linked for 1.4.x users), the v1.7.1 downgrade guard is described, setup-section typos are fixed, and prose style is cleaned up throughout.
+- **Independent-maintenance framing.** The original compatibility pull requests were closed unmerged in June 2026, so the "temporary bridge" language is retired: the plugin is now described as independently maintained, with the acknowledgment of Deac Karns' original work kept. The `funding` field (the npm Fund button, which pointed at the original author's PayPal) is removed.
 
 ## [1.7.1] — 2026-07-28
 
