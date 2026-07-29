@@ -9,6 +9,17 @@ entries short and user-facing.
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/
 
+## [1.7.1] — 2026-07-28
+
+### Fixed
+
+- **Safety freeze on configurations written by plugin 2.x.** If your `config.json` carries `configVersion: 2` (or any value other than `1`), or a `sensorMap` section, it was written by a newer plugin version. This 1.x version cannot interpret it, and previously it would have removed every cached accessory from HomeKit on the first restart after a downgrade, losing room assignments and automations. Now the plugin freezes instead: your accessories stay in HomeKit with their last-known values, no data updates flow, and the log explains what happened.
+- **To resume normal operation** after the freeze, either upgrade the plugin back to 2.x, or restore your 1.x configuration and restart Homebridge. If you migrated through the 2.x plugin UI, your original settings were preserved in `legacy-config-snapshot.json` inside the plugin's data directory (`<homebridge storage>/plugin-data/ambient-weather/`) — copy those fields back into the plugin's config block.
+
+### Not changing
+
+- No behavior change for normal 1.x configurations. No configuration UI change.
+
 ## [1.7.0] — 2026-07-19
 
 ### Added
