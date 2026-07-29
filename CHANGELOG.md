@@ -9,6 +9,12 @@ entries short and user-facing.
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/
 
+## [Unreleased]
+
+### Fixed
+
+- **Plugin UI page is now legible in Homebridge UI's dark theme.** The custom-UI panels (status, discovered stations, notices) previously shipped light-theme-only colors that clashed with the theme stylesheet HB UI X injects into custom-UI iframes, producing dark-on-dark table headers and light-on-light banner text. The panels now carry explicit light AND dark palettes keyed off the `dark-mode` body class HB UI X sets, scoped so the injected theme can't half-override them; all text/background pairs meet WCAG AA contrast in both themes.
+
 ## [2.0.0-beta.8] — 2026-07-29
 
 The big handoff: the `_sensorMapV2` flag now selects the **live** sensor-map v2 path instead of the compare-only "shadow mode" of beta.0–beta.7.

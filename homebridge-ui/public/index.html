@@ -4,35 +4,72 @@
   <meta charset="utf-8" />
   <title>Ambient Weather Sensors — v2 Preview</title>
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-           margin: 0; padding: 16px; color: #1a1a1a; }
-    h1   { font-size: 1.25rem; margin: 0 0 4px 0; }
-    h2   { font-size: 1.05rem; margin: 20px 0 6px 0; border-bottom: 1px solid #ddd; padding-bottom: 4px; }
-    .sub { color: #666; font-size: 0.9rem; margin-bottom: 12px; }
-    .banner {
-      padding: 10px 14px; border-radius: 6px; margin: 12px 0;
-      background: #fff8e1; border-left: 4px solid #f0b000; font-size: 0.92rem;
+    /*
+     * Theme cooperation with HB UI X (task #69 follow-up): the parent
+     * injects its OWN theme stylesheet into this iframe (ui.js applies
+     * parent-sent inline-style / link-element messages) and adds a
+     * `dark-mode` class to <body> when its theme is dark. Two rules
+     * keep our panels legible in both themes regardless of injected-
+     * sheet cascade order:
+     *   1. Everything we style is scoped under #awn — id specificity
+     *      beats the injected theme's class/element rules even though
+     *      that sheet loads after ours.
+     *   2. Every rule pairs background AND text color from the same
+     *      palette (CSS variables below), so no element ever renders
+     *      half ours / half theirs.
+     */
+    #awn {
+      --fg: #1a1a1a; --fg-sub: #666; --fg-empty: #6e6e6e;
+      --rule: #ddd; --row-rule: #eee;
+      --panel-bg: #f7f7f7; --code-bg: #f0f0f0;
+      --warn-bg: #fff8e1;  --warn-fg: #5f4a00;  --warn-edge: #f0b000;
+      --error-bg: #fdecea; --error-fg: #8c1d18; --error-edge: #c62828;
+      --info-bg: #e3f2fd;  --info-fg: #0d47a1;  --info-edge: #1976d2;
+      --on-bg: #c8e6c9;    --on-fg: #1b5e20;
+      --off-bg: #ffcdd2;   --off-fg: #b71c1c;
+      --btn-bg: #fff; --btn-fg: #1a1a1a; --btn-edge: #bbb; --btn-hover: #f0f0f0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      color: var(--fg);
     }
-    .banner.safe-mode { background: #fdecea; border-left-color: #c62828; }
-    .banner.info      { background: #e3f2fd; border-left-color: #1976d2; }
-    .flag {
+    body.dark-mode #awn {
+      --fg: #e8eaed; --fg-sub: #9aa0a6; --fg-empty: #9aa0a6;
+      --rule: #4a4d51; --row-rule: #3c4043;
+      --panel-bg: #2d2f33; --code-bg: #3c4043;
+      --warn-bg: #3d3000;  --warn-fg: #ffd54f;  --warn-edge: #f0b000;
+      --error-bg: #4a1210; --error-fg: #f4a9a3; --error-edge: #e57373;
+      --info-bg: #102a43;  --info-fg: #90caf9;  --info-edge: #42a5f5;
+      --on-bg: #1e3b21;    --on-fg: #a5d6a7;
+      --off-bg: #4a1a1a;   --off-fg: #ef9a9a;
+      --btn-bg: #2d2f33; --btn-fg: #e8eaed; --btn-edge: #5f6368; --btn-hover: #3c4043;
+    }
+    body { margin: 0; padding: 16px; }
+    #awn h1   { font-size: 1.25rem; margin: 24px 0 4px 0; color: var(--fg); }
+    #awn h2   { font-size: 1.05rem; margin: 20px 0 6px 0; border-bottom: 1px solid var(--rule); padding-bottom: 4px; color: var(--fg); }
+    #awn .sub { color: var(--fg-sub); font-size: 0.9rem; margin-bottom: 12px; }
+    #awn .banner {
+      padding: 10px 14px; border-radius: 6px; margin: 12px 0; font-size: 0.92rem;
+      background: var(--warn-bg); color: var(--warn-fg); border-left: 4px solid var(--warn-edge);
+    }
+    #awn .banner.safe-mode { background: var(--error-bg); color: var(--error-fg); border-left-color: var(--error-edge); }
+    #awn .banner.info      { background: var(--info-bg);  color: var(--info-fg);  border-left-color: var(--info-edge); }
+    #awn .flag {
       display: inline-block; padding: 2px 8px; border-radius: 999px;
       font-size: 0.75rem; font-weight: 600; letter-spacing: 0.03em; text-transform: uppercase;
     }
-    .flag.on  { background: #c8e6c9; color: #1b5e20; }
-    .flag.off { background: #ffcdd2; color: #b71c1c; }
-    table  { border-collapse: collapse; width: 100%; font-size: 0.88rem; }
-    th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid #eee; }
-    th     { background: #f7f7f7; font-weight: 600; }
-    .empty { color: #888; font-style: italic; padding: 8px 0; }
-    button {
-      padding: 6px 12px; border-radius: 4px; border: 1px solid #bbb;
-      background: #fff; cursor: pointer; font-size: 0.88rem;
+    #awn .flag.on  { background: var(--on-bg);  color: var(--on-fg); }
+    #awn .flag.off { background: var(--off-bg); color: var(--off-fg); }
+    #awn table  { border-collapse: collapse; width: 100%; font-size: 0.88rem; }
+    #awn th, #awn td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--row-rule); color: var(--fg); }
+    #awn th     { background: var(--panel-bg); font-weight: 600; }
+    #awn .empty { color: var(--fg-empty); font-style: italic; padding: 8px 0; }
+    #awn button {
+      padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 0.88rem;
+      background: var(--btn-bg); color: var(--btn-fg); border: 1px solid var(--btn-edge);
     }
-    button:hover { background: #f0f0f0; }
-    .row  { display: flex; align-items: center; gap: 8px; }
-    .grow { flex: 1; }
-    code { background: #f0f0f0; padding: 1px 4px; border-radius: 3px; font-size: 0.85em; }
+    #awn button:hover { background: var(--btn-hover); }
+    #awn .row  { display: flex; align-items: center; gap: 8px; }
+    #awn .grow { flex: 1; }
+    #awn code { background: var(--code-bg); color: var(--fg); padding: 1px 4px; border-radius: 3px; font-size: 0.85em; }
   </style>
 </head>
 <body>
@@ -44,32 +81,34 @@
     preview panels come after.
   -->
 
-  <h1 style="margin-top:24px;">Sensor-map v2.0 preview</h1>
-  <p class="sub" id="version">v2 preview</p>
+  <div id="awn">
+    <h1>Sensor-map v2.0 preview</h1>
+    <p class="sub" id="version">v2 preview</p>
 
-  <div id="statusBanner" class="banner info">Loading status…</div>
+    <div id="statusBanner" class="banner info">Loading status…</div>
 
-  <div id="warnings"></div>
+    <div id="warnings"></div>
 
-  <h2 class="row">
-    <span class="grow">Status</span>
-    <button id="refresh">Refresh</button>
-  </h2>
-  <table>
-    <tbody>
-      <tr><th>Config mode</th><td id="configMode">—</td></tr>
-      <tr><th>Sensor-map v2 flag</th><td id="v2Flag">—</td></tr>
-      <tr><th>Plugin version</th><td id="pluginVersion">—</td></tr>
-    </tbody>
-  </table>
+    <h2 class="row">
+      <span class="grow">Status</span>
+      <button id="refresh">Refresh</button>
+    </h2>
+    <table>
+      <tbody>
+        <tr><th>Config mode</th><td id="configMode">—</td></tr>
+        <tr><th>Sensor-map v2 flag</th><td id="v2Flag">—</td></tr>
+        <tr><th>Plugin version</th><td id="pluginVersion">—</td></tr>
+      </tbody>
+    </table>
 
-  <h2>Discovered stations &amp; datapoints</h2>
-  <p class="sub">Populated by the plugin as it observes AWN payloads. Empty until the first successful v2 discovery or poll with the sensor-map v2 flag on.</p>
-  <div id="discovery"></div>
+    <h2>Discovered stations &amp; datapoints</h2>
+    <p class="sub">Populated by the plugin as it observes AWN payloads. Empty until the first successful v2 discovery or poll with the sensor-map v2 flag on.</p>
+    <div id="discovery"></div>
 
-  <h2>Notices</h2>
-  <p class="sub">Structural-change notices are recorded when the plugin re-registers an accessory whose structure changed (for example after a sensor-map edit). Expected whenever the v2 flag is on and structure changes. Existing notices remain visible after the flag is turned off; no new structural notices are generated while it is off.</p>
-  <div id="notices"></div>
+    <h2>Notices</h2>
+    <p class="sub">Structural-change notices are recorded when the plugin re-registers an accessory whose structure changed (for example after a sensor-map edit). Expected whenever the v2 flag is on and structure changes. Existing notices remain visible after the flag is turned off; no new structural notices are generated while it is off.</p>
+    <div id="notices"></div>
+  </div>
 
   <script>
     // homebridge is injected into window by Homebridge UI X.
