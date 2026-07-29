@@ -78,13 +78,17 @@ describe('custom-UI theme palette', () => {
     }
   });
 
+  it('the hover rule actually uses --btn-hover (keeps the pair list honest)', () => {
+    expect(css).toMatch(/#awn button:hover \{ background: var\(--btn-hover\)/);
+  });
+
   it('all palette fg/bg pairs meet WCAG AA 4.5:1 in both themes', () => {
     const pairs: Array<[string, string | null]> = [
       ['fg', null], ['fg-sub', null], ['fg-empty', null],
       ['fg', 'panel-bg'], ['fg', 'code-bg'],
       ['warn-fg', 'warn-bg'], ['error-fg', 'error-bg'], ['info-fg', 'info-bg'],
       ['on-fg', 'on-bg'], ['off-fg', 'off-bg'],
-      ['btn-fg', 'btn-bg'],
+      ['btn-fg', 'btn-bg'], ['btn-fg', 'btn-hover'],
     ];
     const backdrop = { light: '#ffffff', dark: '#242424' };
     for (const [name, pal] of [['light', light], ['dark', dark]] as const) {
