@@ -9,6 +9,16 @@ entries short and user-facing.
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/
 
+## [Unreleased]
+
+### Added
+
+- **Sensor-map viewer: read-only editor foundation (GA task #69, PR A).** The plugin settings page now renders the effective sensor map grouped by station: data point, name, kind and measurement, units with AmbientWeather.net-matching labels (source → display when a conversion applies), enabled state, authoring layer (default / global / station / unrecognized), and battery field. The view is strictly read-only; editing ships in a later beta and every future save will flow through the guarded `/compose-save` boundary. Two new read-only UI bridge endpoints back it: `/editor-state` (a sanitized read model derived from the on-disk config.json — credentials and internal machinery never reach the browser; legacy configs render as their migration preview) and `/vocabulary` (per-measurement unit options with display labels).
+
+### Fixed
+
+- **Live theme switching in the plugin settings page.** Homebridge UI X sends its theme to a custom UI iframe only when the page opens, and the client library only ever adds theme classes, so switching between light and dark with the page open left it rendered in the old theme until reopened (observed on beta.8). The page now mirrors the parent's theme classes directly (adding and removing) and follows live theme changes in both directions.
+
 ## [2.0.0-beta.10] — 2026-08-19
 
 ### Added

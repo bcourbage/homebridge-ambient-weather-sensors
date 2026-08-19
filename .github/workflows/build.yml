@@ -32,7 +32,8 @@ jobs:
           node-version: ${{ matrix.node-version }}
 
       - name: Install dependencies
-        run: npm install
+        # Locked tree (package-lock.json committed as of PR A).
+        run: npm ci
 
       - name: Lint the project
         run: npm run lint
@@ -55,3 +56,28 @@ jobs:
           npm audit fix || true
           npm list --outdated
           npm run build
+
+  # The CANONICAL producer of the committed Angular editor artifacts
+  # (homebridge-ui/public/app/, GA task #69 / §10.1): exactly Node
+  # 22.12, matching the Volta pin in package.json. Two cold builds must
+  # be byte-identical AND match the committed files, and the committed
+  # index.html asset references must be current. Contributors on other
+  # Node versions get caught here if their local rebuild drifted.
+  ui-app-determinism:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Use Node.js 22.12 (canonical artifact producer)
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22.12'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify committed UI artifacts are deterministic and current
+        run: npm run verify:app
+
+      - name: Verify the rebuild left the working tree clean
+        run: git diff --exit-code

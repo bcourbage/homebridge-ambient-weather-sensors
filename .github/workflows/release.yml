@@ -46,25 +46,38 @@ jobs:
 
       - uses: actions/setup-node@v6
         with:
-          node-version: '22.x'
+          # Pinned to the CANONICAL artifact-producer version (matches
+          # the Volta pin and build.yml's ui-app-determinism job): the
+          # release must be able to reproduce the committed Angular
+          # artifacts byte-for-byte before publishing them.
+          node-version: '22.12'
           registry-url: 'https://registry.npmjs.org'
 
       - name: Upgrade npm (trusted publishing needs npm >= 11.5.1)
         run: npm install -g npm@latest
 
       - name: Install dependencies
-        # We don't commit package-lock.json (build dist is committed
-        # instead, and runtime deps are small), so `npm ci` would fail
-        # for lack of a lock file. `npm install` resolves fresh from
-        # package.json semver ranges; acceptable for this project's
-        # tiny dependency surface.
-        run: npm install
+        # package-lock.json is committed (PR A, GA task #69), so `npm ci`
+        # installs the exact locked tree — releases build against the
+        # same dependency set the determinism gates verified.
+        run: npm ci
 
       - name: Lint
         run: npm run lint
 
       - name: Build
         run: npm run build
+
+      - name: Verify committed UI artifacts match a canonical rebuild
+        # Review #32 F5: `npm run build` compiles only the plugin and
+        # the UI server — the Angular app ships as COMMITTED artifacts.
+        # A tag could otherwise publish stale assets if the branch
+        # determinism job was skipped or ran on a different commit, so
+        # the release job independently proves committed == rebuilt
+        # before anything reaches npm.
+        run: |
+          npm run verify:app
+          git diff --exit-code
 
       - name: Determine npm dist-tag from version
         # Semver prerelease versions (anything with a hyphen, e.g.
