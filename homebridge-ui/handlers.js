@@ -243,8 +243,10 @@ export async function handleComposeSave(deps, payload) {
     //          current inventory cannot detect a global TEMPLATE being
     //          narrowed to per-station entries — the divergence would
     //          only manifest when a new station appears.
-    const SYNTHETIC_STATION = { macAddress: 'FE:FE:FE:FE:FE:FE', name: '(template-equivalence probe)' };
-    const gateStations = [...stations, SYNTHETIC_STATION];
+    const gateStations = [
+        ...stations,
+        { macAddress: syntheticProbeMac(stations.map(st => st.macAddress)), name: '(template-equivalence probe)' },
+    ];
     const gateBefore = buildEffectiveSensorMap({
         userOverrides: proposal,
         discovery,
@@ -366,6 +368,31 @@ function assembleStationInventory(src) {
         }
     }
     return [...byMac.entries()].map(([macAddress, name]) => ({ macAddress, name }));
+}
+/**
+ * Deterministically pick a valid, locally-administered MAC that is
+ * GUARANTEED absent from the assembled inventory (review #67 round 3):
+ * a fixed probe constant could collide with a real station or override,
+ * dedupe into the existing row, and silently skip the future-station
+ * template-equivalence check. Scans 02:00:00:00:XX:YY candidates in
+ * order and returns the first unused one.
+ */
+export function syntheticProbeMac(existingMacs) {
+    const taken = new Set(existingMacs.map(m => m.toUpperCase()));
+    for (let hi = 0; hi <= 0xff; hi++) {
+        for (let lo = 0; lo <= 0xff; lo++) {
+            const candidate = `02:00:00:00:${hex(hi)}:${hex(lo)}`;
+            if (!taken.has(candidate)) {
+                return candidate;
+            }
+        }
+    }
+    // 65 536 taken locally-administered probes is not a realistic
+    // inventory; fail loudly rather than reuse a station.
+    throw new Error('syntheticProbeMac: no unused probe MAC available.');
+}
+function hex(n) {
+    return n.toString(16).toUpperCase().padStart(2, '0');
 }
 function diffEffectiveRows(before, after) {
     const index = (m) => {

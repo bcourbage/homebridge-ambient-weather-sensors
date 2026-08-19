@@ -16,7 +16,7 @@ import * as path from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { handleComposeSave, type HandlerDeps } from '../../homebridge-ui/handlers';
+import { handleComposeSave, syntheticProbeMac, type HandlerDeps } from '../../homebridge-ui/handlers';
 import { composeAndPersist, type OrchestratorDeps } from '../../homebridge-ui/saveOrchestrator';
 import { LEGACY_SNAPSHOT_FILE, recognizeMirror } from '../../src/sensorMap/legacyMirror';
 
@@ -370,6 +370,43 @@ describe('global-template preservation (review #67 round 2 P1)', () => {
       const rows = (result.error as { rows: Array<{ code: string }> }).rows;
       expect(rows.some(r => r.code === 'custom-missing-kind')).toBe(true);
     }
+  });
+});
+
+describe('synthetic probe MAC is genuinely outside the inventory (review #67 round 3)', () => {
+  it('skips candidates already present and picks the next unused one', () => {
+    expect(syntheticProbeMac([])).toBe('02:00:00:00:00:00');
+    expect(syntheticProbeMac(['02:00:00:00:00:00'])).toBe('02:00:00:00:00:01');
+    expect(syntheticProbeMac(['02:00:00:00:00:00', '02:00:00:00:00:01', MAC]))
+      .toBe('02:00:00:00:00:02');
+    // Case-insensitive against lowercase inventory entries.
+    expect(syntheticProbeMac(['02:00:00:00:00:00'.toLowerCase()])).toBe('02:00:00:00:00:01');
+  });
+
+  it('the gate still proves template equivalence when the first probe candidate IS a real station', async () => {
+    const PROBE0 = '02:00:00:00:00:00';
+    const rig = makeRig(LEGACY_BLOCK);
+    discoveryStore(rig, [MAC, PROBE0]); // a real station squats on the first candidate
+    // Order-dependent battery claims must STILL be refused — proving
+    // the divergence gate ran with a genuinely fresh probe rather than
+    // deduplicating into the existing PROBE0 station.
+    const refused = await handleComposeSave(rig.deps, {
+      base: LEGACY_BLOCK,
+      proposal: [
+        { dataPoint: 'z_custom', kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph', batteryField: 'barn_batt' },
+        { dataPoint: 'a_custom', kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph', batteryField: 'barn_batt' },
+      ],
+    });
+    expect(refused.ok).toBe(false);
+    if (!refused.ok) {
+      expect(refused.error.code).toBe('canonical-divergence');
+    }
+    // And a clean template save still passes with PROBE0 occupied.
+    const saved = await handleComposeSave(rig.deps, {
+      base: LEGACY_BLOCK,
+      proposal: [{ dataPoint: 'barn_x', kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph', name: 'Barn X' }],
+    });
+    expect(saved.ok).toBe(true);
   });
 });
 
