@@ -50,12 +50,12 @@ jobs:
           # the Volta pin and build.yml's ui-app-determinism job): the
           # release must be able to reproduce the committed Angular
           # artifacts byte-for-byte before publishing them.
-          node-version: '22.12'
+          node-version: '22.13'
           registry-url: 'https://registry.npmjs.org'
 
       - name: Upgrade npm (trusted publishing needs npm >= 11.5.1)
         # npm@11, not npm@latest: npm 12 requires Node >= 22.22, and this
-        # job is deliberately pinned to Node 22.12 (the canonical Angular
+        # job is deliberately pinned to Node 22.13 (the canonical Angular
         # artifact producer). npm 11.5.1+ carries OIDC trusted publishing.
         run: npm install -g npm@11
 

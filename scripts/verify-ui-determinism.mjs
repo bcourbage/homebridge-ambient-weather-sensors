@@ -8,7 +8,7 @@
  *   3. the fragment updater must be a no-op afterwards (index.html's
  *      asset references match the committed bundles).
  *
- * Run by the canonical Node 22.12 CI job. Exits non-zero with a
+ * Run by the canonical Node 22.13 CI job. Exits non-zero with a
  * per-file diagnosis on any mismatch.
  */
 

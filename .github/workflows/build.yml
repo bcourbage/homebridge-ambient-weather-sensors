@@ -59,7 +59,10 @@ jobs:
 
   # The CANONICAL producer of the committed Angular editor artifacts
   # (homebridge-ui/public/app/, GA task #69 / §10.1): exactly Node
-  # 22.12, matching the Volta pin in package.json. Two cold builds must
+  # 22.13, matching the Volta pin in package.json. (Not 22.12: the
+  # engines floor is untestable there — @matter/nodejs, an optional
+  # dependency of Homebridge 2.x, excludes >=22.0.0 <22.13.0, so npm
+  # silently skips it and the Homebridge import chain breaks.) Two cold builds must
   # be byte-identical AND match the committed files, and the committed
   # index.html asset references must be current. Contributors on other
   # Node versions get caught here if their local rebuild drifted.
@@ -68,10 +71,10 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Use Node.js 22.12 (canonical artifact producer)
+      - name: Use Node.js 22.13 (canonical artifact producer)
         uses: actions/setup-node@v6
         with:
-          node-version: '22.12'
+          node-version: '22.13'
 
       - name: Install dependencies
         run: npm ci
