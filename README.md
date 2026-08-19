@@ -76,7 +76,7 @@ curious about the shape of the v2 config.
 
 ## What's New in v1.7.2
 
-Documentation and metadata release; no code change. The plugin is now described as independently maintained: the original compatibility pull requests were closed unmerged in June 2026, so the "temporary bridge" language is retired, while the acknowledgment of Deac Karns' original work remains. The npm Fund button (which pointed at the original author's PayPal) is removed and setup-section typos are fixed.
+Documentation and metadata release; no code change.
 
 ## What's New in v1.7.1
 
