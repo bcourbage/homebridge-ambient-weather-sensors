@@ -229,7 +229,7 @@ The allowed-unit set for each numeric `measurement`:
 | `illuminance` | wm2, lux, fc | wm2 (solar), lux (other) | lux | W/m² × 127 → lux; lux = fc × 10.7639104167 |
 | `co2` / `co` | ppm | ppm | ppm | — |
 | `pm25` / `pm10` | ugm3 | ugm3 | ugm3 | — |
-| `wind-speed` | mph, fps, mps, kph, kts | mph | mph | linear (ft/sec = mph × 1.46667) |
+| `wind-speed` | mph, fps, mps, kph, kts | mph | mph | linear (ft/sec = mph × 22/15 exactly, ≈1.4666667) |
 | `rain-rate` | in_per_hr, mm_per_hr | in_per_hr | in_per_hr | ×25.4 |
 | `rain-accumulation` | in, mm | in | in | ×25.4 |
 | `pressure` | inHg, mmHg, hPa | inHg | inHg | mmHg = inHg × 25.4; hPa = inHg × 33.8639 |

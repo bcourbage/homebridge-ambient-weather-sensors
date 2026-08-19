@@ -42,6 +42,7 @@ import type { Measurement, SensorUnit } from './types.js';
 
 import { fahrenheitToCelsius, solarWm2ToLux } from '../nativeConversions.js';
 import {
+  FPS_PER_MPH,
   convertSpeed,
   convertRain,
   convertPressure,
@@ -80,7 +81,7 @@ export const CANONICAL_UNIT_FOR_MEASUREMENT: Record<Measurement, SensorUnit> = {
 // Only linear (non-affine) families live here; temperature and
 // illuminance are affine/rounded special cases handled inline.
 const WIND_FACTOR_FROM_MPH: Partial<Record<SensorUnit, number>> = {
-  mph: 1, fps: 1.46667, kph: 1.60934, mps: 0.44704, kts: 0.86898,
+  mph: 1, fps: FPS_PER_MPH, kph: 1.60934, mps: 0.44704, kts: 0.86898,
 };
 
 const DISTANCE_FACTOR_FROM_MI: Partial<Record<SensorUnit, number>> = {

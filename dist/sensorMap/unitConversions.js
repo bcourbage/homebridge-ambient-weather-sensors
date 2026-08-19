@@ -38,7 +38,7 @@
  * identical; only the layer that owns it moves.
  */
 import { fahrenheitToCelsius, solarWm2ToLux } from '../nativeConversions.js';
-import { convertSpeed, convertRain, convertPressure, convertDistance, } from '../extendedSensors/unitConversions.js';
+import { FPS_PER_MPH, convertSpeed, convertRain, convertPressure, convertDistance, } from '../extendedSensors/unitConversions.js';
 /**
  * The canonical unit each measurement is compared / bucketed in.
  * `boolean` has no unit (rows forbid one); it maps to `'count'` as an
@@ -70,7 +70,7 @@ export const CANONICAL_UNIT_FOR_MEASUREMENT = {
 // Only linear (non-affine) families live here; temperature and
 // illuminance are affine/rounded special cases handled inline.
 const WIND_FACTOR_FROM_MPH = {
-    mph: 1, fps: 1.46667, kph: 1.60934, mps: 0.44704, kts: 0.86898,
+    mph: 1, fps: FPS_PER_MPH, kph: 1.60934, mps: 0.44704, kts: 0.86898,
 };
 const DISTANCE_FACTOR_FROM_MI = {
     mi: 1, km: 1.60934, nm: 0.868976,

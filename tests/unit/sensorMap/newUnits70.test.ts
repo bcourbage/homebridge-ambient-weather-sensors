@@ -70,13 +70,14 @@ function configuredRow(overrides: SensorMapOverride[], dataPoint: string) {
   return row!;
 }
 
-function readValueChar(accessory: ReturnType<typeof makeMockAccessory>): string {
+function readMotionChar(accessory: ReturnType<typeof makeMockAccessory>, displayName: string): string {
   const motion = accessory.getService(MockServices.MotionSensor)!;
-  const valueChar = [...(motion as unknown as { characteristics: Map<string, MockCharacteristic> })
-    .characteristics.values()].find(c => c.displayName === 'Value');
-  expect(valueChar).toBeDefined();
-  return String(valueChar!.value);
+  const char = [...(motion as unknown as { characteristics: Map<string, MockCharacteristic> })
+    .characteristics.values()].find(c => c.displayName === displayName);
+  expect(char, displayName).toBeDefined();
+  return String(char!.value);
 }
+const readValueChar = (a: ReturnType<typeof makeMockAccessory>) => readMotionChar(a, 'Value');
 
 describe('conversions: both directions + round trips', () => {
   it('mmHg = inHg × 25.4 and back', () => {
@@ -86,11 +87,14 @@ describe('conversions: both directions + round trips', () => {
     expect(roundTrip).toBeCloseTo(30.12, 10);
   });
 
-  it('ft/sec = mph × 1.46667 and back', () => {
-    expect(toDisplayUnit('wind-speed', 15, 'fps')).toBeCloseTo(22.0, 3);
-    expect(toCanonical('wind-speed', 'fps', 22.00005)).toBeCloseTo(15, 6);
+  it('ft/sec = mph × 22/15 EXACTLY and back', () => {
+    // The exact ratio matters: 22/15 ft/sec must canonicalize to
+    // EXACTLY 1 mph (a Beaufort boundary), which a rounded constant
+    // (1.46667) misses by ~2.3e-6.
+    expect(toDisplayUnit('wind-speed', 15, 'fps')).toBe(22);
+    expect(toCanonical('wind-speed', 'fps', 22 / 15)).toBe(1);
     const roundTrip = toCanonical('wind-speed', 'fps', toDisplayUnit('wind-speed', 25, 'fps'));
-    expect(roundTrip).toBeCloseTo(25, 10);
+    expect(roundTrip).toBeCloseTo(25, 12);
   });
 
   it('lux = fc × 10.7639104167 and back', () => {
@@ -136,7 +140,7 @@ describe('real wind wrapper in ft/sec', () => {
       'windspeedmph',
     );
     const accessory = drive(row, 'windspeedmph', 15);
-    // 15 mph × 1.46667 = 22.00005 → rounded "22 fps".
+    // 15 mph × 22/15 = 22 exactly → "22 fps".
     expect(readValueChar(accessory)).toBe('22 fps');
   });
 });
@@ -151,6 +155,61 @@ describe('custom light row with sourceUnit fc', () => {
     const svc = accessory.getService(MockServices.LightSensor)!;
     expect(svc.readCharacteristic(MockCharacteristics.CurrentAmbientLightLevel))
       .toBeCloseTo(1076.391, 2);
+  });
+});
+
+describe('custom rows declaring the new units as SOURCE units (full pipeline)', () => {
+  it('a custom pressure row with sourceUnit mmHg converts raw + threshold and fires below it', () => {
+    // Threshold is stored in sourceUnit (mmHg): 765 mmHg. Raw 760 mmHg
+    // canonicalizes to 29.9213 inHg, the threshold to 30.1181 inHg —
+    // custom pressure defaults to 'below', so 760 < 765 fires. The
+    // display converts BACK from canonical: "760.0 mmHg".
+    const row = configuredRow(
+      [{ dataPoint: 'barn_baro_mm', kind: 'motion', measurement: 'pressure', sourceUnit: 'mmHg', displayUnit: 'mmHg', name: 'Barn Baro (mmHg)', threshold: 765 }],
+      'barn_baro_mm',
+    );
+    const accessory = drive(row, 'barn_baro_mm', 760);
+    expect(readValueChar(accessory)).toBe('760.0 mmHg');
+    const motion = accessory.getService(MockServices.MotionSensor)!;
+    expect(motion.readCharacteristic(MockCharacteristics.MotionDetected)).toBe(true);
+  });
+
+  it('the same mmHg row stays quiet when the reading sits above the mmHg threshold', () => {
+    const row = configuredRow(
+      [{ dataPoint: 'barn_baro_mm', kind: 'motion', measurement: 'pressure', sourceUnit: 'mmHg', displayUnit: 'mmHg', name: 'Barn Baro (mmHg)', threshold: 755 }],
+      'barn_baro_mm',
+    );
+    const accessory = drive(row, 'barn_baro_mm', 760);
+    expect(readValueChar(accessory)).toBe('760.0 mmHg');
+    const motion = accessory.getService(MockServices.MotionSensor)!;
+    expect(motion.readCharacteristic(MockCharacteristics.MotionDetected)).toBe(false);
+  });
+
+  it('a custom wind row with sourceUnit fps converts raw + threshold, formats, and fires above', () => {
+    // Raw 22 ft/sec = exactly 15 mph canonical; threshold 20 ft/sec ≈
+    // 13.64 mph. Default direction 'above': 15 > 13.64 fires. Display
+    // round-trips to "22 fps"; 15 mph sits in the 13–19 Beaufort
+    // bucket: 'Moderate breeze'.
+    const row = configuredRow(
+      [{ dataPoint: 'barn_wind_fps', kind: 'motion', measurement: 'wind-speed', sourceUnit: 'fps', displayUnit: 'fps', name: 'Barn Wind (fps)', threshold: 20 }],
+      'barn_wind_fps',
+    );
+    const accessory = drive(row, 'barn_wind_fps', 22);
+    expect(readValueChar(accessory)).toBe('22 fps');
+    expect(readMotionChar(accessory, 'Intensity')).toBe('Moderate breeze');
+    const motion = accessory.getService(MockServices.MotionSensor)!;
+    expect(motion.readCharacteristic(MockCharacteristics.MotionDetected)).toBe(true);
+  });
+
+  it('EXACT Beaufort boundary: 22/15 ft/sec is exactly 1 mph = Light air (fails under a rounded ratio)', () => {
+    // The F1 discriminator: with the old 1.46667 constant this
+    // canonicalizes to 0.9999977 mph and buckets as 'Calm'.
+    const row = configuredRow(
+      [{ dataPoint: 'barn_wind_fps', kind: 'motion', measurement: 'wind-speed', sourceUnit: 'fps', displayUnit: 'fps', name: 'Barn Wind (fps)', triggerEnabled: false }],
+      'barn_wind_fps',
+    );
+    const accessory = drive(row, 'barn_wind_fps', 22 / 15);
+    expect(readMotionChar(accessory, 'Intensity')).toBe('Light air');
   });
 });
 
