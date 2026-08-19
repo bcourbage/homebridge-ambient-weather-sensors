@@ -574,17 +574,64 @@ v1.7.1 guard release (configVersion/sensorMap detected → freeze, no
 reconciliation) is the safety net for downgrades that land on a mirror-less
 config.
 
-**RELEASE GATE (Stage 8 / GA — reviewer finding 5, round 3):** the
-`legacyMirror.ts` package is GROUNDWORK until it has a production caller.
-Today no shipped path performs a v2 conversion — the custom UI is read-only
-and schema-driven saves cannot produce `sensorMap` — so the snapshot/mirror
-contracts cannot yet be violated in the field. The gate: **no release may
-ship a UI (or any code path) capable of writing `configVersion: 2` /
+**RELEASE GATE (Stage 8 / GA — reviewer finding 5, round 3):** no release
+may ship a UI (or any code path) capable of writing `configVersion: 2` /
 `sensorMap` into config.json unless that path routes through
 `composeV2ConfigSave` + `writeLegacySnapshot`, with an integration test
 proving snapshot-write → config-mutation ordering at the real save
-boundary.** Until that release, finding 5 remains OPEN as a tracked gate,
-not a resolved item. (Task #65's flag-flip milestone inherits this gate.)
+boundary. (Task #65's flag-flip milestone inherits this gate.)
+
+**PRODUCTION BOUNDARY (GA task #67 — as built):** the gate's production
+caller is the UI bridge's `/compose-save` endpoint
+(`homebridge-ui/handlers.ts handleComposeSave`) plus the client
+orchestrator (`homebridge-ui/saveOrchestrator.ts composeAndPersist`),
+which is the ONE way the editor (#69) persists a sensor map:
+
+```
+/compose-save → await → updatePluginConfig(...) → savePluginConfig()
+```
+
+Homebridge provides no server-side config-write API — persistence is
+client-side by platform design — so the ordering guarantee is
+architectural: the composed config that could mutate config.json is not
+handed to the client until the immutable snapshot is durably written (or
+verified). Boundary contracts, each refused with a structured error and
+zero writes:
+
+- **Authoritative on-disk config.** Mode detection, the snapshot
+  payload, and the base being replaced come from `config.json` read via
+  `homebridgeConfigPath` — never from the client's copy. The client's
+  base is used only to locate the block being edited, and doubles as a
+  staleness check (`stale-base`): if the on-disk block no longer equals
+  the client's view, the save is refused. Safe mode refuses outright.
+- **Pure-migration seeding.** A legacy config with no proposal composes
+  from `compatToOverrides` (the compat-translated state), never from
+  defaults — converting cannot silently re-enable disabled categories.
+- **Same-machinery validation.** Proposals run through
+  `buildEffectiveSensorMap` (identity-first → duplicate merge with
+  later-field-wins → body validation with provenance); any row error
+  refuses the whole save (`invalid-rows`).
+- **Server-side canonicalization** (§11.3/§17.4): the server assembles
+  the canonical `sensorMap` via `canonicalizeSensorMap` — the client
+  never serializes canonical config.
+- **Station inventory** per §8.7 (live response → discovery registry →
+  cached-accessory uniqueIds → override stationMacs). All sources empty
+  while the config would enable sensors → `no-station-inventory`
+  refusal rather than composing an empty map.
+- **Snapshot verification.** On 'exists', the surviving snapshot is
+  compared against the authoritative pre-conversion fields:
+  mismatch/corrupt → refusal (`legacy-snapshot-mismatch` /
+  `legacy-snapshot-corrupt`); the snapshot is never overwritten.
+  Concurrent first conversions are race-safe (exclusive-create; losers
+  verify the winner's payload).
+
+The gate's ordering integration suite is
+`tests/integration/composeSave.test.ts`: the full compose → update →
+save sequence with the snapshot durable at `updatePluginConfig` time,
+and zero update/save calls on every refusal class. Accepted limitation
+(documented): Homebridge offers no compare-and-swap persistence, so
+cross-session final persistence remains last-writer-wins; staleness is
+detected at compose time via the base check.
 
 ## 6. Compat layer (legacy-mode only)
 

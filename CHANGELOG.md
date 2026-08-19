@@ -13,6 +13,8 @@ entries short and user-facing.
 
 ### Added
 
+- **Guarded sensor-map save boundary (GA task #67 / finding 5).** The UI bridge now exposes `/compose-save`: the single endpoint through which any future sensor-map write must flow. It validates proposals with the same machinery the runtime uses, assembles the canonical `sensorMap` server-side, and writes (or verifies) the immutable legacy snapshot BEFORE returning the composed configuration for the client to persist — so a legacy config's pre-conversion state is durably recorded before config.json can change. Safe-mode configs, stale editor sessions, invalid rows, missing station inventory, and snapshot mismatches are all refused with structured errors and zero writes. The sensor-map editor itself has not shipped; ordinary settings remain editable through the standard form.
+
 - **Unit vocabulary matching AmbientWeather.net (GA task #70, engine + vocabulary layer).** New units for AWN parity: `mmHg` (barometric pressure, mmHg = inHg × 25.4) and `fps` (wind, ft/sec) as v2 row display/source units, plus `fc` (foot-candles, lux = fc × 10.7639104167) as a custom-row source unit. A new vocabulary module records AWN-matching labels, picker ordering, selection contexts, and a dated snapshot of AWN's own units page as the parity reference. The legacy Extended Sensors unit dropdowns are unchanged (v2-only units arrive with the upcoming row editor), and a 1.7.x rollback config never receives a unit that 1.7 cannot render: the mirror omits the family key instead, so a downgrade falls back to the default display unit for that family.
 
 ## [2.0.0-beta.9] — 2026-07-29

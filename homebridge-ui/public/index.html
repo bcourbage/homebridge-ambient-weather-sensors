@@ -152,7 +152,7 @@
         el.textContent = status.safeModeBanner || 'Plugin is in safe mode.';
       } else if (status.readOnly) {
         el.className = 'banner';
-        el.textContent = 'The v2 observation panels below are read-only, and this beta cannot generate or save a sensorMap. Ordinary plugin settings (including the v2 flag) remain editable in the settings form above.';
+        el.textContent = 'The v2 observation panels below are read-only and the sensor-map editor has not shipped yet. Ordinary plugin settings (including the v2 flag) remain editable in the settings form above. The guarded save boundary for the upcoming editor is installed: any sensor-map write flows through a snapshot-first compose endpoint.';
       } else {
         el.className = 'banner info';
         el.textContent = 'v2 sensor map active.';

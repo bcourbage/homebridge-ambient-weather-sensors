@@ -3,18 +3,24 @@
  * HomebridgePluginUiServer's IPC surface and the pure handler logic
  * in ./handlers.ts.
  *
- * v2.0.0-beta.* scope: READ-ONLY. See task #58 + docs/future/sensor-map.md §5.
+ * v2.0.0-beta.* scope: the OBSERVATION endpoints are read-only; the
+ * sensor-map editor has not shipped. /compose-save is the guarded
+ * write BOUNDARY for the upcoming editor (#69): it never writes
+ * config.json itself (Homebridge provides no server-side config-write
+ * API) — it validates, snapshots first, and returns the composed
+ * config for the CLIENT to persist. See sensor-map.md §5.
  *
  * Endpoints exposed:
  *
- *   /status      → { configMode, safeModeBanner?, v2Flag, version, readOnly: true }
+ *   /status      → { configMode, safeModeBanner?, v2Flag, version, readOnly,
+ *                    sensorMapEditorAvailable, composeSaveAvailable }
  *   /discovery   → contents of discovery.json (empty on absent)
  *   /notices     → contents of notices.json (empty on absent)
  *   /ui-state    → contents of ui-state.json (empty on absent)
  *
- * No write endpoints during beta. When v2.1.0 adds writes, they arrive
- * here as new endpoint registrations; the existing read endpoints stay
- * unchanged.
+ * Ordinary legacy schema settings remain writable through HB UI X's
+ * standard form and do NOT flow through /compose-save — the boundary
+ * governs sensorMap/configVersion writes only.
  *
  * The bridge runs in a Homebridge-managed subprocess. It doesn't share
  * a running AWN client with the platform — the platform writes the
@@ -22,7 +28,7 @@
  */
 import * as path from 'path';
 import { HomebridgePluginUiServer, RequestError } from '@homebridge/plugin-ui-utils';
-import { handleGetDiscovery, handleGetNotices, handleGetStatus, handleGetUiState, } from './handlers.js';
+import { handleComposeSave, handleGetDiscovery, handleGetNotices, handleGetStatus, handleGetUiState, } from './handlers.js';
 /**
  * Version stamp displayed in the UI header. Update on every release
  * (or wire to package.json at build time in a later stage — the
@@ -55,11 +61,20 @@ class UiServer extends HomebridgePluginUiServer {
             persistDir: path.join(storage, 'plugin-data', 'ambient-weather'),
             log: bridgeLog,
             version: PLUGIN_VERSION,
+            // Authoritative config.json path for the compose-save boundary
+            // (#67): mode detection + snapshot payloads come from disk.
+            configPath: this.homebridgeConfigPath ?? undefined,
         };
         this.onRequest('/status', (payload) => this.wrap(() => handleGetStatus(this.deps, payload)));
         this.onRequest('/discovery', () => this.wrap(() => handleGetDiscovery(this.deps)));
         this.onRequest('/notices', () => this.wrap(() => handleGetNotices(this.deps)));
         this.onRequest('/ui-state', () => this.wrap(() => handleGetUiState(this.deps)));
+        // The GUARDED write boundary (GA task #67 / finding 5): validates
+        // the proposal, writes/verifies the immutable legacy snapshot
+        // FIRST, and only then returns the composed next config for the
+        // client to persist via HB UI X's API. The row editor (#69) is its
+        // first caller; refusals are structured { ok: false, error }.
+        this.onRequest('/compose-save', (payload) => this.wrap(() => handleComposeSave(this.deps, payload)));
         this.ready();
     }
     /**
