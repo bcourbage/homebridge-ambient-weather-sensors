@@ -24,6 +24,16 @@
 </SPAN>
 
 
+## What's New in v1.7.2 and v1.7.3
+
+Documentation and metadata releases; no code change. The plugin is now
+described as independently maintained: the original compatibility pull
+requests were closed unmerged in June 2026, so the "temporary bridge"
+language is retired, while the acknowledgment of Deac Karns' original
+work remains. The npm Fund button (which pointed at the original
+author's PayPal) is removed, setup-section typos are fixed, and these
+release notes now stay current on the npm page.
+
 ## What's New in v1.7.1
 
 Safety release; no behavior change for normal 1.x configurations. If a future 2.x version of this plugin writes its new configuration format (`configVersion: 2` and a `sensorMap` section) and you later downgrade to 1.x, v1.7.1 freezes safely instead of misreading the config: cached accessories stay in HomeKit at their last-known values, data updates stop, and the log explains how to resume (restore a 1.x configuration, or upgrade back to 2.x). Earlier 1.x versions would instead deregister every cached accessory after such a downgrade, losing room assignments and automations.
