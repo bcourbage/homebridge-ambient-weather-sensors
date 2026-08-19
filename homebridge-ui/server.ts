@@ -48,7 +48,7 @@ import type { Logger } from '../dist/sensorMap/persistence/atomicWrite.js';
  * (tests/unit/homebridge-ui/versionSync.test.ts) fails the build if
  * this drifts from package.json's version.
  */
-const PLUGIN_VERSION: string = '2.0.0-beta.9';
+const PLUGIN_VERSION: string = '2.0.0-beta.10';
 
 // stderr is captured in the Homebridge UI's log tab, so this is
 // where our bridge logs land. The plugin's `this.log.*` isn't
