@@ -6,7 +6,7 @@
  * incremental-build state. After the build, the fragment updater
  * rewrites index.html's asset references.
  *
- * The CANONICAL artifact producer is the Node 22.12 CI job
+ * The CANONICAL artifact producer is the Node 22.13 CI job
  * (ui-app-determinism in build.yml); local runs on other Node versions
  * are for development, and CI fails the build if committed artifacts
  * don't match the canonical rebuild.
