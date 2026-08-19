@@ -54,7 +54,10 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
 
       - name: Upgrade npm (trusted publishing needs npm >= 11.5.1)
-        run: npm install -g npm@latest
+        # npm@11, not npm@latest: npm 12 requires Node >= 22.22, and this
+        # job is deliberately pinned to Node 22.12 (the canonical Angular
+        # artifact producer). npm 11.5.1+ carries OIDC trusted publishing.
+        run: npm install -g npm@11
 
       - name: Install dependencies
         # package-lock.json is committed (PR A, GA task #69), so `npm ci`
