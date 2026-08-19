@@ -26,13 +26,7 @@
 
 ## What's New in v1.7.2 and v1.7.3
 
-Documentation and metadata releases; no code change. The plugin is now
-described as independently maintained: the original compatibility pull
-requests were closed unmerged in June 2026, so the "temporary bridge"
-language is retired, while the acknowledgment of Deac Karns' original
-work remains. The npm Fund button (which pointed at the original
-author's PayPal) is removed, setup-section typos are fixed, and these
-release notes now stay current on the npm page.
+Documentation and metadata releases; no code change.
 
 ## What's New in v1.7.1
 
