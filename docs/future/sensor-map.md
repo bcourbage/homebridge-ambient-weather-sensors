@@ -877,37 +877,55 @@ Three coherent UI actions:
 
 ## 10. Custom Angular UI
 
-### 10.1 Directory layout
+### 10.1 Directory layout and toolchain (amended 2026-08-19 — see decision log)
+
+The editor is **Angular 21 LTS, used narrowly**: standalone components +
+stable Reactive Forms; no Angular Material, no NgRx, no router (tabs are
+local state); pure TypeScript domain/draft modules outside components;
+Homebridge's injected Bootstrap styling. Angular is a thin
+presentation/forms layer — ALL migration and structural correctness
+stays on the server (`/editor-state` is the single read DTO;
+`/preview-save` + `/compose-save` the only write protocol; the browser
+never re-implements the resolver, canonicalizer, or signatures).
 
 ```
 homebridge-ambient-weather-sensors/
 ├── homebridge-ui/
-│   ├── src/                             # Angular source (committed)
-│   ├── dist/                            # Build output (gitignored)
-│   ├── server.ts                        # Node bridge source (committed)
-│   ├── server.js                        # Compiled (gitignored)
-│   ├── tsconfig.json
-│   └── angular.json
-├── src/
-│   ├── awnClient.ts                     # Shared AWN client
-│   └── ...
-├── config.schema.json                   # Minimal schema-driven fallback
-└── package.json
+│   ├── app-src/                 # Angular source (committed)
+│   ├── public/
+│   │   ├── index.html           # Handwritten FRAGMENT (no document tags);
+│   │   │                        #   references built assets by generated name
+│   │   └── app/                 # ng build output (COMMITTED, content-hashed)
+│   ├── server.ts / handlers.ts / saveOrchestrator.ts   # bridge source (committed)
+│   ├── server.js / handlers.js / saveOrchestrator.js   # compiled (COMMITTED)
+│   └── tsconfig.json / angular.json
+└── ...
 ```
 
-Committed: `homebridge-ui/src/`, `server.ts`, tsconfig/angular config. Not committed: `dist/`, `server.js` (in `.gitignore`).
+PACKAGING MODEL (supersedes the original gitignored-dist design): build
+outputs are COMMITTED and shipped — the model this repo adopted after
+the beta.0–beta.4 install failures. No build runs during customer
+installation. Angular's content-hashed filenames are RETAINED (custom
+UIs are vulnerable to stale browser caches); a deterministic script
+rewrites the fragment's asset references after each build.
+Reproducibility gates: pinned toolchain + committed package-lock.json +
+`npm ci`; ONE canonical artifact-building Node version (the
+Volta-pinned Node 22 line — Node 24 runs the test matrix but is not a
+second producer); two consecutive clean builds must compare
+byte-for-byte in CI, which also fails on any rebuild diff vs the
+committed assets; an `npm pack` test proves the published package
+carries every browser/server asset; an enforced bundle budget guards
+size.
 
-Shipped to npm (added to `package.json` `files`): `homebridge-ui/dist/`, `homebridge-ui/server.js`. Not shipped: source.
-
-Build commands:
-
-```json
-"scripts": {
-  "build:ui": "cd homebridge-ui && ng build --configuration production && tsc server.ts",
-  "build": "…existing plugin build… && npm run build:ui",
-  "prepublishOnly": "npm run lint && npm test && npm run build"
-}
-```
+Angular 21 is the launch toolchain (supports Node 22.12+/24 per
+Angular's compatibility table; LTS through June 2027). TypeScript 5.9
+is required and was adopted as a standalone, fully-verified commit.
+Fallback (objective criteria, decided at PR A): if the foundation fails
+iframe boot, theme integration, reproducible builds, package
+completeness, install-time purity, bundle budget, rendering
+responsiveness, Node 22/24 test greenness, or forces a customer runtime
+bump — and the failure cannot be corrected within the foundation PR —
+the named fallback is Preact + Signals.
 
 ### 10.2 Process boundary
 
@@ -1370,6 +1388,20 @@ When any of these appears in a non-motion row (default or user override), the pl
 Tests: for every non-motion kind, submit an override with each of these fields; verify the specific warn is emitted and the field is absent from the resulting effective row.
 
 ## 17. Decision log
+
+- **2026-08-19 (b)**: Editor framework decision (GA task #69). Constrained
+  Angular 21 LTS confirmed after a documented framework-free vs framework
+  analysis (UniFi Protect's vanilla UI rides a private framework —
+  homebridge-plugin-utils/webUi — so it is not evidence that raw DOM
+  stays simple; draft/dirty-state machinery is where client bugs would
+  live). §10.1 amended: committed content-hashed outputs, deterministic
+  packaging gates, canonical Node-22 artifact builds, objective
+  Preact+Signals fallback criteria. Two server additions mandated before
+  any editor write: a sanitized `/editor-state` DTO and a no-write
+  `/preview-save` protocol whose digest the server re-derives on the
+  confirmed `/compose-save`. Delivery split into PRs A (read-only
+  foundation) → B (draft editor + preview) → C (save activation — where
+  finding 5 closes) → D (discovery/ui-state lifecycle) → E (hardening).
 
 - **2026-08-19**: Compose-save boundary review (GA task #67). §11.3
   rules 2–3 amended to LAYERING PRESERVATION (global templates stay
