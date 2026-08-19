@@ -168,6 +168,25 @@ describe('AwnRootComponent (TestBed, jsdom)', () => {
     expect(banners).toHaveLength(2);
   });
 
+  it('renders ownership notes in a distinct Notes section', async () => {
+    const ipc = makeIpc(editorState({
+      notes: [{
+        severity: 'note',
+        code: 'orphan-battery-field',
+        message: "'co2_in_aqin' is disabled, but it is the reserved owner of batteryField 'batt_co2'.",
+        source: 'override',
+        stationMac: MAC,
+      }],
+    }));
+    const fixture = await render(ipc);
+    const el = fixture.nativeElement as HTMLElement;
+    const headings = [...el.querySelectorAll('h2')].map(h => h.textContent!.trim());
+    expect(headings).toContain('Notes');
+    const noteBanner = [...el.querySelectorAll('.banner.info')]
+      .find(b => b.textContent!.includes('batt_co2'));
+    expect(noteBanner).toBeDefined();
+  });
+
   it('renders a load-failure banner when the bridge request rejects', async () => {
     const ipc: HomebridgeIpc = {
       getPluginConfig: async () => [{}],

@@ -52,6 +52,15 @@ export interface EditorAuthoredFragmentDto {
   stationMacKey?: string;
   dataPoint?: string;
   /**
+   * Identity keys whose authored value did NOT validate as a string,
+   * preserved verbatim (e.g. `stationMac: 42`, `dataPoint: null`) —
+   * distinguishable from an absent key. `layer`/`stationMacKey` are
+   * derived only from validated values, so a fragment with a
+   * wrong-typed stationMac reports layer 'global' but carries the
+   * authored value here for the editor to surface and repair.
+   */
+  identityRaw?: { dataPoint?: unknown; stationMac?: unknown };
+  /**
    * The authored key/value pairs, restricted to the known override
    * keys but otherwise VERBATIM — wrong types and explicit nulls
    * included (they are what the editor must surface and repair).

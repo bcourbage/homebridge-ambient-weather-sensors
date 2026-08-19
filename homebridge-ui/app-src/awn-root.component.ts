@@ -58,6 +58,16 @@ interface StationGroup {
       @for (e of state()!.errors; track $index) {
         <div class="banner safe-mode">{{ e.message }}</div>
       }
+      <!-- Ownership/plugin-health notes (orphan battery fields,
+           collision ordering) are a distinct channel from warnings:
+           informational, but users must see them to understand why an
+           accessory lacks its Battery service. -->
+      @if (state()!.notes.length > 0) {
+        <h2>Notes</h2>
+        @for (n of state()!.notes; track $index) {
+          <div class="banner info">{{ n.message }}</div>
+        }
+      }
       @if (groups().length === 0) {
         <p class="empty">No stations or sensor rows to show yet.</p>
       }

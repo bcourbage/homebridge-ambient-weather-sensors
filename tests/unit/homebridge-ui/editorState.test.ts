@@ -234,6 +234,90 @@ describe('/editor-state — v2 configuration', () => {
   });
 });
 
+describe('/editor-state — malformed sensorMap (runtime hard-stop parity)', () => {
+  // The runtime freezes reconciliation on a present-but-non-array
+  // sensorMap instead of exposing the full default map off a config
+  // error (sensorMapShapeError). The preview must mirror that hard
+  // stop (review #32 round 2 F1) — never render a fictitious default
+  // configuration.
+  it.each([
+    ['string', 'oops'],
+    ['object', { tempf: { enabled: false } }],
+    ['number', 42],
+    ['null', null],
+  ])('sensorMap as %s returns the hard-stop diagnostic and zero rows', async (_shape, value) => {
+    const rig = makeRig([{ ...V2_BLOCK, sensorMap: value }]);
+    discoveryStore(rig, [{ mac: MAC, dataPoint: 'tempf' }]);
+    const dto = await handleGetEditorState(rig.deps, {});
+    expect(dto.configMode).toBe('v2');
+    expect(dto.rows).toEqual([]);
+    expect(dto.stations).toEqual([]);
+    expect(dto.authored).toEqual([]);
+    expect(dto.errors).toHaveLength(1);
+    expect(dto.errors[0]).toMatchObject({ severity: 'error', code: 'sensor-map-shape' });
+    expect(dto.errors[0].message).toContain('not an array');
+  });
+
+  it('an ABSENT sensorMap in v2 mode legitimately exposes defaults', async () => {
+    const block = { ...V2_BLOCK } as Record<string, unknown>;
+    delete block.sensorMap;
+    const rig = makeRig([block]);
+    discoveryStore(rig, [{ mac: MAC, dataPoint: 'tempf' }]);
+    const dto = await handleGetEditorState(rig.deps, {});
+    expect(dto.errors).toEqual([]);
+    const tempf = dto.rows.find(r => r.dataPoint === 'tempf');
+    expect(tempf).toMatchObject({ origin: 'default' });
+  });
+});
+
+describe('/editor-state — raw invalid fragments (crash + false-origin counterexamples)', () => {
+  it('sensorMap: [null] renders instead of crashing inventory assembly', async () => {
+    const rig = makeRig([{ ...V2_BLOCK, sensorMap: [null] }]);
+    discoveryStore(rig, [{ mac: MAC, dataPoint: 'tempf' }]);
+    const dto = await handleGetEditorState(rig.deps, {});
+    expect(dto.rows.length).toBeGreaterThan(0);
+    expect(dto.authored).toHaveLength(1);
+    expect(dto.authored[0]).toMatchObject({ index: 0, layer: 'global', fields: {} });
+  });
+
+  it('a wrong-typed stationMac renders instead of crashing layer partitioning', async () => {
+    const rig = makeRig([{ ...V2_BLOCK, sensorMap: [{ dataPoint: 'tempf', stationMac: 42 }] }]);
+    discoveryStore(rig, [{ mac: MAC, dataPoint: 'tempf' }]);
+    const dto = await handleGetEditorState(rig.deps, {});
+    const tempf = dto.rows.find(r => r.dataPoint === 'tempf');
+    // The fragment never validated, so the surviving row is NOT
+    // labeled override-authored.
+    expect(tempf?.origin).toBe('default');
+    // F3: the wrong-typed identity survives verbatim, distinguishable
+    // from an absent stationMac; layer/key derive only from valid values.
+    expect(dto.authored[0].identityRaw).toEqual({ stationMac: 42 });
+    expect(dto.authored[0].layer).toBe('global');
+    expect(dto.authored[0].stationMacKey).toBeUndefined();
+  });
+
+  it('a resolver-REJECTED fragment does not label the surviving default row as global', async () => {
+    const rig = makeRig([{ ...V2_BLOCK, sensorMap: [{ dataPoint: 'tempf', threshold: 'oops' }] }]);
+    discoveryStore(rig, [{ mac: MAC, dataPoint: 'tempf' }]);
+    const dto = await handleGetEditorState(rig.deps, {});
+    expect(dto.errors.length).toBeGreaterThan(0);
+    expect(dto.errors[0]).toMatchObject({ overrideIndex: 0 });
+    const tempf = dto.rows.find(r => r.dataPoint === 'tempf');
+    expect(tempf).toBeDefined();
+    expect(tempf?.origin).toBe('default');
+    // The rejected fragment stays repairable in the authored view.
+    expect(dto.authored[0]).toMatchObject({ dataPoint: 'tempf', fields: { threshold: 'oops' } });
+  });
+
+  it('wrong-typed dataPoint is preserved verbatim in identityRaw', async () => {
+    const rig = makeRig([{ ...V2_BLOCK, sensorMap: [{ dataPoint: null, enabled: false }] }]);
+    discoveryStore(rig, [{ mac: MAC, dataPoint: 'tempf' }]);
+    const dto = await handleGetEditorState(rig.deps, {});
+    expect(dto.authored[0].dataPoint).toBeUndefined();
+    expect(dto.authored[0].identityRaw).toEqual({ dataPoint: null });
+    expect(dto.authored[0].fields).toEqual({ enabled: false });
+  });
+});
+
 describe('/editor-state — legacy and troubled configurations', () => {
   it('a legacy config renders its compat translation as a migration preview', async () => {
     const rig = makeRig([LEGACY_BLOCK]);

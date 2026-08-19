@@ -18,6 +18,7 @@ import { canonicalizeSensorMap } from '../dist/sensorMap/canonicalizeSensorMap.j
 import { compatToOverrides } from '../dist/sensorMap/compat.js';
 import { detectConfigMode } from '../dist/sensorMap/configMode.js';
 import { composeV2ConfigSave, verifyLegacySnapshot, writeLegacySnapshot, } from '../dist/sensorMap/legacyMirror.js';
+import { sensorMapShapeError } from '../dist/sensorMap/platformEffectiveMap.js';
 import { shadowModeEnabled } from '../dist/sensorMap/shadowMode.js';
 import { loadDiscoveryStore, } from '../dist/sensorMap/persistence/discoveryStore.js';
 import { loadNoticeStore, } from '../dist/sensorMap/persistence/noticesStore.js';
@@ -389,20 +390,43 @@ export async function handleGetEditorState(deps, payload) {
             notes: [],
         };
     }
+    // Malformed-sensorMap HARD STOP (review #32 round 2 F1): the runtime
+    // freezes reconciliation on a present-but-non-array sensorMap
+    // (string, object, number, null) rather than exposing the full
+    // default map off a config error. The preview must represent the
+    // SAME state — zero effective rows and a structured diagnostic —
+    // never a fictitious default configuration for PR B to draft from.
+    // (An ABSENT sensorMap in v2 mode legitimately exposes defaults.)
+    const shapeError = sensorMapShapeError(block, modeResult.mode);
+    if (shapeError !== undefined) {
+        return {
+            configMode: modeResult.mode,
+            v2FlagEnabled,
+            editorAvailable: false,
+            version: deps.version,
+            stations: [],
+            authored: [],
+            authoredSource: 'sensorMap',
+            rows: [],
+            warnings,
+            errors: [{ severity: 'error', code: 'sensor-map-shape', message: shapeError }],
+            notes: [],
+        };
+    }
     // §8.7 inventory + overrides — the same assembly compose-save uses.
     // A LEGACY config is presented as its compat translation, so the
-    // editor shows exactly what a pure migration would produce.
+    // editor shows exactly what a pure migration would produce. The raw
+    // sensorMap entries are UNTRUSTED (review round 2 F2): they stay
+    // unknown[] until each consumer has applied its own guards.
     const discovery = await loadDiscoveryStore(path.join(deps.persistDir, 'discovery.json'), deps.log);
     const uiState = await loadUiStateStore(path.join(deps.persistDir, 'ui-state.json'), deps.log);
     const sources = new Map();
+    const rawSensorMap = Array.isArray(block.sensorMap) ? block.sensorMap : [];
     const assemble = (overridesForMacs) => assembleStationInventory({
         liveStations: p.liveStations,
         discovery,
         cachedAccessoryUniqueIds: p.cachedAccessoryUniqueIds,
-        overrideSources: [
-            Array.isArray(block.sensorMap) ? block.sensorMap : [],
-            overridesForMacs,
-        ],
+        overrideSources: [rawSensorMap, overridesForMacs],
         sources,
     });
     let overrides;
@@ -413,9 +437,12 @@ export async function handleGetEditorState(deps, payload) {
         stations = assemble(overrides);
     }
     else {
-        overrides = Array.isArray(block.sensorMap) ? block.sensorMap : [];
+        overrides = rawSensorMap;
         stations = assemble(overrides);
     }
+    // The resolver is raw-safe by contract (it is what the runtime feeds
+    // config-sourced overrides to): invalid fragments come back as
+    // structured errors, never crashes.
     const effectiveMap = buildEffectiveSensorMap({
         userOverrides: overrides,
         discovery,
@@ -423,7 +450,26 @@ export async function handleGetEditorState(deps, payload) {
         stations,
         configMode: 'v2',
     });
-    const layers = partitionOverrideLayers(overrides);
+    // Layer/origin metadata must reflect what the resolver ACCEPTED
+    // (review round 2 F2): partitionOverrideLayers requires validated
+    // overrides, and a resolver-REJECTED fragment must not label the
+    // surviving default row as override-authored. A rejected fragment
+    // also poisons its whole (station, dataPoint) key — every fragment
+    // for that key merged into the row that was rejected.
+    const structurallySafe = (o) => !!o && typeof o === 'object' && !Array.isArray(o)
+        && typeof o.dataPoint === 'string'
+        && (o.stationMac === undefined
+            || typeof o.stationMac === 'string');
+    const keyOf = (o) => `${o.stationMac !== undefined ? o.stationMac.toUpperCase() : '*'}|${o.dataPoint}`;
+    const rejectedIdx = new Set(effectiveMap.errors.map(e => e.overrideIndex));
+    const rejectedKeys = new Set();
+    overrides.forEach((o, i) => {
+        if (rejectedIdx.has(i) && structurallySafe(o)) {
+            rejectedKeys.add(keyOf(o));
+        }
+    });
+    const accepted = overrides.filter((o, i) => structurallySafe(o) && !rejectedIdx.has(i) && !rejectedKeys.has(keyOf(o)));
+    const layers = partitionOverrideLayers(accepted);
     const rows = effectiveMap.rows
         .map(row => toEditorRowDto(row, layers))
         .sort((a, b) => a.stationMac === b.stationMac
@@ -537,13 +583,24 @@ function toAuthoredFragmentDto(entry, index) {
         return dto;
     }
     const frag = entry;
+    // Identity keys: hoisted when they VALIDATE (string); a wrong-typed
+    // identity value is preserved VERBATIM in identityRaw instead
+    // (review #32 round 2 F3) — `stationMac: 42` must stay
+    // distinguishable from an absent stationMac, and the station layer /
+    // normalized key are derived only from a validated value.
     if (typeof frag.stationMac === 'string') {
         dto.layer = 'station';
         dto.stationMac = frag.stationMac;
         dto.stationMacKey = frag.stationMac.toUpperCase();
     }
+    else if ('stationMac' in frag) {
+        dto.identityRaw = { ...dto.identityRaw, stationMac: frag.stationMac };
+    }
     if (typeof frag.dataPoint === 'string') {
         dto.dataPoint = frag.dataPoint;
+    }
+    else if ('dataPoint' in frag) {
+        dto.identityRaw = { ...dto.identityRaw, dataPoint: frag.dataPoint };
     }
     const unknownKeys = [];
     for (const key of Object.keys(frag)) {
@@ -626,7 +683,8 @@ function assembleStationInventory(src) {
     // 4. stationMac values in current + proposed overrides.
     for (const list of src.overrideSources) {
         for (const o of list) {
-            if (typeof o.stationMac === 'string') {
+            if (o && typeof o === 'object' && !Array.isArray(o)
+                && typeof o.stationMac === 'string') {
                 add(o.stationMac, '', 'override');
             }
         }
