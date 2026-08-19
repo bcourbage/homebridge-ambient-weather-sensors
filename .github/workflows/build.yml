@@ -32,7 +32,8 @@ jobs:
           node-version: ${{ matrix.node-version }}
 
       - name: Install dependencies
-        run: npm install
+        # Locked tree (package-lock.json committed as of PR A).
+        run: npm ci
 
       - name: Lint the project
         run: npm run lint

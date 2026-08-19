@@ -53,12 +53,10 @@ jobs:
         run: npm install -g npm@latest
 
       - name: Install dependencies
-        # We don't commit package-lock.json (build dist is committed
-        # instead, and runtime deps are small), so `npm ci` would fail
-        # for lack of a lock file. `npm install` resolves fresh from
-        # package.json semver ranges; acceptable for this project's
-        # tiny dependency surface.
-        run: npm install
+        # package-lock.json is committed (PR A, GA task #69), so `npm ci`
+        # installs the exact locked tree — releases build against the
+        # same dependency set the determinism gates verified.
+        run: npm ci
 
       - name: Lint
         run: npm run lint
