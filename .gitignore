@@ -119,4 +119,5 @@ web_modules/
 
 # macOS
 .DS_Store
-package-lock.json
+# package-lock.json is COMMITTED as of PR A (GA task #69): reproducible
+# `npm ci` builds are a determinism gate for the committed UI assets.
