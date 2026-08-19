@@ -654,6 +654,37 @@ function extractStationMacForError(raw: unknown): string | undefined {
  * Later-wins field merge for duplicate override entries with the same
  * (dataPoint, stationMac?) key. §3.3.2.
  */
+/**
+ * Partition ALREADY-VALID overrides into the global/station layers with
+ * the SAME §3.3.2 duplicate-merge semantics the resolver applies
+ * (later-field-wins per (dataPoint, stationMac?) key). Exposed for the
+ * canonical serializer (review #67 round 2): canonical output must
+ * mirror the proposal's own layering — a global template stays global
+ * so it keeps applying to future stations — and the layering must be
+ * read through this machinery, never re-derived.
+ */
+export function partitionOverrideLayers(overrides: ReadonlyArray<SensorMapOverride>): {
+  global: Map<string, SensorMapOverride>;
+  station: Map<string, Map<string, SensorMapOverride>>;
+} {
+  const global = new Map<string, SensorMapOverride>();
+  const station = new Map<string, Map<string, SensorMapOverride>>();
+  for (const o of overrides) {
+    if (o.stationMac === undefined) {
+      global.set(o.dataPoint, mergeInto(global.get(o.dataPoint), o));
+    } else {
+      const mac = o.stationMac.toUpperCase();
+      let m = station.get(mac);
+      if (!m) {
+        m = new Map();
+        station.set(mac, m);
+      }
+      m.set(o.dataPoint, mergeInto(m.get(o.dataPoint), o));
+    }
+  }
+  return { global, station };
+}
+
 function mergeInto(prev: SensorMapOverride | undefined, next: SensorMapOverride): SensorMapOverride {
   if (!prev) {
     return next;

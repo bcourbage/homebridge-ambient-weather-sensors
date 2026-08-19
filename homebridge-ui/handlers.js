@@ -238,14 +238,28 @@ export async function handleComposeSave(deps, payload) {
     //          guidance to make ownership explicit. The gate also traps
     //          any future serializer defect (it detects the P1-2
     //          per-station identity corruption mechanically).
+    //          Equivalence is proven over the inventory PLUS a synthetic
+    //          never-seen station (review round 2): comparing only the
+    //          current inventory cannot detect a global TEMPLATE being
+    //          narrowed to per-station entries — the divergence would
+    //          only manifest when a new station appears.
+    const SYNTHETIC_STATION = { macAddress: 'FE:FE:FE:FE:FE:FE', name: '(template-equivalence probe)' };
+    const gateStations = [...stations, SYNTHETIC_STATION];
+    const gateBefore = buildEffectiveSensorMap({
+        userOverrides: proposal,
+        discovery,
+        uiState,
+        stations: gateStations,
+        configMode: 'v2',
+    });
     const reloaded = buildEffectiveSensorMap({
         userOverrides: canonical,
         discovery,
         uiState,
-        stations,
+        stations: gateStations,
         configMode: 'v2',
     });
-    const divergent = diffEffectiveRows(effectiveMap, reloaded);
+    const divergent = diffEffectiveRows(gateBefore, reloaded);
     if (divergent.length > 0) {
         return {
             ok: false,

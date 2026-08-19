@@ -1,38 +1,46 @@
 /**
- * Canonical sensorMap serializer (§11.3 / §17.4) — the ONLY producer of
- * the `sensorMap` array that gets written to config.json. The client
- * may submit proposed editor state, but it is never responsible for
- * assembling canonical config: the compose-save boundary runs the
- * proposal through this serializer and persists the result.
+ * Canonical sensorMap serializer (§11.3 / §17.4, as amended by review
+ * #67 round 2) — the ONLY producer of the `sensorMap` array that gets
+ * written to config.json. The client may submit proposed editor state,
+ * but it is never responsible for assembling canonical config: the
+ * compose-save boundary runs the proposal through this serializer and
+ * persists the result.
  *
- * Definition (§11.3): an override contains only fields whose effective
- * value differs from the v2 built-in baseline for the same
- * `(stationMac, dataPoint)`.
+ * LAYERING PRESERVATION (the round-2 amendment): canonical output
+ * mirrors the proposal's OWN global/station structure, read through the
+ * same §3.3.2 merge machinery the resolver uses
+ * (`partitionOverrideLayers`):
  *
- * IMPLEMENTATION PRINCIPLE — no second resolver: both sides of the
- * diff come from the REAL `buildEffectiveSensorMap`:
- *   - the proposal side is the effective map built from the proposed
- *     overrides;
- *   - the baseline side is the effective map built from NO overrides
- *     (pure defaults) for known datapoints, or from the row's minimal
- *     identity declaration (`dataPoint` + `kind` + `measurement` +
- *     numeric `sourceUnit`) for custom datapoints — so derived
- *     defaults (names, measurement-aware trigger directions, display
- *     units, battery ownership) are computed by the same machinery
- *     that will interpret the serialized result on the next load.
- * That construction makes idempotency structural:
- * `canonicalize(load(canonicalize(x)))` compares equal effective maps,
- * so repeated saves are byte-stable (§17.4 rule 5's test).
+ *   - a GLOBAL override stays a global entry — it is a TEMPLATE that
+ *     must keep applying to stations that appear in the future;
+ *   - a STATION override serializes as an EXCEPTION relative to the
+ *     global layer (or the built-in baseline when no global layer
+ *     exists for that dataPoint);
+ *   - the serializer NEVER materializes a global template into
+ *     per-station entries, and NEVER collapses authored per-station
+ *     entries into a new global template — both directions silently
+ *     change behavior on future stations. (This supersedes the original
+ *     §11.3 rule 2 "identical values collapse to global"; template
+ *     scope is user intent, not an optimization target.)
  *
- * Canonicalization rules enforced here:
- *   1. At most one entry per `(dataPoint, stationMac?)` key.
- *   2. Identical field values across ALL inventory stations collapse
- *      to a single global override (no `stationMac`).
- *   3. Divergent stations get per-station entries, and only for
- *      stations whose diff is non-empty.
- *   4. Fields within an entry appear in the fixed §17.4 order.
- *   5. Entries sort by `dataPoint`, then global-first, then
- *      `stationMac` ascending case-insensitive.
+ * MINIMAL DIFF, no second resolver: every diff side comes from the REAL
+ * `buildEffectiveSensorMap`:
+ *   - global entries diff the GLOBAL-LAYER effective map against the
+ *     pure-defaults baseline (known dps) or the row's minimal identity
+ *     declaration (custom dps);
+ *   - station exceptions diff the FULL effective map against the
+ *     global-layer map (falling back to defaults/identity when the
+ *     dataPoint has no global layer).
+ * Custom rows always re-declare their identity (kind, measurement,
+ * numeric sourceUnit) in the layer that introduces them.
+ *
+ * Idempotency is structural: reloading canonical output reproduces the
+ * same layers, so repeated saves are byte-stable — and the compose-save
+ * boundary independently gates on full effective-map equivalence
+ * INCLUDING a synthetic never-seen station (template equivalence).
+ *
+ * Ordering (§17.4): entries sort by `dataPoint`, global before station,
+ * MACs ascending case-insensitive; fields in the fixed §17.4 order.
  */
 import type { DiscoveryStore, SensorMapOverride, StationInventory, UiStateStore } from './types.js';
 export interface CanonicalizeInput {

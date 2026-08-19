@@ -69,13 +69,84 @@ describe('minimal diff vs the v2 baseline', () => {
   });
 });
 
-describe('station collapse (§11.3 rules 2–3)', () => {
-  it('identical per-station values across ALL stations collapse to one global entry', () => {
+describe('layering preservation (§11.3 as amended by review #67 round 2)', () => {
+  it('authored per-station entries STAY station-scoped even when identical (no collapse to a new template)', () => {
+    // Collapsing would widen scope: a future station C would suddenly
+    // inherit a template the user only authored for A and B.
     const out = canon([
       { dataPoint: 'tempf', stationMac: MAC1, name: 'Patio' },
       { dataPoint: 'tempf', stationMac: MAC2, name: 'Patio' },
     ], TWO);
+    expect(out).toEqual([
+      { dataPoint: 'tempf', name: 'Patio', stationMac: MAC1 },
+      { dataPoint: 'tempf', name: 'Patio', stationMac: MAC2 },
+    ]);
+  });
+
+  it('a GLOBAL custom template plus a station exception keeps the global layer (the reviewer repro)', () => {
+    // NOTE: per the frozen §3.7 per-key validation, a custom station
+    // exception must itself declare identity (kind/measurement/
+    // sourceUnit) — a partial {dataPoint, stationMac, name} entry is
+    // refused as custom-missing-kind at the boundary. The canonical
+    // exception therefore re-declares identity alongside the diff.
+    const out = canon([
+      { dataPoint: 'barn_x', kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph', name: 'Barn X' },
+      { dataPoint: 'barn_x', stationMac: MAC2, kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph', name: 'Barn X (Cabin)' },
+    ], TWO);
+    expect(out).toEqual([
+      { dataPoint: 'barn_x', kind: 'motion', measurement: 'wind-speed', name: 'Barn X', sourceUnit: 'mph' },
+      { dataPoint: 'barn_x', kind: 'motion', measurement: 'wind-speed', name: 'Barn X (Cabin)', sourceUnit: 'mph', stationMac: MAC2 },
+    ]);
+  });
+
+  it('a custom exception restating ONLY the template identity is omitted (adds nothing)', () => {
+    const out = canon([
+      { dataPoint: 'barn_x', kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph', name: 'Barn X' },
+      { dataPoint: 'barn_x', stationMac: MAC2, kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph' },
+    ], TWO);
+    expect(out).toEqual([
+      { dataPoint: 'barn_x', kind: 'motion', measurement: 'wind-speed', name: 'Barn X', sourceUnit: 'mph' },
+    ]);
+  });
+
+  it('a global KNOWN-row setting survives as global with a station exception relative to it', () => {
+    const out = canon([
+      { dataPoint: 'tempf', name: 'Patio' },
+      { dataPoint: 'tempf', stationMac: MAC2, name: 'Deck' },
+    ], TWO);
+    expect(out).toEqual([
+      { dataPoint: 'tempf', name: 'Patio' },
+      { dataPoint: 'tempf', name: 'Deck', stationMac: MAC2 },
+    ]);
+  });
+
+  it('a redundant station exception (identical to the global layer) is omitted', () => {
+    const out = canon([
+      { dataPoint: 'tempf', name: 'Patio' },
+      { dataPoint: 'tempf', stationMac: MAC2, name: 'Patio' },
+    ], TWO);
     expect(out).toEqual([{ dataPoint: 'tempf', name: 'Patio' }]);
+  });
+
+  it('the global template applies to a FUTURE station the current inventory has never seen', () => {
+    const overrides: SensorMapOverride[] = [
+      { dataPoint: 'barn_x', kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph', name: 'Barn X' },
+      { dataPoint: 'barn_x', stationMac: MAC2, kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph', name: 'Barn X (Cabin)' },
+    ];
+    const canonical = canon(overrides, TWO);
+    const FUTURE = 'FE:FE:FE:FE:FE:01';
+    const THREE: StationInventory = [...TWO, { macAddress: FUTURE, name: 'New' }];
+    const common = { discovery: discovery(), uiState: uiState(), stations: THREE, configMode: 'v2' as const };
+    const before = buildEffectiveSensorMap({ ...common, userOverrides: overrides });
+    const after = buildEffectiveSensorMap({ ...common, userOverrides: canonical });
+    const rowOn = (m: typeof before, mac: string) =>
+      m.rows.find(r => r.stationMac === mac && r.dataPoint === 'barn_x' && r.kind !== 'unrecognized');
+    // The original config creates barn_x on the future station; the
+    // canonical config must too, identically.
+    const b = rowOn(before, FUTURE);
+    const a = rowOn(after, FUTURE);
+    expect(b).toBeDefined();
+    expect(JSON.stringify(a, Object.keys(a ?? {}).sort())).toBe(JSON.stringify(b, Object.keys(b ?? {}).sort()));
   });
 
   it('divergent stations keep per-station entries, only for non-empty diffs', () => {
@@ -185,10 +256,13 @@ describe('idempotency + byte stability (§11.3 / §17.4 rule 5)', () => {
     expect(JSON.stringify(second, null, 2)).toBe(JSON.stringify(first, null, 2));
   });
 
-  it.each(FIXTURES)('$name: reloading the canonical output reproduces the EFFECTIVE map (rows + signatures)', ({ overrides, stations }) => {
-    // Serializer idempotency alone is insufficient (review #67 P1-2):
-    // the canonical array must MEAN the same thing when loaded.
-    const common = { discovery: discovery(), uiState: uiState(), stations, configMode: 'v2' as const };
+  it.each(FIXTURES)('$name: reloading the canonical output reproduces the EFFECTIVE map (rows + signatures), including on a never-seen station', ({ overrides, stations }) => {
+    // Serializer idempotency alone is insufficient (review #67 P1-2 +
+    // round 2): the canonical array must MEAN the same thing when
+    // loaded — including on a station the current inventory has never
+    // seen (global-template equivalence).
+    const synthetic = { macAddress: 'FE:FE:FE:FE:FE:FE', name: 'Future' };
+    const common = { discovery: discovery(), uiState: uiState(), stations: [...stations, synthetic], configMode: 'v2' as const };
     const before = buildEffectiveSensorMap({ ...common, userOverrides: overrides });
     const canonical = canonicalizeSensorMap({ overrides, stations, discovery: discovery(), uiState: uiState() });
     const after = buildEffectiveSensorMap({ ...common, userOverrides: canonical });

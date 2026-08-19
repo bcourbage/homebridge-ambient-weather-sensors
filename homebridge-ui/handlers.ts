@@ -37,7 +37,10 @@ import {
 import type { Logger } from '../dist/sensorMap/persistence/atomicWrite.js';
 import type {
   DiscoveryStore,
+  InternalInvariantNote,
   NoticeStore,
+  RowValidationError,
+  RowValidationWarning,
   SensorMapOverride,
   StationInventory,
   UiStateStore,
@@ -161,9 +164,9 @@ export type ComposeSaveError =
   | { code: 'ambiguous-platform-block'; message: string }
   | { code: 'safe-mode'; message: string }
   | { code: 'invalid-proposal'; message: string }
-  | { code: 'invalid-rows'; message: string; rows: unknown[] }
+  | { code: 'invalid-rows'; message: string; rows: RowValidationError[] }
   | { code: 'no-station-inventory'; message: string }
-  | { code: 'canonical-divergence'; message: string; rows: unknown[] }
+  | { code: 'canonical-divergence'; message: string; rows: DivergentRow[] }
   | { code: 'legacy-snapshot-mismatch'; message: string }
   | { code: 'legacy-snapshot-corrupt'; message: string }
   | { code: 'snapshot-write-failed'; message: string };
@@ -182,9 +185,9 @@ export type ComposeSaveResult =
      * codes + override indices) — the editor's "needs attention"
      * channel must surface these even on a successful save.
      */
-    warnings: unknown[];
+    warnings: RowValidationWarning[];
     /** Ownership/plugin-health notes (attribution per `source`). */
-    notes: unknown[];
+    notes: InternalInvariantNote[];
   }
   | { ok: false; error: ComposeSaveError };
 
@@ -355,7 +358,7 @@ export async function handleComposeSave(
       error: {
         code: 'invalid-rows',
         message: `${effectiveMap.errors.length} proposed row(s) failed validation; nothing was written.`,
-        rows: effectiveMap.errors as unknown[],
+        rows: effectiveMap.errors,
       },
     };
   }
@@ -374,14 +377,28 @@ export async function handleComposeSave(
   //          guidance to make ownership explicit. The gate also traps
   //          any future serializer defect (it detects the P1-2
   //          per-station identity corruption mechanically).
+  //          Equivalence is proven over the inventory PLUS a synthetic
+  //          never-seen station (review round 2): comparing only the
+  //          current inventory cannot detect a global TEMPLATE being
+  //          narrowed to per-station entries — the divergence would
+  //          only manifest when a new station appears.
+  const SYNTHETIC_STATION = { macAddress: 'FE:FE:FE:FE:FE:FE', name: '(template-equivalence probe)' };
+  const gateStations = [...stations, SYNTHETIC_STATION];
+  const gateBefore = buildEffectiveSensorMap({
+    userOverrides: proposal,
+    discovery,
+    uiState,
+    stations: gateStations,
+    configMode: 'v2',
+  });
   const reloaded = buildEffectiveSensorMap({
     userOverrides: canonical,
     discovery,
     uiState,
-    stations,
+    stations: gateStations,
     configMode: 'v2',
   });
-  const divergent = diffEffectiveRows(effectiveMap as unknown as EffectiveRowsHolder, reloaded as unknown as EffectiveRowsHolder);
+  const divergent = diffEffectiveRows(gateBefore as unknown as EffectiveRowsHolder, reloaded as unknown as EffectiveRowsHolder);
   if (divergent.length > 0) {
     return {
       ok: false,
@@ -444,8 +461,8 @@ export async function handleComposeSave(
     nextConfig: composed.nextConfig,
     snapshot,
     canonicalSensorMap: canonical,
-    warnings: effectiveMap.warnings as unknown[],
-    notes: effectiveMap.notes as unknown[],
+    warnings: effectiveMap.warnings,
+    notes: effectiveMap.notes,
   };
 }
 
@@ -504,13 +521,20 @@ function assembleStationInventory(src: {
  * sides' signatures for the error payload. (The discriminated-union
  * rows are treated as plain records here — comparison only.)
  */
+export interface DivergentRow {
+  stationMac: string;
+  dataPoint: string;
+  before: string;
+  after: string;
+}
+
 interface EffectiveRowsHolder {
   rows: ReadonlyArray<Record<string, unknown> & { kind: string }>;
 }
 function diffEffectiveRows(
   before: EffectiveRowsHolder,
   after: EffectiveRowsHolder,
-): Array<{ stationMac: unknown; dataPoint: unknown; before?: string; after?: string }> {
+): DivergentRow[] {
   const index = (m: EffectiveRowsHolder): Map<string, Record<string, unknown>> => {
     const out = new Map<string, Record<string, unknown>>();
     for (const row of m.rows) {
@@ -522,7 +546,7 @@ function diffEffectiveRows(
   };
   const a = index(before);
   const b = index(after);
-  const divergent: Array<{ stationMac: unknown; dataPoint: unknown; before?: string; after?: string }> = [];
+  const divergent: DivergentRow[] = [];
   for (const key of new Set([...a.keys(), ...b.keys()])) {
     const rowA = a.get(key);
     const rowB = b.get(key);

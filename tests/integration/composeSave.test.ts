@@ -303,7 +303,9 @@ describe('canonical-divergence hard gate (review #67 P1-1)', () => {
       if (!result.ok) {
         expect(result.error.code).toBe('canonical-divergence');
         const rows = (result.error as { rows: Array<{ dataPoint: string }> }).rows;
-        expect(rows.map(r => r.dataPoint).sort()).toEqual(['a_custom', 'z_custom']);
+        // Divergence is reported per (station, dataPoint) — including
+        // the synthetic template-equivalence station — so dedupe.
+        expect([...new Set(rows.map(r => r.dataPoint))].sort()).toEqual(['a_custom', 'z_custom']);
       }
       expect(existsSync(path.join(rig.persistDir, LEGACY_SNAPSHOT_FILE))).toBe(false);
     });
@@ -327,6 +329,50 @@ describe('canonical-divergence hard gate (review #67 P1-1)', () => {
   });
 });
 
+describe('global-template preservation (review #67 round 2 P1)', () => {
+  it('a global template with a station exception survives canonicalization for FUTURE stations', async () => {
+    const rig = makeRig(LEGACY_BLOCK);
+    discoveryStore(rig, [MAC, 'AA:BB:CC:DD:EE:02']);
+    const result = await handleComposeSave(rig.deps, {
+      base: LEGACY_BLOCK,
+      proposal: [
+        { dataPoint: 'barn_x', kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph', name: 'Barn X' },
+        { dataPoint: 'barn_x', stationMac: 'AA:BB:CC:DD:EE:02', kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph', name: 'Barn X (Cabin)' },
+      ],
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      const globalEntry = result.canonicalSensorMap.find(e => e.dataPoint === 'barn_x' && e.stationMac === undefined);
+      const exception = result.canonicalSensorMap.find(e => e.dataPoint === 'barn_x' && e.stationMac === 'AA:BB:CC:DD:EE:02');
+      expect(globalEntry).toBeDefined();
+      expect(globalEntry).toHaveProperty('name', 'Barn X');
+      expect(exception).toBeDefined();
+      expect(exception).toHaveProperty('name', 'Barn X (Cabin)');
+    }
+  });
+
+  it("a PARTIAL custom station exception (the reviewer's literal repro) is refused loudly as invalid-rows", async () => {
+    // The frozen per-key validation (§3.7) requires identity on every
+    // custom entry — the boundary refuses rather than letting the
+    // serializer see (and previously corrupt) the input.
+    const rig = makeRig(LEGACY_BLOCK);
+    discoveryStore(rig, [MAC, 'AA:BB:CC:DD:EE:02']);
+    const result = await handleComposeSave(rig.deps, {
+      base: LEGACY_BLOCK,
+      proposal: [
+        { dataPoint: 'barn_x', kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph', name: 'Barn X' },
+        { dataPoint: 'barn_x', stationMac: 'AA:BB:CC:DD:EE:02', name: 'Barn X (Cabin)' },
+      ],
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('invalid-rows');
+      const rows = (result.error as { rows: Array<{ code: string }> }).rows;
+      expect(rows.some(r => r.code === 'custom-missing-kind')).toBe(true);
+    }
+  });
+});
+
 describe('successful saves surface warnings (review #67 P2-5)', () => {
   it('warn-and-strip validation stays visible in the compose response', async () => {
     const rig = makeRig(LEGACY_BLOCK);
@@ -338,7 +384,7 @@ describe('successful saves surface warnings (review #67 P2-5)', () => {
     });
     expect(result.ok).toBe(true);
     if (result.ok) {
-      const codes = (result.warnings as Array<{ code?: string }>).map(w => w.code);
+      const codes = result.warnings.map(w => w.code);
       expect(codes).toContain('ignored-native-displayunit');
     }
   });

@@ -1059,13 +1059,46 @@ Definition:
 
 > A migrated override contains only fields whose effective legacy value differs from the v2 built-in baseline for the same `(stationMac, dataPoint)`.
 
-**Canonicalization rules** (enforced by the serializer):
+**Canonicalization rules** (enforced by the serializer; rules 2–3
+amended 2026-08-19 — see the decision log):
 
 1. At most one entry per `(dataPoint, stationMac?)` key
-2. Entries with identical field values across all stations serialize as a single global override (no `stationMac`)
-3. Divergent stations get per-station entries only for stations whose diff is non-empty
+2. **Layering preservation.** Canonical output mirrors the proposal's
+   own global/station structure (read through the §3.3.2 merge
+   machinery): a GLOBAL override stays a global entry — it is a
+   template that keeps applying to stations that appear in the future —
+   and a STATION override serializes as an exception relative to the
+   global layer (or the built-in baseline when no global layer exists).
+   The serializer never materializes a template into per-station
+   entries and never collapses authored per-station entries into a new
+   template: both directions silently change behavior on future
+   stations. (Supersedes the original "identical values collapse to
+   global" rule.)
+3. Station exceptions are emitted only when their diff relative to the
+   global layer is non-empty. Custom station entries always re-declare
+   identity (kind, measurement, numeric sourceUnit) because per-key
+   validation (§3.7) requires it — an exception that restates ONLY the
+   template's identity is omitted.
 4. Fields within an entry appear in a stable alphabetical order for byte-stable output
 5. Entries sort by `dataPoint`, then `stationMac` (global first, then MACs alphabetically)
+
+**Canonical-divergence refusal (compose-save boundary).** Battery-field
+ownership among multiple claimants of the same novel field is
+adjudicated by EARLIEST-AUTHORED override index — an ordering that
+sorted canonical output cannot preserve. Rather than persisting an
+authoring-priority field (public-schema growth; the same reasoning that
+removed `wrapperId` from v2 scope), the boundary refuses any proposal
+whose canonical form would change meaning: after serialization the
+canonical array is reloaded and every configured row + structural
+signature is compared against the proposal's effective map — over the
+station inventory PLUS a synthetic never-seen station, so global
+TEMPLATE equivalence is proven, not just current-inventory equivalence.
+Any divergence returns the structured `canonical-divergence` error
+listing the affected rows and both signatures. Supported remediation
+(the error message says this): make ownership explicit — set
+`batteryField: null` on the non-owning claimant(s), or assign distinct
+battery fields — and retry. The gate doubles as a mechanical trap for
+serializer defects: nothing that changes meaning can be persisted.
 
 **Idempotency:**
 
@@ -1337,6 +1370,15 @@ When any of these appears in a non-motion row (default or user override), the pl
 Tests: for every non-motion kind, submit an override with each of these fields; verify the specific warn is emitted and the field is absent from the resulting effective row.
 
 ## 17. Decision log
+
+- **2026-08-19**: Compose-save boundary review (GA task #67). §11.3
+  rules 2–3 amended to LAYERING PRESERVATION (global templates stay
+  global; station entries are exceptions; no collapse in either
+  direction — both change future-station behavior). Added the
+  `canonical-divergence` refusal contract: order-dependent battery
+  ownership is refused with explicit-ownership remediation instead of
+  persisting an authoring-priority schema field. Equivalence gating
+  includes a synthetic never-seen station (template equivalence).
 
 - **2026-07-08**: v1 drafted.
 - **2026-07-09**: First review. Revision incorporated configVersion, station-layered overrides, discovery store, structural signatures, bootstrap for existing accessories, unit source/display split, property-driven testing, minimal UI in beta.0.
