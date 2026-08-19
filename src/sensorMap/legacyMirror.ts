@@ -596,3 +596,66 @@ export async function writeLegacySnapshot(
     await fs.unlink(tmp).catch(() => { /* best-effort */ });
   }
 }
+
+/**
+ * Compare an EXISTING snapshot against the authoritative pre-conversion
+ * legacy fields (compose-save boundary, review #67 P1-6). The split
+ * compose-then-persist transaction has an unavoidable window: a
+ * snapshot can be written, the config save can then fail or the iframe
+ * close, the user can change the legacy config, and a LATER conversion
+ * would see 'exists' — silently blessing a snapshot that no longer
+ * matches what is being removed. The boundary therefore verifies:
+ *
+ *   - 'absent':   no snapshot on disk (caller should write one);
+ *   - 'match':    the stored legacy subset equals the authoritative
+ *                 fields (key-order-insensitive) — proceed as 'exists';
+ *   - 'mismatch': the stored subset differs — REFUSE the conversion
+ *                 (never overwrite; the snapshot is immutable);
+ *   - 'corrupt':  unreadable/unparsable/mis-shaped — REFUSE.
+ */
+export async function verifyLegacySnapshot(
+  persistDir: string,
+  authoritativeLegacyFields: Record<string, unknown>,
+): Promise<'absent' | 'match' | 'mismatch' | 'corrupt'> {
+  const file = path.join(persistDir, LEGACY_SNAPSHOT_FILE);
+  let raw: string;
+  try {
+    raw = await fs.readFile(file, 'utf8');
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') {
+      return 'absent';
+    }
+    return 'corrupt';
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return 'corrupt';
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return 'corrupt';
+  }
+  // Full envelope validation (review #67 P2-4): an unrecognized schema
+  // version — or a missing/invalid savedAt — is a snapshot THIS version
+  // does not understand, and must block conversion as corrupt rather
+  // than be blessed because its legacy subset happens to compare equal.
+  const envelope = parsed as { schemaVersion?: unknown; savedAt?: unknown; legacy?: unknown };
+  if (envelope.schemaVersion !== 1) {
+    return 'corrupt';
+  }
+  if (typeof envelope.savedAt !== 'string' || Number.isNaN(Date.parse(envelope.savedAt))) {
+    return 'corrupt';
+  }
+  const legacy = envelope.legacy;
+  if (!legacy || typeof legacy !== 'object' || Array.isArray(legacy)) {
+    return 'corrupt';
+  }
+  const subset: Record<string, unknown> = {};
+  for (const key of LEGACY_SENSOR_FIELDS) {
+    if (authoritativeLegacyFields[key] !== undefined) {
+      subset[key] = authoritativeLegacyFields[key];
+    }
+  }
+  return canonicalJson(legacy) === canonicalJson(subset) ? 'match' : 'mismatch';
+}

@@ -1,0 +1,289 @@
+/**
+ * Canonical serializer (§11.3 / §17.4): minimal diff vs the v2
+ * baseline, station collapse, fixed ordering, and STRUCTURAL
+ * idempotency — canonicalize(load(canonicalize(x))) must be
+ * byte-identical, across a fixture battery (§17.4's test).
+ */
+import { describe, expect, it } from 'vitest';
+
+import { buildEffectiveSensorMap } from '../../../src/sensorMap/buildEffectiveMap';
+import { canonicalizeSensorMap } from '../../../src/sensorMap/canonicalizeSensorMap';
+import type {
+  DiscoveryStore,
+  SensorMapOverride,
+  StationInventory,
+  UiStateStore,
+} from '../../../src/sensorMap/types';
+
+const MAC1 = 'AA:BB:CC:DD:EE:01';
+const MAC2 = 'AA:BB:CC:DD:EE:02';
+const ONE: StationInventory = [{ macAddress: MAC1, name: 'Home' }];
+const TWO: StationInventory = [
+  { macAddress: MAC1, name: 'Home' },
+  { macAddress: MAC2, name: 'Cabin' },
+];
+
+function discovery(): DiscoveryStore {
+  return { schemaVersion: 1, entries: [] };
+}
+function uiState(): UiStateStore {
+  return { schemaVersion: 1, dismissedNoticeIds: [], forgottenFields: [] };
+}
+function canon(overrides: SensorMapOverride[], stations: StationInventory = ONE): SensorMapOverride[] {
+  return canonicalizeSensorMap({ overrides, stations, discovery: discovery(), uiState: uiState() });
+}
+
+describe('minimal diff vs the v2 baseline', () => {
+  it('an empty proposal serializes to an empty sensorMap', () => {
+    expect(canon([])).toEqual([]);
+  });
+
+  it('a default-valued override field is dropped (no-op diff)', () => {
+    // tempf's default name IS 'Outdoor Temperature' — restating it is
+    // not a difference from baseline.
+    expect(canon([{ dataPoint: 'tempf', name: 'Outdoor Temperature' }])).toEqual([]);
+  });
+
+  it('only the changed field survives', () => {
+    expect(canon([{ dataPoint: 'tempf', name: 'Patio', enabled: true }]))
+      .toEqual([{ dataPoint: 'tempf', name: 'Patio' }]);
+  });
+
+  it('batteryField: null suppression is preserved (meaningful null)', () => {
+    const out = canon([{ dataPoint: 'tempf', batteryField: null }]);
+    expect(out).toHaveLength(1);
+    expect(out[0]).toHaveProperty('batteryField', null);
+  });
+
+  it('a custom row always declares identity (kind, measurement, sourceUnit) plus only its non-default extras', () => {
+    const out = canon([{
+      dataPoint: 'barn_baro', kind: 'motion', measurement: 'pressure',
+      sourceUnit: 'mmHg', threshold: 765,
+      // triggerEnabled: true is the derived default — must vanish.
+      triggerEnabled: true,
+    }]);
+    expect(out).toEqual([{
+      dataPoint: 'barn_baro', kind: 'motion', measurement: 'pressure',
+      sourceUnit: 'mmHg', threshold: 765,
+    }]);
+  });
+});
+
+describe('layering preservation (§11.3 as amended by review #67 round 2)', () => {
+  it('authored per-station entries STAY station-scoped even when identical (no collapse to a new template)', () => {
+    // Collapsing would widen scope: a future station C would suddenly
+    // inherit a template the user only authored for A and B.
+    const out = canon([
+      { dataPoint: 'tempf', stationMac: MAC1, name: 'Patio' },
+      { dataPoint: 'tempf', stationMac: MAC2, name: 'Patio' },
+    ], TWO);
+    expect(out).toEqual([
+      { dataPoint: 'tempf', name: 'Patio', stationMac: MAC1 },
+      { dataPoint: 'tempf', name: 'Patio', stationMac: MAC2 },
+    ]);
+  });
+
+  it('a GLOBAL custom template plus a station exception keeps the global layer (the reviewer repro)', () => {
+    // NOTE: per the frozen §3.7 per-key validation, a custom station
+    // exception must itself declare identity (kind/measurement/
+    // sourceUnit) — a partial {dataPoint, stationMac, name} entry is
+    // refused as custom-missing-kind at the boundary. The canonical
+    // exception therefore re-declares identity alongside the diff.
+    const out = canon([
+      { dataPoint: 'barn_x', kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph', name: 'Barn X' },
+      { dataPoint: 'barn_x', stationMac: MAC2, kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph', name: 'Barn X (Cabin)' },
+    ], TWO);
+    expect(out).toEqual([
+      { dataPoint: 'barn_x', kind: 'motion', measurement: 'wind-speed', name: 'Barn X', sourceUnit: 'mph' },
+      { dataPoint: 'barn_x', kind: 'motion', measurement: 'wind-speed', name: 'Barn X (Cabin)', sourceUnit: 'mph', stationMac: MAC2 },
+    ]);
+  });
+
+  it('a custom exception restating ONLY the template identity is omitted (adds nothing)', () => {
+    const out = canon([
+      { dataPoint: 'barn_x', kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph', name: 'Barn X' },
+      { dataPoint: 'barn_x', stationMac: MAC2, kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph' },
+    ], TWO);
+    expect(out).toEqual([
+      { dataPoint: 'barn_x', kind: 'motion', measurement: 'wind-speed', name: 'Barn X', sourceUnit: 'mph' },
+    ]);
+  });
+
+  it('a global KNOWN-row setting survives as global with a station exception relative to it', () => {
+    const out = canon([
+      { dataPoint: 'tempf', name: 'Patio' },
+      { dataPoint: 'tempf', stationMac: MAC2, name: 'Deck' },
+    ], TWO);
+    expect(out).toEqual([
+      { dataPoint: 'tempf', name: 'Patio' },
+      { dataPoint: 'tempf', name: 'Deck', stationMac: MAC2 },
+    ]);
+  });
+
+  it('a redundant station exception (identical to the global layer) is omitted', () => {
+    const out = canon([
+      { dataPoint: 'tempf', name: 'Patio' },
+      { dataPoint: 'tempf', stationMac: MAC2, name: 'Patio' },
+    ], TWO);
+    expect(out).toEqual([{ dataPoint: 'tempf', name: 'Patio' }]);
+  });
+
+  it('the global template applies to a FUTURE station the current inventory has never seen', () => {
+    const overrides: SensorMapOverride[] = [
+      { dataPoint: 'barn_x', kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph', name: 'Barn X' },
+      { dataPoint: 'barn_x', stationMac: MAC2, kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph', name: 'Barn X (Cabin)' },
+    ];
+    const canonical = canon(overrides, TWO);
+    const FUTURE = 'FE:FE:FE:FE:FE:01';
+    const THREE: StationInventory = [...TWO, { macAddress: FUTURE, name: 'New' }];
+    const common = { discovery: discovery(), uiState: uiState(), stations: THREE, configMode: 'v2' as const };
+    const before = buildEffectiveSensorMap({ ...common, userOverrides: overrides });
+    const after = buildEffectiveSensorMap({ ...common, userOverrides: canonical });
+    const rowOn = (m: typeof before, mac: string) =>
+      m.rows.find(r => r.stationMac === mac && r.dataPoint === 'barn_x' && r.kind !== 'unrecognized');
+    // The original config creates barn_x on the future station; the
+    // canonical config must too, identically.
+    const b = rowOn(before, FUTURE);
+    const a = rowOn(after, FUTURE);
+    expect(b).toBeDefined();
+    expect(JSON.stringify(a, Object.keys(a ?? {}).sort())).toBe(JSON.stringify(b, Object.keys(b ?? {}).sort()));
+  });
+
+  it('divergent stations keep per-station entries, only for non-empty diffs', () => {
+    const out = canon([
+      { dataPoint: 'tempf', stationMac: MAC1, name: 'Patio' },
+      { dataPoint: 'tempf', stationMac: MAC2, name: 'Deck' },
+    ], TWO);
+    expect(out).toEqual([
+      { dataPoint: 'tempf', stationMac: MAC1, name: 'Patio' },
+      { dataPoint: 'tempf', stationMac: MAC2, name: 'Deck' },
+    ]);
+  });
+
+  it('a single-station diff on a two-station inventory stays station-scoped', () => {
+    const out = canon([{ dataPoint: 'tempf', stationMac: MAC2, name: 'Deck' }], TWO);
+    expect(out).toEqual([{ dataPoint: 'tempf', stationMac: MAC2, name: 'Deck' }]);
+  });
+});
+
+describe('ordering (§17.4 rules 3–4)', () => {
+  it('entries sort by dataPoint, global before station, MACs ascending', () => {
+    const out = canon([
+      { dataPoint: 'windspeedmph', stationMac: MAC2, threshold: 30 },
+      { dataPoint: 'humidity', name: 'RH' },
+      { dataPoint: 'windspeedmph', stationMac: MAC1, threshold: 20 },
+      { dataPoint: 'tempf', name: 'Patio' },
+    ], TWO);
+    expect(out.map(o => `${o.dataPoint}|${o.stationMac ?? 'GLOBAL'}`)).toEqual([
+      'humidity|GLOBAL',
+      'tempf|GLOBAL',
+      `windspeedmph|${MAC1}`,
+      `windspeedmph|${MAC2}`,
+    ]);
+  });
+
+  it('fields appear in the fixed §17.4 order', () => {
+    const out = canon([{
+      dataPoint: 'barn_baro', kind: 'motion', measurement: 'pressure',
+      sourceUnit: 'mmHg', threshold: 765, name: 'Barn Baro', enabled: false,
+    }]);
+    expect(Object.keys(out[0])).toEqual(
+      ['dataPoint', 'enabled', 'kind', 'measurement', 'name', 'sourceUnit', 'threshold'],
+    );
+  });
+});
+
+describe('per-station custom identities (review #67 P1-2)', () => {
+  it('the same custom dataPoint with DIFFERENT identities per station keeps each station intact', () => {
+    // The reviewer's repro: temperature/fahrenheit on station A,
+    // humidity/percent on station B. A dataPoint-keyed identity reused
+    // A's identity for B and produced an invalid saved row.
+    const overrides: SensorMapOverride[] = [
+      { dataPoint: 'barn_x', stationMac: MAC1, kind: 'temperature', measurement: 'temperature', sourceUnit: 'fahrenheit' },
+      { dataPoint: 'barn_x', stationMac: MAC2, kind: 'humidity', measurement: 'humidity', sourceUnit: 'percent' },
+    ];
+    const out = canon(overrides, TWO);
+    expect(out).toEqual([
+      { dataPoint: 'barn_x', kind: 'temperature', measurement: 'temperature', sourceUnit: 'fahrenheit', stationMac: MAC1 },
+      { dataPoint: 'barn_x', kind: 'humidity', measurement: 'humidity', sourceUnit: 'percent', stationMac: MAC2 },
+    ]);
+  });
+});
+
+describe('idempotency + byte stability (§11.3 / §17.4 rule 5)', () => {
+  const FIXTURES: Array<{ name: string; overrides: SensorMapOverride[]; stations: StationInventory }> = [
+    { name: 'empty', overrides: [], stations: ONE },
+    { name: 'rename', overrides: [{ dataPoint: 'tempf', name: 'Patio' }], stations: ONE },
+    { name: 'disable', overrides: [{ dataPoint: 'humidity', enabled: false }], stations: ONE },
+    { name: 'battery-suppress', overrides: [{ dataPoint: 'tempf', batteryField: null }], stations: ONE },
+    { name: 'display-unit', overrides: [{ dataPoint: 'baromrelin', displayUnit: 'mmHg' }], stations: ONE },
+    { name: 'threshold+direction', overrides: [{ dataPoint: 'windspeedmph', threshold: 30, triggerDirection: 'below' }], stations: ONE },
+    {
+      name: 'custom-numeric',
+      overrides: [{ dataPoint: 'barn_wind', kind: 'motion', measurement: 'wind-speed', sourceUnit: 'fps', threshold: 20, name: 'Barn Wind' }],
+      stations: ONE,
+    },
+    {
+      name: 'custom-native',
+      overrides: [{ dataPoint: 'barn_light', kind: 'light', measurement: 'illuminance', sourceUnit: 'fc' }],
+      stations: ONE,
+    },
+    {
+      name: 'multi-station-collapse',
+      overrides: [
+        { dataPoint: 'tempf', stationMac: MAC1, name: 'Patio' },
+        { dataPoint: 'tempf', stationMac: MAC2, name: 'Patio' },
+        { dataPoint: 'uv', stationMac: MAC2, threshold: 9 },
+      ],
+      stations: TWO,
+    },
+    {
+      name: 'kitchen-sink',
+      overrides: [
+        { dataPoint: 'tempf', name: 'Patio', batteryField: null },
+        { dataPoint: 'windspeedmph', displayUnit: 'kph', threshold: 40 },
+        { dataPoint: 'hourlyrainin', embedName: true },
+        { dataPoint: 'barn_baro', kind: 'motion', measurement: 'pressure', sourceUnit: 'mmHg', threshold: 765 },
+        { dataPoint: 'lightning_day', enabled: false },
+      ],
+      stations: TWO,
+    },
+  ];
+
+  it.each(FIXTURES)('$name: canonicalize(load(canonicalize(x))) is byte-identical', ({ overrides, stations }) => {
+    const first = canonicalizeSensorMap({ overrides, stations, discovery: discovery(), uiState: uiState() });
+    const second = canonicalizeSensorMap({ overrides: first, stations, discovery: discovery(), uiState: uiState() });
+    expect(JSON.stringify(second, null, 2)).toBe(JSON.stringify(first, null, 2));
+  });
+
+  it.each(FIXTURES)('$name: reloading the canonical output reproduces the EFFECTIVE map (rows + signatures), including on a never-seen station', ({ overrides, stations }) => {
+    // Serializer idempotency alone is insufficient (review #67 P1-2 +
+    // round 2): the canonical array must MEAN the same thing when
+    // loaded — including on a station the current inventory has never
+    // seen (global-template equivalence).
+    const synthetic = { macAddress: 'FE:FE:FE:FE:FE:FE', name: 'Future' };
+    const common = { discovery: discovery(), uiState: uiState(), stations: [...stations, synthetic], configMode: 'v2' as const };
+    const before = buildEffectiveSensorMap({ ...common, userOverrides: overrides });
+    const canonical = canonicalizeSensorMap({ overrides, stations, discovery: discovery(), uiState: uiState() });
+    const after = buildEffectiveSensorMap({ ...common, userOverrides: canonical });
+    const key = (rows: typeof before.rows) => new Map(
+      rows.filter(r => r.kind !== 'unrecognized').map(r => [`${r.stationMac}|${r.dataPoint}`, JSON.stringify(r, Object.keys(r).sort())]),
+    );
+    const a = key(before.rows);
+    const b = key(after.rows);
+    expect([...b.keys()].sort()).toEqual([...a.keys()].sort());
+    for (const [k, v] of a) {
+      expect(b.get(k), k).toBe(v);
+    }
+  });
+
+  it('repeated calls with the same input are deterministic', () => {
+    const overrides: SensorMapOverride[] = [
+      { dataPoint: 'windspeedmph', threshold: 30 },
+      { dataPoint: 'tempf', name: 'Patio' },
+    ];
+    const a = canon(overrides);
+    const b = canon(overrides);
+    expect(JSON.stringify(a)).toBe(JSON.stringify(b));
+  });
+});

@@ -19,7 +19,7 @@
  * accessories continue via configureAccessory() restore; no new
  * add/remove decisions happen.
  */
-import type { DiscoveryStore, EffectiveSensorMap, StationInventory, UiStateStore, WrapperDescriptor } from './types.js';
+import type { DiscoveryStore, EffectiveSensorMap, SensorMapOverride, StationInventory, UiStateStore, WrapperDescriptor } from './types.js';
 export interface BuildInput {
     /**
      * Raw override entries. Accepted as `unknown[]` because in v2 mode
@@ -35,5 +35,22 @@ export interface BuildInput {
     configMode: 'legacy' | 'v2' | 'safe-mode';
 }
 export declare function buildEffectiveSensorMap(input: BuildInput): EffectiveSensorMap;
+/**
+ * Later-wins field merge for duplicate override entries with the same
+ * (dataPoint, stationMac?) key. §3.3.2.
+ */
+/**
+ * Partition ALREADY-VALID overrides into the global/station layers with
+ * the SAME §3.3.2 duplicate-merge semantics the resolver applies
+ * (later-field-wins per (dataPoint, stationMac?) key). Exposed for the
+ * canonical serializer (review #67 round 2): canonical output must
+ * mirror the proposal's own layering — a global template stays global
+ * so it keeps applying to future stations — and the layering must be
+ * read through this machinery, never re-derived.
+ */
+export declare function partitionOverrideLayers(overrides: ReadonlyArray<SensorMapOverride>): {
+    global: Map<string, SensorMapOverride>;
+    station: Map<string, Map<string, SensorMapOverride>>;
+};
 export type { WrapperDescriptor };
 //# sourceMappingURL=buildEffectiveMap.d.ts.map

@@ -574,17 +574,64 @@ v1.7.1 guard release (configVersion/sensorMap detected → freeze, no
 reconciliation) is the safety net for downgrades that land on a mirror-less
 config.
 
-**RELEASE GATE (Stage 8 / GA — reviewer finding 5, round 3):** the
-`legacyMirror.ts` package is GROUNDWORK until it has a production caller.
-Today no shipped path performs a v2 conversion — the custom UI is read-only
-and schema-driven saves cannot produce `sensorMap` — so the snapshot/mirror
-contracts cannot yet be violated in the field. The gate: **no release may
-ship a UI (or any code path) capable of writing `configVersion: 2` /
+**RELEASE GATE (Stage 8 / GA — reviewer finding 5, round 3):** no release
+may ship a UI (or any code path) capable of writing `configVersion: 2` /
 `sensorMap` into config.json unless that path routes through
 `composeV2ConfigSave` + `writeLegacySnapshot`, with an integration test
 proving snapshot-write → config-mutation ordering at the real save
-boundary.** Until that release, finding 5 remains OPEN as a tracked gate,
-not a resolved item. (Task #65's flag-flip milestone inherits this gate.)
+boundary. (Task #65's flag-flip milestone inherits this gate.)
+
+**PRODUCTION BOUNDARY (GA task #67 — as built):** the gate's production
+caller is the UI bridge's `/compose-save` endpoint
+(`homebridge-ui/handlers.ts handleComposeSave`) plus the client
+orchestrator (`homebridge-ui/saveOrchestrator.ts composeAndPersist`),
+which is the ONE way the editor (#69) persists a sensor map:
+
+```
+/compose-save → await → updatePluginConfig(...) → savePluginConfig()
+```
+
+Homebridge provides no server-side config-write API — persistence is
+client-side by platform design — so the ordering guarantee is
+architectural: the composed config that could mutate config.json is not
+handed to the client until the immutable snapshot is durably written (or
+verified). Boundary contracts, each refused with a structured error and
+zero writes:
+
+- **Authoritative on-disk config.** Mode detection, the snapshot
+  payload, and the base being replaced come from `config.json` read via
+  `homebridgeConfigPath` — never from the client's copy. The client's
+  base is used only to locate the block being edited, and doubles as a
+  staleness check (`stale-base`): if the on-disk block no longer equals
+  the client's view, the save is refused. Safe mode refuses outright.
+- **Pure-migration seeding.** A legacy config with no proposal composes
+  from `compatToOverrides` (the compat-translated state), never from
+  defaults — converting cannot silently re-enable disabled categories.
+- **Same-machinery validation.** Proposals run through
+  `buildEffectiveSensorMap` (identity-first → duplicate merge with
+  later-field-wins → body validation with provenance); any row error
+  refuses the whole save (`invalid-rows`).
+- **Server-side canonicalization** (§11.3/§17.4): the server assembles
+  the canonical `sensorMap` via `canonicalizeSensorMap` — the client
+  never serializes canonical config.
+- **Station inventory** per §8.7 (live response → discovery registry →
+  cached-accessory uniqueIds → override stationMacs). All sources empty
+  while the config would enable sensors → `no-station-inventory`
+  refusal rather than composing an empty map.
+- **Snapshot verification.** On 'exists', the surviving snapshot is
+  compared against the authoritative pre-conversion fields:
+  mismatch/corrupt → refusal (`legacy-snapshot-mismatch` /
+  `legacy-snapshot-corrupt`); the snapshot is never overwritten.
+  Concurrent first conversions are race-safe (exclusive-create; losers
+  verify the winner's payload).
+
+The gate's ordering integration suite is
+`tests/integration/composeSave.test.ts`: the full compose → update →
+save sequence with the snapshot durable at `updatePluginConfig` time,
+and zero update/save calls on every refusal class. Accepted limitation
+(documented): Homebridge offers no compare-and-swap persistence, so
+cross-session final persistence remains last-writer-wins; staleness is
+detected at compose time via the base check.
 
 ## 6. Compat layer (legacy-mode only)
 
@@ -1012,13 +1059,46 @@ Definition:
 
 > A migrated override contains only fields whose effective legacy value differs from the v2 built-in baseline for the same `(stationMac, dataPoint)`.
 
-**Canonicalization rules** (enforced by the serializer):
+**Canonicalization rules** (enforced by the serializer; rules 2–3
+amended 2026-08-19 — see the decision log):
 
 1. At most one entry per `(dataPoint, stationMac?)` key
-2. Entries with identical field values across all stations serialize as a single global override (no `stationMac`)
-3. Divergent stations get per-station entries only for stations whose diff is non-empty
+2. **Layering preservation.** Canonical output mirrors the proposal's
+   own global/station structure (read through the §3.3.2 merge
+   machinery): a GLOBAL override stays a global entry — it is a
+   template that keeps applying to stations that appear in the future —
+   and a STATION override serializes as an exception relative to the
+   global layer (or the built-in baseline when no global layer exists).
+   The serializer never materializes a template into per-station
+   entries and never collapses authored per-station entries into a new
+   template: both directions silently change behavior on future
+   stations. (Supersedes the original "identical values collapse to
+   global" rule.)
+3. Station exceptions are emitted only when their diff relative to the
+   global layer is non-empty. Custom station entries always re-declare
+   identity (kind, measurement, numeric sourceUnit) because per-key
+   validation (§3.7) requires it — an exception that restates ONLY the
+   template's identity is omitted.
 4. Fields within an entry appear in a stable alphabetical order for byte-stable output
 5. Entries sort by `dataPoint`, then `stationMac` (global first, then MACs alphabetically)
+
+**Canonical-divergence refusal (compose-save boundary).** Battery-field
+ownership among multiple claimants of the same novel field is
+adjudicated by EARLIEST-AUTHORED override index — an ordering that
+sorted canonical output cannot preserve. Rather than persisting an
+authoring-priority field (public-schema growth; the same reasoning that
+removed `wrapperId` from v2 scope), the boundary refuses any proposal
+whose canonical form would change meaning: after serialization the
+canonical array is reloaded and every configured row + structural
+signature is compared against the proposal's effective map — over the
+station inventory PLUS a synthetic never-seen station, so global
+TEMPLATE equivalence is proven, not just current-inventory equivalence.
+Any divergence returns the structured `canonical-divergence` error
+listing the affected rows and both signatures. Supported remediation
+(the error message says this): make ownership explicit — set
+`batteryField: null` on the non-owning claimant(s), or assign distinct
+battery fields — and retry. The gate doubles as a mechanical trap for
+serializer defects: nothing that changes meaning can be persisted.
 
 **Idempotency:**
 
@@ -1290,6 +1370,15 @@ When any of these appears in a non-motion row (default or user override), the pl
 Tests: for every non-motion kind, submit an override with each of these fields; verify the specific warn is emitted and the field is absent from the resulting effective row.
 
 ## 17. Decision log
+
+- **2026-08-19**: Compose-save boundary review (GA task #67). §11.3
+  rules 2–3 amended to LAYERING PRESERVATION (global templates stay
+  global; station entries are exceptions; no collapse in either
+  direction — both change future-station behavior). Added the
+  `canonical-divergence` refusal contract: order-dependent battery
+  ownership is refused with explicit-ownership remediation instead of
+  persisting an authoring-priority schema field. Equivalence gating
+  includes a synthetic never-seen station (template equivalence).
 
 - **2026-07-08**: v1 drafted.
 - **2026-07-09**: First review. Revision incorporated configVersion, station-layered overrides, discovery store, structural signatures, bootstrap for existing accessories, unit source/display split, property-driven testing, minimal UI in beta.0.
