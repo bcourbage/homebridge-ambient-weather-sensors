@@ -24,7 +24,7 @@
  * The `darkMode` signal mirrors OUR body class via a second observer,
  * so components can react without their own DOM plumbing.
  */
-import { DOCUMENT, Injectable, inject, signal } from '@angular/core';
+import { DOCUMENT, Injectable, InjectionToken, inject, signal } from '@angular/core';
 
 /**
  * The subset of plugin-ui-utils' client API the editor uses. Declared
@@ -34,14 +34,61 @@ import { DOCUMENT, Injectable, inject, signal } from '@angular/core';
 export interface HomebridgeIpc {
   request(path: string, body?: unknown): Promise<unknown>;
   getPluginConfig(): Promise<unknown[]>;
+  /** §8.7 inventory source 3 — cached HomeKit accessories. */
+  getCachedAccessories?(): Promise<unknown[]>;
+}
+
+/**
+ * Injection seam for the bridge global: production resolves
+ * `window.homebridge`; tests provide a fake.
+ */
+export const HOMEBRIDGE_IPC = new InjectionToken<HomebridgeIpc | undefined>('HOMEBRIDGE_IPC', {
+  providedIn: 'root',
+  factory: () => (
+    inject(DOCUMENT).defaultView as (Window & { homebridge?: HomebridgeIpc }) | null
+  )?.homebridge,
+});
+
+/** Is this class one of HB UI X's theme-bearing body classes? */
+export function isThemeClass(c: string): boolean {
+  return c === 'dark-mode' || c.startsWith('config-ui-x-');
+}
+
+/**
+ * One-shot reconciliation: make `ours`' theme classes equal `theirs`'
+ * — adding AND removing (the removal half is exactly what
+ * plugin-ui-utils' add-only handler lacks). Non-theme classes on
+ * either side are left alone.
+ */
+export function syncThemeClasses(theirs: DOMTokenList, ours: DOMTokenList): void {
+  for (const c of Array.from(ours)) {
+    if (isThemeClass(c) && !theirs.contains(c)) {
+      ours.remove(c);
+    }
+  }
+  for (const c of Array.from(theirs)) {
+    if (isThemeClass(c) && !ours.contains(c)) {
+      ours.add(c);
+    }
+  }
+}
+
+/**
+ * Continuous mirror: observe `parentBody`'s class attribute and keep
+ * `ownBody`'s theme classes in sync (initial sync included). Returns
+ * the observer so callers with a bounded lifetime can disconnect.
+ */
+export function observeParentTheme(parentBody: HTMLElement, ownBody: HTMLElement): MutationObserver {
+  const observer = new MutationObserver(() => syncThemeClasses(parentBody.classList, ownBody.classList));
+  observer.observe(parentBody, { attributes: true, attributeFilter: ['class'] });
+  syncThemeClasses(parentBody.classList, ownBody.classList);
+  return observer;
 }
 
 @Injectable({ providedIn: 'root' })
 export class HomebridgeService {
   private readonly document = inject(DOCUMENT);
-  private readonly ipc: HomebridgeIpc | undefined = (
-    this.document.defaultView as (Window & { homebridge?: HomebridgeIpc }) | null
-  )?.homebridge;
+  private readonly ipc = inject(HOMEBRIDGE_IPC);
 
   /**
    * False when the page is opened outside HB UI X (direct file open,
@@ -61,10 +108,6 @@ export class HomebridgeService {
     this.mirrorParentTheme();
   }
 
-  private static isThemeClass(c: string): boolean {
-    return c === 'dark-mode' || c.startsWith('config-ui-x-');
-  }
-
   private mirrorParentTheme(): void {
     let parentBody: HTMLElement | null;
     try {
@@ -76,22 +119,7 @@ export class HomebridgeService {
     if (!parentBody) {
       return;
     }
-    const sync = (): void => {
-      const theirs = parentBody!.classList;
-      const ours = this.document.body.classList;
-      for (const c of [...ours]) {
-        if (HomebridgeService.isThemeClass(c) && !theirs.contains(c)) {
-          ours.remove(c);
-        }
-      }
-      for (const c of [...theirs]) {
-        if (HomebridgeService.isThemeClass(c) && !ours.contains(c)) {
-          ours.add(c);
-        }
-      }
-    };
-    new MutationObserver(sync).observe(parentBody, { attributes: true, attributeFilter: ['class'] });
-    sync();
+    observeParentTheme(parentBody, this.document.body);
   }
 
   /**
@@ -104,5 +132,26 @@ export class HomebridgeService {
       throw new Error('homebridge bridge is not available outside HB UI X');
     }
     return (await this.ipc.request(path, body)) as T;
+  }
+
+  /**
+   * Cached-accessory uniqueIds for §8.7 inventory (review #32 F1) —
+   * the SAME extraction the save orchestrator uses, so /editor-state
+   * and /compose-save see identical station inventories. Returns []
+   * when the API is unavailable or errors: inventory degrades to the
+   * server-side sources rather than failing the page.
+   */
+  async cachedAccessoryUniqueIds(): Promise<string[]> {
+    if (!this.ipc?.getCachedAccessories) {
+      return [];
+    }
+    try {
+      const cached = await this.ipc.getCachedAccessories();
+      return (Array.isArray(cached) ? cached : [])
+        .map(a => (a as { context?: { device?: { uniqueId?: unknown } } })?.context?.device?.uniqueId)
+        .filter((u): u is string => typeof u === 'string');
+    } catch {
+      return [];
+    }
   }
 }

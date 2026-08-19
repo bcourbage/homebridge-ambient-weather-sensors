@@ -360,6 +360,8 @@ export async function handleGetEditorState(deps, payload) {
     const warnings = [];
     if (blocks.length > 1) {
         warnings.push({
+            severity: 'warning',
+            code: 'duplicate-platform-blocks',
             message: `${blocks.length} AmbientWeatherSensors platform blocks found in config.json; showing the first. `
                 + 'Saving is refused while duplicates exist — remove the extra block(s).',
         });
@@ -370,7 +372,7 @@ export async function handleGetEditorState(deps, payload) {
     // detectConfigMode already includes safeModeBanner in warnings —
     // no separate push, or safe mode would show the banner twice.
     for (const w of modeResult.warnings) {
-        warnings.push({ message: w });
+        warnings.push({ severity: 'warning', code: 'config-mode', message: w });
     }
     if (modeResult.mode === 'safe-mode') {
         return {
@@ -379,9 +381,12 @@ export async function handleGetEditorState(deps, payload) {
             editorAvailable: false,
             version: deps.version,
             stations: [],
+            authored: [],
+            authoredSource: 'sensorMap',
             rows: [],
             warnings,
             errors: [],
+            notes: [],
         };
     }
     // §8.7 inventory + overrides — the same assembly compose-save uses.
@@ -425,7 +430,7 @@ export async function handleGetEditorState(deps, payload) {
         ? (a.dataPoint < b.dataPoint ? -1 : a.dataPoint > b.dataPoint ? 1 : 0)
         : (a.stationMac < b.stationMac ? -1 : 1));
     for (const w of effectiveMap.warnings) {
-        warnings.push(toEditorNoteDto(w));
+        warnings.push(toDiagnosticDto('warning', w));
     }
     return {
         configMode: modeResult.mode,
@@ -440,9 +445,12 @@ export async function handleGetEditorState(deps, payload) {
             }
             return dto;
         }),
+        authored: overrides.map(toAuthoredFragmentDto),
+        authoredSource: modeResult.mode === 'legacy' ? 'compat-seeded' : 'sensorMap',
         rows,
         warnings,
-        errors: effectiveMap.errors.map(toEditorNoteDto),
+        errors: effectiveMap.errors.map(e => toDiagnosticDto('error', e)),
+        notes: effectiveMap.notes.map(n => toDiagnosticDto('note', n)),
     };
 }
 /**
@@ -467,6 +475,7 @@ function toEditorRowDto(row, layers) {
         dataPoint: row.dataPoint,
         kind: row.kind,
         enabled: row.enabled,
+        batteryField: null,
         origin: row.kind === 'unrecognized'
             ? 'unrecognized'
             : layers.station.get(row.stationMac.toUpperCase())?.has(row.dataPoint)
@@ -486,13 +495,14 @@ function toEditorRowDto(row, layers) {
     }
     dto.measurement = row.measurement;
     dto.name = row.name;
+    // Mirror the resolver exactly (review #32 F2): null means "no
+    // battery field on this row" — the authored view shows whether that
+    // came from a default or an explicit suppression.
+    dto.batteryField = row.batteryField;
     dto.hasBatterySubService = row.hasBatterySubService;
     dto.embedName = row.embedName;
     dto.triggerEnabled = row.triggerEnabled;
     dto.triggerDirection = row.triggerDirection;
-    if (row.batteryField !== null) {
-        dto.batteryField = row.batteryField;
-    }
     if (row.threshold !== undefined) {
         dto.threshold = row.threshold;
     }
@@ -504,13 +514,76 @@ function toEditorRowDto(row, layers) {
     }
     return dto;
 }
-function toEditorNoteDto(n) {
-    const dto = { message: n.message };
-    if (n.stationMac !== undefined) {
-        dto.stationMac = n.stationMac;
+/**
+ * The known override vocabulary (non-identity keys). A fragment key
+ * outside this set is reported by NAME only in `unknownKeys` — its
+ * value is withheld because an unknown key could hold anything.
+ */
+const AUTHORED_FRAGMENT_FIELDS = new Set([
+    'batteryField', 'displayUnit', 'embedName', 'enabled', 'kind',
+    'measurement', 'name', 'sourceUnit', 'threshold', 'triggerDirection',
+    'triggerEnabled',
+]);
+/**
+ * Sanitized-but-verbatim projection of one authored override fragment
+ * (review #32 F2): field presence — including explicit null and
+ * wrong-typed values — survives, so the editor can render and repair
+ * exactly what the user wrote. Non-object entries project to an empty
+ * fragment; the validation errors at the same index say why.
+ */
+function toAuthoredFragmentDto(entry, index) {
+    const dto = { index, layer: 'global', fields: {} };
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+        return dto;
     }
-    if (n.dataPoint !== undefined) {
-        dto.dataPoint = n.dataPoint;
+    const frag = entry;
+    if (typeof frag.stationMac === 'string') {
+        dto.layer = 'station';
+        dto.stationMac = frag.stationMac;
+        dto.stationMacKey = frag.stationMac.toUpperCase();
+    }
+    if (typeof frag.dataPoint === 'string') {
+        dto.dataPoint = frag.dataPoint;
+    }
+    const unknownKeys = [];
+    for (const key of Object.keys(frag)) {
+        if (key === 'dataPoint' || key === 'stationMac') {
+            continue;
+        }
+        if (AUTHORED_FRAGMENT_FIELDS.has(key)) {
+            dto.fields[key] = frag[key];
+        }
+        else {
+            unknownKeys.push(key);
+        }
+    }
+    if (unknownKeys.length > 0) {
+        dto.unknownKeys = unknownKeys.sort();
+    }
+    return dto;
+}
+/**
+ * Structured diagnostic projection (review #32 F3): the stable code,
+ * field, overrideIndex, and note source cross the boundary intact —
+ * the needs-attention UI associates problems with authored fragments
+ * by index, never by parsing messages.
+ */
+function toDiagnosticDto(severity, d) {
+    const dto = { severity, code: d.code, message: d.message };
+    if (d.overrideIndex !== undefined) {
+        dto.overrideIndex = d.overrideIndex;
+    }
+    if (d.field !== undefined) {
+        dto.field = d.field;
+    }
+    if (d.dataPoint !== undefined) {
+        dto.dataPoint = d.dataPoint;
+    }
+    if (d.stationMac !== undefined) {
+        dto.stationMac = d.stationMac;
+    }
+    if (d.source !== undefined) {
+        dto.source = d.source;
     }
     return dto;
 }

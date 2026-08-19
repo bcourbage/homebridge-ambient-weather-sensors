@@ -110,9 +110,24 @@ describe('/editor-state — v2 configuration', () => {
     expect(byDp.get('tempf')).toMatchObject({ origin: 'global', name: 'Outdoor Temp', kind: 'temperature' });
     expect(byDp.get('windspeedmph')).toMatchObject({ origin: 'station', enabled: false });
     expect(byDp.get('customtemp1')).toMatchObject({ origin: 'global', kind: 'temperature', sourceUnit: 'celsius' });
+    // batteryField mirrors the resolver exactly — null is PRESENT,
+    // never omitted (review #32 F2).
+    expect(byDp.get('customtemp1')!.batteryField).toBeNull();
+    expect('batteryField' in byDp.get('customtemp1')!).toBe(true);
     expect(byDp.get('weirdfield9')).toMatchObject({
       origin: 'unrecognized', kind: 'unrecognized', enabled: false, firstSeen: '2026-01-01T00:00:00Z',
     });
+
+    // The AUTHORED view (review #32 F2): fragment order, layers, and
+    // field presence survive verbatim.
+    expect(dto.authoredSource).toBe('sensorMap');
+    expect(dto.authored).toHaveLength(3);
+    expect(dto.authored[0]).toMatchObject({ index: 0, layer: 'global', dataPoint: 'tempf', fields: { name: 'Outdoor Temp' } });
+    expect(dto.authored[1]).toMatchObject({
+      index: 1, layer: 'station', stationMac: MAC, stationMacKey: MAC,
+      dataPoint: 'windspeedmph', fields: { enabled: false },
+    });
+    expect(dto.authored[2].fields).toEqual({ kind: 'temperature', measurement: 'temperature', sourceUnit: 'celsius' });
 
     // Sanitization: credentials never leave the bridge, and internal
     // machinery is not exposed.
@@ -161,7 +176,7 @@ describe('/editor-state — v2 configuration', () => {
     expect(dto.stations.find(s => s.mac === MAC)?.name).toBe('Home');
   });
 
-  it('invalid rows surface as errors while the rest still renders', async () => {
+  it('invalid rows surface as STRUCTURED errors while the rest still renders, and stay in authored', async () => {
     const rig = makeRig([{
       ...V2_BLOCK,
       sensorMap: [
@@ -171,9 +186,51 @@ describe('/editor-state — v2 configuration', () => {
     }]);
     discoveryStore(rig, [{ mac: MAC, dataPoint: 'tempf' }]);
     const dto = await handleGetEditorState(rig.deps, {});
+    // Structured diagnostics (review #32 F3): stable code + the
+    // authored index the problem belongs to — no message parsing.
     expect(dto.errors.length).toBeGreaterThan(0);
-    expect(dto.errors[0].message).toBeTruthy();
+    expect(dto.errors[0]).toMatchObject({ severity: 'error', overrideIndex: 1, dataPoint: 'brokencustom' });
+    expect(dto.errors[0].code).toBeTruthy();
     expect(dto.rows.some(r => r.dataPoint === 'tempf')).toBe(true);
+    // The rejected fragment does NOT vanish: it is repairable because
+    // the authored view still carries it at the diagnosed index.
+    expect(dto.authored[1]).toMatchObject({
+      index: 1, dataPoint: 'brokencustom',
+      fields: { measurement: 'temperature', sourceUnit: 'celsius' },
+    });
+  });
+
+  it('authored preserves explicit null batteryField, wrong types, and withholds unknown-key values', async () => {
+    const rig = makeRig([{
+      ...V2_BLOCK,
+      sensorMap: [
+        { dataPoint: 'tempf', batteryField: null, threshold: 'oops', someFutureKey: 'secret-ish' },
+      ],
+    }]);
+    discoveryStore(rig, [{ mac: MAC, dataPoint: 'tempf' }]);
+    const dto = await handleGetEditorState(rig.deps, {});
+    const frag = dto.authored[0];
+    expect('batteryField' in frag.fields).toBe(true);
+    expect(frag.fields.batteryField).toBeNull();
+    expect(frag.fields.threshold).toBe('oops'); // verbatim wrong type — the editor must show it
+    expect(frag.unknownKeys).toEqual(['someFutureKey']);
+    expect(JSON.stringify(dto)).not.toContain('secret-ish'); // unknown-key VALUES never cross
+  });
+
+  it('emits ownership notes with their source attribution', async () => {
+    const rig = makeRig([{
+      ...V2_BLOCK,
+      sensorMap: [{ dataPoint: 'co2_in_aqin', enabled: false }],
+    }]);
+    discoveryStore(rig, [
+      { mac: MAC, dataPoint: 'co2_in_aqin' },
+      { mac: MAC, dataPoint: 'pm_in_temp_aqin' },
+      { mac: MAC, dataPoint: 'pm_in_humidity_aqin' },
+    ]);
+    const dto = await handleGetEditorState(rig.deps, {});
+    const orphan = dto.notes.find(n => n.code === 'orphan-battery-field');
+    expect(orphan).toBeDefined();
+    expect(orphan).toMatchObject({ severity: 'note', source: 'override', stationMac: MAC });
   });
 });
 
@@ -187,9 +244,28 @@ describe('/editor-state — legacy and troubled configurations', () => {
     const dto = await handleGetEditorState(rig.deps, {});
     expect(dto.configMode).toBe('legacy');
     expect(dto.v2FlagEnabled).toBe(false);
+    expect(dto.authoredSource).toBe('compat-seeded');
     const tempf = dto.rows.find(r => r.stationMac === MAC && r.dataPoint === 'tempf');
     expect(tempf?.enabled).toBe(true);
     expect(dto.errors).toEqual([]);
+  });
+
+  it('a 1.7.x install with cached accessories but NO discovery.json still gets a migration preview', async () => {
+    // Review #32 F1: the typical upgrade case — the plugin has never
+    // run with the v2 flag, so discovery.json does not exist; the
+    // ONLY station evidence is the cached-accessory uniqueIds the
+    // client passes. Without them the preview would be empty despite
+    // an intact HomeKit installation.
+    const rig = makeRig([LEGACY_BLOCK]); // note: no discoveryStore() call
+    const dto = await handleGetEditorState(rig.deps, {
+      cachedAccessoryUniqueIds: [`${MAC}-tempf`, `${MAC}-windspeedmph`],
+    });
+    expect(dto.configMode).toBe('legacy');
+    expect(dto.authoredSource).toBe('compat-seeded');
+    expect(dto.stations).toEqual([{ mac: MAC, source: 'cached-accessory' }]);
+    expect(dto.rows.length).toBeGreaterThan(0);
+    expect(dto.rows.find(r => r.dataPoint === 'tempf')?.enabled).toBe(true);
+    expect(dto.authored.length).toBeGreaterThan(0);
   });
 
   it('safe mode returns a renderable DTO with the banner, no rows', async () => {

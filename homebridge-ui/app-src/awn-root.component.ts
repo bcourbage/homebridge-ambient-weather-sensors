@@ -49,10 +49,13 @@ interface StationGroup {
     } @else if (!state()) {
       <p class="empty">Loading sensor map…</p>
     } @else {
-      @for (w of state()!.warnings; track w.message) {
+      <!-- Diagnostics tracked by index: messages are not unique
+           (multiple rows can produce identical text), and index is the
+           stable identity for a server-refreshed list. -->
+      @for (w of state()!.warnings; track $index) {
         <div class="banner">{{ w.message }}</div>
       }
-      @for (e of state()!.errors; track e.message) {
+      @for (e of state()!.errors; track $index) {
         <div class="banner safe-mode">{{ e.message }}</div>
       }
       @if (groups().length === 0) {
@@ -153,8 +156,13 @@ export class AwnRootComponent {
 
   private async load(): Promise<void> {
     try {
+      // Cached-accessory uniqueIds are a client-only §8.7 inventory
+      // source (review #32 F1): a typical 1.7.x install has cached
+      // accessories but no discovery.json yet, and without them the
+      // migration preview would render empty.
+      const cachedAccessoryUniqueIds = await this.hb.cachedAccessoryUniqueIds();
       const [state, vocab] = await Promise.all([
-        this.hb.request<EditorStateDto>('/editor-state', {}),
+        this.hb.request<EditorStateDto>('/editor-state', { cachedAccessoryUniqueIds }),
         this.hb.request<VocabularyDto>('/vocabulary'),
       ]);
       this.state.set(state);

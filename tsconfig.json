@@ -15,6 +15,10 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "useDefineForClassFields": false,
+    // Legacy decorator transform for vitest/esbuild: the Angular TestBed
+    // suites JIT-compile app-src components (src/ and the UI bridge have
+    // no decorators, so this is inert for them).
+    "experimentalDecorators": true,
     "noImplicitAny": false
   },
   "include": [

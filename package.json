@@ -74,6 +74,7 @@
     "@vitest/coverage-v8": "4.1.11",
     "eslint": "^9.17.0",
     "homebridge": "^2.0.0",
+    "jsdom": "28.1.0",
     "rimraf": "^6.0.1",
     "rxjs": "7.8.2",
     "ts-node": "^10.9.2",

@@ -21,12 +21,21 @@ const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const uiDir = path.join(root, 'homebridge-ui');
 
 export function coldBuild() {
-  fs.rmSync(path.join(uiDir, 'public', 'app'), { recursive: true, force: true });
+  const appDir = path.join(uiDir, 'public', 'app');
+  fs.rmSync(appDir, { recursive: true, force: true });
   fs.rmSync(path.join(uiDir, '.angular'), { recursive: true, force: true });
   execFileSync(path.join(root, 'node_modules', '.bin', 'ng'), ['build'], {
     cwd: uiDir,
     stdio: 'inherit',
   });
+  // Normalize trailing whitespace in the generated license report so
+  // `git diff --check` can stay a repository-wide gate. Deterministic:
+  // pure function of ng's output, applied on every cold build.
+  const licenses = path.join(appDir, '3rdpartylicenses.txt');
+  if (fs.existsSync(licenses)) {
+    const normalized = fs.readFileSync(licenses, 'utf8').replace(/[ \t]+$/gm, '');
+    fs.writeFileSync(licenses, normalized);
+  }
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
