@@ -42,6 +42,7 @@ import type { Measurement, SensorUnit } from './types.js';
 
 import { fahrenheitToCelsius, solarWm2ToLux } from '../nativeConversions.js';
 import {
+  FPS_PER_MPH,
   convertSpeed,
   convertRain,
   convertPressure,
@@ -80,7 +81,7 @@ export const CANONICAL_UNIT_FOR_MEASUREMENT: Record<Measurement, SensorUnit> = {
 // Only linear (non-affine) families live here; temperature and
 // illuminance are affine/rounded special cases handled inline.
 const WIND_FACTOR_FROM_MPH: Partial<Record<SensorUnit, number>> = {
-  mph: 1, kph: 1.60934, mps: 0.44704, kts: 0.86898,
+  mph: 1, fps: FPS_PER_MPH, kph: 1.60934, mps: 0.44704, kts: 0.86898,
 };
 
 const DISTANCE_FACTOR_FROM_MI: Partial<Record<SensorUnit, number>> = {
@@ -88,7 +89,9 @@ const DISTANCE_FACTOR_FROM_MI: Partial<Record<SensorUnit, number>> = {
 };
 
 const IN_PER_MM = 25.4;          // rain accumulation + rate
-const INHG_PER_HPA = 33.8639;    // pressure
+const INHG_PER_HPA = 33.8639;    // pressure: hPa = inHg * 33.8639
+const MMHG_PER_INHG = 25.4;      // pressure: mmHg = inHg * 25.4; inHg = mmHg / 25.4
+const LUX_PER_FC = 10.7639104167; // illuminance: lux = fc * 10.7639104167; fc = lux / 10.7639104167
 const WM2_PER_LUX = 0.0079;      // illuminance (solar): lux = wm2 / WM2_PER_LUX
 
 /**
@@ -110,7 +113,9 @@ export function toCanonical(measurement: Measurement, sourceUnit: SensorUnit, va
       // lux directly. `solarWm2ToLux` rounds (matching v1.6.0's native
       // write), so the wm2 path stays exactly what SolarRadiationAccessory
       // produced before this refactor.
-      return sourceUnit === 'wm2' ? solarWm2ToLux(value) : value;
+      return sourceUnit === 'wm2' ? solarWm2ToLux(value)
+        : sourceUnit === 'fc' ? value * LUX_PER_FC
+          : value;
     case 'wind-speed': {
       const factor = WIND_FACTOR_FROM_MPH[sourceUnit] ?? 1;
       return value / factor;
@@ -120,7 +125,9 @@ export function toCanonical(measurement: Measurement, sourceUnit: SensorUnit, va
     case 'rain-accumulation':
       return sourceUnit === 'mm' ? value / IN_PER_MM : value;
     case 'pressure':
-      return sourceUnit === 'hPa' ? value / INHG_PER_HPA : value;
+      return sourceUnit === 'hPa' ? value / INHG_PER_HPA
+        : sourceUnit === 'mmHg' ? value / MMHG_PER_INHG
+          : value;
     case 'distance': {
       const factor = DISTANCE_FACTOR_FROM_MI[sourceUnit] ?? 1;
       return value / factor;
@@ -146,7 +153,9 @@ export function toDisplayUnit(measurement: Measurement, canonical: number, displ
       // Celsius → Fahrenheit (the only non-identity display case).
       return displayUnit === 'fahrenheit' ? canonical * 9 / 5 + 32 : canonical;
     case 'illuminance':
-      return displayUnit === 'wm2' ? canonical * WM2_PER_LUX : canonical;
+      return displayUnit === 'wm2' ? canonical * WM2_PER_LUX
+        : displayUnit === 'fc' ? canonical / LUX_PER_FC
+          : canonical;
     case 'wind-speed':
       return convertSpeed(canonical, displayUnit as Parameters<typeof convertSpeed>[1]);
     case 'rain-rate':

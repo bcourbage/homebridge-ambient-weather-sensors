@@ -226,13 +226,13 @@ The allowed-unit set for each numeric `measurement`:
 |---|---|---|---|---|
 | `temperature` | fahrenheit, celsius | fahrenheit | fahrenheit | °F↔°C |
 | `humidity` | percent | percent | percent | — |
-| `illuminance` | wm2, lux | wm2 (solar), lux (other) | lux | W/m² × 127 → lux |
+| `illuminance` | wm2, lux, fc | wm2 (solar), lux (other) | lux | W/m² × 127 → lux; lux = fc × 10.7639104167 |
 | `co2` / `co` | ppm | ppm | ppm | — |
 | `pm25` / `pm10` | ugm3 | ugm3 | ugm3 | — |
-| `wind-speed` | mph, kph, mps, kts | mph | mph | linear |
+| `wind-speed` | mph, fps, mps, kph, kts | mph | mph | linear (ft/sec = mph × 22/15 exactly, ≈1.4666667) |
 | `rain-rate` | in_per_hr, mm_per_hr | in_per_hr | in_per_hr | ×25.4 |
 | `rain-accumulation` | in, mm | in | in | ×25.4 |
-| `pressure` | inHg, hPa | inHg | inHg | ×33.8639 |
+| `pressure` | inHg, mmHg, hPa | inHg | inHg | mmHg = inHg × 25.4; hPa = inHg × 33.8639 |
 | `distance` | mi, km, nm | mi | mi | linear |
 | `uv-index` | index | index | index | — |
 | `count` | count | count | count | — |
@@ -245,6 +245,41 @@ Special cases:
 Plugin ships `LEGAL_UNITS_FOR_MEASUREMENT: Record<Measurement, SensorUnit[] | 'none'>`.
 
 Thresholds are always stored in `sourceUnit`. Display conversion happens at render time only.
+
+#### 3.5.1 Unit vocabulary and the AWN units page (GA task #70)
+
+`src/sensorMap/unitVocabulary.ts` layers presentation metadata on top of
+the legal sets (which remain the sole validation authority): the label
+each unit shows, picker ordering, and the contexts a unit may be offered
+in (`custom-source` vs `extended-display`; native HAP display is never
+selectable). A bijection test pins vocabulary ↔ legal-set agreement,
+including order and uniqueness.
+
+The auditable "matches AmbientWeather.net" reference is
+`AWN_UNITS_PAGE` in that module: the observed
+ambientweather.net/account/units page (2026-08-18, AWN v4.19.9), with
+every AWN category classified as supported / client-controlled-display /
+deferred / not-applicable. Highlights:
+
+- `mmHg` (Barometer) and `fps` = ft/sec (Wind Speed) were added for AWN
+  parity. They are **v2-only units**: the legacy `units.*` schema keeps
+  its v1.7-compatible option sets, and the legacy mirror never projects
+  a v2-only unit into a rollback config (a downgraded 1.7 would mislabel
+  values its converters predate) — the family key is omitted instead, so
+  1.7 falls back to its default display unit. Display-only fallback,
+  never accessory loss.
+- Temperature and Solar Radiation displays are client-controlled
+  (fixed-unit HAP characteristics: CurrentTemperature renders per client
+  locale; CurrentAmbientLightLevel is lux). Their units remain
+  custom-row `sourceUnit` choices; no legacy global knobs exist or will
+  be added for them.
+- `fc` (foot-candles) is device-console vocabulary, not on the AWN site:
+  supported as a custom-row **source** unit only.
+- Beaufort (device consoles only) is a classification scale, not a unit:
+  it surfaces through the extended wind wrappers' Intensity
+  characteristic, never as a displayUnit.
+- Soil Moisture is deferred (no measurement yet); Time Format is
+  not-applicable (timestamps render as relative time).
 
 ### 3.6 Trigger semantics
 

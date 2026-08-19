@@ -43,7 +43,7 @@ export type Measurement = 'temperature' | 'humidity' | 'illuminance' | 'co2' | '
  * set. Kept as a string union rather than an enum so JSON serialization
  * is transparent and no `enum.SOMETHING` lookup is needed.
  */
-export type SensorUnit = 'fahrenheit' | 'celsius' | 'percent' | 'wm2' | 'lux' | 'ppm' | 'ugm3' | 'mph' | 'kph' | 'mps' | 'kts' | 'in_per_hr' | 'mm_per_hr' | 'in' | 'mm' | 'inHg' | 'hPa' | 'mi' | 'km' | 'nm' | 'index' | 'count' | 'degrees' | 'ms';
+export type SensorUnit = 'fahrenheit' | 'celsius' | 'percent' | 'wm2' | 'lux' | 'fc' | 'ppm' | 'ugm3' | 'mph' | 'fps' | 'kph' | 'mps' | 'kts' | 'in_per_hr' | 'mm_per_hr' | 'in' | 'mm' | 'inHg' | 'mmHg' | 'hPa' | 'mi' | 'km' | 'nm' | 'index' | 'count' | 'degrees' | 'ms';
 /**
  * User-authored override entry in `config.json`. Sparse — only fields
  * the user has explicitly set appear.

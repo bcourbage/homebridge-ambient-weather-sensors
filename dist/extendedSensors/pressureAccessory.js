@@ -55,9 +55,11 @@ class PressureLikeAccessory extends ExtendedSensorBase {
     formatValue(canonicalInHg) {
         const converted = convertPressure(canonicalInHg, this.pressureUnit);
         const unitLabel = this.pressureUnit;
-        // hPa values are whole-number-ish (~1013); inHg readings are
-        // two-decimal (~29.92).
-        const precision = this.pressureUnit === 'hPa' ? 0 : 2;
+        // hPa values are whole-number-ish (~1013); mmHg one-decimal
+        // (~760.0); inHg readings are two-decimal (~29.92).
+        const precision = this.pressureUnit === 'hPa' ? 0
+            : this.pressureUnit === 'mmHg' ? 1
+                : 2;
         return `${converted.toFixed(precision)} ${unitLabel}`;
     }
 }

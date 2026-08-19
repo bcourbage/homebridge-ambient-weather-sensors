@@ -9,6 +9,12 @@ entries short and user-facing.
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/
 
+## [Unreleased]
+
+### Added
+
+- **Unit vocabulary matching AmbientWeather.net (GA task #70, engine + vocabulary layer).** New units for AWN parity: `mmHg` (barometric pressure, mmHg = inHg × 25.4) and `fps` (wind, ft/sec) as v2 row display/source units, plus `fc` (foot-candles, lux = fc × 10.7639104167) as a custom-row source unit. A new vocabulary module records AWN-matching labels, picker ordering, selection contexts, and a dated snapshot of AWN's own units page as the parity reference. The legacy Extended Sensors unit dropdowns are unchanged (v2-only units arrive with the upcoming row editor), and a 1.7.x rollback config never receives a unit that 1.7 cannot render: the mirror omits the family key instead, so a downgrade falls back to the default display unit for that family.
+
 ## [2.0.0-beta.9] — 2026-07-29
 
 Documentation, metadata, and plugin-UI polish on top of beta.8; no runtime behavior change.
