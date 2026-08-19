@@ -288,11 +288,47 @@ describe('/editor-state — raw invalid fragments (crash + false-origin countere
     // The fragment never validated, so the surviving row is NOT
     // labeled override-authored.
     expect(tempf?.origin).toBe('default');
-    // F3: the wrong-typed identity survives verbatim, distinguishable
-    // from an absent stationMac; layer/key derive only from valid values.
+    // F3/round 3: the wrong-typed identity survives verbatim AND the
+    // fragment is classified 'invalid' — a present-but-unusable
+    // stationMac is neither a station exception nor a global template.
     expect(dto.authored[0].identityRaw).toEqual({ stationMac: 42 });
-    expect(dto.authored[0].layer).toBe('global');
+    expect(dto.authored[0].layer).toBe('invalid');
     expect(dto.authored[0].stationMacKey).toBeUndefined();
+  });
+
+  it('identity classification uses the engine rules, not string type (round 3)', async () => {
+    const rig = makeRig([{
+      ...V2_BLOCK,
+      sensorMap: [
+        { dataPoint: 'tempf', stationMac: 'not-a-mac', enabled: false },
+        { dataPoint: '', enabled: false },
+        { dataPoint: 'windspeedmph', stationMac: 'aa:bb:cc:dd:ee:01', enabled: false },
+      ],
+    }]);
+    discoveryStore(rig, [{ mac: MAC, dataPoint: 'tempf' }]);
+    const dto = await handleGetEditorState(rig.deps, {});
+
+    // A MAC-SHAPED-only check would have accepted "not-a-mac" as a
+    // string; the engine's STATION_MAC_REGEX rejects it → 'invalid',
+    // verbatim value preserved, no key derived, nothing hoisted.
+    expect(dto.authored[0].layer).toBe('invalid');
+    expect(dto.authored[0].stationMac).toBeUndefined();
+    expect(dto.authored[0].stationMacKey).toBeUndefined();
+    expect(dto.authored[0].identityRaw).toEqual({ stationMac: 'not-a-mac' });
+    expect(dto.authored[0].dataPoint).toBe('tempf');
+    // The invalid exception must not label the surviving row.
+    expect(dto.rows.find(r => r.dataPoint === 'tempf')?.origin).toBe('default');
+
+    // Empty dataPoint fails the non-empty rule → not hoisted.
+    expect(dto.authored[1].dataPoint).toBeUndefined();
+    expect(dto.authored[1].identityRaw).toEqual({ dataPoint: '' });
+
+    // Lowercase MAC is valid per the engine (case-insensitive regex):
+    // hoisted verbatim, key normalized, layer 'station'.
+    expect(dto.authored[2]).toMatchObject({
+      layer: 'station', stationMac: 'aa:bb:cc:dd:ee:01', stationMacKey: MAC,
+    });
+    expect(dto.authored[2].identityRaw).toBeUndefined();
   });
 
   it('a resolver-REJECTED fragment does not label the surviving default row as global', async () => {

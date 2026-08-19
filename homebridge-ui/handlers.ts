@@ -25,6 +25,7 @@ import {
   writeLegacySnapshot,
 } from '../dist/sensorMap/legacyMirror.js';
 import { sensorMapShapeError, type EffectiveMapConfig } from '../dist/sensorMap/platformEffectiveMap.js';
+import { STATION_MAC_REGEX } from '../dist/sensorMap/validation.js';
 import { shadowModeEnabled } from '../dist/sensorMap/shadowMode.js';
 import {
   loadDiscoveryStore,
@@ -612,11 +613,12 @@ export async function handleGetEditorState(
     stations = assemble(overrides);
   }
 
-  // The resolver is raw-safe by contract (it is what the runtime feeds
-  // config-sourced overrides to): invalid fragments come back as
-  // structured errors, never crashes.
+  // The resolver is raw-safe by contract — BuildInput.userOverrides
+  // is ReadonlyArray<unknown> precisely because config-sourced entries
+  // are untrusted; invalid fragments come back as structured errors,
+  // never crashes.
   const effectiveMap = buildEffectiveSensorMap({
-    userOverrides: overrides as SensorMapOverride[],
+    userOverrides: overrides,
     discovery,
     uiState,
     stations,
@@ -768,19 +770,22 @@ function toAuthoredFragmentDto(entry: unknown, index: number): EditorAuthoredFra
     return dto;
   }
   const frag = entry as Record<string, unknown>;
-  // Identity keys: hoisted when they VALIDATE (string); a wrong-typed
-  // identity value is preserved VERBATIM in identityRaw instead
-  // (review #32 round 2 F3) — `stationMac: 42` must stay
-  // distinguishable from an absent stationMac, and the station layer /
-  // normalized key are derived only from a validated value.
-  if (typeof frag.stationMac === 'string') {
+  // Identity keys are hoisted only when they satisfy the ENGINE's
+  // identity rules (validateOverrideIdentity: non-empty dataPoint;
+  // stationMac MAC-shaped per STATION_MAC_REGEX) — string type alone
+  // is not validation (review #32 round 3). A PRESENT-but-invalid
+  // stationMac makes the fragment layer 'invalid' (it is neither a
+  // real station exception nor a global template), and the authored
+  // value is preserved VERBATIM in identityRaw either way.
+  if (typeof frag.stationMac === 'string' && STATION_MAC_REGEX.test(frag.stationMac)) {
     dto.layer = 'station';
     dto.stationMac = frag.stationMac;
     dto.stationMacKey = frag.stationMac.toUpperCase();
   } else if ('stationMac' in frag) {
+    dto.layer = 'invalid';
     dto.identityRaw = { ...dto.identityRaw, stationMac: frag.stationMac };
   }
-  if (typeof frag.dataPoint === 'string') {
+  if (typeof frag.dataPoint === 'string' && frag.dataPoint.length > 0) {
     dto.dataPoint = frag.dataPoint;
   } else if ('dataPoint' in frag) {
     dto.identityRaw = { ...dto.identityRaw, dataPoint: frag.dataPoint };
