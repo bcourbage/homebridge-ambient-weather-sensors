@@ -12,7 +12,7 @@
     "noImplicitOverride": true,
     "noFallthroughCasesInSwitch": true,
     "noImplicitReturns": true,
-    "lib": ["ES2022", "dom"],
+    "lib": ["ES2022", "dom", "dom.iterable"],
     "outDir": "./out-tsc/app"
   },
   "angularCompilerOptions": {

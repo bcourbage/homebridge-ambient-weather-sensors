@@ -5,12 +5,24 @@
  * depend on this service, which keeps them testable and confines the
  * "is the bridge actually there?" question to one place.
  *
- * Theme: HB UI X toggles a `dark-mode` class on <body> when the parent
- * theme changes (and injects its own stylesheet). The `darkMode`
- * signal mirrors that class via a MutationObserver, so components can
- * react without their own DOM plumbing. The injected sheet plus the
- * fragment's #awn CSS variables handle most styling; the signal exists
- * for the cases CSS can't express.
+ * Theme: at iframe INIT, HB UI X posts its theme body classes
+ * (`config-ui-x-<theme>`, `dark-mode` when dark) and mirrors its
+ * stylesheets into this iframe — but it never posts again on a LIVE
+ * theme change, and plugin-ui-utils' body-class handler is add-only
+ * (classList.add, no removal). Result without intervention: switching
+ * the parent theme leaves this page rendered in the OLD theme until
+ * it is reopened (observed on v2.0.0-beta.8).
+ *
+ * The custom UI iframe is same-origin with HB UI X, so this service
+ * fixes that locally: it observes the PARENT document's body classes
+ * and mirrors the theme-bearing ones (`dark-mode`, `config-ui-x-*`)
+ * onto our body — adding AND removing. The mirrored stylesheets are
+ * theme-agnostic (palettes are class-scoped), so class sync alone
+ * switches the palette. Cross-origin embedding (if HB UI X ever
+ * changes serving) degrades gracefully to the init-time snapshot.
+ *
+ * The `darkMode` signal mirrors OUR body class via a second observer,
+ * so components can react without their own DOM plumbing.
  */
 import { DOCUMENT, Injectable, inject, signal } from '@angular/core';
 
@@ -42,10 +54,44 @@ export class HomebridgeService {
 
   constructor() {
     // Root-provided service: lives for the iframe's lifetime, so the
-    // observer is intentionally never disconnected.
+    // observers are intentionally never disconnected.
     new MutationObserver(() => {
       this.darkMode.set(this.document.body.classList.contains('dark-mode'));
     }).observe(this.document.body, { attributes: true, attributeFilter: ['class'] });
+    this.mirrorParentTheme();
+  }
+
+  private static isThemeClass(c: string): boolean {
+    return c === 'dark-mode' || c.startsWith('config-ui-x-');
+  }
+
+  private mirrorParentTheme(): void {
+    let parentBody: HTMLElement | null;
+    try {
+      const win = this.document.defaultView;
+      parentBody = win && win.parent !== win ? win.parent.document.body : null;
+    } catch {
+      return; // cross-origin parent: keep the init-time snapshot
+    }
+    if (!parentBody) {
+      return;
+    }
+    const sync = (): void => {
+      const theirs = parentBody!.classList;
+      const ours = this.document.body.classList;
+      for (const c of [...ours]) {
+        if (HomebridgeService.isThemeClass(c) && !theirs.contains(c)) {
+          ours.remove(c);
+        }
+      }
+      for (const c of [...theirs]) {
+        if (HomebridgeService.isThemeClass(c) && !ours.contains(c)) {
+          ours.add(c);
+        }
+      }
+    };
+    new MutationObserver(sync).observe(parentBody, { attributes: true, attributeFilter: ['class'] });
+    sync();
   }
 
   /**
