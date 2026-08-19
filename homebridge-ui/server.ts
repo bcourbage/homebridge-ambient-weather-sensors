@@ -33,9 +33,11 @@ import { HomebridgePluginUiServer, RequestError } from '@homebridge/plugin-ui-ut
 import {
   handleComposeSave,
   handleGetDiscovery,
+  handleGetEditorState,
   handleGetNotices,
   handleGetStatus,
   handleGetUiState,
+  handleGetVocabulary,
   type HandlerDeps,
 } from './handlers.js';
 import type { Logger } from '../dist/sensorMap/persistence/atomicWrite.js';
@@ -91,6 +93,11 @@ class UiServer extends HomebridgePluginUiServer {
     // client to persist via HB UI X's API. The row editor (#69) is its
     // first caller; refusals are structured { ok: false, error }.
     this.onRequest('/compose-save', (payload) => this.wrap(() => handleComposeSave(this.deps, payload)));
+    // Sanitized read model + unit vocabulary for the row editor (#69).
+    // Both are READ-ONLY; the editor stays display-only until PR C
+    // activates the save path through /compose-save.
+    this.onRequest('/editor-state', (payload) => this.wrap(() => handleGetEditorState(this.deps, payload)));
+    this.onRequest('/vocabulary', () => this.wrap(async () => handleGetVocabulary()));
 
     this.ready();
   }

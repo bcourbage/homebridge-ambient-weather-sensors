@@ -1,0 +1,253 @@
+/**
+ * /editor-state + /vocabulary — the sanitized read model the #69
+ * editor consumes (PR A, read-only).
+ *
+ * Contract under test:
+ *   - the ON-DISK config.json is the authority (same rule as
+ *     /compose-save); credentials and machinery never appear in the DTO;
+ *   - legacy configs render as their compat translation (the migration
+ *     preview), v2 configs as their sensorMap;
+ *   - troubled-but-readable states (safe mode, duplicate blocks,
+ *     invalid rows) come back as renderable DTO state, while transport
+ *     failures (missing/unreadable config) throw;
+ *   - the vocabulary endpoint is a pure projection of UNIT_VOCABULARY
+ *     (#70) — labels and order included, validity authority untouched.
+ */
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import * as path from 'node:path';
+
+import { afterEach, describe, expect, it } from 'vitest';
+
+import {
+  handleGetEditorState,
+  handleGetVocabulary,
+  type HandlerDeps,
+} from '../../../homebridge-ui/handlers';
+import { UNIT_VOCABULARY, unitOptionsFor } from '../../../src/sensorMap/unitVocabulary';
+import type { Measurement } from '../../../src/sensorMap/types';
+
+const MAC = 'AA:BB:CC:DD:EE:01';
+const OTHER_MAC = 'AA:BB:CC:DD:EE:02';
+const silentLog = { info: () => {}, warn: () => {}, debug: () => {} };
+
+interface Rig {
+  root: string;
+  persistDir: string;
+  deps: HandlerDeps;
+}
+
+const rigs: Rig[] = [];
+
+function makeRig(blocks: Record<string, unknown>[]): Rig {
+  const root = mkdtempSync(path.join(tmpdir(), 'editor-state-'));
+  const persistDir = path.join(root, 'plugin-data', 'ambient-weather');
+  mkdirSync(persistDir, { recursive: true });
+  const configPath = path.join(root, 'config.json');
+  writeFileSync(configPath, JSON.stringify({ platforms: blocks }, null, 2));
+  const rig: Rig = {
+    root, persistDir,
+    deps: { persistDir, log: silentLog, version: 'test', configPath, env: {} },
+  };
+  rigs.push(rig);
+  return rig;
+}
+
+afterEach(() => {
+  for (const rig of rigs.splice(0)) {
+    rmSync(rig.root, { recursive: true, force: true });
+  }
+});
+
+function discoveryStore(rig: Rig, entries: Array<{ mac: string; dataPoint: string }>): void {
+  writeFileSync(path.join(rig.persistDir, 'discovery.json'), JSON.stringify({
+    schemaVersion: 1,
+    entries: entries.map(e => ({
+      stationMac: e.mac, stationName: 'Home', dataPoint: e.dataPoint,
+      firstSeen: '2026-01-01T00:00:00Z', lastSeen: '2026-01-02T00:00:00Z',
+    })),
+  }));
+}
+
+const V2_BLOCK = {
+  platform: 'AmbientWeatherSensors',
+  name: 'Test Station',
+  apiKey: 'SECRET-API-KEY-XYZ',
+  applicationKey: 'SECRET-APP-KEY-XYZ',
+  configVersion: 2,
+  sensorMap: [
+    { dataPoint: 'tempf', name: 'Outdoor Temp' },
+    { dataPoint: 'windspeedmph', stationMac: MAC, enabled: false },
+    { dataPoint: 'customtemp1', kind: 'temperature', measurement: 'temperature', sourceUnit: 'celsius' },
+  ],
+};
+
+const LEGACY_BLOCK = {
+  platform: 'AmbientWeatherSensors',
+  name: 'Test Station',
+  apiKey: 'SECRET-API-KEY-XYZ',
+  applicationKey: 'SECRET-APP-KEY-XYZ',
+  temperatureSensors: true,
+  humiditySensors: false,
+  windSensors: true,
+};
+
+describe('/editor-state — v2 configuration', () => {
+  it('renders effective rows with layer origins, sanitized', async () => {
+    const rig = makeRig([V2_BLOCK]);
+    discoveryStore(rig, [
+      { mac: MAC, dataPoint: 'tempf' },
+      { mac: MAC, dataPoint: 'windspeedmph' },
+      { mac: MAC, dataPoint: 'weirdfield9' },
+    ]);
+    const dto = await handleGetEditorState(rig.deps, {});
+
+    expect(dto.configMode).toBe('v2');
+    expect(dto.editorAvailable).toBe(false);
+    expect(dto.errors).toEqual([]);
+
+    const byDp = new Map(dto.rows.filter(r => r.stationMac === MAC).map(r => [r.dataPoint, r]));
+    expect(byDp.get('tempf')).toMatchObject({ origin: 'global', name: 'Outdoor Temp', kind: 'temperature' });
+    expect(byDp.get('windspeedmph')).toMatchObject({ origin: 'station', enabled: false });
+    expect(byDp.get('customtemp1')).toMatchObject({ origin: 'global', kind: 'temperature', sourceUnit: 'celsius' });
+    expect(byDp.get('weirdfield9')).toMatchObject({
+      origin: 'unrecognized', kind: 'unrecognized', enabled: false, firstSeen: '2026-01-01T00:00:00Z',
+    });
+
+    // Sanitization: credentials never leave the bridge, and internal
+    // machinery is not exposed.
+    const wire = JSON.stringify(dto);
+    expect(wire).not.toContain('SECRET-API-KEY-XYZ');
+    expect(wire).not.toContain('SECRET-APP-KEY-XYZ');
+    expect(wire).not.toContain('structuralSignature');
+    expect(wire).not.toContain('wrapperId');
+  });
+
+  it('rows are sorted by stationMac then dataPoint', async () => {
+    const rig = makeRig([{
+      ...V2_BLOCK,
+      sensorMap: [
+        ...V2_BLOCK.sensorMap,
+        { dataPoint: 'tempf', stationMac: OTHER_MAC, enabled: false },
+      ],
+    }]);
+    discoveryStore(rig, [
+      { mac: OTHER_MAC, dataPoint: 'windspeedmph' },
+      { mac: MAC, dataPoint: 'tempf' },
+    ]);
+    const dto = await handleGetEditorState(rig.deps, {});
+    const keys = dto.rows.map(r => `${r.stationMac}|${r.dataPoint}`);
+    expect(keys).toEqual([...keys].sort());
+  });
+
+  it('station inventory carries first-sight source attribution', async () => {
+    const rig = makeRig([{
+      ...V2_BLOCK,
+      sensorMap: [
+        ...V2_BLOCK.sensorMap,
+        { dataPoint: 'tempf', stationMac: 'AA:BB:CC:DD:EE:03', enabled: false },
+      ],
+    }]);
+    discoveryStore(rig, [{ mac: MAC, dataPoint: 'tempf' }]);
+    const dto = await handleGetEditorState(rig.deps, {
+      liveStations: [{ macAddress: OTHER_MAC, name: 'Fresh' }],
+      cachedAccessoryUniqueIds: ['AA:BB:CC:DD:EE:04-tempf'],
+    });
+    const source = new Map(dto.stations.map(s => [s.mac, s.source]));
+    expect(source.get(OTHER_MAC)).toBe('live');
+    expect(source.get(MAC)).toBe('discovery');
+    expect(source.get('AA:BB:CC:DD:EE:04')).toBe('cached-accessory');
+    expect(source.get('AA:BB:CC:DD:EE:03')).toBe('override');
+    expect(dto.stations.find(s => s.mac === MAC)?.name).toBe('Home');
+  });
+
+  it('invalid rows surface as errors while the rest still renders', async () => {
+    const rig = makeRig([{
+      ...V2_BLOCK,
+      sensorMap: [
+        { dataPoint: 'tempf', name: 'Outdoor Temp' },
+        { dataPoint: 'brokencustom', measurement: 'temperature', sourceUnit: 'celsius' }, // custom missing kind
+      ],
+    }]);
+    discoveryStore(rig, [{ mac: MAC, dataPoint: 'tempf' }]);
+    const dto = await handleGetEditorState(rig.deps, {});
+    expect(dto.errors.length).toBeGreaterThan(0);
+    expect(dto.errors[0].message).toBeTruthy();
+    expect(dto.rows.some(r => r.dataPoint === 'tempf')).toBe(true);
+  });
+});
+
+describe('/editor-state — legacy and troubled configurations', () => {
+  it('a legacy config renders its compat translation as a migration preview', async () => {
+    const rig = makeRig([LEGACY_BLOCK]);
+    discoveryStore(rig, [
+      { mac: MAC, dataPoint: 'tempf' },
+      { mac: MAC, dataPoint: 'windspeedmph' },
+    ]);
+    const dto = await handleGetEditorState(rig.deps, {});
+    expect(dto.configMode).toBe('legacy');
+    expect(dto.v2FlagEnabled).toBe(false);
+    const tempf = dto.rows.find(r => r.stationMac === MAC && r.dataPoint === 'tempf');
+    expect(tempf?.enabled).toBe(true);
+    expect(dto.errors).toEqual([]);
+  });
+
+  it('safe mode returns a renderable DTO with the banner, no rows', async () => {
+    const rig = makeRig([{ ...LEGACY_BLOCK, configVersion: 99 }]);
+    discoveryStore(rig, [{ mac: MAC, dataPoint: 'tempf' }]);
+    const dto = await handleGetEditorState(rig.deps, {});
+    expect(dto.configMode).toBe('safe-mode');
+    expect(dto.rows).toEqual([]);
+    expect(dto.stations).toEqual([]);
+    expect(dto.editorAvailable).toBe(false);
+    expect(dto.warnings.some(w => /newer plugin version/.test(w.message))).toBe(true);
+    // The banner appears exactly once (detectConfigMode already folds
+    // it into warnings; the handler must not add it again).
+    expect(dto.warnings.filter(w => /newer plugin version/.test(w.message))).toHaveLength(1);
+  });
+
+  it('duplicate platform blocks render the first with a warning', async () => {
+    const rig = makeRig([V2_BLOCK, { ...V2_BLOCK, name: 'Second' }]);
+    discoveryStore(rig, [{ mac: MAC, dataPoint: 'tempf' }]);
+    const dto = await handleGetEditorState(rig.deps, {});
+    expect(dto.warnings.some(w => /2 AmbientWeatherSensors platform blocks/.test(w.message))).toBe(true);
+    expect(dto.rows.length).toBeGreaterThan(0);
+  });
+
+  it('throws when no config path is available or no block exists', async () => {
+    const rig = makeRig([{ platform: 'SomethingElse' }]);
+    await expect(handleGetEditorState(rig.deps, {})).rejects.toThrow(/No AmbientWeatherSensors platform block/);
+    await expect(handleGetEditorState({ ...rig.deps, configPath: undefined }, {}))
+      .rejects.toThrow(/No config.json path/);
+    await expect(handleGetEditorState({ ...rig.deps, configPath: path.join(rig.root, 'missing.json') }, {}))
+      .rejects.toThrow(/could not be read/);
+  });
+});
+
+describe('/vocabulary', () => {
+  it('is an exact projection of UNIT_VOCABULARY per selection context', () => {
+    const dto = handleGetVocabulary();
+    const measurements = Object.keys(UNIT_VOCABULARY) as Measurement[];
+    expect(Object.keys(dto.measurements).sort()).toEqual([...measurements].sort());
+    for (const m of measurements) {
+      expect(dto.measurements[m].customSource).toEqual(
+        unitOptionsFor(m, 'custom-source').map(o => ({ unit: o.unit, label: o.label })));
+      expect(dto.measurements[m].extendedDisplay).toEqual(
+        unitOptionsFor(m, 'extended-display').map(o => ({ unit: o.unit, label: o.label })));
+    }
+  });
+
+  it('carries the #70 additions with labels: mmHg, fps, and source-only fc', () => {
+    const dto = handleGetVocabulary();
+    expect(dto.measurements['pressure'].extendedDisplay.map(o => o.unit)).toContain('mmHg');
+    expect(dto.measurements['wind-speed'].extendedDisplay.map(o => o.unit)).toContain('fps');
+    const light = dto.measurements['illuminance'];
+    expect(light.customSource.map(o => o.unit)).toContain('fc');
+    expect(light.extendedDisplay.map(o => o.unit)).not.toContain('fc');
+    for (const list of [light.customSource, dto.measurements['pressure'].extendedDisplay]) {
+      for (const o of list) {
+        expect(o.label).toBeTruthy();
+      }
+    }
+  });
+});

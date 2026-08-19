@@ -28,7 +28,7 @@
  */
 import * as path from 'path';
 import { HomebridgePluginUiServer, RequestError } from '@homebridge/plugin-ui-utils';
-import { handleComposeSave, handleGetDiscovery, handleGetNotices, handleGetStatus, handleGetUiState, } from './handlers.js';
+import { handleComposeSave, handleGetDiscovery, handleGetEditorState, handleGetNotices, handleGetStatus, handleGetUiState, handleGetVocabulary, } from './handlers.js';
 /**
  * Version stamp displayed in the UI header. Update on every release
  * (or wire to package.json at build time in a later stage — the
@@ -75,6 +75,11 @@ class UiServer extends HomebridgePluginUiServer {
         // client to persist via HB UI X's API. The row editor (#69) is its
         // first caller; refusals are structured { ok: false, error }.
         this.onRequest('/compose-save', (payload) => this.wrap(() => handleComposeSave(this.deps, payload)));
+        // Sanitized read model + unit vocabulary for the row editor (#69).
+        // Both are READ-ONLY; the editor stays display-only until PR C
+        // activates the save path through /compose-save.
+        this.onRequest('/editor-state', (payload) => this.wrap(() => handleGetEditorState(this.deps, payload)));
+        this.onRequest('/vocabulary', () => this.wrap(async () => handleGetVocabulary()));
         this.ready();
     }
     /**

@@ -13,7 +13,7 @@
  */
 import { promises as fs } from 'fs';
 import * as path from 'path';
-import { buildEffectiveSensorMap } from '../dist/sensorMap/buildEffectiveMap.js';
+import { buildEffectiveSensorMap, partitionOverrideLayers } from '../dist/sensorMap/buildEffectiveMap.js';
 import { canonicalizeSensorMap } from '../dist/sensorMap/canonicalizeSensorMap.js';
 import { compatToOverrides } from '../dist/sensorMap/compat.js';
 import { detectConfigMode } from '../dist/sensorMap/configMode.js';
@@ -22,6 +22,7 @@ import { shadowModeEnabled } from '../dist/sensorMap/shadowMode.js';
 import { loadDiscoveryStore, } from '../dist/sensorMap/persistence/discoveryStore.js';
 import { loadNoticeStore, } from '../dist/sensorMap/persistence/noticesStore.js';
 import { loadUiStateStore, } from '../dist/sensorMap/persistence/uiStateStore.js';
+import { UNIT_VOCABULARY, unitOptionsFor } from '../dist/sensorMap/unitVocabulary.js';
 export async function handleGetStatus(deps, payload) {
     const config = extractConfig(payload);
     const modeResult = detectConfigMode(config);
@@ -326,15 +327,205 @@ export async function handleComposeSave(deps, payload) {
         notes: effectiveMap.notes,
     };
 }
+/**
+ * Sanitized read model for the sensor-map editor. The AUTHORITATIVE
+ * on-disk config.json is the source (same rule as /compose-save);
+ * the response carries only what the editor renders — credentials,
+ * paths, and internal machinery never leave the bridge.
+ *
+ * Read-only semantics: unreadable/absent config THROWS (the client
+ * shows a load failure), while a readable-but-troubled configuration
+ * (safe mode, multiple blocks, validation errors) returns a DTO that
+ * SAYS so — those are states the editor must render, not transport
+ * failures.
+ */
+export async function handleGetEditorState(deps, payload) {
+    const p = (payload ?? {});
+    if (!deps.configPath) {
+        throw new Error('No config.json path available to the UI server.');
+    }
+    let configJson;
+    try {
+        configJson = JSON.parse(await fs.readFile(deps.configPath, 'utf8'));
+    }
+    catch (e) {
+        throw new Error(`config.json could not be read: ${e.message}`);
+    }
+    const platforms = configJson.platforms;
+    const blocks = (Array.isArray(platforms) ? platforms : [])
+        .filter((b) => !!b && typeof b === 'object' && b.platform === 'AmbientWeatherSensors');
+    if (blocks.length === 0) {
+        throw new Error('No AmbientWeatherSensors platform block found in config.json.');
+    }
+    const warnings = [];
+    if (blocks.length > 1) {
+        warnings.push({
+            message: `${blocks.length} AmbientWeatherSensors platform blocks found in config.json; showing the first. `
+                + 'Saving is refused while duplicates exist — remove the extra block(s).',
+        });
+    }
+    const block = blocks[0];
+    const modeResult = detectConfigMode(block);
+    const v2FlagEnabled = detectV2FlagSource(block, deps.env ?? process.env) !== 'none';
+    // detectConfigMode already includes safeModeBanner in warnings —
+    // no separate push, or safe mode would show the banner twice.
+    for (const w of modeResult.warnings) {
+        warnings.push({ message: w });
+    }
+    if (modeResult.mode === 'safe-mode') {
+        return {
+            configMode: 'safe-mode',
+            v2FlagEnabled,
+            editorAvailable: false,
+            version: deps.version,
+            stations: [],
+            rows: [],
+            warnings,
+            errors: [],
+        };
+    }
+    // §8.7 inventory + overrides — the same assembly compose-save uses.
+    // A LEGACY config is presented as its compat translation, so the
+    // editor shows exactly what a pure migration would produce.
+    const discovery = await loadDiscoveryStore(path.join(deps.persistDir, 'discovery.json'), deps.log);
+    const uiState = await loadUiStateStore(path.join(deps.persistDir, 'ui-state.json'), deps.log);
+    const sources = new Map();
+    const assemble = (overridesForMacs) => assembleStationInventory({
+        liveStations: p.liveStations,
+        discovery,
+        cachedAccessoryUniqueIds: p.cachedAccessoryUniqueIds,
+        overrideSources: [
+            Array.isArray(block.sensorMap) ? block.sensorMap : [],
+            overridesForMacs,
+        ],
+        sources,
+    });
+    let overrides;
+    let stations;
+    if (modeResult.mode === 'legacy') {
+        stations = assemble([]);
+        overrides = compatToOverrides(block, stations);
+        stations = assemble(overrides);
+    }
+    else {
+        overrides = Array.isArray(block.sensorMap) ? block.sensorMap : [];
+        stations = assemble(overrides);
+    }
+    const effectiveMap = buildEffectiveSensorMap({
+        userOverrides: overrides,
+        discovery,
+        uiState,
+        stations,
+        configMode: 'v2',
+    });
+    const layers = partitionOverrideLayers(overrides);
+    const rows = effectiveMap.rows
+        .map(row => toEditorRowDto(row, layers))
+        .sort((a, b) => a.stationMac === b.stationMac
+        ? (a.dataPoint < b.dataPoint ? -1 : a.dataPoint > b.dataPoint ? 1 : 0)
+        : (a.stationMac < b.stationMac ? -1 : 1));
+    for (const w of effectiveMap.warnings) {
+        warnings.push(toEditorNoteDto(w));
+    }
+    return {
+        configMode: modeResult.mode,
+        v2FlagEnabled,
+        editorAvailable: false, // flips true in PR C (finding 5 closure)
+        version: deps.version,
+        stations: stations.map(st => {
+            const mac = st.macAddress.toUpperCase();
+            const dto = { mac, source: sources.get(mac) ?? 'override' };
+            if (st.name) {
+                dto.name = st.name;
+            }
+            return dto;
+        }),
+        rows,
+        warnings,
+        errors: effectiveMap.errors.map(toEditorNoteDto),
+    };
+}
+/**
+ * Unit vocabulary for the editor's pickers (#70): per-measurement
+ * options per selection context, in vocabulary display order, with
+ * human-facing labels. Pure projection of UNIT_VOCABULARY — the
+ * server stays the sole validity authority (§3.7).
+ */
+export function handleGetVocabulary() {
+    const measurements = {};
+    for (const m of Object.keys(UNIT_VOCABULARY)) {
+        measurements[m] = {
+            customSource: unitOptionsFor(m, 'custom-source').map(o => ({ unit: o.unit, label: o.label })),
+            extendedDisplay: unitOptionsFor(m, 'extended-display').map(o => ({ unit: o.unit, label: o.label })),
+        };
+    }
+    return { measurements };
+}
+function toEditorRowDto(row, layers) {
+    const dto = {
+        stationMac: row.stationMac,
+        dataPoint: row.dataPoint,
+        kind: row.kind,
+        enabled: row.enabled,
+        origin: row.kind === 'unrecognized'
+            ? 'unrecognized'
+            : layers.station.get(row.stationMac.toUpperCase())?.has(row.dataPoint)
+                ? 'station'
+                : layers.global.has(row.dataPoint)
+                    ? 'global'
+                    : 'default',
+    };
+    if (row.firstSeen !== undefined) {
+        dto.firstSeen = row.firstSeen;
+    }
+    if (row.lastSeen !== undefined) {
+        dto.lastSeen = row.lastSeen;
+    }
+    if (row.kind === 'unrecognized') {
+        return dto;
+    }
+    dto.measurement = row.measurement;
+    dto.name = row.name;
+    dto.hasBatterySubService = row.hasBatterySubService;
+    dto.embedName = row.embedName;
+    dto.triggerEnabled = row.triggerEnabled;
+    dto.triggerDirection = row.triggerDirection;
+    if (row.batteryField !== null) {
+        dto.batteryField = row.batteryField;
+    }
+    if (row.threshold !== undefined) {
+        dto.threshold = row.threshold;
+    }
+    if (row.sourceUnit !== undefined) {
+        dto.sourceUnit = row.sourceUnit;
+    }
+    if (row.displayUnit !== undefined) {
+        dto.displayUnit = row.displayUnit;
+    }
+    return dto;
+}
+function toEditorNoteDto(n) {
+    const dto = { message: n.message };
+    if (n.stationMac !== undefined) {
+        dto.stationMac = n.stationMac;
+    }
+    if (n.dataPoint !== undefined) {
+        dto.dataPoint = n.dataPoint;
+    }
+    return dto;
+}
 /** §8.7 station-inventory union, in preference order (names from the freshest source). */
 function assembleStationInventory(src) {
     const byMac = new Map(); // MAC → name ('' when unknown)
-    const add = (mac, name) => {
+    const add = (mac, name, source) => {
         const key = mac.toUpperCase();
         if (!/^([0-9A-F]{2}:){5}[0-9A-F]{2}$/.test(key)) {
             return;
         }
         const existing = byMac.get(key);
+        if (existing === undefined) {
+            src.sources?.set(key, source);
+        }
         if (existing === undefined || (existing === '' && name !== '')) {
             byMac.set(key, name);
         }
@@ -343,19 +534,19 @@ function assembleStationInventory(src) {
     if (Array.isArray(src.liveStations)) {
         for (const s of src.liveStations) {
             if (s && typeof s === 'object' && typeof s.macAddress === 'string') {
-                add(s.macAddress, String(s.name ?? ''));
+                add(s.macAddress, String(s.name ?? ''), 'live');
             }
         }
     }
     // 2. Discovery registry.
     for (const e of src.discovery.entries) {
-        add(e.stationMac, e.stationName ?? '');
+        add(e.stationMac, e.stationName ?? '', 'discovery');
     }
     // 3. Cached-accessory uniqueId prefixes (MAC-dataPoint).
     if (Array.isArray(src.cachedAccessoryUniqueIds)) {
         for (const uid of src.cachedAccessoryUniqueIds) {
             if (typeof uid === 'string' && uid.length >= 17) {
-                add(uid.slice(0, 17), '');
+                add(uid.slice(0, 17), '', 'cached-accessory');
             }
         }
     }
@@ -363,7 +554,7 @@ function assembleStationInventory(src) {
     for (const list of src.overrideSources) {
         for (const o of list) {
             if (typeof o.stationMac === 'string') {
-                add(o.stationMac, '');
+                add(o.stationMac, '', 'override');
             }
         }
     }
