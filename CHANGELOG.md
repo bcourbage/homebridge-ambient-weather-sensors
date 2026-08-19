@@ -9,6 +9,14 @@ entries short and user-facing.
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/
 
+## [1.7.3] — 2026-08-19
+
+Documentation-only release; no code change.
+
+### Fixed
+
+- **README "What's New" now surfaces v1.7.2.** The v1.7.2 release refreshed the README but left its own release unmentioned, so the npm package page (which renders the README packed inside the `latest` version) still headlined v1.7.1. The notes now cover the v1.7.2/v1.7.3 documentation line.
+
 ## [1.7.2] — 2026-07-29
 
 Documentation-only release; no code change.
