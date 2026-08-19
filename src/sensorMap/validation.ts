@@ -49,12 +49,13 @@ const KNOWN_MEASUREMENTS: ReadonlySet<Measurement> = new Set<Measurement>([
   'pressure', 'distance', 'uv-index', 'count', 'direction',
   'timestamp', 'boolean',
 ]);
-const KNOWN_UNITS: ReadonlySet<SensorUnit> = new Set<SensorUnit>([
-  'fahrenheit', 'celsius', 'percent', 'wm2', 'lux', 'ppm', 'ugm3',
-  'mph', 'kph', 'mps', 'kts', 'in_per_hr', 'mm_per_hr',
-  'in', 'mm', 'inHg', 'hPa', 'mi', 'km', 'nm',
-  'index', 'count', 'degrees', 'ms',
-]);
+// Derived from the single validation authority rather than hand-listed:
+// a unit is "known" iff SOME measurement's legal set contains it, so a
+// unit added to units.ts can never be silently rejected here (review
+// #70: the third handwritten copy of this list is eliminated).
+const KNOWN_UNITS: ReadonlySet<SensorUnit> = new Set<SensorUnit>(
+  Object.values(LEGAL_UNITS_FOR_MEASUREMENT).flat(),
+);
 const TRIGGER_DIRECTIONS: ReadonlySet<'above' | 'below'> = new Set(['above', 'below']);
 
 /**

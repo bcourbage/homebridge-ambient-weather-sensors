@@ -13,14 +13,15 @@
  * speed threshold of 25" means 25 of whatever the user picked.
  */
 
-export type SpeedUnit = 'mph' | 'kph' | 'mps' | 'kts';
+export type SpeedUnit = 'mph' | 'fps' | 'kph' | 'mps' | 'kts';
 export type RainUnit = 'in' | 'mm';
-export type PressureUnit = 'inHg' | 'hPa';
+export type PressureUnit = 'inHg' | 'mmHg' | 'hPa';
 export type DistanceUnit = 'mi' | 'km' | 'nm';
 
 export function convertSpeed(mph: number, target: SpeedUnit): number {
   switch (target) {
     case 'mph': return mph;
+    case 'fps': return mph * 1.46667;   // ft/sec = mph * 5280/3600
     case 'kph': return mph * 1.60934;
     case 'mps': return mph * 0.44704;
     case 'kts': return mph * 0.86898;
@@ -32,7 +33,11 @@ export function convertRain(inches: number, target: RainUnit): number {
 }
 
 export function convertPressure(inHg: number, target: PressureUnit): number {
-  return target === 'hPa' ? inHg * 33.8639 : inHg;
+  switch (target) {
+    case 'inHg': return inHg;
+    case 'mmHg': return inHg * 25.4;   // mmHg = inHg * 25.4; inHg = mmHg / 25.4
+    case 'hPa':  return inHg * 33.8639;
+  }
 }
 
 export function convertDistance(miles: number, target: DistanceUnit): number {

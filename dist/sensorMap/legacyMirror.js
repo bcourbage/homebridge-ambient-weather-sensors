@@ -75,6 +75,7 @@ import { createHash } from 'crypto';
 import { promises as fs } from 'fs';
 import * as path from 'path';
 import { defaultRowFor } from './defaultMap.js';
+import { V17_LEGAL_LEGACY_UNITS } from './unitVocabulary.js';
 import { REAL_CLOCK, } from './persistence/atomicWrite.js';
 /** Metadata key stamped into config.json next to the mirrored fields. */
 export const LEGACY_MIRROR_KEY = '_legacyMirror';
@@ -299,9 +300,18 @@ export function projectLegacyMirror(effectiveMap) {
         }
         return values.size === 1 ? [...values][0] : undefined;
     };
+    // v2-only display units (mmHg, fps, and any future addition) must
+    // NOT leak into a 1.7.x rollback config: 1.7's converters predate
+    // them, so its wrappers would fall back to the AWN-native conversion
+    // while the formatter prints the new unit's name — a silent
+    // 25.4x-class display error. Project a family unit only when 1.7
+    // actually understands it (V17_LEGAL_LEGACY_UNITS); otherwise omit
+    // the key so a downgrade falls back to 1.7's default display unit —
+    // a display-only fallback, never accessory loss. Documented in
+    // sensor-map.md's downgrade section and pinned by tests.
     const units = {};
     const windUnit = unitFor(r => r.kind === 'motion' && r.measurement === 'wind-speed');
-    if (windUnit && windUnit !== 'mph') {
+    if (windUnit && windUnit !== 'mph' && V17_LEGAL_LEGACY_UNITS.windSpeed.includes(windUnit)) {
         units.windSpeed = windUnit;
     }
     // v1.7's units.rain is a single in/mm dropdown covering both
@@ -316,11 +326,11 @@ export function projectLegacyMirror(effectiveMap) {
         }
     }
     const pressureUnit = unitFor(r => r.kind === 'motion' && r.measurement === 'pressure');
-    if (pressureUnit && pressureUnit !== 'inHg') {
+    if (pressureUnit && pressureUnit !== 'inHg' && V17_LEGAL_LEGACY_UNITS.pressure.includes(pressureUnit)) {
         units.pressure = pressureUnit;
     }
     const distanceUnit = unitFor(r => r.kind === 'motion' && r.measurement === 'distance');
-    if (distanceUnit && distanceUnit !== 'mi') {
+    if (distanceUnit && distanceUnit !== 'mi' && V17_LEGAL_LEGACY_UNITS.distance.includes(distanceUnit)) {
         units.distance = distanceUnit;
     }
     if (Object.keys(units).length > 0) {

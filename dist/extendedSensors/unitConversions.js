@@ -15,6 +15,7 @@
 export function convertSpeed(mph, target) {
     switch (target) {
         case 'mph': return mph;
+        case 'fps': return mph * 1.46667; // ft/sec = mph * 5280/3600
         case 'kph': return mph * 1.60934;
         case 'mps': return mph * 0.44704;
         case 'kts': return mph * 0.86898;
@@ -24,7 +25,11 @@ export function convertRain(inches, target) {
     return target === 'mm' ? inches * 25.4 : inches;
 }
 export function convertPressure(inHg, target) {
-    return target === 'hPa' ? inHg * 33.8639 : inHg;
+    switch (target) {
+        case 'inHg': return inHg;
+        case 'mmHg': return inHg * 25.4; // mmHg = inHg * 25.4; inHg = mmHg / 25.4
+        case 'hPa': return inHg * 33.8639;
+    }
 }
 export function convertDistance(miles, target) {
     switch (target) {

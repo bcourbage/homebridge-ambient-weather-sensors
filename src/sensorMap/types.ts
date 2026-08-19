@@ -84,12 +84,14 @@ export type SensorUnit =
   // Light
   | 'wm2'
   | 'lux'
+  | 'fc'
   // Gas
   | 'ppm'
   // Particulate
   | 'ugm3'
   // Wind
   | 'mph'
+  | 'fps'
   | 'kph'
   | 'mps'
   | 'kts'
@@ -101,6 +103,7 @@ export type SensorUnit =
   | 'mm'
   // Pressure
   | 'inHg'
+  | 'mmHg'
   | 'hPa'
   // Distance
   | 'mi'

@@ -12,9 +12,9 @@
  * thresholds always interpreted in the *display* unit so a "wind
  * speed threshold of 25" means 25 of whatever the user picked.
  */
-export type SpeedUnit = 'mph' | 'kph' | 'mps' | 'kts';
+export type SpeedUnit = 'mph' | 'fps' | 'kph' | 'mps' | 'kts';
 export type RainUnit = 'in' | 'mm';
-export type PressureUnit = 'inHg' | 'hPa';
+export type PressureUnit = 'inHg' | 'mmHg' | 'hPa';
 export type DistanceUnit = 'mi' | 'km' | 'nm';
 export declare function convertSpeed(mph: number, target: SpeedUnit): number;
 export declare function convertRain(inches: number, target: RainUnit): number;
