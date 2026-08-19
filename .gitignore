@@ -121,3 +121,9 @@ web_modules/
 .DS_Store
 # package-lock.json is COMMITTED as of PR A (GA task #69): reproducible
 # `npm ci` builds are a determinism gate for the committed UI assets.
+
+# Angular build cache + intermediate tsc output (the app's BUILT
+# artifacts under homebridge-ui/public/app/ ARE committed — see
+# sensor-map.md §10.1)
+homebridge-ui/.angular/
+homebridge-ui/out-tsc/

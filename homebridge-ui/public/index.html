@@ -109,7 +109,19 @@
     <h2>Notices</h2>
     <p class="sub">Structural-change notices are recorded when the plugin re-registers an accessory whose structure changed (for example after a sensor-map edit). Expected whenever the v2 flag is on and structure changes. Existing notices remain visible after the flag is turned off; no new structural notices are generated while it is off.</p>
     <div id="notices"></div>
+
+    <!--
+      The Angular sensor-map editor (#69) bootstraps onto this element.
+      Its bundle is committed under app/ with content-hashed filenames;
+      the script reference between the markers below is REWRITTEN by
+      scripts/update-ui-fragment.mjs after every `npm run build:app` —
+      never edit that block by hand.
+    -->
+    <awn-root></awn-root>
   </div>
+  <!-- awn-app:assets:begin -->
+  <script type="module" src="app/main-JIJPFRTO.js"></script>
+  <!-- awn-app:assets:end -->
 
   <script>
     // homebridge is injected into window by Homebridge UI X.
