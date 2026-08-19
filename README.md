@@ -74,6 +74,10 @@ legacy config.
 See `docs/future/sensor-map.md` for the full design if you're
 curious about the shape of the v2 config.
 
+## What's New in v1.7.2
+
+Documentation and metadata release; no code change. The plugin is now described as independently maintained: the original compatibility pull requests were closed unmerged in June 2026, so the "temporary bridge" language is retired, while the acknowledgment of Deac Karns' original work remains. The npm Fund button (which pointed at the original author's PayPal) is removed and setup-section typos are fixed.
+
 ## What's New in v1.7.1
 
 Safety release on the 1.x line; no behavior change for normal 1.x configurations. If a 2.x version of this plugin writes its new configuration format (`configVersion: 2` and a `sensorMap` section) and you later downgrade to 1.x, v1.7.1 freezes safely instead of misreading the config: cached accessories stay in HomeKit at their last-known values, data updates stop, and the log explains how to resume (restore a 1.x configuration, or upgrade back to 2.x). Earlier 1.x versions would instead deregister every cached accessory after such a downgrade, losing room assignments and automations.
