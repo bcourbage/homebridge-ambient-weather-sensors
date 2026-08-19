@@ -45,6 +45,26 @@ export async function composeAndPersist(deps, args) {
             cachedAccessoryUniqueIds = undefined; // inventory source is best-effort
         }
     }
+    // Locate the edited block in the FRESH config array by deep equality
+    // (review #67 P1-3): a separately deserialized base is never
+    // reference-equal, and indexOf would silently APPEND the composed
+    // block as a duplicate. The server enforces the same exactly-one
+    // deep-match contract against disk.
+    const matchIndexes = cfgArray
+        .map((b, i) => (deepJson(b) === deepJson(base) ? i : -1))
+        .filter(i => i >= 0);
+    if (matchIndexes.length !== 1) {
+        return {
+            ok: false,
+            error: {
+                code: matchIndexes.length === 0 ? 'stale-base' : 'ambiguous-platform-block',
+                message: matchIndexes.length === 0
+                    ? 'The block being edited no longer matches the current plugin config; reload and retry.'
+                    : `${matchIndexes.length} identical blocks match the base; cannot determine which to replace.`,
+            },
+        };
+    }
+    const index = matchIndexes[0];
     const result = await deps.request('/compose-save', {
         base,
         proposal: args.proposal,
@@ -55,12 +75,21 @@ export async function composeAndPersist(deps, args) {
         // Refusal or malformed response: NO update, NO save.
         return result ?? { ok: false, error: { code: 'invalid-proposal', message: 'Empty response from /compose-save.' } };
     }
-    // Replace the edited block with the composed config, positionally.
-    const index = cfgArray.indexOf(base);
-    const nextArray = index >= 0
-        ? cfgArray.map((b, i) => (i === index ? result.nextConfig : b))
-        : [...cfgArray.filter(b => b !== base), result.nextConfig];
+    const nextArray = cfgArray.map((b, i) => (i === index ? result.nextConfig : b));
     await deps.updatePluginConfig(nextArray);
     await deps.savePluginConfig();
     return result;
+}
+/** Deterministic deep JSON (sorted keys) for block matching. */
+function deepJson(v) {
+    if (Array.isArray(v)) {
+        return `[${v.map(deepJson).join(',')}]`;
+    }
+    if (v && typeof v === 'object') {
+        const entries = Object.entries(v)
+            .filter(([, val]) => val !== undefined)
+            .sort(([a], [b]) => (a < b ? -1 : 1));
+        return `{${entries.map(([k, val]) => `${JSON.stringify(k)}:${deepJson(val)}`).join(',')}}`;
+    }
+    return JSON.stringify(v);
 }

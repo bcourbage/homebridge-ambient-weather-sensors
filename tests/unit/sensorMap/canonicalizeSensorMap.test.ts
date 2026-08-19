@@ -6,6 +6,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
+import { buildEffectiveSensorMap } from '../../../src/sensorMap/buildEffectiveMap';
 import { canonicalizeSensorMap } from '../../../src/sensorMap/canonicalizeSensorMap';
 import type {
   DiscoveryStore,
@@ -121,6 +122,23 @@ describe('ordering (§17.4 rules 3–4)', () => {
   });
 });
 
+describe('per-station custom identities (review #67 P1-2)', () => {
+  it('the same custom dataPoint with DIFFERENT identities per station keeps each station intact', () => {
+    // The reviewer's repro: temperature/fahrenheit on station A,
+    // humidity/percent on station B. A dataPoint-keyed identity reused
+    // A's identity for B and produced an invalid saved row.
+    const overrides: SensorMapOverride[] = [
+      { dataPoint: 'barn_x', stationMac: MAC1, kind: 'temperature', measurement: 'temperature', sourceUnit: 'fahrenheit' },
+      { dataPoint: 'barn_x', stationMac: MAC2, kind: 'humidity', measurement: 'humidity', sourceUnit: 'percent' },
+    ];
+    const out = canon(overrides, TWO);
+    expect(out).toEqual([
+      { dataPoint: 'barn_x', kind: 'temperature', measurement: 'temperature', sourceUnit: 'fahrenheit', stationMac: MAC1 },
+      { dataPoint: 'barn_x', kind: 'humidity', measurement: 'humidity', sourceUnit: 'percent', stationMac: MAC2 },
+    ]);
+  });
+});
+
 describe('idempotency + byte stability (§11.3 / §17.4 rule 5)', () => {
   const FIXTURES: Array<{ name: string; overrides: SensorMapOverride[]; stations: StationInventory }> = [
     { name: 'empty', overrides: [], stations: ONE },
@@ -165,6 +183,24 @@ describe('idempotency + byte stability (§11.3 / §17.4 rule 5)', () => {
     const first = canonicalizeSensorMap({ overrides, stations, discovery: discovery(), uiState: uiState() });
     const second = canonicalizeSensorMap({ overrides: first, stations, discovery: discovery(), uiState: uiState() });
     expect(JSON.stringify(second, null, 2)).toBe(JSON.stringify(first, null, 2));
+  });
+
+  it.each(FIXTURES)('$name: reloading the canonical output reproduces the EFFECTIVE map (rows + signatures)', ({ overrides, stations }) => {
+    // Serializer idempotency alone is insufficient (review #67 P1-2):
+    // the canonical array must MEAN the same thing when loaded.
+    const common = { discovery: discovery(), uiState: uiState(), stations, configMode: 'v2' as const };
+    const before = buildEffectiveSensorMap({ ...common, userOverrides: overrides });
+    const canonical = canonicalizeSensorMap({ overrides, stations, discovery: discovery(), uiState: uiState() });
+    const after = buildEffectiveSensorMap({ ...common, userOverrides: canonical });
+    const key = (rows: typeof before.rows) => new Map(
+      rows.filter(r => r.kind !== 'unrecognized').map(r => [`${r.stationMac}|${r.dataPoint}`, JSON.stringify(r, Object.keys(r).sort())]),
+    );
+    const a = key(before.rows);
+    const b = key(after.rows);
+    expect([...b.keys()].sort()).toEqual([...a.keys()].sort());
+    for (const [k, v] of a) {
+      expect(b.get(k), k).toBe(v);
+    }
   });
 
   it('repeated calls with the same input are deterministic', () => {

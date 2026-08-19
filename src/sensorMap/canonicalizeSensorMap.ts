@@ -91,23 +91,30 @@ export function canonicalizeSensorMap(input: CanonicalizeInput): SensorMapOverri
     }
   }
 
-  // Baseline for CUSTOM datapoints: the minimal identity declaration,
-  // resolved by the same machinery (one batch map for all customs).
-  const customIdentity = new Map<string, SensorMapOverride>();
+  // Baseline for CUSTOM datapoints: each STATION's minimal identity
+  // declaration, resolved by the same machinery. Keyed by
+  // (stationMac, dataPoint) — the same custom dataPoint may carry a
+  // DIFFERENT kind/measurement/sourceUnit per station (review #67
+  // P1-2: a dataPoint-keyed identity reused station A's identity for
+  // station B, corrupting B's serialized row). The identity overrides
+  // are station-scoped so every station resolves its own baseline.
+  const customIdentity = new Map<string, SensorMapOverride>(); // `${MAC}|${dp}` → identity
   for (const row of proposal.rows) {
     if (row.kind === 'unrecognized' || defaultRowFor(row.dataPoint)) {
       continue;
     }
-    if (!customIdentity.has(row.dataPoint)) {
+    const key = `${row.stationMac}|${row.dataPoint}`;
+    if (!customIdentity.has(key)) {
       const identity: SensorMapOverride = {
         dataPoint: row.dataPoint,
+        stationMac: row.stationMac,
         kind: row.kind as SensorKind,
         measurement: row.measurement as Measurement,
       };
       if (row.measurement !== 'timestamp' && row.measurement !== 'boolean') {
         identity.sourceUnit = (row as { sourceUnit: SensorUnit }).sourceUnit;
       }
-      customIdentity.set(row.dataPoint, identity);
+      customIdentity.set(key, identity);
     }
   }
   const identityBaseline = buildEffectiveSensorMap({
@@ -133,8 +140,9 @@ export function canonicalizeSensorMap(input: CanonicalizeInput): SensorMapOverri
     const baseline = isCustom ? identityByKey.get(key) : defaultsByKey.get(key);
     const diff: Diff = {};
     if (isCustom) {
-      // Identity fields are always declared for a custom row.
-      const identity = customIdentity.get(row.dataPoint)!;
+      // Identity fields are always declared for a custom row — THIS
+      // station's identity, never another station's.
+      const identity = customIdentity.get(key)!;
       diff.kind = identity.kind;
       diff.measurement = identity.measurement;
       if (identity.sourceUnit !== undefined) {

@@ -228,6 +228,38 @@ export async function handleComposeSave(deps, payload) {
     // ---- 7. The SERVER assembles canonical config (§11.3/§17.4) — the
     //         client is never responsible for canonical serialization.
     const canonical = canonicalizeSensorMap({ overrides: proposal, stations, discovery, uiState });
+    // ---- 7b. HARD DIVERGENCE GATE (review #67 P1-1): canonical output
+    //          MUST mean exactly what the proposal meant. Reloading the
+    //          canonical array must reproduce every effective row AND
+    //          structural signature. The known divergence class:
+    //          battery-field claims adjudicated by EARLIEST-AUTHORED
+    //          index, which entry sorting cannot preserve — a proposal
+    //          whose meaning depends on authoring order is refused with
+    //          guidance to make ownership explicit. The gate also traps
+    //          any future serializer defect (it detects the P1-2
+    //          per-station identity corruption mechanically).
+    const reloaded = buildEffectiveSensorMap({
+        userOverrides: canonical,
+        discovery,
+        uiState,
+        stations,
+        configMode: 'v2',
+    });
+    const divergent = diffEffectiveRows(effectiveMap, reloaded);
+    if (divergent.length > 0) {
+        return {
+            ok: false,
+            error: {
+                code: 'canonical-divergence',
+                message: 'Canonical serialization would change the meaning of this configuration for '
+                    + `${divergent.length} row(s) — most commonly because multiple rows claim the same battery `
+                    + 'field and ownership depends on authoring order, which canonical (sorted) output does not '
+                    + "preserve. Make ownership explicit (set batteryField: null on the non-owning row(s), or "
+                    + 'assign distinct battery fields) and retry. Nothing was written.',
+                rows: divergent,
+            },
+        };
+    }
     // ---- 8. Compose. detectConfigMode's verdict is passed explicitly
     //         (it is the single authority on "legacy").
     const composed = composeV2ConfigSave(block, canonical, effectiveMap, modeResult.mode);
@@ -269,7 +301,14 @@ export async function handleComposeSave(deps, payload) {
         }
         snapshot = outcome;
     }
-    return { ok: true, nextConfig: composed.nextConfig, snapshot, canonicalSensorMap: canonical };
+    return {
+        ok: true,
+        nextConfig: composed.nextConfig,
+        snapshot,
+        canonicalSensorMap: canonical,
+        warnings: effectiveMap.warnings,
+        notes: effectiveMap.notes,
+    };
 }
 /** §8.7 station-inventory union, in preference order (names from the freshest source). */
 function assembleStationInventory(src) {
@@ -313,6 +352,34 @@ function assembleStationInventory(src) {
         }
     }
     return [...byMac.entries()].map(([macAddress, name]) => ({ macAddress, name }));
+}
+function diffEffectiveRows(before, after) {
+    const index = (m) => {
+        const out = new Map();
+        for (const row of m.rows) {
+            if (row.kind !== 'unrecognized') {
+                out.set(`${String(row.stationMac)}|${String(row.dataPoint)}`, row);
+            }
+        }
+        return out;
+    };
+    const a = index(before);
+    const b = index(after);
+    const divergent = [];
+    for (const key of new Set([...a.keys(), ...b.keys()])) {
+        const rowA = a.get(key);
+        const rowB = b.get(key);
+        if (!rowA || !rowB || canonicalJsonLocal(rowA) !== canonicalJsonLocal(rowB)) {
+            const [stationMac, dataPoint] = key.split('|');
+            divergent.push({
+                stationMac,
+                dataPoint,
+                before: rowA ? String(rowA.structuralSignature ?? '(row absent)') : '(row absent)',
+                after: rowB ? String(rowB.structuralSignature ?? '(row absent)') : '(row absent)',
+            });
+        }
+    }
+    return divergent;
 }
 /** Deterministic deep JSON for base-vs-on-disk comparison. */
 function canonicalJsonLocal(v) {

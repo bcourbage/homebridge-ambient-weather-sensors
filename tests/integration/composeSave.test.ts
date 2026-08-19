@@ -285,6 +285,65 @@ describe('canonicalization at the boundary', () => {
   });
 });
 
+describe('canonical-divergence hard gate (review #67 P1-1)', () => {
+  it('reverse-alphabetical battery claimants (order-dependent ownership) refuse the save', () => {
+    // z_custom is authored FIRST and owns barn_batt by earliest index;
+    // canonical sorting would put a_custom first and flip ownership —
+    // both signatures would change and HomeKit would re-register.
+    const rig = makeRig(LEGACY_BLOCK);
+    discoveryStore(rig);
+    return handleComposeSave(rig.deps, {
+      base: LEGACY_BLOCK,
+      proposal: [
+        { dataPoint: 'z_custom', kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph', batteryField: 'barn_batt' },
+        { dataPoint: 'a_custom', kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph', batteryField: 'barn_batt' },
+      ],
+    }).then((result) => {
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe('canonical-divergence');
+        const rows = (result.error as { rows: Array<{ dataPoint: string }> }).rows;
+        expect(rows.map(r => r.dataPoint).sort()).toEqual(['a_custom', 'z_custom']);
+      }
+      expect(existsSync(path.join(rig.persistDir, LEGACY_SNAPSHOT_FILE))).toBe(false);
+    });
+  });
+
+  it('the same claimants save cleanly once ownership is explicit (batteryField: null on the loser)', async () => {
+    const rig = makeRig(LEGACY_BLOCK);
+    discoveryStore(rig);
+    const result = await handleComposeSave(rig.deps, {
+      base: LEGACY_BLOCK,
+      proposal: [
+        { dataPoint: 'z_custom', kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph', batteryField: 'barn_batt' },
+        { dataPoint: 'a_custom', kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph', batteryField: null },
+      ],
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      const z = result.canonicalSensorMap.find(e => e.dataPoint === 'z_custom');
+      expect(z).toHaveProperty('batteryField', 'barn_batt');
+    }
+  });
+});
+
+describe('successful saves surface warnings (review #67 P2-5)', () => {
+  it('warn-and-strip validation stays visible in the compose response', async () => {
+    const rig = makeRig(LEGACY_BLOCK);
+    discoveryStore(rig);
+    const result = await handleComposeSave(rig.deps, {
+      base: LEGACY_BLOCK,
+      // displayUnit on a native-HAP measurement is warn-and-stripped.
+      proposal: [{ dataPoint: 'tempf', name: 'Patio', displayUnit: 'celsius' }],
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      const codes = (result.warnings as Array<{ code?: string }>).map(w => w.code);
+      expect(codes).toContain('ignored-native-displayunit');
+    }
+  });
+});
+
 describe('immutable snapshot lifecycle', () => {
   it('an existing MATCHING snapshot verifies and proceeds as exists', async () => {
     const rig = makeRig(LEGACY_BLOCK);
@@ -327,6 +386,24 @@ describe('immutable snapshot lifecycle', () => {
     }
   });
 
+  it('an unrecognized snapshot schemaVersion is corrupt even when the legacy fields match (review P2-4)', async () => {
+    const rig = makeRig(LEGACY_BLOCK);
+    discoveryStore(rig);
+    writeFileSync(path.join(rig.persistDir, LEGACY_SNAPSHOT_FILE), JSON.stringify({
+      schemaVersion: 99,
+      savedAt: '2026-01-01T00:00:00Z',
+      legacy: {
+        temperatureSensors: true, humiditySensors: false,
+        extendedSensors: true, windSensors: true,
+      },
+    }, null, 2));
+    const result = await handleComposeSave(rig.deps, { base: LEGACY_BLOCK });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('legacy-snapshot-corrupt');
+    }
+  });
+
   it('concurrent first conversions: exactly one written, the rest verify as exists, payload intact', async () => {
     const rig = makeRig(LEGACY_BLOCK);
     discoveryStore(rig);
@@ -340,6 +417,21 @@ describe('immutable snapshot lifecycle', () => {
     expect(outcomes.filter(o => o === 'exists')).toHaveLength(2);
     const snap = JSON.parse(readFileSync(path.join(rig.persistDir, LEGACY_SNAPSHOT_FILE), 'utf8'));
     expect(snap.legacy.temperatureSensors).toBe(true);
+  });
+});
+
+describe('explicit-base orchestration (review #67 P1-3)', () => {
+  it('a CLONED base (deep-equal, not reference-equal) replaces the block instead of appending a duplicate', async () => {
+    const rig = makeRig(LEGACY_BLOCK);
+    discoveryStore(rig);
+    const client = makeClient(rig);
+    const clonedBase = JSON.parse(JSON.stringify(LEGACY_BLOCK)) as Record<string, unknown>;
+    const result = await composeAndPersist(client.deps, { base: clonedBase });
+    expect(result.ok).toBe(true);
+    expect(client.events).toEqual(['compose', 'update', 'save']);
+    const awsBlocks = (client.persistedArray ?? []).filter(b => b.platform === 'AmbientWeatherSensors');
+    expect(awsBlocks).toHaveLength(1);
+    expect(awsBlocks[0].configVersion).toBe(2);
   });
 });
 

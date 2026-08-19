@@ -636,7 +636,18 @@ export async function verifyLegacySnapshot(
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     return 'corrupt';
   }
-  const legacy = (parsed as { legacy?: unknown }).legacy;
+  // Full envelope validation (review #67 P2-4): an unrecognized schema
+  // version — or a missing/invalid savedAt — is a snapshot THIS version
+  // does not understand, and must block conversion as corrupt rather
+  // than be blessed because its legacy subset happens to compare equal.
+  const envelope = parsed as { schemaVersion?: unknown; savedAt?: unknown; legacy?: unknown };
+  if (envelope.schemaVersion !== 1) {
+    return 'corrupt';
+  }
+  if (typeof envelope.savedAt !== 'string' || Number.isNaN(Date.parse(envelope.savedAt))) {
+    return 'corrupt';
+  }
+  const legacy = envelope.legacy;
   if (!legacy || typeof legacy !== 'object' || Array.isArray(legacy)) {
     return 'corrupt';
   }
