@@ -12,11 +12,15 @@
  *
  * Endpoints exposed:
  *
- *   /status      → { configMode, safeModeBanner?, v2Flag, version, readOnly,
- *                    sensorMapEditorAvailable, composeSaveAvailable }
- *   /discovery   → contents of discovery.json (empty on absent)
- *   /notices     → contents of notices.json (empty on absent)
- *   /ui-state    → contents of ui-state.json (empty on absent)
+ *   /status       → { configMode, safeModeBanner?, v2Flag, version, readOnly,
+ *                     sensorMapEditorAvailable, composeSaveAvailable,
+ *                     previewSaveAvailable }
+ *   /discovery    → contents of discovery.json (empty on absent)
+ *   /notices      → contents of notices.json (empty on absent)
+ *   /ui-state     → contents of ui-state.json (empty on absent)
+ *   /editor-state → sanitized editor read model (authored + effective)
+ *   /vocabulary   → per-measurement unit options with display labels
+ *   /preview-save → save dry run: exact pipeline, zero writes, digest
  *
  * Ordinary legacy schema settings remain writable through HB UI X's
  * standard form and do NOT flow through /compose-save — the boundary
@@ -28,7 +32,7 @@
  */
 import * as path from 'path';
 import { HomebridgePluginUiServer, RequestError } from '@homebridge/plugin-ui-utils';
-import { handleComposeSave, handleGetDiscovery, handleGetEditorState, handleGetNotices, handleGetStatus, handleGetUiState, handleGetVocabulary, } from './handlers.js';
+import { handleComposeSave, handleGetDiscovery, handleGetEditorState, handleGetNotices, handleGetStatus, handleGetUiState, handleGetVocabulary, handlePreviewSave, } from './handlers.js';
 /**
  * Version stamp displayed in the UI header. Update on every release
  * (or wire to package.json at build time in a later stage — the
@@ -80,6 +84,11 @@ class UiServer extends HomebridgePluginUiServer {
         // activates the save path through /compose-save.
         this.onRequest('/editor-state', (payload) => this.wrap(() => handleGetEditorState(this.deps, payload)));
         this.onRequest('/vocabulary', () => this.wrap(async () => handleGetVocabulary()));
+        // Server-authoritative save DRY RUN (#69 PR B): the exact save
+        // pipeline with zero writes — validation, canonical form, the
+        // structural diff, and the stateless confirmation digest the
+        // future save path (PR C) must present for structural changes.
+        this.onRequest('/preview-save', (payload) => this.wrap(() => handlePreviewSave(this.deps, payload)));
         this.ready();
     }
     /**
