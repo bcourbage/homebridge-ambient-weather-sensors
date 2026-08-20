@@ -9,6 +9,16 @@ entries short and user-facing.
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/
 
+## [Unreleased]
+
+### Added
+
+- **Sensor-map draft editor with server-verified preview (GA task #69, PR B).** The sensor-map table is now editable as a DRAFT: enable or disable rows, rename them, choose display units, set motion thresholds and trigger direction, and remove overrides. Nothing is saved — drafts live in the page, and a new "Preview changes" action dry-runs them through the exact server-side save pipeline (validation, canonical form, and a row-by-row diff that marks which accessories would re-register) with zero writes. Saving from the editor arrives in a later beta through the guarded snapshot-first boundary. Also fixed: the section heading hierarchy, so "Sensor map" visibly contains its notes and station tables, and a save/preview is now refused outright when config.json carries a malformed `sensorMap` the runtime would refuse to interpret.
+
+### Changed
+
+- **Node.js support floor corrected to 22.13.** The beta.11 release process demonstrated that the previously advertised 22.12 floor cannot run the Homebridge 2 dependency tree (an optional Homebridge dependency excludes Node 22.0–22.12); the plugin's engines, documentation, and CI now state and test 22.13 as the floor.
+
 ## [2.0.0-beta.11] — 2026-08-19
 
 ### Added

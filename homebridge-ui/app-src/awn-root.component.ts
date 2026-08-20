@@ -1,9 +1,13 @@
 /**
- * Read-only sensor-map viewer (GA task #69, PR A) — the editor
- * foundation. Renders the sanitized /editor-state read model grouped
- * by station, with unit labels from /vocabulary (#70). No writes of
- * any kind: editing arrives in PR B (draft state + preview protocol)
- * and persistence only in PR C through composeAndPersist.
+ * Sensor-map editor, draft stage (GA task #69, PR B). Renders the
+ * /editor-state read model grouped by station, lets the user DRAFT
+ * row edits (enable/disable, rename, display unit, thresholds,
+ * remove-override), and dry-runs drafts through the server's
+ * /preview-save — the exact save pipeline with zero writes.
+ *
+ * NO PERSISTENCE: this component never calls updatePluginConfig or
+ * savePluginConfig. Drafts live in memory; the save path activates
+ * in a later release through the guarded compose-save boundary.
  *
  * Styling deliberately leans on the fragment page's #awn scope: this
  * component renders inside <div id="awn">, so the page's table rules
@@ -11,9 +15,17 @@
  * styles below add only what the page doesn't define.
  */
 import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
+import { FormBuilder, ReactiveFormsModule } from '@angular/forms';
 
+import { DraftStore } from './draft-store';
 import { HomebridgeService } from './homebridge.service';
-import type { EditorRowDto, EditorStateDto, VocabularyDto } from './dto/editor-state';
+import type {
+  EditorRowDto,
+  EditorStateDto,
+  PreviewResultDto,
+  UnitOptionDto,
+  VocabularyDto,
+} from './dto/editor-state';
 
 interface StationGroup {
   mac: string;
@@ -25,7 +37,9 @@ interface StationGroup {
 @Component({
   selector: 'awn-root',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  imports: [ReactiveFormsModule],
   styles: `
+    h3 { font-size: 0.95rem; margin: 16px 0 4px 0; }
     .origin {
       display: inline-block; padding: 1px 7px; border-radius: 999px;
       font-size: 0.72rem; font-weight: 600; letter-spacing: 0.02em;
@@ -36,9 +50,41 @@ interface StationGroup {
     .origin.unrecognized { background: var(--warn-bg); color: var(--warn-fg); }
     .station-meta { color: var(--fg-sub); font-size: 0.85rem; font-weight: 400; margin-left: 8px; }
     .muted { color: var(--fg-empty); }
+    .dirty-dot {
+      display: inline-block; width: 8px; height: 8px; border-radius: 999px;
+      background: var(--warn-edge); margin-right: 6px;
+    }
+    .draft-bar {
+      display: flex; align-items: center; gap: 10px;
+      padding: 10px 14px; border-radius: 6px; margin: 12px 0;
+      background: var(--panel-bg); border: 1px solid var(--rule);
+    }
+    .draft-bar .grow { flex: 1; }
+    .editor-form {
+      background: var(--panel-bg); border-top: 2px solid var(--rule);
+      padding: 10px 14px;
+    }
+    .editor-form label { display: inline-flex; align-items: center; gap: 6px; margin: 4px 16px 4px 0; font-size: 0.88rem; }
+    .editor-form input[type="text"], .editor-form input[type="number"], .editor-form select {
+      background: var(--btn-bg); color: var(--btn-fg);
+      border: 1px solid var(--btn-edge); border-radius: 4px; padding: 4px 8px;
+    }
+    .change-kind {
+      display: inline-block; min-width: 64px; text-align: center;
+      padding: 1px 7px; border-radius: 999px; font-size: 0.72rem; font-weight: 600;
+    }
+    .change-kind.added    { background: var(--on-bg);    color: var(--on-fg); }
+    .change-kind.removed  { background: var(--off-bg);   color: var(--off-fg); }
+    .change-kind.modified { background: var(--info-bg);  color: var(--info-fg); }
+    .structural-chip {
+      display: inline-block; margin-left: 8px; padding: 1px 7px; border-radius: 999px;
+      font-size: 0.72rem; font-weight: 600;
+      background: var(--warn-bg); color: var(--warn-fg);
+    }
+    .change-row { padding: 4px 0; border-bottom: 1px solid var(--row-rule); font-size: 0.88rem; }
   `,
   template: `
-    <h2>Sensor map <span class="station-meta">read-only preview</span></h2>
+    <h2>Sensor map <span class="station-meta">draft editor preview</span></h2>
     @if (!available) {
       <div class="banner">
         This page is running outside Homebridge UI X, so the sensor map
@@ -49,44 +95,89 @@ interface StationGroup {
     } @else if (!state()) {
       <p class="empty">Loading sensor map…</p>
     } @else {
-      <!-- Diagnostics tracked by index: messages are not unique
-           (multiple rows can produce identical text), and index is the
-           stable identity for a server-refreshed list. -->
       @for (w of state()!.warnings; track $index) {
         <div class="banner">{{ w.message }}</div>
       }
       @for (e of state()!.errors; track $index) {
         <div class="banner safe-mode">{{ e.message }}</div>
       }
-      <!-- Ownership/plugin-health notes (orphan battery fields,
-           collision ordering) are a distinct channel from warnings:
-           informational, but users must see them to understand why an
-           accessory lacks its Battery service. -->
       @if (state()!.notes.length > 0) {
-        <h2>Notes</h2>
+        <h3>Notes</h3>
         @for (n of state()!.notes; track $index) {
           <div class="banner info">{{ n.message }}</div>
         }
       }
+
+      @if (draftCount() > 0) {
+        <div class="draft-bar">
+          <span class="grow"><strong>{{ draftCount() }}</strong> draft change(s) — nothing is saved; preview runs the real save pipeline without writing.</span>
+          <button type="button" (click)="preview()" [disabled]="previewPending()">Preview changes</button>
+          <button type="button" (click)="discardAll()">Discard drafts</button>
+        </div>
+      }
+
+      @if (previewPending()) {
+        <p class="empty">Previewing…</p>
+      }
+      @if (previewResult(); as pr) {
+        @if (pr.ok) {
+          <h3>Preview</h3>
+          @if (pr.changes.length === 0) {
+            <div class="banner info">No effective changes: the draft resolves to the current configuration.</div>
+          } @else {
+            @for (c of pr.changes; track $index) {
+              <div class="change-row">
+                <span class="change-kind {{ c.change }}">{{ c.change }}</span>
+                @if (c.structural) {
+                  <span class="structural-chip">re-registers</span>
+                }
+                <code>{{ c.dataPoint }}</code>
+                <span class="station-meta">{{ c.stationMac }}</span>
+                @if (c.change === 'modified') {
+                  <span class="muted"> {{ changeSummary(c.before!, c.after!) }}</span>
+                }
+              </div>
+            }
+            @if (pr.structuralChangeCount > 0) {
+              <div class="banner">
+                {{ pr.structuralChangeCount }} accessor{{ pr.structuralChangeCount === 1 ? 'y' : 'ies' }} would re-register on save
+                (HomeKit room assignments for re-registered accessories may need to be redone).
+                Saving from this editor arrives in a later beta; this preview wrote nothing.
+              </div>
+            } @else {
+              <div class="banner info">All changes apply in place; no accessory re-registers. Saving from this editor arrives in a later beta; this preview wrote nothing.</div>
+            }
+          }
+          @for (w of pr.warnings; track $index) {
+            <div class="banner">{{ w.message }}</div>
+          }
+        } @else {
+          <div class="banner safe-mode">Preview refused ({{ pr.error.code }}): {{ pr.error.message }}</div>
+        }
+      }
+
       @if (groups().length === 0) {
         <p class="empty">No stations or sensor rows to show yet.</p>
       }
       @for (group of groups(); track group.mac) {
-        <h2>
+        <h3>
           {{ group.title }}
           <span class="station-meta"><code>{{ group.mac }}</code> · {{ group.source }}</span>
-        </h2>
+        </h3>
         <table>
           <thead>
             <tr>
               <th>Data point</th><th>Name</th><th>Kind</th><th>Units</th>
-              <th>Enabled</th><th>Layer</th><th>Battery</th>
+              <th>Enabled</th><th>Layer</th><th>Battery</th><th></th>
             </tr>
           </thead>
           <tbody>
             @for (row of group.rows; track row.dataPoint) {
               <tr>
-                <td><code>{{ row.dataPoint }}</code></td>
+                <td>
+                  @if (isDirty(row)) { <span class="dirty-dot" title="draft edits"></span> }
+                  <code>{{ row.dataPoint }}</code>
+                </td>
                 <td>{{ row.name ?? '' }}</td>
                 <td>
                   @if (row.kind === 'unrecognized') {
@@ -105,7 +196,46 @@ interface StationGroup {
                     <span class="muted">—</span>
                   }
                 </td>
+                <td>
+                  @if (row.kind !== 'unrecognized') {
+                    <button type="button" (click)="toggleEdit(row)">{{ isExpanded(row) ? 'Close' : 'Edit' }}</button>
+                  }
+                </td>
               </tr>
+              @if (isExpanded(row)) {
+                <tr>
+                  <td colspan="8" class="editor-form">
+                    <form [formGroup]="editForm!">
+                      <label><input type="checkbox" formControlName="enabled" /> Enabled</label>
+                      <label>Name <input type="text" formControlName="name" /></label>
+                      @if (displayUnitOptions(row).length > 0) {
+                        <label>Display unit
+                          <select formControlName="displayUnit">
+                            @for (u of displayUnitOptions(row); track u.unit) {
+                              <option [value]="u.unit">{{ u.label }}</option>
+                            }
+                          </select>
+                        </label>
+                      }
+                      @if (row.kind === 'motion') {
+                        <label>Threshold <input type="number" step="any" formControlName="threshold" /></label>
+                        <label>Trigger
+                          <select formControlName="triggerDirection">
+                            <option value="above">above</option>
+                            <option value="below">below</option>
+                          </select>
+                        </label>
+                      }
+                      @if (row.origin === 'global' || row.origin === 'station') {
+                        <button type="button" (click)="removeOverride(row)">Remove override</button>
+                      }
+                      @if (isDirty(row)) {
+                        <button type="button" (click)="resetRow(row)">Reset row</button>
+                      }
+                    </form>
+                  </td>
+                </tr>
+              }
             }
           </tbody>
         </table>
@@ -115,11 +245,25 @@ interface StationGroup {
 })
 export class AwnRootComponent {
   private readonly hb = inject(HomebridgeService);
+  private readonly fb = inject(FormBuilder);
+  readonly store = new DraftStore();
 
   protected readonly available = this.hb.available;
   protected readonly state = signal<EditorStateDto | undefined>(undefined);
   protected readonly vocab = signal<VocabularyDto | undefined>(undefined);
   protected readonly loadError = signal<string | undefined>(undefined);
+  protected readonly previewResult = signal<PreviewResultDto | null>(null);
+  protected readonly previewPending = signal(false);
+  /** Bumped on every draft mutation so computed()s re-read the store. */
+  protected readonly draftVersion = signal(0);
+
+  protected readonly expandedKey = signal<string | null>(null);
+  protected editForm: ReturnType<FormBuilder['group']> | null = null;
+
+  protected readonly draftCount = computed(() => {
+    this.draftVersion();
+    return this.store.draftCount;
+  });
 
   /** Flat unit-code → display-label map across all measurements (#70). */
   private readonly unitLabels = computed<ReadonlyMap<string, string>>(() => {
@@ -166,10 +310,6 @@ export class AwnRootComponent {
 
   private async load(): Promise<void> {
     try {
-      // Cached-accessory uniqueIds are a client-only §8.7 inventory
-      // source (review #32 F1): a typical 1.7.x install has cached
-      // accessories but no discovery.json yet, and without them the
-      // migration preview would render empty.
       const cachedAccessoryUniqueIds = await this.hb.cachedAccessoryUniqueIds();
       const [state, vocab] = await Promise.all([
         this.hb.request<EditorStateDto>('/editor-state', { cachedAccessoryUniqueIds }),
@@ -177,9 +317,149 @@ export class AwnRootComponent {
       ]);
       this.state.set(state);
       this.vocab.set(vocab);
+      this.store.reset(state.authored);
+      this.bump();
     } catch (e) {
       this.loadError.set(e instanceof Error ? e.message : String(e));
     }
+  }
+
+  private bump(): void {
+    this.draftVersion.update(v => v + 1);
+    // Any draft mutation invalidates a shown preview — it no longer
+    // describes the draft.
+    this.previewResult.set(null);
+  }
+
+  protected rowKey(row: EditorRowDto): string {
+    return `${row.stationMac}|${row.dataPoint}`;
+  }
+
+  protected isExpanded(row: EditorRowDto): boolean {
+    return this.expandedKey() === this.rowKey(row);
+  }
+
+  protected isDirty(row: EditorRowDto): boolean {
+    this.draftVersion();
+    return this.store.isRowDirty(row);
+  }
+
+  protected displayUnitOptions(row: EditorRowDto): UnitOptionDto[] {
+    if (!row.measurement) {
+      return [];
+    }
+    return this.vocab()?.measurements[row.measurement]?.extendedDisplay ?? [];
+  }
+
+  protected toggleEdit(row: EditorRowDto): void {
+    if (this.isExpanded(row)) {
+      this.expandedKey.set(null);
+      this.editForm = null;
+      return;
+    }
+    const current = (field: 'enabled' | 'name' | 'displayUnit' | 'threshold' | 'triggerDirection'): unknown =>
+      this.store.draftedValue(row, field) ?? (row as unknown as Record<string, unknown>)[field];
+    this.editForm = this.fb.group({
+      enabled: [current('enabled') === true],
+      name: [typeof current('name') === 'string' ? current('name') : ''],
+      displayUnit: [typeof current('displayUnit') === 'string' ? current('displayUnit') : ''],
+      threshold: [typeof current('threshold') === 'number' ? current('threshold') : null],
+      triggerDirection: [current('triggerDirection') === 'below' ? 'below' : 'above'],
+    });
+    this.editForm.valueChanges.subscribe((v: Record<string, unknown>) => {
+      this.applyEdit(row, v);
+    });
+    this.expandedKey.set(this.rowKey(row));
+  }
+
+  private applyEdit(row: EditorRowDto, v: Record<string, unknown>): void {
+    if (v.enabled !== row.enabled) {
+      this.store.setField(row, 'enabled', v.enabled === true);
+    }
+    if (typeof v.name === 'string' && v.name !== '' && v.name !== row.name) {
+      this.store.setField(row, 'name', v.name);
+    }
+    if (typeof v.displayUnit === 'string' && v.displayUnit !== '' && v.displayUnit !== row.displayUnit) {
+      this.store.setField(row, 'displayUnit', v.displayUnit);
+    }
+    if (row.kind === 'motion') {
+      if (typeof v.threshold === 'number' && v.threshold !== row.threshold) {
+        this.store.setField(row, 'threshold', v.threshold);
+      }
+      if ((v.triggerDirection === 'above' || v.triggerDirection === 'below')
+        && v.triggerDirection !== row.triggerDirection) {
+        this.store.setField(row, 'triggerDirection', v.triggerDirection);
+      }
+    }
+    this.bump();
+  }
+
+  protected removeOverride(row: EditorRowDto): void {
+    this.store.removeOverride(row);
+    this.bump();
+  }
+
+  protected resetRow(row: EditorRowDto): void {
+    this.store.resetRow(row);
+    this.bump();
+  }
+
+  protected discardAll(): void {
+    this.store.discardAll();
+    this.expandedKey.set(null);
+    this.editForm = null;
+    this.bump();
+  }
+
+  protected async preview(): Promise<void> {
+    this.previewPending.set(true);
+    this.previewResult.set(null);
+    try {
+      const [base, cachedAccessoryUniqueIds] = await Promise.all([
+        this.hb.pluginConfigBlock(),
+        this.hb.cachedAccessoryUniqueIds(),
+      ]);
+      const result = await this.hb.request<PreviewResultDto>('/preview-save', {
+        base,
+        proposal: this.store.proposal(),
+        cachedAccessoryUniqueIds,
+      });
+      this.previewResult.set(result);
+    } catch (e) {
+      this.previewResult.set({
+        ok: false,
+        error: { code: 'transport', message: e instanceof Error ? e.message : String(e) },
+      });
+    } finally {
+      this.previewPending.set(false);
+    }
+  }
+
+  protected changeSummary(before: EditorRowDto, after: EditorRowDto): string {
+    const parts: string[] = [];
+    if (before.name !== after.name) {
+      parts.push(`"${before.name}" → "${after.name}"`);
+    }
+    if (before.enabled !== after.enabled) {
+      parts.push(after.enabled ? 'enabled' : 'disabled');
+    }
+    if (before.displayUnit !== after.displayUnit) {
+      parts.push(`${this.unitLabel(before.displayUnit)} → ${this.unitLabel(after.displayUnit)}`);
+    }
+    if (before.threshold !== after.threshold) {
+      parts.push(`threshold ${before.threshold ?? '—'} → ${after.threshold ?? '—'}`);
+    }
+    if (before.triggerDirection !== after.triggerDirection) {
+      parts.push(`trigger ${after.triggerDirection}`);
+    }
+    if (before.batteryField !== after.batteryField) {
+      parts.push(`battery ${before.batteryField ?? '—'} → ${after.batteryField ?? '—'}`);
+    }
+    return parts.join(', ');
+  }
+
+  private unitLabel(u: string | undefined): string {
+    return u === undefined ? '—' : (this.unitLabels().get(u) ?? u);
   }
 
   protected unitCell(row: EditorRowDto): string {

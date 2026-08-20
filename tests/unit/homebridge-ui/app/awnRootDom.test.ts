@@ -24,7 +24,7 @@ import {
   syncThemeClasses,
   type HomebridgeIpc,
 } from '../../../../homebridge-ui/app-src/homebridge.service';
-import type { EditorStateDto, VocabularyDto } from '../../../../homebridge-ui/app-src/dto/editor-state';
+import type { EditorStateDto, PreviewResultDto, VocabularyDto } from '../../../../homebridge-ui/app-src/dto/editor-state';
 
 const MAC = 'AA:BB:CC:DD:EE:01';
 const OTHER_MAC = 'AA:BB:CC:DD:EE:02';
@@ -77,8 +77,14 @@ function editorState(overrides: Partial<EditorStateDto> = {}): EditorStateDto {
   };
 }
 
-function makeIpc(state: EditorStateDto, cachedAccessories?: unknown[]): HomebridgeIpc & { requests: Array<{ path: string; body: unknown }> } {
+function makeIpc(
+  state: EditorStateDto,
+  cachedAccessories?: unknown[],
+  previewResult?: PreviewResultDto,
+): HomebridgeIpc & { requests: Array<{ path: string; body: unknown }> } {
   const requests: Array<{ path: string; body: unknown }> = [];
+  // Deliberately NO updatePluginConfig / savePluginConfig here: the
+  // PR B component must never need them — persistence is PR C.
   return {
     requests,
     getPluginConfig: async () => [{}],
@@ -92,6 +98,9 @@ function makeIpc(state: EditorStateDto, cachedAccessories?: unknown[]): Homebrid
       }
       if (path === '/vocabulary') {
         return VOCAB;
+      }
+      if (path === '/preview-save' && previewResult !== undefined) {
+        return previewResult;
       }
       throw new Error(`unexpected path ${path}`);
     },
@@ -135,7 +144,7 @@ describe('AwnRootComponent (TestBed, jsdom)', () => {
     const ipc = makeIpc(editorState());
     const fixture = await render(ipc);
     const el = fixture.nativeElement as HTMLElement;
-    const headings = [...el.querySelectorAll('h2')].map(h => h.textContent!.trim());
+    const headings = [...el.querySelectorAll('h3')].map(h => h.textContent!.trim());
     expect(headings.some(h => h.startsWith('Roof'))).toBe(true);
     expect(el.querySelectorAll('table')).toHaveLength(2);
     const text = el.textContent!;
@@ -180,7 +189,7 @@ describe('AwnRootComponent (TestBed, jsdom)', () => {
     }));
     const fixture = await render(ipc);
     const el = fixture.nativeElement as HTMLElement;
-    const headings = [...el.querySelectorAll('h2')].map(h => h.textContent!.trim());
+    const headings = [...el.querySelectorAll('h3')].map(h => h.textContent!.trim());
     expect(headings).toContain('Notes');
     const noteBanner = [...el.querySelectorAll('.banner.info')]
       .find(b => b.textContent!.includes('batt_co2'));
@@ -196,6 +205,138 @@ describe('AwnRootComponent (TestBed, jsdom)', () => {
     };
     const fixture = await render(ipc);
     expect((fixture.nativeElement as HTMLElement).textContent).toContain('bridge exploded');
+  });
+});
+
+describe('draft editing + preview (PR B — no persistence)', () => {
+  async function settle(fixture: ComponentFixture<AwnRootComponent>): Promise<void> {
+    await new Promise((r) => setTimeout(r, 0));
+    await fixture.whenStable();
+    fixture.detectChanges();
+  }
+
+  /** Expand the edit form on the row whose Data point cell shows `dp`. */
+  function openEditor(fixture: ComponentFixture<AwnRootComponent>, dp: string): HTMLElement {
+    const el = fixture.nativeElement as HTMLElement;
+    const tr = [...el.querySelectorAll('tbody tr')]
+      .find(r => r.querySelector('td code')?.textContent === dp)!;
+    (tr.querySelector('button') as HTMLButtonElement).click();
+    fixture.detectChanges();
+    return el;
+  }
+
+  function typeInto(input: HTMLInputElement, value: string): void {
+    input.value = value;
+    input.dispatchEvent(new Event('input'));
+  }
+
+  const PREVIEW_OK: PreviewResultDto = {
+    ok: true,
+    canonicalSensorMap: [],
+    rows: [],
+    changes: [
+      {
+        stationMac: OTHER_MAC, dataPoint: 'tempinf', change: 'modified', structural: false,
+        before: editorState().rows[2],
+        after: { ...editorState().rows[2], name: 'Patio Temp' },
+      },
+      {
+        stationMac: MAC, dataPoint: 'customx', change: 'added', structural: true,
+        after: { ...editorState().rows[0], dataPoint: 'customx' },
+      },
+    ],
+    structuralChangeCount: 1,
+    digest: 'ab'.repeat(32),
+    warnings: [],
+    notes: [],
+  };
+
+  it('drafting a rename shows the dirty bar and sends the exact station-scoped proposal', async () => {
+    const ipc = makeIpc(editorState(), [], PREVIEW_OK);
+    const fixture = await render(ipc);
+    const el = openEditor(fixture, 'tempinf'); // origin 'default' → new station fragment
+
+    typeInto(el.querySelector('.editor-form input[type="text"]') as HTMLInputElement, 'Patio Temp');
+    await settle(fixture);
+    expect(el.textContent).toContain('1 draft change(s)');
+
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement).click();
+    await settle(fixture);
+
+    const req = ipc.requests.find(r => r.path === '/preview-save');
+    expect(req?.body).toEqual({
+      base: {}, // getPluginConfig()[0]
+      proposal: [{ dataPoint: 'tempinf', stationMac: OTHER_MAC, name: 'Patio Temp' }],
+      cachedAccessoryUniqueIds: [],
+    });
+  });
+
+  it('renders the preview diff with structural chips and the re-register banner', async () => {
+    const ipc = makeIpc(editorState(), [], PREVIEW_OK);
+    const fixture = await render(ipc);
+    const el = openEditor(fixture, 'tempinf');
+    typeInto(el.querySelector('.editor-form input[type="text"]') as HTMLInputElement, 'Patio Temp');
+    await settle(fixture);
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement).click();
+    await settle(fixture);
+
+    expect(el.querySelector('.change-kind.modified')).not.toBeNull();
+    expect(el.querySelector('.change-kind.added')).not.toBeNull();
+    // Structural chips must not merely be attribute-hidden (an
+    // explicit CSS display defeats [hidden] — caught in the browser
+    // smoke): non-structural changes render NO chip element at all.
+    expect(el.querySelectorAll('.structural-chip')).toHaveLength(1);
+    expect(el.textContent).toContain('1 accessory would re-register on save');
+    expect(el.textContent).toContain('this preview wrote nothing');
+  });
+
+  it('renders a structured refusal', async () => {
+    const refusal: PreviewResultDto = {
+      ok: false,
+      error: { code: 'stale-base', message: 'The configuration changed since this editor session loaded.' },
+    };
+    const ipc = makeIpc(editorState(), [], refusal);
+    const fixture = await render(ipc);
+    const el = openEditor(fixture, 'tempinf');
+    typeInto(el.querySelector('.editor-form input[type="text"]') as HTMLInputElement, 'X Y');
+    await settle(fixture);
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement).click();
+    await settle(fixture);
+    expect(el.textContent).toContain('Preview refused (stale-base)');
+  });
+
+  it('discard clears drafts and the shown preview', async () => {
+    const ipc = makeIpc(editorState(), [], PREVIEW_OK);
+    const fixture = await render(ipc);
+    const el = openEditor(fixture, 'tempinf');
+    typeInto(el.querySelector('.editor-form input[type="text"]') as HTMLInputElement, 'Patio Temp');
+    await settle(fixture);
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement).click();
+    await settle(fixture);
+    expect(el.querySelector('.change-kind')).not.toBeNull();
+
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Discard drafts') as HTMLButtonElement).click();
+    await settle(fixture);
+    expect(el.textContent).not.toContain('draft change(s)');
+    expect(el.querySelector('.change-kind')).toBeNull();
+  });
+
+  it('NEVER persists: the whole edit/preview flow touches only read + preview endpoints', async () => {
+    // The fake bridge does not even implement updatePluginConfig /
+    // savePluginConfig — if the component tried to persist, it would
+    // throw. Additionally: every request it made is on the allowlist.
+    const ipc = makeIpc(editorState(), [], PREVIEW_OK);
+    const fixture = await render(ipc);
+    const el = openEditor(fixture, 'tempinf');
+    typeInto(el.querySelector('.editor-form input[type="text"]') as HTMLInputElement, 'Patio Temp');
+    await settle(fixture);
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement).click();
+    await settle(fixture);
+
+    const paths = new Set(ipc.requests.map(r => r.path));
+    expect([...paths].sort()).toEqual(['/editor-state', '/preview-save', '/vocabulary']);
+    expect('updatePluginConfig' in ipc).toBe(false);
+    expect('savePluginConfig' in ipc).toBe(false);
   });
 });
 

@@ -1389,6 +1389,32 @@ Tests: for every non-motion kind, submit an override with each of these fields; 
 
 ## 17. Decision log
 
+- **2026-08-19 (c)**: PR B as-built — draft editor + `/preview-save`
+  (GA task #69). The preview endpoint shares the save's exact pipeline
+  by construction: `runSavePipeline()` (authoritative on-disk config,
+  base staleness check, mode + sensorMap-shape gates, proposal
+  shape/seeding, §8.7 inventory, same-machinery validation, canonical
+  serialization, divergence gate) is the single implementation behind
+  `/compose-save` and `/preview-save`; the preview performs zero
+  writes — not even the legacy snapshot. It returns the canonical
+  sensorMap, the proposed effective rows, a row diff against the
+  current on-disk state (added/removed configured rows are structural;
+  modified rows are structural iff `structuralSignature` changes,
+  which includes a battery host being disabled), and a STATELESS
+  confirmation digest: sha256 over the canonical JSON of (on-disk
+  block, canonical sensorMap). PR C's `/compose-save` re-derives the
+  digest from its own pipeline results and refuses a structural save
+  whose presented digest does not match. The `sensor-map-shape` hard
+  stop now also gates preview AND save (previously only the runtime
+  and `/editor-state`): a draft composed against a config the runtime
+  refuses to interpret must not silently replace it. Client drafts
+  are patches over authored fragments (no resolver semantics in the
+  browser; the only ordering fact used is §3.3.2 later-field-wins for
+  patch placement); edits target the row's authoring layer, defaults
+  draft new station-scoped fragments, and PR B does not author new
+  global templates from the UI. Kind/measurement editing and
+  unrecognized-field assignment are deferred past PR B.
+
 - **2026-08-19 (b)**: Editor framework decision (GA task #69). Constrained
   Angular 21 LTS confirmed after a documented framework-free vs framework
   analysis (UniFi Protect's vanilla UI rides a private framework —
