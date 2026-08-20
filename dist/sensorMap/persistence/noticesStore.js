@@ -40,8 +40,8 @@ function isNoticeStore(raw) {
 export function emptyNoticeStore() {
     return { schemaVersion: 1, notices: [] };
 }
-export async function loadNoticeStore(filePath, log, clock = REAL_CLOCK) {
-    const loaded = await readJsonStore(filePath, isNoticeStore, log, clock);
+export async function loadNoticeStore(filePath, log, clock = REAL_CLOCK, opts = {}) {
+    const loaded = await readJsonStore(filePath, isNoticeStore, log, clock, opts);
     return loaded ?? emptyNoticeStore();
 }
 export async function saveNoticeStore(filePath, store, log) {

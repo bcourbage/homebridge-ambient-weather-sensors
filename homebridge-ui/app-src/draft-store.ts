@@ -74,7 +74,41 @@ export class DraftStore {
   }
 
   /**
-   * Drop patches that equal what the authored fragment already says —
+   * Withdraw a drafted field (review #43 P1-3): the form syncs EVERY
+   * field on every event — a value typed back to the original clears
+   * its patch instead of leaving a stale draft behind the equal-
+   * looking control.
+   */
+  clearField(row: EditorRowDto, field: DraftableField): void {
+    const key = rowDraftKey(row);
+    const e = this.drafts.get(key);
+    if (!e || e.remove) {
+      return; // never resurrect a remove-override draft
+    }
+    e.patches.delete(field);
+    if (e.patches.size === 0) {
+      this.drafts.delete(key);
+    }
+  }
+
+  /**
+   * The authored value of a field at a key: FIELD-WISE later-wins
+   * across every fragment of the key (§3.3.2 merge order — review #43
+   * P1-3: a value authored by an EARLIER fragment and untouched by
+   * later ones is still the authored value).
+   */
+  private authoredBaseline(key: string): { [k: string]: unknown } {
+    const baseline: { [k: string]: unknown } = {};
+    for (const f of this.authored) {
+      if (this.fragmentKey(f) === key) {
+        Object.assign(baseline, f.fields);
+      }
+    }
+    return baseline;
+  }
+
+  /**
+   * Drop patches that equal what the authored fragments already say —
    * typing a value back to its authored state un-drafts the field.
    * (No comparison against resolver DEFAULTS: for a row with no
    * authored fragment, any patch is a real draft.)
@@ -84,17 +118,10 @@ export class DraftStore {
     if (!e || e.remove) {
       return;
     }
-    let authoredFields: { [k: string]: unknown } | undefined;
-    for (const f of this.authored) {
-      if (this.fragmentKey(f) === key) {
-        authoredFields = f.fields; // last one wins, matching §3.3.2
-      }
-    }
-    if (authoredFields) {
-      for (const [field, value] of [...e.patches]) {
-        if (field in authoredFields && authoredFields[field] === value) {
-          e.patches.delete(field);
-        }
+    const baseline = this.authoredBaseline(key);
+    for (const [field, value] of [...e.patches]) {
+      if (field in baseline && baseline[field] === value) {
+        e.patches.delete(field);
       }
     }
     if (e.patches.size === 0 && !e.remove) {

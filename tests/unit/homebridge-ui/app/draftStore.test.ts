@@ -57,6 +57,42 @@ describe('dirty tracking', () => {
     expect(store.proposal()).toEqual([{ dataPoint: 'tempf', name: 'Authored' }]);
   });
 
+  it('clearField withdraws a single drafted field without touching others', () => {
+    const store = new DraftStore();
+    store.reset([]);
+    const r = row({ dataPoint: 'tempf', origin: 'default' });
+    store.setField(r, 'enabled', false);
+    store.setField(r, 'name', 'X');
+    store.clearField(r, 'enabled');
+    expect(store.draftedValue(r, 'enabled')).toBeUndefined();
+    expect(store.draftedValue(r, 'name')).toBe('X');
+    store.clearField(r, 'name');
+    expect(store.dirty).toBe(false);
+  });
+
+  it('clearField never resurrects a remove-override draft', () => {
+    const store = new DraftStore();
+    store.reset([frag({ index: 0, dataPoint: 'uv', fields: { enabled: false } })]);
+    const r = row({ dataPoint: 'uv', origin: 'global' });
+    store.removeOverride(r);
+    store.clearField(r, 'enabled');
+    expect(store.draftCount).toBe(1); // the removal stands
+    expect(store.proposal()).toEqual([]);
+  });
+
+  it('prune sees values authored by EARLIER fragments (field-wise later-wins, review #43 P1-3)', () => {
+    const store = new DraftStore();
+    // Two fragments, same key: the FIRST authors name, the SECOND
+    // only enabled. A last-fragment-only baseline would miss 'X'.
+    store.reset([
+      frag({ index: 0, dataPoint: 'tempf', fields: { name: 'X' } }),
+      frag({ index: 1, dataPoint: 'tempf', fields: { enabled: false } }),
+    ]);
+    const r = row({ dataPoint: 'tempf', origin: 'global', name: 'X' });
+    store.setField(r, 'name', 'X'); // equals the field-wise authored value
+    expect(store.dirty).toBe(false);
+  });
+
   it('discardAll and resetRow clear drafts', () => {
     const store = new DraftStore();
     store.reset([]);

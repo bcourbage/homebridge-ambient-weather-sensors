@@ -10,10 +10,10 @@
  * by convention — there's no filesystem lock here.
  */
 import type { UiStateStore } from '../types.js';
-import { type Clock, type Logger } from './atomicWrite.js';
+import { type Clock, type Logger, type ReadStoreOptions } from './atomicWrite.js';
 export declare const UI_STATE_FILE = "ui-state.json";
 export declare function emptyUiStateStore(): UiStateStore;
-export declare function loadUiStateStore(filePath: string, log: Logger, clock?: Clock): Promise<UiStateStore>;
+export declare function loadUiStateStore(filePath: string, log: Logger, clock?: Clock, opts?: ReadStoreOptions): Promise<UiStateStore>;
 /**
  * UI-server-only write path. The plugin should NEVER call this; it
  * exists here so the UI server (Stage 8) has a single source of truth

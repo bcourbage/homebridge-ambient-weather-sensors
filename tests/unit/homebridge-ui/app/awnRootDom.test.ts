@@ -61,9 +61,9 @@ function editorState(overrides: Partial<EditorStateDto> = {}): EditorStateDto {
         origin: 'global',
       },
       {
-        stationMac: MAC, dataPoint: 'windspeedmph', kind: 'wind', measurement: 'wind-speed',
+        stationMac: MAC, dataPoint: 'windspeedmph', kind: 'motion', measurement: 'wind-speed',
         sourceUnit: 'mph', displayUnit: 'fps', name: 'Wind', enabled: false, batteryField: null,
-        origin: 'station',
+        origin: 'station', threshold: 10, triggerEnabled: true, triggerDirection: 'above',
       },
       {
         stationMac: OTHER_MAC, dataPoint: 'tempinf', kind: 'temperature', measurement: 'temperature',
@@ -286,7 +286,10 @@ describe('draft editing + preview (PR B — no persistence)', () => {
     // explicit CSS display defeats [hidden] — caught in the browser
     // smoke): non-structural changes render NO chip element at all.
     expect(el.querySelectorAll('.structural-chip')).toHaveLength(1);
-    expect(el.textContent).toContain('1 accessory would re-register on save');
+    // The chip names what the accessory DOES (review #43 P1-1):
+    // 'added' registers — never a blanket "re-registers".
+    expect(el.querySelector('.structural-chip')?.textContent).toBe('registers');
+    expect(el.textContent).toContain('1 accessory would register, deregister, or re-register on save');
     expect(el.textContent).toContain('this preview wrote nothing');
   });
 
@@ -319,6 +322,135 @@ describe('draft editing + preview (PR B — no persistence)', () => {
     await settle(fixture);
     expect(el.textContent).not.toContain('draft change(s)');
     expect(el.querySelector('.change-kind')).toBeNull();
+  });
+
+  it('reverting every control clears its draft (review #43 P1-3)', async () => {
+    const ipc = makeIpc(editorState(), [], PREVIEW_OK);
+    const fixture = await render(ipc);
+    const el = openEditor(fixture, 'windspeedmph'); // motion row: all controls
+    const dirty = (): boolean => el.textContent!.includes('draft change(s)');
+
+    // enabled: original false → toggle on → dirty → toggle off → clean
+    const checkbox = el.querySelector('.editor-form input[type="checkbox"]') as HTMLInputElement;
+    checkbox.click();
+    await settle(fixture);
+    expect(dirty()).toBe(true);
+    checkbox.click();
+    await settle(fixture);
+    expect(dirty()).toBe(false);
+
+    // name: 'Wind' → 'Gale' → dirty → back to 'Wind' → clean
+    const name = el.querySelector('.editor-form input[type="text"]') as HTMLInputElement;
+    typeInto(name, 'Gale');
+    await settle(fixture);
+    expect(dirty()).toBe(true);
+    typeInto(name, 'Wind');
+    await settle(fixture);
+    expect(dirty()).toBe(false);
+
+    // displayUnit: 'fps' → 'mph' → dirty → back → clean
+    const unit = el.querySelector('.editor-form select') as HTMLSelectElement;
+    unit.value = 'mph';
+    unit.dispatchEvent(new Event('change'));
+    await settle(fixture);
+    expect(dirty()).toBe(true);
+    unit.value = 'fps';
+    unit.dispatchEvent(new Event('change'));
+    await settle(fixture);
+    expect(dirty()).toBe(false);
+
+    // threshold: 10 → 25 → dirty → back to 10 → clean
+    const threshold = el.querySelector('.editor-form input[type="number"]') as HTMLInputElement;
+    typeInto(threshold, '25');
+    await settle(fixture);
+    expect(dirty()).toBe(true);
+    typeInto(threshold, '10');
+    await settle(fixture);
+    expect(dirty()).toBe(false);
+
+    // triggerDirection: 'above' → 'below' → dirty → back → clean
+    const direction = [...el.querySelectorAll('.editor-form select')][1] as HTMLSelectElement;
+    direction.value = 'below';
+    direction.dispatchEvent(new Event('change'));
+    await settle(fixture);
+    expect(dirty()).toBe(true);
+    direction.value = 'above';
+    direction.dispatchEvent(new Event('change'));
+    await settle(fixture);
+    expect(dirty()).toBe(false);
+  });
+
+  it('Reset row closes the form so a later event cannot resurrect the edits', async () => {
+    const ipc = makeIpc(editorState(), [], PREVIEW_OK);
+    const fixture = await render(ipc);
+    const el = openEditor(fixture, 'tempinf');
+    typeInto(el.querySelector('.editor-form input[type="text"]') as HTMLInputElement, 'Patio Temp');
+    await settle(fixture);
+    expect(el.textContent).toContain('1 draft change(s)');
+
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Reset row') as HTMLButtonElement).click();
+    await settle(fixture);
+    expect(el.textContent).not.toContain('draft change(s)');
+    expect(el.querySelector('.editor-form')).toBeNull(); // form is closed
+  });
+
+  it('a stale in-flight preview never overwrites a newer draft (review #43 P2-4)', async () => {
+    let resolvePreview!: (v: PreviewResultDto) => void;
+    const requests: Array<{ path: string; body: unknown }> = [];
+    const ipc: HomebridgeIpc & { requests: typeof requests } = {
+      requests,
+      getPluginConfig: async () => [{}],
+      getCachedAccessories: async () => [],
+      request: async (path: string, body?: unknown) => {
+        requests.push({ path, body });
+        if (path === '/editor-state') {
+          return editorState();
+        }
+        if (path === '/vocabulary') {
+          return VOCAB;
+        }
+        // Deferred: resolves only when the test says so.
+        return new Promise((r) => {
+          resolvePreview = r as (v: PreviewResultDto) => void;
+        });
+      },
+    };
+    const fixture = await render(ipc);
+    const el = openEditor(fixture, 'tempinf');
+    typeInto(el.querySelector('.editor-form input[type="text"]') as HTMLInputElement, 'Patio Temp');
+    await settle(fixture);
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement).click();
+    await settle(fixture);
+
+    // Edit AGAIN while the request is in flight...
+    typeInto(el.querySelector('.editor-form input[type="text"]') as HTMLInputElement, 'Newer Name');
+    await settle(fixture);
+    // ...then the OLD response arrives. It must be discarded.
+    resolvePreview(PREVIEW_OK);
+    await settle(fixture);
+    expect(el.querySelector('.change-kind')).toBeNull();
+    expect(el.textContent).not.toContain('accessory would register');
+  });
+
+  it('renders proposal-specific notes from the preview (review #43 P2-5)', async () => {
+    const withNotes: PreviewResultDto = {
+      ...PREVIEW_OK,
+      notes: [{
+        severity: 'note', code: 'orphan-battery-field', source: 'override',
+        message: "'co2_in_aqin' is disabled, but it is the reserved owner of batteryField 'batt_co2'.",
+      }],
+    };
+    const ipc = makeIpc(editorState(), [], withNotes);
+    const fixture = await render(ipc);
+    const el = openEditor(fixture, 'tempinf');
+    typeInto(el.querySelector('.editor-form input[type="text"]') as HTMLInputElement, 'Patio Temp');
+    await settle(fixture);
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement).click();
+    await settle(fixture);
+
+    const headings = [...el.querySelectorAll('h3')].map(h => h.textContent!.trim());
+    expect(headings).toContain('Preview notes');
+    expect([...el.querySelectorAll('.banner.info')].some(b => b.textContent!.includes('batt_co2'))).toBe(true);
   });
 
   it('NEVER persists: the whole edit/preview flow touches only read + preview endpoints', async () => {

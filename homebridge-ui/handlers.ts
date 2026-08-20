@@ -38,7 +38,7 @@ import {
   loadUiStateStore,
 } from '../dist/sensorMap/persistence/uiStateStore.js';
 import { UNIT_VOCABULARY, unitOptionsFor } from '../dist/sensorMap/unitVocabulary.js';
-import type { Logger } from '../dist/sensorMap/persistence/atomicWrite.js';
+import type { Logger, ReadStoreOptions } from '../dist/sensorMap/persistence/atomicWrite.js';
 import type {
   DiscoveryStore,
   EffectiveSensorRow,
@@ -76,6 +76,14 @@ export interface HandlerDeps {
    */
   configPath?: string;
 }
+
+/**
+ * The UI bridge is a READ-ONLY consumer of the platform's persistence
+ * stores (§8 single-writer): it must never quarantine-rename a corrupt
+ * file — recovery mutation belongs to the writer (the platform), and
+ * endpoints like /preview-save promise zero writes of any kind.
+ */
+const READ_ONLY_STORE: ReadStoreOptions = { quarantineCorrupt: false };
 
 export interface StatusPayload {
   version: string;
@@ -130,15 +138,15 @@ export async function handleGetStatus(deps: HandlerDeps, payload: unknown): Prom
 }
 
 export async function handleGetDiscovery(deps: HandlerDeps): Promise<DiscoveryStore> {
-  return loadDiscoveryStore(path.join(deps.persistDir, 'discovery.json'), deps.log);
+  return loadDiscoveryStore(path.join(deps.persistDir, 'discovery.json'), deps.log, undefined, READ_ONLY_STORE);
 }
 
 export async function handleGetNotices(deps: HandlerDeps): Promise<NoticeStore> {
-  return loadNoticeStore(path.join(deps.persistDir, 'notices.json'), deps.log);
+  return loadNoticeStore(path.join(deps.persistDir, 'notices.json'), deps.log, undefined, READ_ONLY_STORE);
 }
 
 export async function handleGetUiState(deps: HandlerDeps): Promise<UiStateStore> {
-  return loadUiStateStore(path.join(deps.persistDir, 'ui-state.json'), deps.log);
+  return loadUiStateStore(path.join(deps.persistDir, 'ui-state.json'), deps.log, undefined, READ_ONLY_STORE);
 }
 
 // ---- Internals ----------------------------------------------------
@@ -364,8 +372,8 @@ async function runSavePipeline(
   //         discovery registry, cached-accessory MACs, override MACs.
   //         Assembled twice when the proposal is compat-seeded, so the
   //         seeded overrides' station scopes contribute their MACs.
-  const discovery = await loadDiscoveryStore(path.join(deps.persistDir, 'discovery.json'), deps.log);
-  const uiState = await loadUiStateStore(path.join(deps.persistDir, 'ui-state.json'), deps.log);
+  const discovery = await loadDiscoveryStore(path.join(deps.persistDir, 'discovery.json'), deps.log, undefined, READ_ONLY_STORE);
+  const uiState = await loadUiStateStore(path.join(deps.persistDir, 'ui-state.json'), deps.log, undefined, READ_ONLY_STORE);
   const assemble = (proposalForMacs: ReadonlyArray<SensorMapOverride>): StationInventory =>
     assembleStationInventory({
       liveStations: p.liveStations,
@@ -575,7 +583,55 @@ export async function handlePreviewSave(
   if (!r.ok) {
     return { ok: false, error: r.error };
   }
-  const { block, modeResult, proposal, stations, discovery, uiState, effectiveMap, canonical } = r.ctx;
+  const { effectiveMap, canonical } = r.ctx;
+  const consequences = computeSaveConsequences(r.ctx);
+
+  return {
+    ok: true,
+    canonicalSensorMap: canonical,
+    rows: consequences.proposedRows,
+    changes: consequences.changes,
+    structuralChangeCount: consequences.structuralChangeCount,
+    digest: consequences.digest,
+    warnings: effectiveMap.warnings.map(w => toDiagnosticDto('warning', w)),
+    notes: effectiveMap.notes.map(n => toDiagnosticDto('note', n)),
+  };
+}
+
+/** Everything a save DOES to the HomeKit accessory set, plus the digest binding it. */
+export interface SaveConsequences {
+  changes: PreviewChangeDto[];
+  structuralChangeCount: number;
+  /**
+   * The confirmation token (review #43 P1-2): sha256 over canonical
+   * JSON of the on-disk block, the canonical sensorMap, AND the sorted
+   * current/proposed runtime accessory sets (station, dataPoint,
+   * structuralSignature). Binding the accessory sets makes the digest
+   * sensitive to everything that shapes the CONSEQUENCES — discovery,
+   * station inventory, cached accessories, ui-state — not just the
+   * inputs the user typed. PR C's /compose-save recomputes this same
+   * function and refuses a structural save whose presented digest
+   * differs.
+   */
+  digest: string;
+  /** All proposed effective rows (disabled included), for display. */
+  proposedRows: EditorRowDto[];
+}
+
+/**
+ * Compute the accessory-set consequences of a validated save pipeline
+ * result. THE diff is over the RUNTIME ACCESSORY SET — configured AND
+ * enabled rows, the same filter the platform's reconciliation applies
+ * (review #43 P1-1): a disabled row has no accessory, so disabling
+ * registers as 'removed' (the accessory DEregisters) and enabling as
+ * 'added' (it registers). 'modified' rows exist on both sides;
+ * structural iff the signature changed (re-registration).
+ *
+ * Single implementation for /preview-save today and /compose-save's
+ * digest verification in PR C.
+ */
+export function computeSaveConsequences(ctx: SavePipelineContext): SaveConsequences {
+  const { block, modeResult, proposal, stations, discovery, uiState, effectiveMap, canonical } = ctx;
 
   // CURRENT effective state from the on-disk block over the SAME
   // inventory: a legacy config's current state is its compat
@@ -596,23 +652,24 @@ export async function handlePreviewSave(
   const proposedLayers = acceptedOverrideLayers(proposal, effectiveMap.errors);
 
   type ConfiguredRow = Exclude<EffectiveSensorRow, { kind: 'unrecognized' }>;
-  const configuredByKey = (rows: EffectiveSensorRow[]): Map<string, ConfiguredRow> => {
+  const accessorySet = (rows: EffectiveSensorRow[]): Map<string, ConfiguredRow> => {
     const out = new Map<string, ConfiguredRow>();
     for (const row of rows) {
-      if (row.kind !== 'unrecognized') {
+      if (row.kind !== 'unrecognized' && row.enabled) {
         out.set(`${row.stationMac}|${row.dataPoint}`, row as ConfiguredRow);
       }
     }
     return out;
   };
-  const before = configuredByKey(currentMap.rows);
-  const after = configuredByKey(effectiveMap.rows);
+  const before = accessorySet(currentMap.rows);
+  const after = accessorySet(effectiveMap.rows);
 
   // Fields whose change matters to the user. structuralSignature
   // decides the `structural` flag (re-registration); the rest mark a
-  // row as modified-in-place.
+  // row as modified-in-place. (No `enabled` here — both sides of a
+  // 'modified' pair are enabled by construction.)
   const ROW_FIELDS = [
-    'structuralSignature', 'kind', 'measurement', 'name', 'enabled',
+    'structuralSignature', 'kind', 'measurement', 'name',
     'sourceUnit', 'displayUnit', 'threshold', 'triggerEnabled',
     'triggerDirection', 'batteryField', 'hasBatterySubService', 'embedName',
   ] as const;
@@ -652,25 +709,34 @@ export async function handlePreviewSave(
     ? (x.dataPoint < y.dataPoint ? -1 : x.dataPoint > y.dataPoint ? 1 : 0)
     : (x.stationMac < y.stationMac ? -1 : 1));
 
-  const rows = effectiveMap.rows
+  const proposedRows = effectiveMap.rows
     .map(row => toEditorRowDto(row, proposedLayers))
     .sort((a, b) => a.stationMac === b.stationMac
       ? (a.dataPoint < b.dataPoint ? -1 : a.dataPoint > b.dataPoint ? 1 : 0)
       : (a.stationMac < b.stationMac ? -1 : 1));
 
+  const setSummary = (set: Map<string, ConfiguredRow>): Array<Record<string, string>> =>
+    [...set.values()]
+      .map(row => ({
+        stationMac: row.stationMac,
+        dataPoint: row.dataPoint,
+        structuralSignature: row.structuralSignature,
+      }))
+      .sort((a, b) => `${a.stationMac}|${a.dataPoint}` < `${b.stationMac}|${b.dataPoint}` ? -1 : 1);
   const digest = createHash('sha256')
-    .update(canonicalJsonLocal({ base: block, canonical }))
+    .update(canonicalJsonLocal({
+      base: block,
+      canonical,
+      current: setSummary(before),
+      proposed: setSummary(after),
+    }))
     .digest('hex');
 
   return {
-    ok: true,
-    canonicalSensorMap: canonical,
-    rows,
     changes,
     structuralChangeCount: changes.filter(c => c.structural).length,
     digest,
-    warnings: effectiveMap.warnings.map(w => toDiagnosticDto('warning', w)),
-    notes: effectiveMap.notes.map(n => toDiagnosticDto('note', n)),
+    proposedRows,
   };
 }
 
@@ -783,8 +849,8 @@ export async function handleGetEditorState(
   // editor shows exactly what a pure migration would produce. The raw
   // sensorMap entries are UNTRUSTED (review round 2 F2): they stay
   // unknown[] until each consumer has applied its own guards.
-  const discovery = await loadDiscoveryStore(path.join(deps.persistDir, 'discovery.json'), deps.log);
-  const uiState = await loadUiStateStore(path.join(deps.persistDir, 'ui-state.json'), deps.log);
+  const discovery = await loadDiscoveryStore(path.join(deps.persistDir, 'discovery.json'), deps.log, undefined, READ_ONLY_STORE);
+  const uiState = await loadUiStateStore(path.join(deps.persistDir, 'ui-state.json'), deps.log, undefined, READ_ONLY_STORE);
   const sources = new Map<string, EditorStationDto['source']>();
   const rawSensorMap: ReadonlyArray<unknown> = Array.isArray(block.sensorMap) ? block.sensorMap : [];
   const assemble = (overridesForMacs: ReadonlyArray<unknown>): StationInventory =>

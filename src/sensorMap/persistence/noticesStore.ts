@@ -18,6 +18,7 @@ import {
   type Clock,
   type Logger,
   REAL_CLOCK,
+  type ReadStoreOptions,
 } from './atomicWrite.js';
 
 export const NOTICES_FILE = 'notices.json';
@@ -52,8 +53,8 @@ export function emptyNoticeStore(): NoticeStore {
   return { schemaVersion: 1, notices: [] };
 }
 
-export async function loadNoticeStore(filePath: string, log: Logger, clock: Clock = REAL_CLOCK): Promise<NoticeStore> {
-  const loaded = await readJsonStore<NoticeStore>(filePath, isNoticeStore, log, clock);
+export async function loadNoticeStore(filePath: string, log: Logger, clock: Clock = REAL_CLOCK, opts: ReadStoreOptions = {}): Promise<NoticeStore> {
+  const loaded = await readJsonStore<NoticeStore>(filePath, isNoticeStore, log, clock, opts);
   return loaded ?? emptyNoticeStore();
 }
 

@@ -28,10 +28,12 @@ const STALE_TEMP_AGE_MS = 60 * 60 * 1000;
 /**
  * Read a JSON store file. Returns the parsed object on success, or
  * undefined on any failure (with the file quarantined and a warn
- * logged). Caller supplies a validator that rejects malformed shapes
- * — e.g., checks `schemaVersion === 1`.
+ * logged, unless `quarantineCorrupt: false`). Caller supplies a
+ * validator that rejects malformed shapes — e.g., checks
+ * `schemaVersion === 1`.
  */
-export async function readJsonStore(filePath, validator, log, clock = REAL_CLOCK) {
+export async function readJsonStore(filePath, validator, log, clock = REAL_CLOCK, opts = {}) {
+    const quarantineCorrupt = opts.quarantineCorrupt ?? true;
     let raw;
     try {
         raw = await fs.readFile(filePath, 'utf8');
@@ -52,11 +54,19 @@ export async function readJsonStore(filePath, validator, log, clock = REAL_CLOCK
     }
     catch (e) {
         const err = e;
+        if (!quarantineCorrupt) {
+            log.warn(`Malformed JSON in ${filePath} (${err.message}); reading empty (read-only consumer, file left in place).`);
+            return undefined;
+        }
         const quarantined = await quarantine(filePath, log, clock);
         log.warn(`Malformed JSON in ${filePath} (${err.message}); quarantined to ${quarantined}. Starting empty.`);
         return undefined;
     }
     if (!validator(parsed)) {
+        if (!quarantineCorrupt) {
+            log.warn(`Unexpected schema in ${filePath}; reading empty (read-only consumer, file left in place).`);
+            return undefined;
+        }
         const quarantined = await quarantine(filePath, log, clock);
         log.warn(`Unexpected schema in ${filePath}; quarantined to ${quarantined}. Starting empty.`);
         return undefined;

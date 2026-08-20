@@ -1396,14 +1396,21 @@ Tests: for every non-motion kind, submit an override with each of these fields; 
   shape/seeding, §8.7 inventory, same-machinery validation, canonical
   serialization, divergence gate) is the single implementation behind
   `/compose-save` and `/preview-save`; the preview performs zero
-  writes — not even the legacy snapshot. It returns the canonical
-  sensorMap, the proposed effective rows, a row diff against the
-  current on-disk state (added/removed configured rows are structural;
-  modified rows are structural iff `structuralSignature` changes,
-  which includes a battery host being disabled), and a STATELESS
-  confirmation digest: sha256 over the canonical JSON of (on-disk
-  block, canonical sensorMap). PR C's `/compose-save` re-derives the
-  digest from its own pipeline results and refuses a structural save
+  writes — not even the legacy snapshot (the UI bridge reads the
+  persistence stores with `quarantineCorrupt: false`: it is not their
+  §8 single writer, so corrupt-file recovery is never its side
+  effect). It returns the canonical sensorMap, the proposed effective
+  rows, and a diff over the RUNTIME ACCESSORY SET — configured AND
+  enabled rows, the same filter reconciliation applies (review #43
+  round 1): disabling a row is `removed` (its accessory deregisters),
+  enabling is `added` (it registers), and `modified` rows are
+  structural iff `structuralSignature` changes. The STATELESS
+  confirmation digest is sha256 over the canonical JSON of (on-disk
+  block, canonical sensorMap, sorted current accessory set, sorted
+  proposed accessory set) — binding the CONSEQUENCES, so discovery or
+  inventory drift after a preview invalidates its token even when the
+  typed inputs are unchanged. PR C's `/compose-save` recomputes the
+  same `computeSaveConsequences()` and refuses a structural save
   whose presented digest does not match. The `sensor-map-shape` hard
   stop now also gates preview AND save (previously only the runtime
   and `/editor-state`): a draft composed against a config the runtime

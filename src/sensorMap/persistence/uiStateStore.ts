@@ -17,6 +17,7 @@ import {
   type Clock,
   type Logger,
   REAL_CLOCK,
+  type ReadStoreOptions,
 } from './atomicWrite.js';
 
 export const UI_STATE_FILE = 'ui-state.json';
@@ -53,8 +54,8 @@ export function emptyUiStateStore(): UiStateStore {
   return { schemaVersion: 1, dismissedNoticeIds: [], forgottenFields: [] };
 }
 
-export async function loadUiStateStore(filePath: string, log: Logger, clock: Clock = REAL_CLOCK): Promise<UiStateStore> {
-  const loaded = await readJsonStore<UiStateStore>(filePath, isUiStateStore, log, clock);
+export async function loadUiStateStore(filePath: string, log: Logger, clock: Clock = REAL_CLOCK, opts: ReadStoreOptions = {}): Promise<UiStateStore> {
+  const loaded = await readJsonStore<UiStateStore>(filePath, isUiStateStore, log, clock, opts);
   return loaded ?? emptyUiStateStore();
 }
 

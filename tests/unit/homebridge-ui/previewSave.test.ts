@@ -163,31 +163,60 @@ describe('/preview-save — diff semantics', () => {
     }
   });
 
-  it('disabling distinguishes battery hosts (structural) from plain rows (not)', async () => {
+  it('disabling a row previews as REMOVED, structural: its accessory deregisters (review #43 P1-1)', async () => {
+    // The runtime registers only configured AND enabled rows, so
+    // disabling is a deregistration, never an in-place update — for
+    // battery hosts and plain rows alike.
     const rig = makeRig(V2_BLOCK);
     discoveryStore(rig, ['tempf', 'humidity']);
-    // tempf is the canonical battout host: disabling it REMOVES its
-    // Battery sub-service, so its own signature changes (battery 1→0)
-    // — structural, exactly as the ownership notes describe.
-    const host = await handlePreviewSave(rig.deps, {
-      base: V2_BLOCK,
-      proposal: [CUSTOM_ROW, { dataPoint: 'tempf', enabled: false }],
-    });
-    expect(host.ok).toBe(true);
-    if (host.ok) {
-      expect(host.changes.find(c => c.dataPoint === 'tempf'))
-        .toMatchObject({ change: 'modified', structural: true });
+    for (const dp of ['tempf', 'humidity']) {
+      const result = await handlePreviewSave(rig.deps, {
+        base: V2_BLOCK,
+        proposal: [CUSTOM_ROW, { dataPoint: dp, enabled: false }],
+      });
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        const change = result.changes.find(c => c.dataPoint === dp);
+        expect(change).toMatchObject({ change: 'removed', structural: true });
+        expect(change?.after).toBeUndefined();
+        expect(result.structuralChangeCount).toBe(1);
+      }
     }
-    // humidity references battout but does not host it: disabling
-    // changes no signature — modified, not structural.
-    const plain = await handlePreviewSave(rig.deps, {
-      base: V2_BLOCK,
-      proposal: [CUSTOM_ROW, { dataPoint: 'humidity', enabled: false }],
+  });
+
+  it('enabling a disabled row previews as ADDED, structural: its accessory registers', async () => {
+    const disabledBlock = {
+      ...V2_BLOCK,
+      sensorMap: [CUSTOM_ROW, { dataPoint: 'humidity', enabled: false }],
+    };
+    const rig = makeRig(disabledBlock);
+    discoveryStore(rig, ['tempf', 'humidity']);
+    const result = await handlePreviewSave(rig.deps, {
+      base: disabledBlock,
+      proposal: [CUSTOM_ROW, { dataPoint: 'humidity', enabled: true }],
     });
-    expect(plain.ok).toBe(true);
-    if (plain.ok) {
-      expect(plain.changes.find(c => c.dataPoint === 'humidity'))
-        .toMatchObject({ change: 'modified', structural: false });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      const change = result.changes.find(c => c.dataPoint === 'humidity');
+      expect(change).toMatchObject({ change: 'added', structural: true });
+      expect(change?.before).toBeUndefined();
+    }
+  });
+
+  it('an edit to a row that stays disabled has no accessory consequences', async () => {
+    const disabledBlock = {
+      ...V2_BLOCK,
+      sensorMap: [CUSTOM_ROW, { dataPoint: 'humidity', enabled: false }],
+    };
+    const rig = makeRig(disabledBlock);
+    discoveryStore(rig, ['tempf', 'humidity']);
+    const result = await handlePreviewSave(rig.deps, {
+      base: disabledBlock,
+      proposal: [CUSTOM_ROW, { dataPoint: 'humidity', enabled: false, name: 'Renamed While Off' }],
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.changes).toEqual([]);
     }
   });
 });
@@ -207,6 +236,53 @@ describe('/preview-save — digest', () => {
       expect(a.digest).toBe(b.digest);
       expect(c.digest).not.toBe(a.digest);
     }
+  });
+});
+
+describe('/preview-save — digest binds the CONSEQUENCES (review #43 P1-2)', () => {
+  it('the digest changes when discovery gains a station, even with identical base and proposal', async () => {
+    const rig = makeRig(V2_BLOCK);
+    discoveryStore(rig, ['tempf']);
+    const first = await handlePreviewSave(rig.deps, { base: V2_BLOCK, proposal: [CUSTOM_ROW] });
+    expect(first.ok).toBe(true);
+
+    // Station B appears in discovery after the preview: the same
+    // global proposal now affects MORE accessories, so the confirm
+    // token from the first preview must be invalid.
+    const OTHER = 'AA:BB:CC:DD:EE:99';
+    writeFileSync(path.join(rig.persistDir, 'discovery.json'), JSON.stringify({
+      schemaVersion: 1,
+      entries: [
+        { stationMac: MAC, stationName: 'Home', dataPoint: 'tempf', firstSeen: '2026-01-01T00:00:00Z', lastSeen: '2026-01-02T00:00:00Z' },
+        { stationMac: OTHER, stationName: 'Cabin', dataPoint: 'tempf', firstSeen: '2026-01-03T00:00:00Z', lastSeen: '2026-01-03T00:00:00Z' },
+      ],
+    }));
+    const second = await handlePreviewSave(rig.deps, { base: V2_BLOCK, proposal: [CUSTOM_ROW] });
+    expect(second.ok).toBe(true);
+    if (first.ok && second.ok) {
+      expect(second.digest).not.toBe(first.digest);
+    }
+  });
+});
+
+describe('/preview-save and /editor-state — corrupt stores are never quarantined by the bridge (review #43 P2-6)', () => {
+  it('a malformed discovery.json is read as empty and LEFT IN PLACE', async () => {
+    const rig = makeRig(LEGACY_BLOCK);
+    writeFileSync(path.join(rig.persistDir, 'discovery.json'), '{not json');
+    writeFileSync(path.join(rig.persistDir, 'ui-state.json'), '{"schemaVersion": 99}');
+    const before = readdirSync(rig.persistDir).sort();
+    const bytesBefore = readFileSync(path.join(rig.persistDir, 'discovery.json'), 'utf8');
+
+    const result = await handlePreviewSave(rig.deps, {
+      base: LEGACY_BLOCK,
+      cachedAccessoryUniqueIds: [`${MAC}-tempf`],
+    });
+    expect(result.ok).toBe(true); // inventory degrades to cached accessories
+
+    // The bridge is a read-only consumer (§8 single-writer): no
+    // quarantine rename, no new files, bytes untouched.
+    expect(readdirSync(rig.persistDir).sort()).toEqual(before);
+    expect(readFileSync(path.join(rig.persistDir, 'discovery.json'), 'utf8')).toBe(bytesBefore);
   });
 });
 

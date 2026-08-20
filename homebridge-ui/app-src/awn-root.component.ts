@@ -123,13 +123,13 @@ interface StationGroup {
         @if (pr.ok) {
           <h3>Preview</h3>
           @if (pr.changes.length === 0) {
-            <div class="banner info">No effective changes: the draft resolves to the current configuration.</div>
+            <div class="banner info">No accessory changes: nothing registers, deregisters, or updates. (Edits to disabled rows still save and take effect when the row is enabled.)</div>
           } @else {
             @for (c of pr.changes; track $index) {
               <div class="change-row">
                 <span class="change-kind {{ c.change }}">{{ c.change }}</span>
                 @if (c.structural) {
-                  <span class="structural-chip">re-registers</span>
+                  <span class="structural-chip">{{ structuralVerb(c.change) }}</span>
                 }
                 <code>{{ c.dataPoint }}</code>
                 <span class="station-meta">{{ c.stationMac }}</span>
@@ -140,16 +140,22 @@ interface StationGroup {
             }
             @if (pr.structuralChangeCount > 0) {
               <div class="banner">
-                {{ pr.structuralChangeCount }} accessor{{ pr.structuralChangeCount === 1 ? 'y' : 'ies' }} would re-register on save
-                (HomeKit room assignments for re-registered accessories may need to be redone).
+                {{ pr.structuralChangeCount }} accessor{{ pr.structuralChangeCount === 1 ? 'y' : 'ies' }} would register, deregister, or re-register on save
+                (a re-registered accessory may need its HomeKit room assignment redone; a deregistered one leaves HomeKit).
                 Saving from this editor arrives in a later beta; this preview wrote nothing.
               </div>
             } @else {
-              <div class="banner info">All changes apply in place; no accessory re-registers. Saving from this editor arrives in a later beta; this preview wrote nothing.</div>
+              <div class="banner info">All changes apply in place; no accessory registers, deregisters, or re-registers. Saving from this editor arrives in a later beta; this preview wrote nothing.</div>
             }
           }
           @for (w of pr.warnings; track $index) {
             <div class="banner">{{ w.message }}</div>
+          }
+          @if (pr.notes.length > 0) {
+            <h3>Preview notes</h3>
+            @for (n of pr.notes; track $index) {
+              <div class="banner info">{{ n.message }}</div>
+            }
           }
         } @else {
           <div class="banner safe-mode">Preview refused ({{ pr.error.code }}): {{ pr.error.message }}</div>
@@ -372,35 +378,50 @@ export class AwnRootComponent {
     this.expandedKey.set(this.rowKey(row));
   }
 
+  /**
+   * Synchronize EVERY field with the form on every event (review #43
+   * P1-3): a value differing from the row's original becomes a patch;
+   * a value equal to the original CLEARS its patch — so reverting a
+   * control in the form always reverts the draft, and the proposal
+   * always matches what the form displays. Invalid transients (empty
+   * name, cleared number) clear their patch rather than drafting.
+   */
   private applyEdit(row: EditorRowDto, v: Record<string, unknown>): void {
-    if (v.enabled !== row.enabled) {
-      this.store.setField(row, 'enabled', v.enabled === true);
-    }
-    if (typeof v.name === 'string' && v.name !== '' && v.name !== row.name) {
-      this.store.setField(row, 'name', v.name);
-    }
-    if (typeof v.displayUnit === 'string' && v.displayUnit !== '' && v.displayUnit !== row.displayUnit) {
-      this.store.setField(row, 'displayUnit', v.displayUnit);
-    }
+    const sync = (field: 'enabled' | 'name' | 'displayUnit' | 'threshold' | 'triggerDirection',
+      formValue: unknown, original: unknown, valid: boolean): void => {
+      if (!valid || formValue === original) {
+        this.store.clearField(row, field);
+      } else {
+        this.store.setField(row, field, formValue);
+      }
+    };
+    sync('enabled', v.enabled === true, row.enabled, true);
+    sync('name', v.name, row.name, typeof v.name === 'string' && v.name !== '');
+    sync('displayUnit', v.displayUnit, row.displayUnit,
+      typeof v.displayUnit === 'string' && v.displayUnit !== '');
     if (row.kind === 'motion') {
-      if (typeof v.threshold === 'number' && v.threshold !== row.threshold) {
-        this.store.setField(row, 'threshold', v.threshold);
-      }
-      if ((v.triggerDirection === 'above' || v.triggerDirection === 'below')
-        && v.triggerDirection !== row.triggerDirection) {
-        this.store.setField(row, 'triggerDirection', v.triggerDirection);
-      }
+      sync('threshold', v.threshold, row.threshold, typeof v.threshold === 'number');
+      sync('triggerDirection', v.triggerDirection, row.triggerDirection,
+        v.triggerDirection === 'above' || v.triggerDirection === 'below');
     }
     this.bump();
   }
 
   protected removeOverride(row: EditorRowDto): void {
     this.store.removeOverride(row);
+    // Close the form: its controls show pre-removal values, and a
+    // later form event would resurrect the override as patches.
+    this.expandedKey.set(null);
+    this.editForm = null;
     this.bump();
   }
 
   protected resetRow(row: EditorRowDto): void {
     this.store.resetRow(row);
+    // Close the form (review #43 P1-3): the controls still hold the
+    // edited values, and the next form event would re-draft them.
+    this.expandedKey.set(null);
+    this.editForm = null;
     this.bump();
   }
 
@@ -412,6 +433,11 @@ export class AwnRootComponent {
   }
 
   protected async preview(): Promise<void> {
+    // Bind the request to the draft version it previews (review #43
+    // P2-4): inputs stay editable while the request runs, and a
+    // response for an OLDER draft must never install its results (or
+    // its digest) over the newer state.
+    const draftVersionAtStart = this.draftVersion();
     this.previewPending.set(true);
     this.previewResult.set(null);
     try {
@@ -424,15 +450,24 @@ export class AwnRootComponent {
         proposal: this.store.proposal(),
         cachedAccessoryUniqueIds,
       });
-      this.previewResult.set(result);
+      if (this.draftVersion() === draftVersionAtStart) {
+        this.previewResult.set(result);
+      }
     } catch (e) {
-      this.previewResult.set({
-        ok: false,
-        error: { code: 'transport', message: e instanceof Error ? e.message : String(e) },
-      });
+      if (this.draftVersion() === draftVersionAtStart) {
+        this.previewResult.set({
+          ok: false,
+          error: { code: 'transport', message: e instanceof Error ? e.message : String(e) },
+        });
+      }
     } finally {
       this.previewPending.set(false);
     }
+  }
+
+  /** What a structural change DOES to the accessory (review #43 P1-1). */
+  protected structuralVerb(change: 'added' | 'removed' | 'modified'): string {
+    return change === 'added' ? 'registers' : change === 'removed' ? 'deregisters' : 're-registers';
   }
 
   protected changeSummary(before: EditorRowDto, after: EditorRowDto): string {

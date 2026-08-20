@@ -19,11 +19,11 @@
  * platform for a live snapshot).
  */
 import type { DiscoveryStore } from '../types.js';
-import { cleanupStaleTempFiles, type Clock, type Logger } from './atomicWrite.js';
+import { cleanupStaleTempFiles, type Clock, type Logger, type ReadStoreOptions } from './atomicWrite.js';
 export declare const DISCOVERY_FILE = "discovery.json";
 export declare const DISCOVERY_LAST_SEEN_INTERVAL_MS: number;
 export declare function emptyDiscoveryStore(): DiscoveryStore;
-export declare function loadDiscoveryStore(filePath: string, log: Logger, clock?: Clock): Promise<DiscoveryStore>;
+export declare function loadDiscoveryStore(filePath: string, log: Logger, clock?: Clock, opts?: ReadStoreOptions): Promise<DiscoveryStore>;
 export declare function saveDiscoveryStore(filePath: string, store: DiscoveryStore, log: Logger): Promise<void>;
 interface TrackerOptions {
     filePath: string;

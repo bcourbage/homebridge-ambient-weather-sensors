@@ -11,11 +11,11 @@
  * accessory disappeared.
  */
 import type { NoticeStore } from '../types.js';
-import { type Clock, type Logger } from './atomicWrite.js';
+import { type Clock, type Logger, type ReadStoreOptions } from './atomicWrite.js';
 export declare const NOTICES_FILE = "notices.json";
 export declare const MAX_NOTICES = 100;
 export declare function emptyNoticeStore(): NoticeStore;
-export declare function loadNoticeStore(filePath: string, log: Logger, clock?: Clock): Promise<NoticeStore>;
+export declare function loadNoticeStore(filePath: string, log: Logger, clock?: Clock, opts?: ReadStoreOptions): Promise<NoticeStore>;
 export declare function saveNoticeStore(filePath: string, store: NoticeStore, log: Logger): Promise<void>;
 /**
  * Append a notice and persist. Deterministic id derived from
