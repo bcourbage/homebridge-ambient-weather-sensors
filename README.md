@@ -97,7 +97,7 @@ This plugin allows you to pull sensor data from your Ambient Weather weather sta
 
 ## Compatibility
 - Homebridge `1.8+` and Homebridge `2.x`
-- Node.js `22.12+` or `24.x`
+- Node.js `22.13+` or `24.x`
 
 ## Features
 - Supports parsing sensors attached to multiple weather stations

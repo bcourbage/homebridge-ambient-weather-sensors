@@ -917,7 +917,7 @@ committed assets; an `npm pack` test proves the published package
 carries every browser/server asset; an enforced bundle budget guards
 size.
 
-Angular 21 is the launch toolchain (supports Node 22.12+/24 per
+Angular 21 is the launch toolchain (supports Node 22.13+/24 per
 Angular's compatibility table; LTS through June 2027). TypeScript 5.9
 is required and was adopted as a standalone, fully-verified commit.
 Fallback (objective criteria, decided at PR A): if the foundation fails
