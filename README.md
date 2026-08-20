@@ -71,7 +71,11 @@ downgrade while a v2 config is still in place, install **v1.7.1**
 accessories preserved but no longer updating, until you restore a
 legacy config.
 
-See `docs/future/sensor-map.md` for the full design if you're
+The plugin's settings page gains v2 preview panels: status,
+discovery, notices, and a read-only sensor-map table.
+[docs/plugin-ui.md](./docs/plugin-ui.md) explains what they show
+and what becomes editable at release. See
+`docs/future/sensor-map.md` for the full design if you're
 curious about the shape of the v2 config.
 
 ## What's New in v1.7.2
