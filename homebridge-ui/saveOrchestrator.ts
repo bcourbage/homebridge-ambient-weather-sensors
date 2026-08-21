@@ -48,6 +48,13 @@ export interface ComposeAndPersistArgs {
    * (multi-Home) setups must pass the block their editor loaded.
    */
   base?: Record<string, unknown>;
+  /**
+   * The /preview-save confirmation digest (PR C / finding 5). The
+   * server REQUIRES it for saves with structural consequences and
+   * refuses stale or mismatched values — pass the digest of the
+   * preview the user actually confirmed.
+   */
+  confirmDigest?: string;
 }
 
 export async function composeAndPersist(
@@ -109,6 +116,7 @@ export async function composeAndPersist(
     proposal: args.proposal,
     cachedAccessoryUniqueIds,
     liveStations: args.liveStations,
+    confirmDigest: args.confirmDigest,
   }) as ComposeSaveResult;
 
   if (!result || result.ok !== true) {
@@ -117,8 +125,39 @@ export async function composeAndPersist(
   }
 
   const nextArray = cfgArray.map((b, i) => (i === index ? result.nextConfig : b));
-  await deps.updatePluginConfig(nextArray);
-  await deps.savePluginConfig();
+  // Post-compose persistence failures are INDETERMINATE (review #45
+  // P1-2): HB UI X may have taken effect and then rejected, or lost
+  // the response. Never tell the user "nothing was written" here —
+  // report the failed stage and direct them to reload and inspect
+  // before retrying. (The legacy snapshot is already durable either
+  // way; a retry re-verifies it.)
+  try {
+    await deps.updatePluginConfig(nextArray);
+  } catch (e) {
+    return {
+      ok: false,
+      error: {
+        code: 'persistence-indeterminate',
+        stage: 'updatePluginConfig',
+        message: `updatePluginConfig failed after the save was composed: ${(e as Error).message}. The staged `
+          + 'configuration state is uncertain — reload the plugin settings and inspect the configuration before '
+          + 'retrying. The legacy snapshot (when applicable) was already written and is verified on retry.',
+      },
+    };
+  }
+  try {
+    await deps.savePluginConfig();
+  } catch (e) {
+    return {
+      ok: false,
+      error: {
+        code: 'persistence-indeterminate',
+        stage: 'savePluginConfig',
+        message: `savePluginConfig failed after the configuration was staged: ${(e as Error).message}. The save `
+          + 'MAY have been applied — reload the plugin settings and inspect the configuration before retrying.',
+      },
+    };
+  }
   return result;
 }
 

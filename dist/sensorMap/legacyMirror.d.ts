@@ -2,38 +2,50 @@
  * Legacy mirror + immutable snapshot — the downgrade-safety package for
  * the v2 config migration (finding-#4 Stage 4, review finding 5).
  *
- * THE PROBLEM: once the UI migration saves `configVersion: 2` and
- * removes the legacy toggles, a plugin downgraded to v1.7 reads every
- * category toggle as false, produces an empty device set, and
- * unregisters the entire accessory cache on its FIRST boot — before any
+ * THE PROBLEM (the mirror-ABSENT/STALE case): if a v2 config carried
+ * no synchronized legacy fields — or outdated ones — a plugin
+ * downgraded to an UNGUARDED release (v1.7.0 and earlier, which DO
+ * attempt to interpret whatever legacy fields are present) would read
+ * every category toggle as false, produce an empty device set, and
+ * unregister the entire accessory cache on its FIRST boot — before any
  * human can restore a backup. Room placement and automations die at
- * that moment and are not recoverable by re-registering the same UUIDs.
+ * that moment and are not recoverable by re-registering the same
+ * UUIDs. (The editor migration does NOT remove the legacy toggles: it
+ * re-emits them, synchronized, as the mirror below. Guarded v1.7.1+
+ * releases never interpret a v2-marked config at all — they freeze.)
  *
  * THE PACKAGE (three layers, each independent):
  *
  *   1. IMMUTABLE SNAPSHOT (permanent). At the first v2 conversion —
  *      BEFORE config.json is mutated — the UI save flow writes the
- *      legacy sensor-configuration fields it is about to remove to
- *      `legacy-config-snapshot.json` in the plugin persist dir, via the
- *      atomic persistence helper. Never overwritten; never contains API
+ *      ORIGINAL legacy sensor-configuration fields (which the
+ *      conversion supersedes and re-emits in synchronized, projected
+ *      form — see the mirror below) to `legacy-config-snapshot.json`
+ *      in the plugin persist dir, via the atomic persistence helper. Never overwritten; never contains API
  *      secrets (only `LEGACY_SENSOR_FIELDS`). Provenance + the manual
  *      late-rollback procedure's source of truth.
  *
  *   2. SYNCHRONIZED MIRROR (time-boxed). Every automated v2 UI save
  *      re-emits legacy sensor fields ALONGSIDE `configVersion: 2` +
  *      `sensorMap`, projected from the effective v2 map by
- *      `projectLegacyMirror`. A downgraded v1.7 reads those fields
- *      directly — zero restore step, no race. Marked with
- *      `_legacyMirror: { version, hash }` so `detectConfigMode`
+ *      `projectLegacyMirror`. Its value is the CURRENT-STATE MANUAL
+ *      rollback: remove `sensorMap`, `configVersion`, and
+ *      `_legacyMirror` from the block, and the remaining synchronized
+ *      legacy fields ARE a working 1.x configuration of the current
+ *      state — no field reconstruction. The shipped 1.7.x guard
+ *      freezes on ANY v2-marked config BEFORE reading these fields,
+ *      mirrored or not: nothing on the 1.7.x line consumes the mirror
+ *      automatically (that would require a NEW 1.7.x release). Marked
+ *      with `_legacyMirror: { version, hash }` so `detectConfigMode`
  *      suppresses its both-shapes-present ambiguity warning ONLY for a
  *      recognized, hash-matching mirror; a manual `sensorMap` edit that
- *      staleness the mirror is detectable (hash mismatch) and warned.
+ *      stales the mirror is detectable (hash mismatch) and warned.
  *      The runtime plugin never rewrites config — mirror maintenance is
  *      exclusively the UI server's save path (`composeV2ConfigSave`).
  *
- *   3. The v1.7.1 guard backport (separate release) freezes instead of
- *      reconciling when it sees a v2 config — the safety net for a
- *      downgrade that lands on a config whose mirror was dropped.
+ *   3. The v1.7.1+ guard (separate release) freezes instead of
+ *      reconciling when it sees ANY v2 config — downgrade safety comes
+ *      from the guard alone, never from the mirror.
  *
  * REVERSE-PROJECTION CONTRACT (conservative, cache-preservation first):
  * the mirror's job is that v1.7 registers EXACTLY the v1.7-representable

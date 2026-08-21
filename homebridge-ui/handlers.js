@@ -18,7 +18,7 @@ import { buildEffectiveSensorMap, partitionOverrideLayers } from '../dist/sensor
 import { canonicalizeSensorMap } from '../dist/sensorMap/canonicalizeSensorMap.js';
 import { compatToOverrides } from '../dist/sensorMap/compat.js';
 import { detectConfigMode } from '../dist/sensorMap/configMode.js';
-import { composeV2ConfigSave, verifyLegacySnapshot, writeLegacySnapshot, } from '../dist/sensorMap/legacyMirror.js';
+import { composeV2ConfigSave, recognizeMirror, verifyLegacySnapshot, writeLegacySnapshot, } from '../dist/sensorMap/legacyMirror.js';
 import { sensorMapShapeError } from '../dist/sensorMap/platformEffectiveMap.js';
 import { STATION_MAC_REGEX } from '../dist/sensorMap/validation.js';
 import { shadowModeEnabled } from '../dist/sensorMap/shadowMode.js';
@@ -47,7 +47,7 @@ export async function handleGetStatus(deps, payload) {
         configWarnings: modeResult.warnings,
         safeModeBanner: modeResult.safeModeBanner,
         readOnly: true,
-        sensorMapEditorAvailable: false,
+        sensorMapEditorAvailable: true,
         composeSaveAvailable: true,
         previewSaveAvailable: true,
     };
@@ -303,6 +303,58 @@ export async function handleComposeSave(deps, payload) {
         return r;
     }
     const { block, modeResult, effectiveMap, canonical } = r.ctx;
+    // ---- 7b2. V2-FLAG GATE (review #45 P1-1): saving converts the
+    //           configuration to v2, and a v2 config with the flag OFF
+    //           is exactly the dangerous state the rollback docs warn
+    //           about (the flag-off runtime cannot read sensorMap and
+    //           can deregister cached accessories). The editor is
+    //           disabled client-side when the flag is off; this is the
+    //           fail-closed server backstop. Previews stay available —
+    //           a dry run is how users decide whether to opt in.
+    if (detectV2FlagSource(block, deps.env ?? process.env) === 'none') {
+        return {
+            ok: false,
+            error: {
+                code: 'v2-flag-off',
+                message: 'The sensor-map v2 flag is off, so the runtime would not read a saved sensor map — and a v2 '
+                    + 'configuration with the flag off can deregister cached accessories. Enable "Advanced (v2.0 preview) → '
+                    + 'Enable sensor-map v2 live path" in the settings form, restart Homebridge, and retry. Nothing was written.',
+            },
+        };
+    }
+    // ---- 7c. STRUCTURAL CONFIRMATION GATE (PR C / finding 5): the
+    //          consequences are recomputed HERE, from the current
+    //          on-disk config and inventory — never trusted from the
+    //          client. A save that would register, deregister, or
+    //          re-register accessories requires the digest issued by
+    //          /preview-save for exactly these consequences; anything
+    //          missing or mismatched fails closed BEFORE the snapshot
+    //          or composition. The fresh digest is deliberately NOT
+    //          included in the refusal — the only way to get one is to
+    //          preview, which is what puts the confirmation in front
+    //          of the user.
+    const consequences = computeSaveConsequences(r.ctx);
+    if (p.confirmDigest !== undefined && p.confirmDigest !== consequences.digest) {
+        return {
+            ok: false,
+            error: {
+                code: 'stale-confirmation',
+                message: 'The configuration, station inventory, or discovery state changed since this save was previewed. '
+                    + 'Preview again and re-confirm; nothing was written.',
+            },
+        };
+    }
+    if (consequences.structuralChangeCount > 0 && p.confirmDigest === undefined) {
+        return {
+            ok: false,
+            error: {
+                code: 'confirmation-required',
+                message: `This save would register, deregister, or re-register ${consequences.structuralChangeCount} `
+                    + 'accessor(y/ies). Preview the changes and confirm them first; nothing was written.',
+                structuralChangeCount: consequences.structuralChangeCount,
+            },
+        };
+    }
     // ---- 8. Compose. detectConfigMode's verdict is passed explicitly
     //         (it is the single authority on "legacy").
     const composed = composeV2ConfigSave(block, canonical, effectiveMap, modeResult.mode);
@@ -553,6 +605,15 @@ export async function handleGetEditorState(deps, payload) {
     for (const w of modeResult.warnings) {
         warnings.push({ severity: 'warning', code: 'config-mode', message: w });
     }
+    if (!v2FlagEnabled && modeResult.mode !== 'safe-mode') {
+        warnings.push({
+            severity: 'warning',
+            code: 'v2-flag-off',
+            message: 'The sensor-map v2 flag is off: the table below is a preview and saving is disabled. To edit for '
+                + 'real, enable "Advanced (v2.0 preview) → Enable sensor-map v2 live path" in the settings form and '
+                + 'restart Homebridge.',
+        });
+    }
     if (modeResult.mode === 'safe-mode') {
         return {
             configMode: 'safe-mode',
@@ -562,6 +623,7 @@ export async function handleGetEditorState(deps, payload) {
             stations: [],
             authored: [],
             authoredSource: 'sensorMap',
+            mirrorState: recognizeMirror(block).state,
             rows: [],
             warnings,
             errors: [],
@@ -585,6 +647,7 @@ export async function handleGetEditorState(deps, payload) {
             stations: [],
             authored: [],
             authoredSource: 'sensorMap',
+            mirrorState: recognizeMirror(block).state,
             rows: [],
             warnings,
             errors: [{ severity: 'error', code: 'sensor-map-shape', message: shapeError }],
@@ -641,7 +704,7 @@ export async function handleGetEditorState(deps, payload) {
     return {
         configMode: modeResult.mode,
         v2FlagEnabled,
-        editorAvailable: false, // flips true in PR C (finding 5 closure)
+        editorAvailable: v2FlagEnabled, // PR C: save path live, gated on the v2 opt-in (review #45 P1-1)
         version: deps.version,
         stations: stations.map(st => {
             const mac = st.macAddress.toUpperCase();
@@ -653,6 +716,7 @@ export async function handleGetEditorState(deps, payload) {
         }),
         authored: overrides.map(toAuthoredFragmentDto),
         authoredSource: modeResult.mode === 'legacy' ? 'compat-seeded' : 'sensorMap',
+        mirrorState: recognizeMirror(block).state,
         rows,
         warnings,
         errors: effectiveMap.errors.map(e => toDiagnosticDto('error', e)),

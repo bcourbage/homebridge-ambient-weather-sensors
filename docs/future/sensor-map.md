@@ -536,9 +536,23 @@ forever.
 
 **2. Synchronized legacy mirror — time-boxed.** Every automated v2 UI save
 re-emits legacy sensor fields alongside `configVersion: 2` + `sensorMap`,
-reverse-projected from the effective v2 map (`projectLegacyMirror`). A
-downgraded v1.7 reads them directly — zero restore step, no first-boot race.
-The projection is conservative around CACHE PRESERVATION: v1.7 must register
+reverse-projected from the effective v2 map (`projectLegacyMirror`). Its
+value is the CURRENT-STATE MANUAL rollback — valid ONLY while the mirror
+is recognized (hash-matching, editor-generated — surfaced positively as
+`mirrorState: 'recognized'` in `/editor-state` and "Rollback mirror:
+verified" on the plugin page; a mirror-less v2 config raises NO warning,
+so absence-of-warnings is not a check): removing `sensorMap`,
+`configVersion`, and `_legacyMirror` (and disabling `_sensorMapV2` /
+unsetting `SENSOR_MAP_V2`) leaves a working 1.x configuration of the
+current state, because the legacy fields are already synchronized in the
+block. With a missing, invalid, or STALE mirror the same deletions can
+expose empty or outdated legacy fields and deregister accessories — the
+documented recovery is then the guard freeze, the snapshot restore, or an
+upgrade + editor re-save to regenerate the mirror; never blind deletion. The shipped 1.7.x guard freezes on ANY v2-marked config BEFORE
+reading these fields — nothing on the 1.7.x line consumes the mirror
+automatically; that would require a new 1.7.x implementation (2026-08-20
+review: not currently planned). The projection is conservative around
+CACHE PRESERVATION: v1.7 must register
 exactly the v1.7-representable accessories the v2 map enables (zero
 unregister calls for those; verified by the downgrade lifecycle fixture and a
 projection property test). Specifics:
@@ -566,13 +580,15 @@ projection property test). Specifics:
   equally loud "metadata is INVALID" warning. Manual config edits are the
   user's responsibility to re-save through the UI.
 
-**Support window:** automatic 1.x rollback (the mirror) is maintained through
+**Support window:** the synchronized mirror (which is what makes the
+current-state manual rollback a three-deletion edit — mirror-recognized
+configs only) is maintained through
 the **2.1.x line and removed in 2.2.0**. The snapshot remains permanently;
-from 2.2.0 onward, rolling back below 2.0 is a documented manual procedure
-(restore the snapshot fields into config.json before downgrading). The
-v1.7.1 guard release (configVersion/sensorMap detected → freeze, no
-reconciliation) is the safety net for downgrades that land on a mirror-less
-config.
+from 2.2.0 onward, rolling back below 2.0 means the ORIGINAL-state manual
+procedure (delete every `LEGACY_SENSOR_FIELDS` key, apply the snapshot's
+`legacy` object, remove the v2 markers). The v1.7.1+ guard
+(configVersion/sensorMap detected → freeze, no reconciliation) is the
+downgrade safety net for EVERY v2-marked config, mirrored or not.
 
 **RELEASE GATE (Stage 8 / GA — reviewer finding 5, round 3):** no release
 may ship a UI (or any code path) capable of writing `configVersion: 2` /
@@ -1397,6 +1413,26 @@ When any of these appears in a non-motion row (default or user override), the pl
 Tests: for every non-motion kind, submit an override with each of these fields; verify the specific warn is emitted and the field is absent from the resulting effective row.
 
 ## 17. Decision log
+
+- **2026-08-20**: PR C as-built — save activation (GA task #69;
+  finding 5 CLOSES here). The editor's save path runs EXCLUSIVELY
+  through `composeAndPersist` → `/compose-save`. The boundary gained
+  the STRUCTURAL CONFIRMATION GATE, placed after the shared pipeline
+  and BEFORE composition/snapshot: `computeSaveConsequences()` is
+  recomputed from the current on-disk config and inventory; a save
+  with structural consequences (register/deregister/re-register)
+  refuses without a digest (`confirmation-required`, which never
+  echoes a usable digest — /preview-save is the only source, forcing
+  the confirmation UX), and ANY provided digest that mismatches the
+  recomputation refuses as `stale-confirmation`, structural or not.
+  The client shows a confirmation modal listing the structural
+  changes before a structural save; in-place saves go direct, always
+  carrying the previewed digest. `sensorMapEditorAvailable` and
+  `editorAvailable` flip true (safe mode and the sensorMap-shape hard
+  stop stay false, and the client gates every save control on the
+  server's flag). The pure-migration first save remains digest-free
+  by construction — it has zero accessory consequences (§11
+  equivalence, proven on production data pre-beta.12).
 
 - **2026-08-19 (c)**: PR B as-built — draft editor + `/preview-save`
   (GA task #69). The preview endpoint shares the save's exact pipeline

@@ -24,6 +24,8 @@ import {
   handleGetVocabulary,
   type HandlerDeps,
 } from '../../../homebridge-ui/handlers';
+import { buildEffectiveSensorMap } from '../../../src/sensorMap/buildEffectiveMap';
+import { composeV2ConfigSave } from '../../../src/sensorMap/legacyMirror';
 import { UNIT_VOCABULARY, unitOptionsFor } from '../../../src/sensorMap/unitVocabulary';
 import type { Measurement } from '../../../src/sensorMap/types';
 
@@ -74,6 +76,7 @@ const V2_BLOCK = {
   name: 'Test Station',
   apiKey: 'SECRET-API-KEY-XYZ',
   applicationKey: 'SECRET-APP-KEY-XYZ',
+  _sensorMapV2: true,
   configVersion: 2,
   sensorMap: [
     { dataPoint: 'tempf', name: 'Outdoor Temp' },
@@ -103,7 +106,7 @@ describe('/editor-state — v2 configuration', () => {
     const dto = await handleGetEditorState(rig.deps, {});
 
     expect(dto.configMode).toBe('v2');
-    expect(dto.editorAvailable).toBe(false);
+    expect(dto.editorAvailable).toBe(true); // PR C: save path live
     expect(dto.errors).toEqual([]);
 
     const byDp = new Map(dto.rows.filter(r => r.stationMac === MAC).map(r => [r.dataPoint, r]));
@@ -354,6 +357,79 @@ describe('/editor-state — raw invalid fragments (crash + false-origin countere
   });
 });
 
+describe('/editor-state — mirrorState (review #45 round 4)', () => {
+  it('COUNTEREXAMPLE: a v2 config with no _legacyMirror and no legacy fields is absent, with NO stale/invalid warning', async () => {
+    // The exact false-authorization case: "confirm there is no
+    // warning" would have blessed a rollback that exposes an empty
+    // legacy config. The positive mirrorState signal is the fix.
+    const bare = {
+      platform: 'AmbientWeatherSensors',
+      apiKey: 'k', applicationKey: 'a', _sensorMapV2: true,
+      configVersion: 2,
+      sensorMap: [{ dataPoint: 'tempf', name: 'Patio' }],
+    };
+    const rig = makeRig([bare]);
+    discoveryStore(rig, [{ mac: MAC, dataPoint: 'tempf' }]);
+    const dto = await handleGetEditorState(rig.deps, {});
+    expect(dto.mirrorState).toBe('absent');
+    expect(dto.warnings.some(w => /stale|invalid/i.test(w.message))).toBe(false);
+  });
+
+  it('an editor-composed config is recognized; tampering with sensorMap makes it stale', async () => {
+    const legacyBase = {
+      platform: 'AmbientWeatherSensors',
+      apiKey: 'k', applicationKey: 'a', _sensorMapV2: true, temperatureSensors: true,
+    };
+    const map = buildEffectiveSensorMap({
+      userOverrides: [], discovery: { schemaVersion: 1, entries: [] } as never,
+      uiState: { schemaVersion: 1, dismissedNoticeIds: [], forgottenFields: [] } as never,
+      stations: [{ macAddress: MAC, name: 'Home' }], configMode: 'v2',
+    });
+    const { nextConfig } = composeV2ConfigSave(legacyBase, [], map, 'legacy');
+    const rig = makeRig([{ platform: 'AmbientWeatherSensors', ...nextConfig }]);
+    discoveryStore(rig, [{ mac: MAC, dataPoint: 'tempf' }]);
+    const dto = await handleGetEditorState(rig.deps, {});
+    expect(dto.mirrorState).toBe('recognized');
+
+    const tampered = { platform: 'AmbientWeatherSensors', ...nextConfig, sensorMap: [{ dataPoint: 'tempf', enabled: false }] };
+    const rig2 = makeRig([tampered]);
+    discoveryStore(rig2, [{ mac: MAC, dataPoint: 'tempf' }]);
+    const dto2 = await handleGetEditorState(rig2.deps, {});
+    expect(dto2.mirrorState).toBe('stale');
+  });
+});
+
+describe('/editor-state — v2-flag gating (review #45 P1-1)', () => {
+  it('flag OFF: editorAvailable false with a directing banner (rows still preview)', async () => {
+    const rig = makeRig([LEGACY_BLOCK]); // no _sensorMapV2, env {}
+    discoveryStore(rig, [{ mac: MAC, dataPoint: 'tempf' }]);
+    const dto = await handleGetEditorState(rig.deps, {});
+    expect(dto.v2FlagEnabled).toBe(false);
+    expect(dto.editorAvailable).toBe(false);
+    const banner = dto.warnings.find(w => w.code === 'v2-flag-off');
+    expect(banner).toBeDefined();
+    expect(banner?.message).toContain('restart Homebridge');
+    expect(dto.rows.length).toBeGreaterThan(0); // the preview stays useful
+  });
+
+  it('flag ON via config field enables the editor', async () => {
+    const rig = makeRig([{ ...LEGACY_BLOCK, _sensorMapV2: true }]);
+    discoveryStore(rig, [{ mac: MAC, dataPoint: 'tempf' }]);
+    const dto = await handleGetEditorState(rig.deps, {});
+    expect(dto.v2FlagEnabled).toBe(true);
+    expect(dto.editorAvailable).toBe(true);
+    expect(dto.warnings.find(w => w.code === 'v2-flag-off')).toBeUndefined();
+  });
+
+  it('flag ON via environment variable enables the editor', async () => {
+    const rig = makeRig([LEGACY_BLOCK]);
+    discoveryStore(rig, [{ mac: MAC, dataPoint: 'tempf' }]);
+    const dto = await handleGetEditorState({ ...rig.deps, env: { SENSOR_MAP_V2: '1' } }, {});
+    expect(dto.v2FlagEnabled).toBe(true);
+    expect(dto.editorAvailable).toBe(true);
+  });
+});
+
 describe('/editor-state — legacy and troubled configurations', () => {
   it('a legacy config renders its compat translation as a migration preview', async () => {
     const rig = makeRig([LEGACY_BLOCK]);
@@ -395,6 +471,7 @@ describe('/editor-state — legacy and troubled configurations', () => {
     expect(dto.configMode).toBe('safe-mode');
     expect(dto.rows).toEqual([]);
     expect(dto.stations).toEqual([]);
+    // Safe mode stays fail-closed even with the PR C save path live.
     expect(dto.editorAvailable).toBe(false);
     expect(dto.warnings.some(w => /newer plugin version/.test(w.message))).toBe(true);
     // The banner appears exactly once (detectConfigMode already folds

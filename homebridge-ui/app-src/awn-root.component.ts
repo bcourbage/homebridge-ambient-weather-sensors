@@ -5,9 +5,13 @@
  * remove-override), and dry-runs drafts through the server's
  * /preview-save — the exact save pipeline with zero writes.
  *
- * NO PERSISTENCE: this component never calls updatePluginConfig or
- * savePluginConfig. Drafts live in memory; the save path activates
- * in a later release through the guarded compose-save boundary.
+ * PERSISTENCE (PR C / finding 5): saving runs EXCLUSIVELY through
+ * composeAndPersist — /compose-save validates against the on-disk
+ * config, verifies the structural confirmation digest, writes the
+ * legacy snapshot FIRST, and only then does the returned config reach
+ * updatePluginConfig/savePluginConfig, verbatim. Structural saves
+ * demand explicit confirmation in a modal; every refusal produces
+ * zero config writes.
  *
  * Styling deliberately leans on the fragment page's #awn scope: this
  * component renders inside <div id="awn">, so the page's table rules
@@ -19,6 +23,7 @@ import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
 
 import { DraftStore } from './draft-store';
 import { HomebridgeService } from './homebridge.service';
+import { composeAndPersist } from '../saveOrchestrator';
 import type {
   EditorRowDto,
   EditorStateDto,
@@ -83,6 +88,16 @@ interface StationGroup {
       background: var(--warn-bg); color: var(--warn-fg);
     }
     .change-row { padding: 4px 0; border-bottom: 1px solid var(--row-rule); font-size: 0.88rem; }
+    .modal-backdrop {
+      position: fixed; inset: 0; background: rgba(0, 0, 0, 0.45);
+      display: flex; align-items: center; justify-content: center; z-index: 1000;
+    }
+    .modal {
+      background: var(--panel-bg); color: var(--fg);
+      border: 1px solid var(--rule); border-radius: 8px;
+      padding: 16px 20px; max-width: 560px; width: 90%;
+      max-height: 70vh; overflow-y: auto;
+    }
   `,
   template: `
     <h2>Sensor map <span class="station-meta">draft editor preview</span></h2>
@@ -108,12 +123,23 @@ interface StationGroup {
           <div class="banner info">{{ n.message }}</div>
         }
       }
+      <!-- Positive rollback-mirror indicator (review #45 round 4):
+           the manual current-state rollback documented in the README
+           is authorized ONLY by 'verified' here — 'absent' produces
+           no warning banner anywhere, so silence is not a signal. -->
+      @if (state()!.configMode === 'v2') {
+        @if (state()!.mirrorState === 'recognized') {
+          <div class="banner info">Rollback mirror: verified. The documented current-state manual rollback (deleting the three v2 markers) is available for this configuration.</div>
+        } @else {
+          <div class="banner">Rollback mirror: {{ state()!.mirrorState }}. Do NOT use the marker-deletion rollback — freeze on the current 1.7.x, restore the snapshot, or re-save here to regenerate the mirror.</div>
+        }
+      }
 
       @if (draftCount() > 0) {
         <div class="draft-bar">
           <span class="grow"><strong>{{ draftCount() }}</strong> draft change(s) — nothing is saved; preview runs the real save pipeline without writing.</span>
-          <button type="button" (click)="preview()" [disabled]="previewPending() || editFormInvalid()">Preview changes</button>
-          <button type="button" (click)="discardAll()">Discard drafts</button>
+          <button type="button" (click)="preview()" [disabled]="previewPending() || editFormInvalid() || saving() || reloadRequired()">Preview changes</button>
+          <button type="button" (click)="discardAll()" [disabled]="saving() || reloadRequired()">Discard drafts</button>
         </div>
       }
 
@@ -143,10 +169,10 @@ interface StationGroup {
               <div class="banner">
                 {{ pr.structuralChangeCount }} accessor{{ pr.structuralChangeCount === 1 ? 'y' : 'ies' }} would register, deregister, or re-register on save
                 (a re-registered accessory may need its HomeKit room assignment redone; a deregistered one leaves HomeKit).
-                Saving from this editor arrives in a later beta; this preview wrote nothing.
+                This preview wrote nothing; saving will ask for confirmation first.
               </div>
             } @else {
-              <div class="banner info">All changes apply in place; no accessory registers, deregisters, or re-registers. Saving from this editor arrives in a later beta; this preview wrote nothing.</div>
+              <div class="banner info">All changes apply in place; no accessory registers, deregisters, or re-registers. This preview wrote nothing.</div>
             }
           }
           @for (w of pr.warnings; track $index) {
@@ -158,9 +184,67 @@ interface StationGroup {
               <div class="banner info">{{ n.message }}</div>
             }
           }
+          @if (state()!.editorAvailable && pr.changes.length >= 0) {
+            <div class="draft-bar">
+              <span class="grow">
+                @if (pr.structuralChangeCount > 0) {
+                  Saving will ask for confirmation of the {{ pr.structuralChangeCount }} registration change(s) above.
+                } @else {
+                  Saving applies these changes without registering or deregistering any accessory.
+                }
+              </span>
+              <button type="button" (click)="saveClicked(pr)" [disabled]="saving() || reloadRequired()">Save changes</button>
+            </div>
+          }
         } @else {
           <div class="banner safe-mode">Preview refused ({{ pr.error.code }}): {{ pr.error.message }}</div>
         }
+      }
+      @if (saving()) {
+        <p class="empty">Saving…</p>
+      }
+      @if (saveResult(); as sr) {
+        @if (sr.ok) {
+          <div class="banner info">
+            Saved. The sensor map was written through the guarded boundary
+            @if (sr.snapshot === 'written') {
+              — your original legacy settings were preserved first in
+              <code>legacy-config-snapshot.json</code> (plugin data directory)
+            } @else if (sr.snapshot === 'exists') {
+              — the existing legacy snapshot was verified before writing
+            }.
+            Homebridge applies structural changes on the next restart.
+          </div>
+        } @else {
+          <div class="banner safe-mode">Save failed ({{ sr.code }}): {{ sr.message }}</div>
+        }
+      }
+      @if (reloadRequired()) {
+        <div class="banner">
+          <span>Editing is locked until this page is reloaded: the saved state is uncertain, so drafts and previews here may no longer match the configuration on disk. Reload, inspect the configuration, and only then retry.</span>
+          <button type="button" (click)="reloadPage()">Reload now</button>
+        </div>
+      }
+      @if (confirmOpen() && previewResult()?.ok) {
+        <div class="modal-backdrop">
+          <div class="modal">
+            <h3>Confirm registration changes</h3>
+            <p>These accessories will register, deregister, or re-register when saved. A re-registered accessory may need its HomeKit room assignment redone; a deregistered one leaves HomeKit.</p>
+            @for (c of structuralChanges(); track $index) {
+              <div class="change-row">
+                <span class="change-kind {{ c.change }}">{{ c.change }}</span>
+                <span class="structural-chip">{{ structuralVerb(c.change) }}</span>
+                <code>{{ c.dataPoint }}</code>
+                <span class="station-meta">{{ c.stationMac }}</span>
+              </div>
+            }
+            <div class="draft-bar">
+              <span class="grow"></span>
+              <button type="button" (click)="confirmSave()" [disabled]="saving()">Confirm save</button>
+              <button type="button" (click)="confirmOpen.set(false)">Cancel</button>
+            </div>
+          </div>
+        </div>
       }
 
       @if (groups().length === 0) {
@@ -205,7 +289,7 @@ interface StationGroup {
                 </td>
                 <td>
                   @if (row.kind !== 'unrecognized') {
-                    <button type="button" (click)="toggleEdit(row)">{{ isExpanded(row) ? 'Close' : 'Edit' }}</button>
+                    <button type="button" (click)="toggleEdit(row)" [disabled]="saving() || reloadRequired()">{{ isExpanded(row) ? 'Close' : 'Edit' }}</button>
                   }
                 </td>
               </tr>
@@ -269,6 +353,20 @@ export class AwnRootComponent {
   protected readonly previewPending = signal(false);
   /** True while an OPEN edit form holds an invalid (blanked) control. */
   protected readonly editFormInvalid = signal(false);
+  protected readonly saving = signal(false);
+  /**
+   * Terminal until reload (review #45 round 2): a
+   * persistence-indeterminate outcome means the on-disk configuration
+   * MAY have changed under this page — every editor action locks and
+   * the user is directed to reload before doing anything else.
+   */
+  protected readonly reloadRequired = signal(false);
+  protected readonly confirmOpen = signal(false);
+  protected readonly saveResult = signal<
+    | { ok: true; snapshot: 'written' | 'exists' | 'not-applicable' }
+    | { ok: false; code: string; message: string }
+    | null
+  >(null);
   /** Bumped on every draft mutation so computed()s re-read the store. */
   protected readonly draftVersion = signal(0);
 
@@ -333,7 +431,11 @@ export class AwnRootComponent {
       this.state.set(state);
       this.vocab.set(vocab);
       this.store.reset(state.authored);
-      this.bump();
+      // Fresh baseline: drafts and preview are void, but NOT the save
+      // banner — a post-save reload must not erase its own receipt
+      // (bump() is for USER mutations, which do retire it).
+      this.draftVersion.update(v => v + 1);
+      this.previewResult.set(null);
     } catch (e) {
       this.loadError.set(e instanceof Error ? e.message : String(e));
     }
@@ -342,8 +444,9 @@ export class AwnRootComponent {
   private bump(): void {
     this.draftVersion.update(v => v + 1);
     // Any draft mutation invalidates a shown preview — it no longer
-    // describes the draft.
+    // describes the draft — and retires a previous save's banner.
     this.previewResult.set(null);
+    this.saveResult.set(null);
   }
 
   protected rowKey(row: EditorRowDto): string {
@@ -494,6 +597,81 @@ export class AwnRootComponent {
     } finally {
       this.previewPending.set(false);
     }
+  }
+
+  /** The structural subset of the current preview, for the modal. */
+  protected structuralChanges(): Array<{ change: 'added' | 'removed' | 'modified'; dataPoint: string; stationMac: string }> {
+    const pr = this.previewResult();
+    return pr?.ok ? pr.changes.filter(c => c.structural) : [];
+  }
+
+  /**
+   * Save entry point (PR C / finding 5): structural consequences open
+   * the confirmation modal; in-place changes save directly. Either
+   * path runs EXCLUSIVELY through composeAndPersist with the digest
+   * of the preview the user is looking at — the server re-derives and
+   * verifies it before anything is written.
+   */
+  protected saveClicked(pr: Extract<PreviewResultDto, { ok: true }>): void {
+    if (pr.structuralChangeCount > 0) {
+      this.confirmOpen.set(true);
+      return;
+    }
+    void this.doSave(pr.digest);
+  }
+
+  protected confirmSave(): void {
+    const pr = this.previewResult();
+    if (pr?.ok) {
+      void this.doSave(pr.digest);
+    }
+  }
+
+  private async doSave(confirmDigest: string): Promise<void> {
+    this.saving.set(true);
+    this.saveResult.set(null);
+    // Lock editing for the duration (review #45 P2-4): the open form
+    // closes (no form events can draft mid-save) and Edit/Preview/
+    // Discard disable via saving() — a slow save can never race a
+    // newer draft into the post-save discard/reload.
+    this.expandedKey.set(null);
+    this.editForm = null;
+    this.editFormInvalid.set(false);
+    try {
+      const result = await composeAndPersist(this.hb.orchestratorDeps(), {
+        proposal: this.store.proposal(),
+        confirmDigest,
+      });
+      if (result.ok) {
+        this.saveResult.set({ ok: true, snapshot: result.snapshot });
+        // Reload the authoritative state: the config on disk changed,
+        // so drafts and the preview are consumed, not merely stale.
+        this.store.discardAll();
+        this.previewResult.set(null);
+        this.expandedKey.set(null);
+        this.editForm = null;
+        this.editFormInvalid.set(false);
+        this.draftVersion.update(v => v + 1);
+        await this.load();
+      } else {
+        this.saveResult.set({ ok: false, code: result.error.code, message: result.error.message });
+        if (result.error.code === 'persistence-indeterminate') {
+          this.reloadRequired.set(true);
+        }
+      }
+    } catch (e) {
+      this.saveResult.set({
+        ok: false, code: 'transport',
+        message: e instanceof Error ? e.message : String(e),
+      });
+    } finally {
+      this.saving.set(false);
+      this.confirmOpen.set(false);
+    }
+  }
+
+  protected reloadPage(): void {
+    this.hb.reloadWindow();
   }
 
   /** What a structural change DOES to the accessory (review #43 P1-1). */

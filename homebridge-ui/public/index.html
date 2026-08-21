@@ -123,7 +123,7 @@
     <awn-root></awn-root>
   </div>
   <!-- awn-app:assets:begin -->
-  <script type="module" src="app/main-RGPYRHNG.js"></script>
+  <script type="module" src="app/main-MVP6CGXQ.js"></script>
   <!-- awn-app:assets:end -->
 
   <script>
@@ -167,7 +167,12 @@
         el.textContent = status.safeModeBanner || 'Plugin is in safe mode.';
       } else if (status.readOnly) {
         el.className = 'banner';
-        el.textContent = 'The v2 observation panels below are read-only and the sensor-map editor has not shipped yet. Ordinary plugin settings (including the v2 flag) remain editable in the settings form above. The guarded save boundary for the upcoming editor is installed: any sensor-map write flows through a snapshot-first compose endpoint.';
+        // Truthfulness branch (review #45 round 2): saving requires
+        // the v2 flag; the page must never claim a config-converting
+        // operation is available while the server would refuse it.
+        el.textContent = status.v2Flag && status.v2Flag.enabled
+          ? 'The status panels below are read-only observations. The sensor-map editor further down can draft, preview, and save changes: every save flows through a guarded snapshot-first boundary, and changes that would register or remove HomeKit accessories require explicit confirmation. Ordinary plugin settings (including the v2 flag) remain editable in the settings form above.'
+          : 'The status panels below are read-only observations. The sensor-map editor further down is draft-and-preview only while the sensor-map v2 flag is off — saving is disabled. Enable "Advanced (v2.0 preview)" in the settings form above and restart Homebridge to edit for real.';
       } else {
         el.className = 'banner info';
         el.textContent = 'v2 sensor map active.';

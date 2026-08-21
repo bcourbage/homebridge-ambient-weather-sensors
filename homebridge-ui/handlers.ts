@@ -22,6 +22,7 @@ import { compatToOverrides, type LegacyConfig } from '../dist/sensorMap/compat.j
 import { detectConfigMode, type ConfigInputShape } from '../dist/sensorMap/configMode.js';
 import {
   composeV2ConfigSave,
+  recognizeMirror,
   verifyLegacySnapshot,
   writeLegacySnapshot,
 } from '../dist/sensorMap/legacyMirror.js';
@@ -100,8 +101,13 @@ export interface StatusPayload {
    * below rather than by repurposing this boolean.
    */
   readOnly: true;
-  /** The sensor-map row editor has not shipped yet (#69). */
-  sensorMapEditorAvailable: false;
+  /**
+   * The sensor-map row editor is LIVE (#69 PR C): the editor's save
+   * path runs exclusively through composeAndPersist → /compose-save,
+   * with structural saves gated on the /preview-save confirmation
+   * digest. This is the finding-5 closure flag.
+   */
+  sensorMapEditorAvailable: true;
   /**
    * The guarded compose-save boundary is installed: any sensorMap
    * write MUST flow through /compose-save (snapshot-first). Ordinary
@@ -112,7 +118,9 @@ export interface StatusPayload {
   /**
    * The server-authoritative preview endpoint is installed (#69 PR B):
    * drafts can be dry-run through the REAL save pipeline with zero
-   * writes. Saving itself stays unavailable until PR C.
+   * writes, with or without the v2 flag. Saving is live (PR C) and
+   * flag-gated: /compose-save refuses with 'v2-flag-off' when the
+   * flag is off.
    */
   previewSaveAvailable: true;
 }
@@ -131,7 +139,7 @@ export async function handleGetStatus(deps: HandlerDeps, payload: unknown): Prom
     configWarnings: modeResult.warnings,
     safeModeBanner: modeResult.safeModeBanner,
     readOnly: true,
-    sensorMapEditorAvailable: false,
+    sensorMapEditorAvailable: true,
     composeSaveAvailable: true,
     previewSaveAvailable: true,
   };
@@ -195,10 +203,14 @@ export type ComposeSaveError =
   | { code: 'ambiguous-platform-block'; message: string }
   | { code: 'safe-mode'; message: string }
   | { code: 'sensor-map-shape'; message: string }
+  | { code: 'v2-flag-off'; message: string }
+  | { code: 'persistence-indeterminate'; message: string; stage: 'updatePluginConfig' | 'savePluginConfig' }
   | { code: 'invalid-proposal'; message: string }
   | { code: 'invalid-rows'; message: string; rows: RowValidationError[] }
   | { code: 'no-station-inventory'; message: string }
   | { code: 'canonical-divergence'; message: string; rows: DivergentRow[] }
+  | { code: 'confirmation-required'; message: string; structuralChangeCount: number }
+  | { code: 'stale-confirmation'; message: string }
   | { code: 'legacy-snapshot-mismatch'; message: string }
   | { code: 'legacy-snapshot-corrupt'; message: string }
   | { code: 'snapshot-write-failed'; message: string };
@@ -239,13 +251,25 @@ export interface ComposeSavePayload {
    */
   cachedAccessoryUniqueIds?: unknown;
   liveStations?: unknown;
+  /**
+   * The confirmation digest from /preview-save (PR C / finding 5).
+   * REQUIRED when the save has structural consequences (accessories
+   * registering, deregistering, or re-registering): the server
+   * recomputes computeSaveConsequences() from the CURRENT on-disk
+   * config and inventory and refuses a missing or mismatched digest —
+   * proving the user confirmed THESE consequences, not a stale
+   * preview. Never returned by a refusal: the only way to obtain it
+   * is /preview-save, which is what forces the confirmation UX.
+   */
+  confirmDigest?: unknown;
 }
 
 /**
- * Compose a v2 save: validate the proposal, write/verify the immutable
- * legacy snapshot FIRST, and only then return the composed next config
- * for the client to persist through HB UI X's API. The composed config
- * physically cannot reach config.json before the snapshot is durable.
+ * Compose a v2 save: validate the proposal, verify the structural
+ * confirmation digest, write/verify the immutable legacy snapshot
+ * FIRST, and only then return the composed next config for the client
+ * to persist through HB UI X's API. The composed config physically
+ * cannot reach config.json before the snapshot is durable.
  *
  * Refusals return `{ ok: false, error }` (JSON-safe, editor-consumable)
  * and perform NO writes — with one deliberate exception: a successful
@@ -501,6 +525,60 @@ export async function handleComposeSave(
     return r;
   }
   const { block, modeResult, effectiveMap, canonical } = r.ctx;
+
+  // ---- 7b2. V2-FLAG GATE (review #45 P1-1): saving converts the
+  //           configuration to v2, and a v2 config with the flag OFF
+  //           is exactly the dangerous state the rollback docs warn
+  //           about (the flag-off runtime cannot read sensorMap and
+  //           can deregister cached accessories). The editor is
+  //           disabled client-side when the flag is off; this is the
+  //           fail-closed server backstop. Previews stay available —
+  //           a dry run is how users decide whether to opt in.
+  if (detectV2FlagSource(block as ConfigInputShape, deps.env ?? process.env) === 'none') {
+    return {
+      ok: false,
+      error: {
+        code: 'v2-flag-off',
+        message: 'The sensor-map v2 flag is off, so the runtime would not read a saved sensor map — and a v2 '
+          + 'configuration with the flag off can deregister cached accessories. Enable "Advanced (v2.0 preview) → '
+          + 'Enable sensor-map v2 live path" in the settings form, restart Homebridge, and retry. Nothing was written.',
+      },
+    };
+  }
+
+  // ---- 7c. STRUCTURAL CONFIRMATION GATE (PR C / finding 5): the
+  //          consequences are recomputed HERE, from the current
+  //          on-disk config and inventory — never trusted from the
+  //          client. A save that would register, deregister, or
+  //          re-register accessories requires the digest issued by
+  //          /preview-save for exactly these consequences; anything
+  //          missing or mismatched fails closed BEFORE the snapshot
+  //          or composition. The fresh digest is deliberately NOT
+  //          included in the refusal — the only way to get one is to
+  //          preview, which is what puts the confirmation in front
+  //          of the user.
+  const consequences = computeSaveConsequences(r.ctx);
+  if (p.confirmDigest !== undefined && p.confirmDigest !== consequences.digest) {
+    return {
+      ok: false,
+      error: {
+        code: 'stale-confirmation',
+        message: 'The configuration, station inventory, or discovery state changed since this save was previewed. '
+          + 'Preview again and re-confirm; nothing was written.',
+      },
+    };
+  }
+  if (consequences.structuralChangeCount > 0 && p.confirmDigest === undefined) {
+    return {
+      ok: false,
+      error: {
+        code: 'confirmation-required',
+        message: `This save would register, deregister, or re-register ${consequences.structuralChangeCount} `
+          + 'accessor(y/ies). Preview the changes and confirm them first; nothing was written.',
+        structuralChangeCount: consequences.structuralChangeCount,
+      },
+    };
+  }
 
   // ---- 8. Compose. detectConfigMode's verdict is passed explicitly
   //         (it is the single authority on "legacy").
@@ -807,6 +885,15 @@ export async function handleGetEditorState(
   for (const w of modeResult.warnings) {
     warnings.push({ severity: 'warning', code: 'config-mode', message: w });
   }
+  if (!v2FlagEnabled && modeResult.mode !== 'safe-mode') {
+    warnings.push({
+      severity: 'warning',
+      code: 'v2-flag-off',
+      message: 'The sensor-map v2 flag is off: the table below is a preview and saving is disabled. To edit for '
+        + 'real, enable "Advanced (v2.0 preview) → Enable sensor-map v2 live path" in the settings form and '
+        + 'restart Homebridge.',
+    });
+  }
   if (modeResult.mode === 'safe-mode') {
     return {
       configMode: 'safe-mode',
@@ -816,6 +903,7 @@ export async function handleGetEditorState(
       stations: [],
       authored: [],
       authoredSource: 'sensorMap',
+      mirrorState: recognizeMirror(block).state,
       rows: [],
       warnings,
       errors: [],
@@ -840,6 +928,7 @@ export async function handleGetEditorState(
       stations: [],
       authored: [],
       authoredSource: 'sensorMap',
+      mirrorState: recognizeMirror(block).state,
       rows: [],
       warnings,
       errors: [{ severity: 'error', code: 'sensor-map-shape', message: shapeError }],
@@ -902,7 +991,7 @@ export async function handleGetEditorState(
   return {
     configMode: modeResult.mode,
     v2FlagEnabled,
-    editorAvailable: false, // flips true in PR C (finding 5 closure)
+    editorAvailable: v2FlagEnabled, // PR C: save path live, gated on the v2 opt-in (review #45 P1-1)
     version: deps.version,
     stations: stations.map(st => {
       const mac = st.macAddress.toUpperCase();
@@ -914,6 +1003,7 @@ export async function handleGetEditorState(
     }),
     authored: overrides.map(toAuthoredFragmentDto),
     authoredSource: modeResult.mode === 'legacy' ? 'compat-seeded' : 'sensorMap',
+    mirrorState: recognizeMirror(block).state,
     rows,
     warnings,
     errors: effectiveMap.errors.map(e => toDiagnosticDto('error', e)),

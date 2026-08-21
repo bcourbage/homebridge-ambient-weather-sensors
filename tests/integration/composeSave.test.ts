@@ -16,7 +16,7 @@ import * as path from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { handleComposeSave, syntheticProbeMac, type HandlerDeps } from '../../homebridge-ui/handlers';
+import { handleComposeSave, handlePreviewSave, syntheticProbeMac, type HandlerDeps } from '../../homebridge-ui/handlers';
 import { composeAndPersist, type OrchestratorDeps } from '../../homebridge-ui/saveOrchestrator';
 import { LEGACY_SNAPSHOT_FILE, recognizeMirror } from '../../src/sensorMap/legacyMirror';
 
@@ -60,6 +60,7 @@ const LEGACY_BLOCK = {
   platform: 'AmbientWeatherSensors',
   name: 'Test Station',
   apiKey: 'k', applicationKey: 'a',
+  _sensorMapV2: true, // saves require the v2 opt-in (review #45 P1-1)
   temperatureSensors: true,
   humiditySensors: false,
   extendedSensors: true,
@@ -74,6 +75,18 @@ function discoveryStore(rig: Rig, macs: string[] = [MAC]): void {
       { stationMac: mac, stationName: 'Home', dataPoint: 'windspeedmph', firstSeen: '2026-01-01T00:00:00Z', lastSeen: '2026-01-02T00:00:00Z' },
     ]),
   }));
+}
+
+/**
+ * The realistic PR C flow: obtain the structural-confirmation digest
+ * the way the editor does — by previewing exactly what will be saved.
+ */
+async function digestFor(rig: Rig, payload: Record<string, unknown>): Promise<string> {
+  const preview = await handlePreviewSave(rig.deps, payload);
+  if (!preview.ok) {
+    throw new Error(`preview refused: ${preview.error.code}`);
+  }
+  return preview.digest;
 }
 
 /** Event-logging fake of HB UI X's client API, wired to the REAL handler. */
@@ -109,6 +122,179 @@ function makeClient(rig: Rig): {
   };
   return Object.assign(state, { deps });
 }
+
+describe('structural confirmation digest (PR C / finding 5)', () => {
+  const STRUCTURAL_PAYLOAD = {
+    base: LEGACY_BLOCK,
+    proposal: [{ dataPoint: 'barn_x', kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph', name: 'Barn X' }],
+  };
+
+  it('a structural save WITHOUT a digest is refused with zero writes', async () => {
+    const rig = makeRig(LEGACY_BLOCK);
+    discoveryStore(rig);
+    const result = await handleComposeSave(rig.deps, STRUCTURAL_PAYLOAD);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('confirmation-required');
+      expect((result.error as { structuralChangeCount: number }).structuralChangeCount).toBeGreaterThan(0);
+      // The refusal must NOT hand back a usable digest — /preview-save
+      // is the only source, which is what forces the confirmation UX.
+      expect(JSON.stringify(result.error)).not.toMatch(/[0-9a-f]{64}/);
+    }
+    expect(existsSync(path.join(rig.persistDir, LEGACY_SNAPSHOT_FILE))).toBe(false);
+  });
+
+  it('a STALE digest (discovery gained a station after the preview) is refused', async () => {
+    const rig = makeRig(LEGACY_BLOCK);
+    discoveryStore(rig);
+    const digest = await digestFor(rig, STRUCTURAL_PAYLOAD);
+    discoveryStore(rig, [MAC, 'AA:BB:CC:DD:EE:77']); // world moved on
+    const result = await handleComposeSave(rig.deps, { ...STRUCTURAL_PAYLOAD, confirmDigest: digest });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('stale-confirmation');
+    }
+    expect(existsSync(path.join(rig.persistDir, LEGACY_SNAPSHOT_FILE))).toBe(false);
+  });
+
+  it('a FRESH digest is accepted', async () => {
+    const rig = makeRig(LEGACY_BLOCK);
+    discoveryStore(rig);
+    const result = await handleComposeSave(rig.deps, {
+      ...STRUCTURAL_PAYLOAD,
+      confirmDigest: await digestFor(rig, STRUCTURAL_PAYLOAD),
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it('a pure legacy migration (zero accessory changes) needs NO digest — the Demeter case', async () => {
+    const rig = makeRig(LEGACY_BLOCK);
+    discoveryStore(rig);
+    // Migration equivalence: converting the config touches no
+    // accessories, so no confirmation is demanded and the snapshot is
+    // written on the way through.
+    const result = await handleComposeSave(rig.deps, { base: LEGACY_BLOCK });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.snapshot).toBe('written');
+    }
+  });
+
+  it('a mismatched digest is refused even when the save is non-structural (fail closed)', async () => {
+    const rig = makeRig(LEGACY_BLOCK);
+    discoveryStore(rig);
+    const result = await handleComposeSave(rig.deps, {
+      base: LEGACY_BLOCK,
+      confirmDigest: 'ab'.repeat(32), // not what the server derives
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('stale-confirmation');
+    }
+  });
+});
+
+describe('v2-flag gate on saves (review #45 P1-1)', () => {
+  it('a save with the flag OFF is refused — the preview still works', async () => {
+    const flagOff = { ...LEGACY_BLOCK } as Record<string, unknown>;
+    delete flagOff._sensorMapV2;
+    const rig = makeRig(flagOff);
+    discoveryStore(rig);
+    const preview = await handlePreviewSave(rig.deps, { base: flagOff });
+    expect(preview.ok).toBe(true); // dry runs are how users decide to opt in
+    const save = await handleComposeSave(rig.deps, { base: flagOff });
+    expect(save.ok).toBe(false);
+    if (!save.ok) {
+      expect(save.error.code).toBe('v2-flag-off');
+      expect(save.error.message).toContain('restart Homebridge');
+    }
+    expect(existsSync(path.join(rig.persistDir, LEGACY_SNAPSHOT_FILE))).toBe(false);
+  });
+});
+
+describe('post-compose persistence failures are INDETERMINATE (review #45 P1-2)', () => {
+  it('updatePluginConfig rejecting reports the stage and never claims nothing was written', async () => {
+    const rig = makeRig(LEGACY_BLOCK);
+    discoveryStore(rig);
+    const client = makeClient(rig);
+    client.deps.updatePluginConfig = async () => {
+      throw new Error('ipc channel dropped');
+    };
+    const result = await composeAndPersist(client.deps, {});
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('persistence-indeterminate');
+      expect((result.error as { stage: string }).stage).toBe('updatePluginConfig');
+      expect(result.error.message).toContain('reload the plugin settings');
+      expect(result.error.message).not.toContain('Nothing was written');
+    }
+  });
+
+  it('savePluginConfig rejecting AFTER update took effect reports uncertainty', async () => {
+    const rig = makeRig(LEGACY_BLOCK);
+    discoveryStore(rig);
+    const client = makeClient(rig);
+    client.deps.savePluginConfig = async () => {
+      throw new Error('save endpoint 500');
+    };
+    const result = await composeAndPersist(client.deps, {});
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('persistence-indeterminate');
+      expect((result.error as { stage: string }).stage).toBe('savePluginConfig');
+      expect(result.error.message).toContain('MAY have been applied');
+    }
+    // update DID take effect before the failure — the effect-then-throw shape.
+    expect(client.events).toEqual(['compose', 'update']);
+    expect(client.persistedArray).toBeDefined();
+  });
+});
+
+describe('no-bypass: preview → confirm → compose → update → save (PR C)', () => {
+  it('the confirmed structural save persists the returned config verbatim, mirror included', async () => {
+    const rig = makeRig(LEGACY_BLOCK);
+    discoveryStore(rig);
+    const client = makeClient(rig);
+    const payload = {
+      proposal: [{ dataPoint: 'barn_x', kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph', name: 'Barn X' }],
+    };
+    // 1. Preview (the REAL handler) issues the digest.
+    const preview = await handlePreviewSave(rig.deps, { base: LEGACY_BLOCK, ...payload });
+    expect(preview.ok).toBe(true);
+    if (!preview.ok) {
+      return;
+    }
+    expect(preview.structuralChangeCount).toBeGreaterThan(0);
+    // 2-4. Confirmed save through the ONE route.
+    const result = await composeAndPersist(client.deps, { ...payload, confirmDigest: preview.digest });
+    expect(result.ok).toBe(true);
+    expect(client.events).toEqual(['compose', 'update', 'save']);
+    expect(client.snapshotExistedAtUpdate).toBe(true); // durable BEFORE persistence
+    // Verbatim persistence, synchronized mirror included.
+    const persisted = client.persistedArray!.find(b => b.platform === 'AmbientWeatherSensors')!;
+    if (result.ok) {
+      expect(persisted).toEqual(result.nextConfig);
+    }
+    expect(persisted.configVersion).toBe(2);
+    expect(persisted).toHaveProperty('_legacyMirror');
+    expect(Array.isArray(persisted.sensorMap)).toBe(true);
+  });
+
+  it('a structural save without confirmation makes ZERO config writes through the orchestrator', async () => {
+    const rig = makeRig(LEGACY_BLOCK);
+    discoveryStore(rig);
+    const client = makeClient(rig);
+    const result = await composeAndPersist(client.deps, {
+      proposal: [{ dataPoint: 'barn_x', kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph', name: 'Barn X' }],
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('confirmation-required');
+    }
+    expect(client.events).toEqual(['compose']); // no update, no save
+    expect(client.persistedArray).toBeUndefined();
+  });
+});
 
 describe('ordering: snapshot is durable before the client persistence half runs', () => {
   it('full success sequence is compose → update → save, with the snapshot on disk at update time', async () => {
@@ -231,13 +417,14 @@ describe('proposal normalization (identity-first → merge → body validation)'
   it('duplicate incomplete fragments merge into one valid custom row', async () => {
     const rig = makeRig(LEGACY_BLOCK);
     discoveryStore(rig);
-    const result = await handleComposeSave(rig.deps, {
+    const payload = {
       base: LEGACY_BLOCK,
       proposal: [
         { dataPoint: 'barn_baro', kind: 'motion' },
         { dataPoint: 'barn_baro', measurement: 'pressure', sourceUnit: 'mmHg' },
       ],
-    });
+    };
+    const result = await handleComposeSave(rig.deps, { ...payload, confirmDigest: await digestFor(rig, payload) });
     expect(result.ok).toBe(true);
     if (result.ok) {
       const entry = result.canonicalSensorMap.find(e => e.dataPoint === 'barn_baro');
@@ -314,13 +501,14 @@ describe('canonical-divergence hard gate (review #67 P1-1)', () => {
   it('the same claimants save cleanly once ownership is explicit (batteryField: null on the loser)', async () => {
     const rig = makeRig(LEGACY_BLOCK);
     discoveryStore(rig);
-    const result = await handleComposeSave(rig.deps, {
+    const payload = {
       base: LEGACY_BLOCK,
       proposal: [
         { dataPoint: 'z_custom', kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph', batteryField: 'barn_batt' },
         { dataPoint: 'a_custom', kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph', batteryField: null },
       ],
-    });
+    };
+    const result = await handleComposeSave(rig.deps, { ...payload, confirmDigest: await digestFor(rig, payload) });
     expect(result.ok).toBe(true);
     if (result.ok) {
       const z = result.canonicalSensorMap.find(e => e.dataPoint === 'z_custom');
@@ -333,13 +521,14 @@ describe('global-template preservation (review #67 round 2 P1)', () => {
   it('a global template with a station exception survives canonicalization for FUTURE stations', async () => {
     const rig = makeRig(LEGACY_BLOCK);
     discoveryStore(rig, [MAC, 'AA:BB:CC:DD:EE:02']);
-    const result = await handleComposeSave(rig.deps, {
+    const payload = {
       base: LEGACY_BLOCK,
       proposal: [
         { dataPoint: 'barn_x', kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph', name: 'Barn X' },
         { dataPoint: 'barn_x', stationMac: 'AA:BB:CC:DD:EE:02', kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph', name: 'Barn X (Cabin)' },
       ],
-    });
+    };
+    const result = await handleComposeSave(rig.deps, { ...payload, confirmDigest: await digestFor(rig, payload) });
     expect(result.ok).toBe(true);
     if (result.ok) {
       const globalEntry = result.canonicalSensorMap.find(e => e.dataPoint === 'barn_x' && e.stationMac === undefined);
@@ -402,10 +591,11 @@ describe('synthetic probe MAC is genuinely outside the inventory (review #67 rou
       expect(refused.error.code).toBe('canonical-divergence');
     }
     // And a clean template save still passes with PROBE0 occupied.
-    const saved = await handleComposeSave(rig.deps, {
+    const cleanPayload = {
       base: LEGACY_BLOCK,
       proposal: [{ dataPoint: 'barn_x', kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph', name: 'Barn X' }],
-    });
+    };
+    const saved = await handleComposeSave(rig.deps, { ...cleanPayload, confirmDigest: await digestFor(rig, cleanPayload) });
     expect(saved.ok).toBe(true);
   });
 });
@@ -414,11 +604,12 @@ describe('successful saves surface warnings (review #67 P2-5)', () => {
   it('warn-and-strip validation stays visible in the compose response', async () => {
     const rig = makeRig(LEGACY_BLOCK);
     discoveryStore(rig);
-    const result = await handleComposeSave(rig.deps, {
+    const payload = {
       base: LEGACY_BLOCK,
       // displayUnit on a native-HAP measurement is warn-and-stripped.
       proposal: [{ dataPoint: 'tempf', name: 'Patio', displayUnit: 'celsius' }],
-    });
+    };
+    const result = await handleComposeSave(rig.deps, { ...payload, confirmDigest: await digestFor(rig, payload) });
     expect(result.ok).toBe(true);
     if (result.ok) {
       const codes = result.warnings.map(w => w.code);

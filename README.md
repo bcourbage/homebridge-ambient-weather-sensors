@@ -50,33 +50,73 @@ a compare-only "shadow mode" that logged divergences without ever
 touching registration; that observer has been retired in favor of
 the real thing.)
 
-**Rollback (legacy-compatible configs, the normal case):** beta.8
-never migrates your config or generates `sensorMap` on its own, so
-unless you hand-authored `configVersion: 2` / `sensorMap` fields,
-turning the flag off and restarting cleanly returns you to v1.7
-behavior. Accessories the v2 path structurally re-registered while
-it was on may need their room assignments redone in Apple Home.
-Downgrading to the 1.7.x line is safe under the same condition.
+**Saving from the editor converts your configuration.** The
+sensor-map editor's first save rewrites the plugin's config block to
+the v2 format (`configVersion: 2` plus a `sensorMap`). Before
+`config.json` changes, your original 1.x settings are preserved in an
+immutable snapshot: `legacy-config-snapshot.json` in the plugin's
+data directory (`<homebridge storage>/plugin-data/ambient-weather/`).
+The saved block also carries a synchronized 1.7.x mirror of the
+legacy fields, kept up to date on every save.
 
-**Rollback with a hand-authored v2 config:** if you added
-`configVersion: 2` + `sensorMap` yourself, restore a 1.x-compatible
-config BEFORE disabling the flag or downgrading: with the flag
-off, the v1 path cannot read `sensorMap` and can deregister your
-cached accessories. No 1.x release can operate or update custom
-v2-only sensors: v1.7.1's emergency freeze preserves their cached
-tiles at last-known values, and restoring a legacy config and
-resuming normal 1.x reconciliation removes them. For an emergency
-downgrade while a v2 config is still in place, install **v1.7.1**
-(not v1.7.0 or earlier): it freezes safely, with cached
-accessories preserved but no longer updating, until you restore a
-legacy config.
+**Rollback before any editor save (legacy config, flag on):** the
+plugin never converts your configuration on its own, so turning the
+flag off and restarting cleanly returns you to v1.7 behavior.
+Accessories the v2 path structurally re-registered while it was on
+may need their room assignments redone in Apple Home. Downgrading to
+the 1.7.x line is safe under the same condition.
 
-The plugin's settings page gains v2 preview panels: status,
-discovery, notices, and a read-only sensor-map table.
-[docs/plugin-ui.md](./docs/plugin-ui.md) explains what they show
-and what becomes editable at release. See
-`docs/future/sensor-map.md` for the full design if you're
-curious about the shape of the v2 config.
+**Rollback after an editor save (or any v2 config):** do NOT simply
+turn the flag off — with the flag off, the v1 path cannot read
+`sensorMap` and can deregister your cached accessories. Three exact
+paths, from fastest to most thorough:
+
+- **Emergency freeze (no config edit):** install the current
+  **1.7.x** release (never v1.7.0 or earlier) with the v2 config
+  still in place. Its guard detects the v2 configuration and freezes
+  instead of reconciling: cached accessories stay in HomeKit at their
+  last-known values, updates stop, and the log explains how to
+  resume. The safety comes entirely from that guard — guarded
+  v1.7.1+ releases do not interpret a v2-marked configuration.
+  (v1.7.0 and earlier DO attempt to read it, which is exactly why
+  the emergency target is the current 1.7.x.)
+- **Operational rollback to your CURRENT settings** — only with a
+  VERIFIED mirror: open the plugin's settings page and confirm it
+  positively shows **"Rollback mirror: verified"**. The absence of
+  warnings is NOT enough — a v2 config with no mirror at all shows no
+  warning either, and deleting its markers would expose an empty
+  legacy configuration and deregister accessories. With the verified
+  indicator shown: in the plugin's config block, delete exactly three
+  things — `sensorMap`, `configVersion`, and `_legacyMirror` — keep
+  everything else, ALSO disable `_sensorMapV2` in the block and unset
+  the `SENSOR_MAP_V2` environment variable if you use it, then run
+  1.7.x (or 2.x with the flag off) and restart. If the page shows any
+  other mirror status (absent, stale, or invalid): do NOT delete the
+  markers — freeze on current 1.7.x, restore the snapshot (next
+  path), or upgrade back to 2.x and re-save in the editor to
+  regenerate the mirror.
+- **Rollback to your ORIGINAL (pre-conversion) settings:** open
+  `legacy-config-snapshot.json` and use its `legacy` object. In the
+  plugin's config block, delete every legacy sensor-configuration
+  field (the sensor category toggles, `extendedDisplayMode`,
+  `thresholds`, `units`, `excludeSensors`, `includeOnly`), copy in
+  the snapshot's `legacy` fields as the replacement — the snapshot
+  is sparse, so replace rather than overlay — delete `sensorMap`,
+  `configVersion`, and `_legacyMirror`, disable `_sensorMapV2`, and
+  unset the `SENSOR_MAP_V2` environment variable if you use it.
+  Restart.
+- **Custom v2-only sensors** (added through the editor for fields the
+  plugin has no built-in definition for): no 1.x release can operate
+  or update them. The 1.7.x freeze preserves their cached tiles at
+  last-known values, and restoring a legacy config and resuming
+  normal 1.x reconciliation removes them.
+
+The plugin's settings page carries the v2 panels: status, discovery,
+notices, and the sensor-map editor (draft, preview, and save with
+guarded confirmation — saving requires the v2 flag).
+[docs/plugin-ui.md](./docs/plugin-ui.md) explains each panel and how
+saving works. See `docs/future/sensor-map.md` for the full design if
+you're curious about the shape of the v2 config.
 
 ## What's New in v1.7.2
 
