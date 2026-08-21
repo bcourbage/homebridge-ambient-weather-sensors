@@ -637,8 +637,13 @@ export async function writeLegacySnapshot(
  *   - 'absent':   no snapshot on disk (caller should write one);
  *   - 'match':    the stored legacy subset equals the authoritative
  *                 fields (key-order-insensitive) — proceed as 'exists';
- *   - 'mismatch': the stored subset differs — REFUSE the conversion
- *                 (never overwrite; the snapshot is immutable);
+ *   - 'mismatch': the stored subset differs — the RECONVERSION case
+ *                 (a post-rollback config carries the projected
+ *                 mirror form, never the original): the caller must
+ *                 durably record the current baseline via
+ *                 `journalConversionBaseline` BEFORE proceeding, and
+ *                 abort if that fails. The snapshot itself is
+ *                 immutable and is never overwritten;
  *   - 'corrupt':  unreadable/unparsable/mis-shaped — REFUSE.
  */
 export async function verifyLegacySnapshot(
@@ -695,6 +700,38 @@ interface ConversionJournalEntry {
 }
 
 /**
+ * Per-journal-path serialization of the read/deduplicate/write/read-back
+ * sequence. Without it, concurrent appends race: both read the same
+ * entry list, both rename their own rewrite over the file, and the
+ * loser's baseline is silently dropped while both callers report
+ * 'appended' — the exact data loss the journal exists to prevent
+ * (review PR #46 P1, reproduced). The chain is failure-safe: a
+ * rejected operation settles its link, so later appends still run.
+ *
+ * In-process serialization is sufficient because the journal has ONE
+ * writer process by the same §8 single-writer convention as every
+ * other persist-dir store: only the UI server's compose-save boundary
+ * writes it, and concurrent saves from multiple browser sessions all
+ * land in that one bridge process.
+ */
+const journalLocks = new Map<string, Promise<unknown>>();
+
+async function withJournalLock<T>(file: string, fn: () => Promise<T>): Promise<T> {
+  const key = path.resolve(file);
+  const prev = journalLocks.get(key) ?? Promise.resolve();
+  const run = prev.then(fn); // prev never rejects (tails settle to undefined)
+  const tail = run.then(() => undefined, () => undefined);
+  journalLocks.set(key, tail);
+  try {
+    return await run;
+  } finally {
+    if (journalLocks.get(key) === tail) {
+      journalLocks.delete(key);
+    }
+  }
+}
+
+/**
  * Record the pre-conversion legacy baseline of a conversion AFTER the
  * first — the reconversion path: a user who performed the documented
  * current-state rollback holds the projected mirror form, which the
@@ -714,6 +751,10 @@ interface ConversionJournalEntry {
  * abort the save. A corrupt journal is never quarantined or replaced:
  * it is an audit record, and the failure message directs manual
  * inspection instead.
+ *
+ * Concurrent calls for the same journal are serialized end-to-end
+ * (read, deduplicate, write, read-back) so no append can overwrite
+ * another's entry; see `withJournalLock`.
  */
 export async function journalConversionBaseline(
   persistDir: string,
@@ -729,40 +770,51 @@ export async function journalConversionBaseline(
     }
   }
 
-  const entries = await readConversionJournal(file);
-  const latest = entries[entries.length - 1];
-  if (latest !== undefined && canonicalJson(latest.legacy) === canonicalJson(subset)) {
-    return 'unchanged';
-  }
+  return withJournalLock(file, async () => {
+    const entries = await readConversionJournal(file);
+    const latest = entries[entries.length - 1];
+    if (latest !== undefined && canonicalJson(latest.legacy) === canonicalJson(subset)) {
+      return 'unchanged';
+    }
 
-  entries.push({ savedAt: clock.iso(), legacy: subset });
-  const body = JSON.stringify({ schemaVersion: 1, entries }, null, 2);
+    entries.push({ savedAt: clock.iso(), legacy: subset });
+    const body = JSON.stringify({ schemaVersion: 1, entries }, null, 2);
 
-  await fs.mkdir(persistDir, { recursive: true });
-  const tmp = path.join(
-    persistDir,
-    `${LEGACY_JOURNAL_FILE}.${process.pid}.${Math.floor(Math.random() * 1e9).toString(36)}.tmp`,
-  );
-  try {
-    await fs.writeFile(tmp, body, { encoding: 'utf8', mode: 0o640 });
-    await fs.rename(tmp, file);
-  } finally {
-    await fs.unlink(tmp).catch(() => { /* best-effort */ });
-  }
+    await fs.mkdir(persistDir, { recursive: true });
+    const tmp = path.join(
+      persistDir,
+      `${LEGACY_JOURNAL_FILE}.${process.pid}.${Math.floor(Math.random() * 1e9).toString(36)}.tmp`,
+    );
+    try {
+      await fs.writeFile(tmp, body, { encoding: 'utf8', mode: 0o640 });
+      await fs.rename(tmp, file);
+    } finally {
+      await fs.unlink(tmp).catch(() => { /* best-effort */ });
+    }
 
-  const readBack = await fs.readFile(file, 'utf8');
-  if (readBack !== body) {
-    throw new Error(`conversion journal read-back does not match what was written (${file})`);
-  }
-  log.info(`Conversion journal: pre-conversion legacy baseline appended to ${file}.`);
-  return 'appended';
+    const readBack = await fs.readFile(file, 'utf8');
+    if (readBack !== body) {
+      throw new Error(`conversion journal read-back does not match what was written (${file})`);
+    }
+    log.info(`Conversion journal: pre-conversion legacy baseline appended to ${file}.`);
+    return 'appended';
+  });
 }
+
+const LEGACY_FIELD_SET: ReadonlySet<string> = new Set<string>(LEGACY_SENSOR_FIELDS);
 
 /**
  * Read and strictly validate the journal envelope. ENOENT is a fresh
  * journal (empty list); every other read/parse/shape failure throws —
  * the caller's save must fail closed rather than risk overwriting or
- * silently restarting an audit record it cannot interpret.
+ * silently restarting an audit record it cannot interpret. Strictness
+ * includes the VOCABULARY (review PR #46 P2, reproduced): every
+ * `legacy` key must be in `LEGACY_SENSOR_FIELDS` — a journal carrying
+ * anything else (e.g. an injected `apiKey`) is rejected rather than
+ * accepted and re-persisted by the next append, which would break the
+ * credential-free promise. Unknown envelope keys and unknown entry
+ * keys are rejected for the same reason: this version cannot vouch
+ * for content it does not understand.
  */
 async function readConversionJournal(file: string): Promise<ConversionJournalEntry[]> {
   let raw: string;
@@ -781,17 +833,32 @@ async function readConversionJournal(file: string): Promise<ConversionJournalEnt
     throw new Error(`conversion journal is not valid JSON (${file}). Inspect it manually; it is never overwritten.`);
   }
   const envelope = parsed as { schemaVersion?: unknown; entries?: unknown };
-  const shapeError = (): Error =>
-    new Error(`conversion journal has an unrecognized shape (${file}). Inspect it manually; it is never overwritten.`);
+  const shapeError = (detail: string): Error =>
+    new Error(`conversion journal has an unrecognized shape (${detail}) (${file}). Inspect it manually; it is never overwritten.`);
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || envelope.schemaVersion !== 1 || !Array.isArray(envelope.entries)) {
-    throw shapeError();
+    throw shapeError('envelope');
+  }
+  for (const key of Object.keys(parsed)) {
+    if (key !== 'schemaVersion' && key !== 'entries') {
+      throw shapeError(`unknown envelope key '${key}'`);
+    }
   }
   for (const entry of envelope.entries) {
     const e = entry as { savedAt?: unknown; legacy?: unknown };
     if (!entry || typeof entry !== 'object' || Array.isArray(entry)
       || typeof e.savedAt !== 'string' || Number.isNaN(Date.parse(e.savedAt))
       || !e.legacy || typeof e.legacy !== 'object' || Array.isArray(e.legacy)) {
-      throw shapeError();
+      throw shapeError('entry');
+    }
+    for (const key of Object.keys(entry)) {
+      if (key !== 'savedAt' && key !== 'legacy') {
+        throw shapeError(`unknown entry key '${key}'`);
+      }
+    }
+    for (const key of Object.keys(e.legacy)) {
+      if (!LEGACY_FIELD_SET.has(key)) {
+        throw shapeError(`field '${key}' is outside the legacy sensor-configuration vocabulary`);
+      }
     }
   }
   return envelope.entries as ConversionJournalEntry[];

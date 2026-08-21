@@ -117,6 +117,18 @@ paths, from fastest to most thorough:
   `configVersion`, and `_legacyMirror`, disable `_sensorMapV2`, and
   unset the `SENSOR_MAP_V2` environment variable if you use it.
   Restart.
+- **Rollback to a JOURNALED (post-rollback) baseline:** if you rolled
+  back and later reconverted, the settings you rolled back to are in
+  `legacy-conversion-journal.json` (same directory as the snapshot).
+  Pick the entry you want under `entries` — the LAST entry is the
+  most recent pre-reconversion baseline — and restore it exactly like
+  the snapshot, sourcing the fields from that entry's `legacy`
+  object: delete every legacy sensor-configuration field, copy in the
+  entry's `legacy` fields as the replacement (entries are sparse, so
+  replace rather than overlay), delete `sensorMap`, `configVersion`,
+  and `_legacyMirror`, disable `_sensorMapV2`, unset the
+  `SENSOR_MAP_V2` environment variable if you use it, and do a full
+  Homebridge restart.
 - **Custom v2-only sensors** (added through the editor for fields the
   plugin has no built-in definition for): no 1.x release can operate
   or update them. The 1.7.x freeze preserves their cached tiles at

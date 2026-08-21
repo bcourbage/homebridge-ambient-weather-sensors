@@ -395,6 +395,78 @@ describe('journalConversionBaseline (append-only, deduplicated, no secrets)', ()
     await fs.writeFile(journalPath(), JSON.stringify({ schemaVersion: 1, entries: [{ savedAt: '2026-01-01T00:00:00Z', legacy: [] }] }));
     await expect(journalConversionBaseline(dir, { temperatureSensors: true }, log, clock)).rejects.toThrow(/unrecognized shape/);
   });
+
+  it('rejects a journal whose entry carries fields outside LEGACY_SENSOR_FIELDS (the apiKey counterexample) and never rewrites it', async () => {
+    // PR #46 review P2, reproduced pre-fix: this journal was ACCEPTED
+    // and the credential re-persisted by the next append.
+    const poisoned = JSON.stringify({
+      schemaVersion: 1,
+      entries: [{ savedAt: '2026-01-01T00:00:00Z', legacy: { apiKey: 'secret' } }],
+    });
+    await fs.writeFile(journalPath(), poisoned);
+    await expect(journalConversionBaseline(dir, { temperatureSensors: true }, log, clock))
+      .rejects.toThrow(/outside the legacy sensor-configuration vocabulary/);
+    expect(await fs.readFile(journalPath(), 'utf8')).toBe(poisoned); // untouched
+  });
+
+  it('rejects unknown envelope keys and unknown entry keys', async () => {
+    await fs.writeFile(journalPath(), JSON.stringify({
+      schemaVersion: 1, entries: [], extra: true,
+    }));
+    await expect(journalConversionBaseline(dir, { temperatureSensors: true }, log, clock))
+      .rejects.toThrow(/unknown envelope key 'extra'/);
+
+    await fs.writeFile(journalPath(), JSON.stringify({
+      schemaVersion: 1,
+      entries: [{ savedAt: '2026-01-01T00:00:00Z', legacy: { temperatureSensors: true }, note: 'hi' }],
+    }));
+    await expect(journalConversionBaseline(dir, { temperatureSensors: true }, log, clock))
+      .rejects.toThrow(/unknown entry key 'note'/);
+  });
+
+  it('concurrent appends with DISTINCT baselines both survive (PR #46 P1: the unlocked read-modify-rename dropped one)', async () => {
+    // Deterministic: both calls enter before either completes, so
+    // without serialization both read the empty journal and the last
+    // rename wins (reproduced: two 'appended', one surviving entry).
+    // The per-path lock serializes them end-to-end.
+    const outcomes = await Promise.all([
+      journalConversionBaseline(dir, { temperatureSensors: true }, log, clock),
+      journalConversionBaseline(dir, { temperatureSensors: false }, log, clock),
+    ]);
+    expect(outcomes).toEqual(['appended', 'appended']);
+    const raw = JSON.parse(await fs.readFile(journalPath(), 'utf8')) as {
+      entries: Array<{ legacy: Record<string, unknown> }>;
+    };
+    expect(raw.entries).toHaveLength(2);
+    expect(raw.entries[0].legacy).toEqual({ temperatureSensors: true });
+    expect(raw.entries[1].legacy).toEqual({ temperatureSensors: false });
+  });
+
+  it('concurrent appends with IDENTICAL baselines: one appends, one deduplicates', async () => {
+    const outcomes = await Promise.all([
+      journalConversionBaseline(dir, { temperatureSensors: true }, log, clock),
+      journalConversionBaseline(dir, { temperatureSensors: true }, log, clock),
+    ]);
+    expect(outcomes.sort()).toEqual(['appended', 'unchanged']);
+    const raw = JSON.parse(await fs.readFile(journalPath(), 'utf8')) as { entries: unknown[] };
+    expect(raw.entries).toHaveLength(1);
+  });
+
+  it('the lock chain is failure-safe: an append after a rejected one still runs', async () => {
+    const poisoned = JSON.stringify({ schemaVersion: 99, entries: [] });
+    await fs.writeFile(journalPath(), poisoned);
+    const [first, second] = await Promise.allSettled([
+      journalConversionBaseline(dir, { temperatureSensors: true }, log, clock),
+      // Queued behind the failing call on the same journal's lock;
+      // it must still run (and fail on the same corrupt journal, not
+      // hang or get swallowed).
+      journalConversionBaseline(dir, { temperatureSensors: false }, log, clock),
+    ]);
+    expect(first.status).toBe('rejected');
+    expect(second.status).toBe('rejected');
+    await fs.rm(journalPath());
+    await expect(journalConversionBaseline(dir, { temperatureSensors: true }, log, clock)).resolves.toBe('appended');
+  });
 });
 
 describe('projection property test (finding 5 — reviewer requirement)', () => {

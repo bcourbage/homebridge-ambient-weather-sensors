@@ -102,7 +102,10 @@ problems surface as banners), but the editor is the recommended path.
   exists. Converting again after a rollback also works: the
   rolled-back settings are recorded in an append-only
   `legacy-conversion-journal.json` first, so neither the original
-  snapshot nor the rolled-back state is ever lost.
+  snapshot nor the rolled-back state is ever lost. A journal entry is
+  restored with the same procedure as the snapshot, sourcing the
+  fields from the chosen entry's `legacy` object — see the README's
+  rollback section for the exact steps.
 - **Guarded saves**: every save is validated server-side against
   the same rules the runtime uses. Changes that would register,
   deregister, or re-register an accessory require explicit

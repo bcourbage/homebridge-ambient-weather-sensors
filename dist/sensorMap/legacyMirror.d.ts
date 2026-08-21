@@ -227,8 +227,13 @@ export declare function writeLegacySnapshot(persistDir: string, legacyFields: Re
  *   - 'absent':   no snapshot on disk (caller should write one);
  *   - 'match':    the stored legacy subset equals the authoritative
  *                 fields (key-order-insensitive) — proceed as 'exists';
- *   - 'mismatch': the stored subset differs — REFUSE the conversion
- *                 (never overwrite; the snapshot is immutable);
+ *   - 'mismatch': the stored subset differs — the RECONVERSION case
+ *                 (a post-rollback config carries the projected
+ *                 mirror form, never the original): the caller must
+ *                 durably record the current baseline via
+ *                 `journalConversionBaseline` BEFORE proceeding, and
+ *                 abort if that fails. The snapshot itself is
+ *                 immutable and is never overwritten;
  *   - 'corrupt':  unreadable/unparsable/mis-shaped — REFUSE.
  */
 export declare function verifyLegacySnapshot(persistDir: string, authoritativeLegacyFields: Record<string, unknown>): Promise<'absent' | 'match' | 'mismatch' | 'corrupt'>;
@@ -252,6 +257,10 @@ export declare function verifyLegacySnapshot(persistDir: string, authoritativeLe
  * abort the save. A corrupt journal is never quarantined or replaced:
  * it is an audit record, and the failure message directs manual
  * inspection instead.
+ *
+ * Concurrent calls for the same journal are serialized end-to-end
+ * (read, deduplicate, write, read-back) so no append can overwrite
+ * another's entry; see `withJournalLock`.
  */
 export declare function journalConversionBaseline(persistDir: string, legacyFields: Record<string, unknown>, log: Logger, clock?: Clock): Promise<'appended' | 'unchanged'>;
 //# sourceMappingURL=legacyMirror.d.ts.map

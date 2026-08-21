@@ -550,7 +550,19 @@ not grow it while genuinely different baselines are always preserved. The
 original snapshot is never modified by this path. A journal that exists
 but cannot be parsed or fails shape validation refuses the save
 (`conversion-journal-error`) — it is an audit record and is never
-quarantined, rewritten, or restarted.
+quarantined, rewritten, or restarted. Shape validation is strict about
+the VOCABULARY: every entry's `legacy` keys must be in
+`LEGACY_SENSOR_FIELDS`, and unknown envelope or entry keys are
+rejected — an injected credential (e.g. `apiKey`) must never be
+accepted and re-persisted by a later append (PR #46 review P2).
+Appends for the same journal are serialized end-to-end (read,
+deduplicate, write, read-back) by a per-path promise-chain mutex —
+concurrent saves cannot drop each other's baselines (PR #46 review
+P1); in-process serialization suffices because the journal's single
+writer (§8) is the UI server process, where all compose-save requests
+land. Restoring a journaled baseline is documented in the README: the
+snapshot-restore procedure with the fields sourced from the chosen
+entry's `legacy` object.
 
 **2. Synchronized legacy mirror — time-boxed.** Every automated v2 UI save
 re-emits legacy sensor fields alongside `configVersion: 2` + `sensorMap`,
