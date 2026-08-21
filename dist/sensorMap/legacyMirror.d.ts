@@ -2,20 +2,26 @@
  * Legacy mirror + immutable snapshot — the downgrade-safety package for
  * the v2 config migration (finding-#4 Stage 4, review finding 5).
  *
- * THE PROBLEM: once the UI migration saves `configVersion: 2` and
- * removes the legacy toggles, a plugin downgraded to v1.7 reads every
- * category toggle as false, produces an empty device set, and
- * unregisters the entire accessory cache on its FIRST boot — before any
+ * THE PROBLEM (the mirror-ABSENT/STALE case): if a v2 config carried
+ * no synchronized legacy fields — or outdated ones — a plugin
+ * downgraded to an UNGUARDED release (v1.7.0 and earlier, which DO
+ * attempt to interpret whatever legacy fields are present) would read
+ * every category toggle as false, produce an empty device set, and
+ * unregister the entire accessory cache on its FIRST boot — before any
  * human can restore a backup. Room placement and automations die at
- * that moment and are not recoverable by re-registering the same UUIDs.
+ * that moment and are not recoverable by re-registering the same
+ * UUIDs. (The editor migration does NOT remove the legacy toggles: it
+ * re-emits them, synchronized, as the mirror below. Guarded v1.7.1+
+ * releases never interpret a v2-marked config at all — they freeze.)
  *
  * THE PACKAGE (three layers, each independent):
  *
  *   1. IMMUTABLE SNAPSHOT (permanent). At the first v2 conversion —
  *      BEFORE config.json is mutated — the UI save flow writes the
- *      legacy sensor-configuration fields it is about to remove to
- *      `legacy-config-snapshot.json` in the plugin persist dir, via the
- *      atomic persistence helper. Never overwritten; never contains API
+ *      ORIGINAL legacy sensor-configuration fields (which the
+ *      conversion supersedes and re-emits in synchronized, projected
+ *      form — see the mirror below) to `legacy-config-snapshot.json`
+ *      in the plugin persist dir, via the atomic persistence helper. Never overwritten; never contains API
  *      secrets (only `LEGACY_SENSOR_FIELDS`). Provenance + the manual
  *      late-rollback procedure's source of truth.
  *

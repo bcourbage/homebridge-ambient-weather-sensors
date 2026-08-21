@@ -76,15 +76,25 @@ paths, from fastest to most thorough:
   still in place. Its guard detects the v2 configuration and freezes
   instead of reconciling: cached accessories stay in HomeKit at their
   last-known values, updates stop, and the log explains how to
-  resume. The safety comes entirely from that guard — no 1.x release
-  reads any part of a v2 configuration.
-- **Operational rollback to your CURRENT settings:** in the plugin's
-  config block, delete exactly three things — `sensorMap`,
-  `configVersion`, and `_legacyMirror` — and keep everything else.
-  Every editor save keeps the legacy sensor fields in the block
-  synchronized with your v2 settings, so what remains is a working
-  1.x configuration of your current state. Then run 1.7.x (or 2.x
-  with the flag off) and restart.
+  resume. The safety comes entirely from that guard — guarded
+  v1.7.1+ releases do not interpret a v2-marked configuration.
+  (v1.7.0 and earlier DO attempt to read it, which is exactly why
+  the emergency target is the current 1.7.x.)
+- **Operational rollback to your CURRENT settings** — only with a
+  healthy editor-saved mirror: this path requires the synchronized
+  legacy fields the editor maintains, so first open the plugin's
+  settings page and confirm there is NO "mirror is STALE" or
+  "metadata is INVALID" warning (a hand-edited `sensorMap`, or one
+  not produced by the editor, invalidates the mirror). If the mirror
+  is healthy: in the plugin's config block, delete exactly three
+  things — `sensorMap`, `configVersion`, and `_legacyMirror` — keep
+  everything else, ALSO disable `_sensorMapV2` in the block and unset
+  the `SENSOR_MAP_V2` environment variable if you use it, then run
+  1.7.x (or 2.x with the flag off) and restart. If the mirror is
+  missing, stale, or warned about: do NOT delete the markers —
+  freeze on current 1.7.x, restore the snapshot (next path), or
+  upgrade back to 2.x and re-save in the editor to regenerate the
+  mirror.
 - **Rollback to your ORIGINAL (pre-conversion) settings:** open
   `legacy-config-snapshot.json` and use its `legacy` object. In the
   plugin's config block, delete every legacy sensor-configuration

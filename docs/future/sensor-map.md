@@ -537,10 +537,15 @@ forever.
 **2. Synchronized legacy mirror — time-boxed.** Every automated v2 UI save
 re-emits legacy sensor fields alongside `configVersion: 2` + `sensorMap`,
 reverse-projected from the effective v2 map (`projectLegacyMirror`). Its
-value is the CURRENT-STATE MANUAL rollback: removing `sensorMap`,
-`configVersion`, and `_legacyMirror` leaves a working 1.x configuration of
-the current state, because the legacy fields are already synchronized in
-the block. The shipped 1.7.x guard freezes on ANY v2-marked config BEFORE
+value is the CURRENT-STATE MANUAL rollback — valid ONLY while the mirror
+is recognized (hash-matching, editor-generated): removing `sensorMap`,
+`configVersion`, and `_legacyMirror` (and disabling `_sensorMapV2` /
+unsetting `SENSOR_MAP_V2`) leaves a working 1.x configuration of the
+current state, because the legacy fields are already synchronized in the
+block. With a missing, invalid, or STALE mirror the same deletions can
+expose empty or outdated legacy fields and deregister accessories — the
+documented recovery is then the guard freeze, the snapshot restore, or an
+upgrade + editor re-save to regenerate the mirror; never blind deletion. The shipped 1.7.x guard freezes on ANY v2-marked config BEFORE
 reading these fields — nothing on the 1.7.x line consumes the mirror
 automatically; that would require a new 1.7.x implementation (2026-08-20
 review: not currently planned). The projection is conservative around
@@ -573,7 +578,8 @@ projection property test). Specifics:
   user's responsibility to re-save through the UI.
 
 **Support window:** the synchronized mirror (which is what makes the
-current-state manual rollback a three-deletion edit) is maintained through
+current-state manual rollback a three-deletion edit — mirror-recognized
+configs only) is maintained through
 the **2.1.x line and removed in 2.2.0**. The snapshot remains permanently;
 from 2.2.0 onward, rolling back below 2.0 means the ORIGINAL-state manual
 procedure (delete every `LEGACY_SENSOR_FIELDS` key, apply the snapshot's

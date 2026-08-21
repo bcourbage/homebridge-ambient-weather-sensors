@@ -1,31 +1,37 @@
 /**
- * Downgrade lifecycle fixture (finding 5 — reviewer requirement).
+ * Downgrade lifecycle fixtures (finding 5; reworked per review #45
+ * round 3).
  *
- * Simulates the real downgrade sequence:
+ * The REAL downgrade journey for an editor-generated v2 config has
+ * two shipped halves:
  *
- *   1. A v2 configuration is produced by the UI save flow
- *      (`composeV2ConfigSave`): `configVersion: 2` + `sensorMap` + the
- *      SYNCHRONIZED LEGACY MIRROR + `_legacyMirror` metadata.
- *   2. The accessory cache is v2-WRITTEN: contexts carry `kind`,
- *      `measurement`, and `structuralSignature` alongside the legacy
- *      `type` (P1-2's shape).
- *   3. The plugin is downgraded to v1.7 and boots against that config
- *      and cache. v1.7 has no configMode detection — it reads the
- *      legacy fields directly and runs its registration semantics.
+ *   1. GUARD FREEZE (markers present): a downgraded v1.7.1+ detects
+ *      `configVersion`/`sensorMap` in didFinishLaunching and freezes —
+ *      zero fetch, zero reconciliation, cache preserved. That
+ *      lifecycle is pinned ON THE 1.x BRANCH, where the guard lives:
+ *      release/1.7.0 → tests/integration/configGuard.test.ts
+ *      ("freezes on a 2.x config: cache stays published, zero HAP
+ *      calls, no network"). HEAD cannot run 1.7.1 code, so it is not
+ *      re-tested here.
  *
- * v1.7 semantics are exercised through HEAD's flag-OFF discoverDevices
- * path, which the Stage-4 work keeps byte-identical to the v1.7.0
- * registration pipeline (the full 1044-test v1 baseline pins it).
+ *   2. DOCUMENTED CURRENT-STATE MANUAL ROLLBACK (this file's first
+ *      test): with a recognized editor-generated mirror, delete
+ *      exactly `sensorMap`, `configVersion`, and `_legacyMirror`,
+ *      leave the v2 flag off, and the remaining synchronized legacy
+ *      fields ARE a working 1.x configuration — the legacy pipeline
+ *      keeps every representable accessory with zero unregister
+ *      calls; custom rows are the explicit loss boundary. Exercised
+ *      through didFinishLaunching against HEAD's flag-off path, which
+ *      Stage 4 keeps byte-identical to the v1.7.0 registration
+ *      pipeline.
  *
- * The assertions the reviewer asked for:
- *   - ZERO unregister calls for every v1.7-representable known
- *     accessory (not merely recognizable `type` strings) — native AND
- *     extended, battery hosts included.
- *   - The custom accessory is the explicit downgrade-loss boundary:
- *     its cached accessory IS unregistered, and its dataPoint is never
- *     (mis)registered as a new wrong-wrapper accessory even though
- *     v1.7's broad matchers would otherwise catch it
- *     (`barn_temp`.includes('temp')).
+ * The second test in this file is a HISTORICAL HAZARD ILLUSTRATION,
+ * not a downgrade journey: it runs v1.7.0-ERA parser semantics
+ * against a STILL-MARKED v2 config (v1.7.0 ignored unknown keys and
+ * read the mirrored legacy fields). Shipped 1.7.1+ freezes instead of
+ * ever doing this — the test exists to pin what the mirror protects
+ * against on ancient versions, and must not be cited as the real
+ * journey.
  */
 
 import { describe, expect, it, vi } from 'vitest';
@@ -79,8 +85,8 @@ function v2CachedAccessory(opts: {
   return a;
 }
 
-describe('v1.7 downgrade fixture: v2 config + synchronized mirror + v2-written cache', () => {
-  it('v1.7 registration semantics keep every representable accessory; custom is the loss boundary', async () => {
+describe('downgrade journeys: editor-generated v2 config + v2-written cache', () => {
+  it('DOCUMENTED current-state rollback (delete 3 markers, flag off) keeps every representable accessory; custom is the loss boundary', async () => {
     // ---- 1. The v2 config as the UI save flow writes it.
     const sensorMap = [
       { dataPoint: 'humidity', enabled: false },                 // disabled in v2 → stays gone in v1.7
@@ -102,11 +108,22 @@ describe('v1.7 downgrade fixture: v2 config + synchronized mirror + v2-written c
     );
 
     // ---- 2. The v2-written cache: native + extended + battery host.
+    // ---- 1b. The DOCUMENTED current-state rollback (review #45
+    //          round 3): with a recognized mirror, delete exactly the
+    //          three v2 markers and keep everything else; the v2 flag
+    //          is absent (off). The synchronized legacy fields remain.
+    const rolledBack = { ...nextConfig } as Record<string, unknown>;
+    delete rolledBack.sensorMap;
+    delete rolledBack.configVersion;
+    delete rolledBack._legacyMirror;
+    expect('_sensorMapV2' in rolledBack).toBe(false); // flag off for 1.x behavior
+    expect(rolledBack.temperatureSensors).toBe(true); // the mirror's fields survive
+
     const api = new MockAPI();
     const log = new MockLogger();
     const platform = new AmbientWeatherSensorsPlatform(
       log as never,
-      { platform: 'AmbientWeatherSensors', ...nextConfig } as never,
+      { platform: 'AmbientWeatherSensors', ...rolledBack } as never,
       api as never,
     );
     const tempf = v2CachedAccessory({
@@ -163,10 +180,13 @@ describe('v1.7 downgrade fixture: v2 config + synchronized mirror + v2-written c
     }));
     vi.spyOn(global, 'setInterval').mockImplementation(() => 0 as unknown as ReturnType<typeof setInterval>);
 
-    // v1.7 has no configMode detection or v2 branch — its
-    // didFinishLaunching calls discoverDevices() unconditionally.
-    // HEAD's flag-off discoverDevices is that same pipeline.
-    await platform.discoverDevices();
+    // The FULL lifecycle: didFinishLaunching detects the (now marker-
+    // free) config as 'legacy' and runs the flag-off pipeline — the
+    // same route a real restart takes after the manual rollback.
+    api.emit('didFinishLaunching');
+    await vi.waitFor(() => {
+      expect(api.updated).toContain(tempf);
+    });
 
     // Every representable known accessory survives with ZERO
     // unregister calls; the custom cache is the only loss.
@@ -187,6 +207,64 @@ describe('v1.7 downgrade fixture: v2 config + synchronized mirror + v2-written c
     expect(api.updated).toContain(tempf);
     expect(tempf.displayName).toBe('Outdoor Temperature');
 
+    vi.restoreAllMocks();
+  });
+
+  it('HISTORICAL HAZARD (v1.7.0-era ONLY, not the documented journey): raw parser reads a STILL-MARKED v2 config via the mirror', async () => {
+    // v1.7.0 and earlier ignored unknown config keys and attempted to
+    // interpret whatever legacy fields were present — the mirror is
+    // what made that survivable for representable accessories. Shipped
+    // v1.7.1+ NEVER does this: its guard freezes on the markers first
+    // (pinned on release/1.7.0 in tests/integration/configGuard.test.ts).
+    const sensorMap = [
+      { dataPoint: 'humidity', enabled: false },
+      { dataPoint: 'barn_temp', kind: 'temperature', measurement: 'temperature', sourceUnit: 'celsius', displayUnit: 'celsius' },
+    ];
+    const v2Map = buildEffectiveSensorMap({
+      userOverrides: sensorMap,
+      discovery: emptyDiscoveryStore(),
+      uiState: emptyUiStateStore(),
+      stations: STATIONS,
+      configMode: 'v2',
+    });
+    const { nextConfig } = composeV2ConfigSave(
+      { apiKey: 'k', applicationKey: 'k' }, sensorMap, v2Map,
+      detectConfigMode({} as never).mode,
+    );
+    // Markers deliberately LEFT IN PLACE — the v1.7.0-era scenario.
+    expect(nextConfig.configVersion).toBe(2);
+
+    const api = new MockAPI();
+    const platform = new AmbientWeatherSensorsPlatform(
+      new MockLogger() as never,
+      { platform: 'AmbientWeatherSensors', ...nextConfig } as never,
+      api as never,
+    );
+    const tempf = v2CachedAccessory({
+      dataPoint: 'tempf', type: 'Temperature', displayName: 'Outdoor Temperature',
+      kind: 'temperature', measurement: 'temperature', wrapperId: 'temperature', battery: true,
+      services: (a) => {
+        const svc = a.addService(MockServices.TemperatureSensor);
+        svc.addCharacteristic(MockCharacteristics.CurrentTemperature);
+        const batt = a.addService(MockServices.Battery);
+        batt.addCharacteristic(MockCharacteristics.StatusLowBattery);
+      },
+    });
+    platform.configureAccessory(tempf as never);
+    vi.spyOn(global, 'fetch').mockImplementation(async () => new Response(JSON.stringify([{
+      macAddress: MAC, info: { name: 'Home' },
+      lastData: { tempf: 68, humidity: 40, battout: 1, barn_temp: 21 },
+    }]), { status: 200, headers: { 'content-type': 'application/json' } }));
+    vi.spyOn(global, 'setInterval').mockImplementation(() => 0 as unknown as ReturnType<typeof setInterval>);
+
+    // v1.7.0's didFinishLaunching called discoverDevices()
+    // unconditionally — no guard, no mode detection. Direct call =
+    // that era's semantics; do NOT route through HEAD's lifecycle.
+    await platform.discoverDevices();
+
+    expect(api.unregistered).not.toContain(tempf);
+    expect(api.registered.some(a => (a.context.device as { uniqueId?: string }).uniqueId === `${MAC}-humidity`)).toBe(false);
+    expect(api.registered.some(a => (a.context.device as { uniqueId?: string }).uniqueId === `${MAC}-barn_temp`)).toBe(false);
     vi.restoreAllMocks();
   });
 });
