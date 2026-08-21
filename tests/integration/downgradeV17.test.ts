@@ -238,17 +238,36 @@ describe('downgrade journeys: editor-generated v2 config + v2-written cache', ()
     delete rolledBack.configVersion;
     delete rolledBack._legacyMirror;
 
-    // The env flag is UNSET for the legacy lifecycle (the platform
-    // reads process.env via shadowModeEnabled's default).
+    // The environment-enabled installation is REAL in this test
+    // (review #45 round 5): SENSOR_MAP_V2 is set, the v2 path is
+    // positively proven enabled, and only the documented UNSET flips
+    // the platform back to the legacy path — omit the unset and the
+    // lifecycle enters the v2 reconciler, failing the v2Routing
+    // discriminator below (mutation-verified).
     const envBefore = process.env.SENSOR_MAP_V2;
-    delete process.env.SENSOR_MAP_V2;
+    process.env.SENSOR_MAP_V2 = '1';
     try {
+      // Positive proof the env flag drives the v2 path: a platform
+      // constructed NOW (env set) has the live v2 opt-in even though
+      // the rolled-back config carries no _sensorMapV2.
+      const probe = new AmbientWeatherSensorsPlatform(
+        new MockLogger() as never,
+        { platform: 'AmbientWeatherSensors', ...rolledBack } as never,
+        new MockAPI() as never,
+      );
+      expect((probe as unknown as { sensorMapV2: boolean }).sensorMapV2).toBe(true);
+
+      // The documented rollback step: UNSET the environment variable
+      // BEFORE the legacy platform starts.
+      delete process.env.SENSOR_MAP_V2;
+
       const api = new MockAPI();
       const platform = new AmbientWeatherSensorsPlatform(
         new MockLogger() as never,
         { platform: 'AmbientWeatherSensors', ...rolledBack } as never,
         api as never,
       );
+      expect((platform as unknown as { sensorMapV2: boolean }).sensorMapV2).toBe(false);
       const tempf = v2CachedAccessory({
         dataPoint: 'tempf', type: 'Temperature', displayName: 'Outdoor Temperature',
         kind: 'temperature', measurement: 'temperature', wrapperId: 'temperature', battery: true,
@@ -273,10 +292,16 @@ describe('downgrade journeys: editor-generated v2 config + v2-written cache', ()
       expect(api.unregistered).not.toContain(tempf);
       // v2-disabled humidity stays excluded via the mirror.
       expect(api.registered.some(a => (a.context.device as { uniqueId?: string }).uniqueId === `${MAC}-humidity`)).toBe(false);
+      // THE DISCRIMINATOR: the legacy lifecycle never builds a v2
+      // routing map. If the unset above is omitted, didFinishLaunching
+      // runs the v2 reconciler instead and this fails.
+      expect((platform as unknown as { v2Routing: unknown }).v2Routing).toBeUndefined();
       vi.restoreAllMocks();
     } finally {
       if (envBefore !== undefined) {
         process.env.SENSOR_MAP_V2 = envBefore;
+      } else {
+        delete process.env.SENSOR_MAP_V2;
       }
     }
   });
