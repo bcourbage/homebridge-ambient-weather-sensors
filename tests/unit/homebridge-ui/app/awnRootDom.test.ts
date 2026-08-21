@@ -782,6 +782,19 @@ describe('save flow (PR C / finding 5 — the ONE route is composeAndPersist)', 
     expect(el.textContent).toContain('Save failed (persistence-indeterminate)');
     expect(el.textContent).toContain('reload the plugin settings');
     expect(el.textContent).not.toContain('Nothing was written');
+
+    // Terminal until reload (review #45 round 2): every editor action
+    // locks — no blind retry with stale drafts against a config that
+    // may already have changed — and a reload path is offered.
+    expect(el.textContent).toContain('Editing is locked until this page is reloaded');
+    expect([...el.querySelectorAll('button')].some(b => b.textContent === 'Reload now')).toBe(true);
+    for (const b of [...el.querySelectorAll('button')].filter(x => x.textContent === 'Edit')) {
+      expect((b as HTMLButtonElement).disabled).toBe(true);
+    }
+    const save = [...el.querySelectorAll('button')].find(b => b.textContent === 'Save changes');
+    if (save) {
+      expect((save as HTMLButtonElement).disabled).toBe(true);
+    }
   });
 
   it('no Save button when the server says the editor is unavailable', async () => {

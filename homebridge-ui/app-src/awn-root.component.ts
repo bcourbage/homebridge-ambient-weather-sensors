@@ -127,8 +127,8 @@ interface StationGroup {
       @if (draftCount() > 0) {
         <div class="draft-bar">
           <span class="grow"><strong>{{ draftCount() }}</strong> draft change(s) — nothing is saved; preview runs the real save pipeline without writing.</span>
-          <button type="button" (click)="preview()" [disabled]="previewPending() || editFormInvalid() || saving()">Preview changes</button>
-          <button type="button" (click)="discardAll()" [disabled]="saving()">Discard drafts</button>
+          <button type="button" (click)="preview()" [disabled]="previewPending() || editFormInvalid() || saving() || reloadRequired()">Preview changes</button>
+          <button type="button" (click)="discardAll()" [disabled]="saving() || reloadRequired()">Discard drafts</button>
         </div>
       }
 
@@ -182,7 +182,7 @@ interface StationGroup {
                   Saving applies these changes without registering or deregistering any accessory.
                 }
               </span>
-              <button type="button" (click)="saveClicked(pr)" [disabled]="saving()">Save changes</button>
+              <button type="button" (click)="saveClicked(pr)" [disabled]="saving() || reloadRequired()">Save changes</button>
             </div>
           }
         } @else {
@@ -207,6 +207,12 @@ interface StationGroup {
         } @else {
           <div class="banner safe-mode">Save failed ({{ sr.code }}): {{ sr.message }}</div>
         }
+      }
+      @if (reloadRequired()) {
+        <div class="banner">
+          <span>Editing is locked until this page is reloaded: the saved state is uncertain, so drafts and previews here may no longer match the configuration on disk. Reload, inspect the configuration, and only then retry.</span>
+          <button type="button" (click)="reloadPage()">Reload now</button>
+        </div>
       }
       @if (confirmOpen() && previewResult()?.ok) {
         <div class="modal-backdrop">
@@ -272,7 +278,7 @@ interface StationGroup {
                 </td>
                 <td>
                   @if (row.kind !== 'unrecognized') {
-                    <button type="button" (click)="toggleEdit(row)" [disabled]="saving()">{{ isExpanded(row) ? 'Close' : 'Edit' }}</button>
+                    <button type="button" (click)="toggleEdit(row)" [disabled]="saving() || reloadRequired()">{{ isExpanded(row) ? 'Close' : 'Edit' }}</button>
                   }
                 </td>
               </tr>
@@ -337,6 +343,13 @@ export class AwnRootComponent {
   /** True while an OPEN edit form holds an invalid (blanked) control. */
   protected readonly editFormInvalid = signal(false);
   protected readonly saving = signal(false);
+  /**
+   * Terminal until reload (review #45 round 2): a
+   * persistence-indeterminate outcome means the on-disk configuration
+   * MAY have changed under this page — every editor action locks and
+   * the user is directed to reload before doing anything else.
+   */
+  protected readonly reloadRequired = signal(false);
   protected readonly confirmOpen = signal(false);
   protected readonly saveResult = signal<
     | { ok: true; snapshot: 'written' | 'exists' | 'not-applicable' }
@@ -631,6 +644,9 @@ export class AwnRootComponent {
         await this.load();
       } else {
         this.saveResult.set({ ok: false, code: result.error.code, message: result.error.message });
+        if (result.error.code === 'persistence-indeterminate') {
+          this.reloadRequired.set(true);
+        }
       }
     } catch (e) {
       this.saveResult.set({
@@ -641,6 +657,10 @@ export class AwnRootComponent {
       this.saving.set(false);
       this.confirmOpen.set(false);
     }
+  }
+
+  protected reloadPage(): void {
+    this.hb.reloadWindow();
   }
 
   /** What a structural change DOES to the accessory (review #43 P1-1). */

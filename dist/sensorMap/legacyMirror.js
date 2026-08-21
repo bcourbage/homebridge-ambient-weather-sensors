@@ -22,18 +22,24 @@
  *   2. SYNCHRONIZED MIRROR (time-boxed). Every automated v2 UI save
  *      re-emits legacy sensor fields ALONGSIDE `configVersion: 2` +
  *      `sensorMap`, projected from the effective v2 map by
- *      `projectLegacyMirror`. A downgraded v1.7 reads those fields
- *      directly — zero restore step, no race. Marked with
- *      `_legacyMirror: { version, hash }` so `detectConfigMode`
+ *      `projectLegacyMirror`. Its value is the CURRENT-STATE MANUAL
+ *      rollback: remove `sensorMap`, `configVersion`, and
+ *      `_legacyMirror` from the block, and the remaining synchronized
+ *      legacy fields ARE a working 1.x configuration of the current
+ *      state — no field reconstruction. The shipped 1.7.x guard
+ *      freezes on ANY v2-marked config BEFORE reading these fields,
+ *      mirrored or not: nothing on the 1.7.x line consumes the mirror
+ *      automatically (that would require a NEW 1.7.x release). Marked
+ *      with `_legacyMirror: { version, hash }` so `detectConfigMode`
  *      suppresses its both-shapes-present ambiguity warning ONLY for a
  *      recognized, hash-matching mirror; a manual `sensorMap` edit that
- *      staleness the mirror is detectable (hash mismatch) and warned.
+ *      stales the mirror is detectable (hash mismatch) and warned.
  *      The runtime plugin never rewrites config — mirror maintenance is
  *      exclusively the UI server's save path (`composeV2ConfigSave`).
  *
- *   3. The v1.7.1 guard backport (separate release) freezes instead of
- *      reconciling when it sees a v2 config — the safety net for a
- *      downgrade that lands on a config whose mirror was dropped.
+ *   3. The v1.7.1+ guard (separate release) freezes instead of
+ *      reconciling when it sees ANY v2 config — downgrade safety comes
+ *      from the guard alone, never from the mirror.
  *
  * REVERSE-PROJECTION CONTRACT (conservative, cache-preservation first):
  * the mirror's job is that v1.7 registers EXACTLY the v1.7-representable

@@ -155,6 +155,11 @@ export class HomebridgeService {
     return Array.isArray(blocks) ? blocks[0] : undefined;
   }
 
+  /** Reload the iframe (seam so tests can observe without navigating). */
+  reloadWindow(): void {
+    this.document.defaultView?.location.reload();
+  }
+
   /**
    * Dependency bundle for composeAndPersist — the ONE save route
    * (PR C / finding 5). Throws when the bridge lacks the persistence

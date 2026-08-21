@@ -117,7 +117,9 @@ export interface StatusPayload {
   /**
    * The server-authoritative preview endpoint is installed (#69 PR B):
    * drafts can be dry-run through the REAL save pipeline with zero
-   * writes. Saving itself stays unavailable until PR C.
+   * writes, with or without the v2 flag. Saving is live (PR C) and
+   * flag-gated: /compose-save refuses with 'v2-flag-off' when the
+   * flag is off.
    */
   previewSaveAvailable: true;
 }

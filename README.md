@@ -68,18 +68,31 @@ the 1.7.x line is safe under the same condition.
 
 **Rollback after an editor save (or any v2 config):** do NOT simply
 turn the flag off — with the flag off, the v1 path cannot read
-`sensorMap` and can deregister your cached accessories. Instead:
+`sensorMap` and can deregister your cached accessories. Three exact
+paths, from fastest to most thorough:
 
-- **To return to 1.x behavior on 2.x:** restore a 1.x-shaped config
-  first (copy the fields from `legacy-config-snapshot.json` back into
-  the plugin's config block, replacing `configVersion` and
-  `sensorMap`), then disable the flag and restart.
-- **For an emergency downgrade with the v2 config still in place:**
-  install the current **1.7.x** release (never v1.7.0 or earlier).
-  It freezes safely: cached accessories stay in HomeKit at their
+- **Emergency freeze (no config edit):** install the current
+  **1.7.x** release (never v1.7.0 or earlier) with the v2 config
+  still in place. Its guard detects the v2 configuration and freezes
+  instead of reconciling: cached accessories stay in HomeKit at their
   last-known values, updates stop, and the log explains how to
-  resume. The mirror keeps that freeze safe; it does not make 1.7.x
-  operate the v2 config.
+  resume. The safety comes entirely from that guard — no 1.x release
+  reads any part of a v2 configuration.
+- **Operational rollback to your CURRENT settings:** in the plugin's
+  config block, delete exactly three things — `sensorMap`,
+  `configVersion`, and `_legacyMirror` — and keep everything else.
+  Every editor save keeps the legacy sensor fields in the block
+  synchronized with your v2 settings, so what remains is a working
+  1.x configuration of your current state. Then run 1.7.x (or 2.x
+  with the flag off) and restart.
+- **Rollback to your ORIGINAL (pre-conversion) settings:** open
+  `legacy-config-snapshot.json` and use its `legacy` object. In the
+  plugin's config block, delete every legacy sensor-configuration
+  field (the sensor category toggles, `extendedDisplayMode`,
+  `thresholds`, `units`, `excludeSensors`, `includeOnly`), copy in
+  the snapshot's `legacy` fields as the replacement — the snapshot
+  is sparse, so replace rather than overlay — and delete `sensorMap`,
+  `configVersion`, and `_legacyMirror`. Restart.
 - **Custom v2-only sensors** (added through the editor for fields the
   plugin has no built-in definition for): no 1.x release can operate
   or update them. The 1.7.x freeze preserves their cached tiles at
