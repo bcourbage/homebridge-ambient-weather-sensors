@@ -1,6 +1,8 @@
+import { execFile } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import * as os from 'node:os';
 import * as nodePath from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -9,10 +11,12 @@ import { detectConfigMode } from '../../../src/sensorMap/configMode';
 import { buildEffectiveSensorMap } from '../../../src/sensorMap/buildEffectiveMap';
 import { defaultRowFor } from '../../../src/sensorMap/defaultMap';
 import {
+  LEGACY_JOURNAL_DIR,
   LEGACY_MIRROR_KEY,
   LEGACY_SENSOR_FIELDS,
   LEGACY_SNAPSHOT_FILE,
   composeV2ConfigSave,
+  journalConversionBaseline,
   mirrorHash,
   projectLegacyMirror,
   recognizeMirror,
@@ -334,6 +338,264 @@ describe('writeLegacySnapshot (immutable, atomic, no secrets)', () => {
     const entries = await fs.readdir(dir);
     expect(entries.filter(e => e.endsWith('.tmp'))).toHaveLength(0);
   });
+});
+
+describe('journalConversionBaseline (append-only entry files, deduplicated, no secrets)', () => {
+  let dir: string;
+  const log = { info: () => {}, warn: () => {}, debug: () => {} };
+  const clock = { iso: () => '2026-08-20T00:00:00.000Z', now: () => 1_755_648_000_000 };
+  const journalDir = (): string => nodePath.join(dir, LEGACY_JOURNAL_DIR);
+  const entryPath = (seq: number): string =>
+    nodePath.join(journalDir(), `entry-${String(seq).padStart(6, '0')}.json`);
+
+  /** Read the journal directory back the way a human (or restore doc) would. */
+  async function readEntries(): Promise<Array<{ name: string; savedAt: string; legacy: Record<string, unknown> }>> {
+    const names = (await fs.readdir(journalDir())).filter(n => !n.startsWith('.')).sort();
+    return Promise.all(names.map(async name => {
+      const parsed = JSON.parse(await fs.readFile(nodePath.join(journalDir(), name), 'utf8')) as {
+        savedAt: string; legacy: Record<string, unknown>;
+      };
+      return { name, savedAt: parsed.savedAt, legacy: parsed.legacy };
+    }));
+  }
+
+  beforeEach(async () => {
+    dir = await fs.mkdtemp(nodePath.join(os.tmpdir(), 'aws-journal-'));
+  });
+  afterEach(async () => {
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it('appends a fresh baseline as entry-000001.json, excluding secrets by the field allowlist', async () => {
+    const outcome = await journalConversionBaseline(dir, { temperatureSensors: true, apiKey: 'secret' }, log, clock);
+    expect(outcome).toBe('appended');
+    const entries = await readEntries();
+    expect(entries).toHaveLength(1);
+    expect(entries[0].name).toBe('entry-000001.json');
+    expect(entries[0].savedAt).toBe('2026-08-20T00:00:00.000Z');
+    expect(entries[0].legacy).toEqual({ temperatureSensors: true });
+    // No orphan temp files anywhere in the persist dir.
+    const stray = (await fs.readdir(dir)).filter(e => e.endsWith('.tmp'));
+    expect(stray).toHaveLength(0);
+  });
+
+  it('deduplicates against the LATEST entry only (key order never matters)', async () => {
+    await journalConversionBaseline(dir, { temperatureSensors: true, windSensors: false }, log, clock);
+    // Same baseline, different key order → unchanged, still one entry.
+    expect(await journalConversionBaseline(dir, { windSensors: false, temperatureSensors: true }, log, clock)).toBe('unchanged');
+    // A different baseline appends...
+    expect(await journalConversionBaseline(dir, { temperatureSensors: false }, log, clock)).toBe('appended');
+    // ...and returning to an OLDER baseline appends again (only the
+    // latest entry deduplicates — history is never rewritten).
+    expect(await journalConversionBaseline(dir, { temperatureSensors: true, windSensors: false }, log, clock)).toBe('appended');
+    const entries = await readEntries();
+    expect(entries.map(e => e.name)).toEqual(['entry-000001.json', 'entry-000002.json', 'entry-000003.json']);
+  });
+
+  it('existing entries are never rewritten by later appends', async () => {
+    await journalConversionBaseline(dir, { temperatureSensors: true }, log, clock);
+    const firstBytes = await fs.readFile(entryPath(1), 'utf8');
+    await journalConversionBaseline(dir, { temperatureSensors: false }, log, clock);
+    expect(await fs.readFile(entryPath(1), 'utf8')).toBe(firstBytes);
+  });
+
+  it('tolerates gaps from manual pruning and continues after the highest entry', async () => {
+    await journalConversionBaseline(dir, { temperatureSensors: true }, log, clock);
+    await journalConversionBaseline(dir, { temperatureSensors: false }, log, clock);
+    await journalConversionBaseline(dir, { windSensors: true }, log, clock);
+    await fs.rm(entryPath(2)); // a user pruned an entry by hand
+    expect(await journalConversionBaseline(dir, { humiditySensors: true }, log, clock)).toBe('appended');
+    const entries = await readEntries();
+    expect(entries.map(e => e.name)).toEqual(['entry-000001.json', 'entry-000003.json', 'entry-000004.json']);
+  });
+
+  it('ignores OS dotfiles but fails closed on any other unexpected file in the journal', async () => {
+    await journalConversionBaseline(dir, { temperatureSensors: true }, log, clock);
+    await fs.writeFile(nodePath.join(journalDir(), '.DS_Store'), 'finder junk');
+    expect(await journalConversionBaseline(dir, { temperatureSensors: false }, log, clock)).toBe('appended');
+
+    await fs.writeFile(nodePath.join(journalDir(), 'notes.txt'), 'what is this');
+    await expect(journalConversionBaseline(dir, { windSensors: true }, log, clock))
+      .rejects.toThrow(/unexpected file 'notes\.txt'/);
+  });
+
+  it('fails closed on an unparsable entry file and never rewrites it', async () => {
+    await fs.mkdir(journalDir(), { recursive: true });
+    await fs.writeFile(entryPath(1), '{not json');
+    await expect(journalConversionBaseline(dir, { temperatureSensors: true }, log, clock)).rejects.toThrow(/not valid JSON/);
+    expect(await fs.readFile(entryPath(1), 'utf8')).toBe('{not json');
+  });
+
+  it('fails closed on an unrecognized schemaVersion or malformed entry', async () => {
+    await fs.mkdir(journalDir(), { recursive: true });
+    await fs.writeFile(entryPath(1), JSON.stringify({ schemaVersion: 99, savedAt: '2026-01-01T00:00:00Z', legacy: {} }));
+    await expect(journalConversionBaseline(dir, { temperatureSensors: true }, log, clock)).rejects.toThrow(/unrecognized shape/);
+
+    await fs.writeFile(entryPath(1), JSON.stringify({ schemaVersion: 1, savedAt: 'not-a-date', legacy: {} }));
+    await expect(journalConversionBaseline(dir, { temperatureSensors: true }, log, clock)).rejects.toThrow(/unrecognized shape/);
+
+    await fs.writeFile(entryPath(1), JSON.stringify({ schemaVersion: 1, savedAt: '2026-01-01T00:00:00Z', legacy: [] }));
+    await expect(journalConversionBaseline(dir, { temperatureSensors: true }, log, clock)).rejects.toThrow(/unrecognized shape/);
+  });
+
+  it('rejects an entry carrying fields outside LEGACY_SENSOR_FIELDS (the apiKey counterexample) and never rewrites it', async () => {
+    // PR #46 review P2, reproduced pre-fix: this entry was ACCEPTED
+    // and the credential re-persisted by the next append.
+    const poisoned = JSON.stringify({
+      schemaVersion: 1, savedAt: '2026-01-01T00:00:00Z', legacy: { apiKey: 'secret' },
+    });
+    await fs.mkdir(journalDir(), { recursive: true });
+    await fs.writeFile(entryPath(1), poisoned);
+    await expect(journalConversionBaseline(dir, { temperatureSensors: true }, log, clock))
+      .rejects.toThrow(/outside the legacy sensor-configuration vocabulary/);
+    expect(await fs.readFile(entryPath(1), 'utf8')).toBe(poisoned); // untouched
+  });
+
+  it('rejects unknown entry keys', async () => {
+    await fs.mkdir(journalDir(), { recursive: true });
+    await fs.writeFile(entryPath(1), JSON.stringify({
+      schemaVersion: 1, savedAt: '2026-01-01T00:00:00Z', legacy: { temperatureSensors: true }, note: 'hi',
+    }));
+    await expect(journalConversionBaseline(dir, { temperatureSensors: true }, log, clock))
+      .rejects.toThrow(/unknown entry key 'note'/);
+  });
+
+  it('fails closed when a pre-release single-file journal is present', async () => {
+    const singleFile = nodePath.join(dir, `${LEGACY_JOURNAL_DIR}.json`);
+    await fs.writeFile(singleFile, JSON.stringify({ schemaVersion: 1, entries: [] }));
+    await expect(journalConversionBaseline(dir, { temperatureSensors: true }, log, clock))
+      .rejects.toThrow(/pre-release single-file conversion journal/);
+    expect(await fs.readFile(singleFile, 'utf8')).toContain('"entries"'); // untouched
+  });
+
+  it('concurrent appends with DISTINCT baselines both survive (PR #46 P1: the unlocked read-modify-rename dropped one)', async () => {
+    const outcomes = await Promise.all([
+      journalConversionBaseline(dir, { temperatureSensors: true }, log, clock),
+      journalConversionBaseline(dir, { temperatureSensors: false }, log, clock),
+    ]);
+    expect(outcomes).toEqual(['appended', 'appended']);
+    const entries = await readEntries();
+    expect(entries).toHaveLength(2);
+    expect(entries[0].legacy).toEqual({ temperatureSensors: true });
+    expect(entries[1].legacy).toEqual({ temperatureSensors: false });
+  });
+
+  it('concurrent appends with IDENTICAL baselines: one appends, one deduplicates', async () => {
+    const outcomes = await Promise.all([
+      journalConversionBaseline(dir, { temperatureSensors: true }, log, clock),
+      journalConversionBaseline(dir, { temperatureSensors: true }, log, clock),
+    ]);
+    expect(outcomes.sort()).toEqual(['appended', 'unchanged']);
+    expect(await readEntries()).toHaveLength(1);
+  });
+
+  it('the lock chain is failure-safe: an append after a rejected one still runs', async () => {
+    await fs.mkdir(journalDir(), { recursive: true });
+    await fs.writeFile(entryPath(1), '{not json');
+    const [first, second] = await Promise.allSettled([
+      journalConversionBaseline(dir, { temperatureSensors: true }, log, clock),
+      // Queued behind the failing call on the same journal's lock;
+      // it must still run (and fail on the same corrupt entry, not
+      // hang or get swallowed).
+      journalConversionBaseline(dir, { temperatureSensors: false }, log, clock),
+    ]);
+    expect(first.status).toBe('rejected');
+    expect(second.status).toBe('rejected');
+    await fs.rm(entryPath(1));
+    await expect(journalConversionBaseline(dir, { temperatureSensors: true }, log, clock)).resolves.toBe('appended');
+  });
+
+  /**
+   * Cross-process rig with a FORCED same-sequence-number race (review
+   * PR #46 round 4): without a barrier, sequential child scheduling
+   * would let even the old unsafe read-modify-replace implementation
+   * pass (A commits entry 1, B then reads it and commits entry 2). The
+   * barrier makes the test discriminating: each child patches
+   * fs.promises.writeFile (the exact object the dist module binds)
+   * BEFORE importing the module; after writing its journal TEMP file —
+   * i.e. after it has read the directory and chosen a sequence number,
+   * but before the commit — it signals `ready-<id>` and blocks until
+   * the parent's `release` marker. The parent releases only once BOTH
+   * children are ready, so both hold seq 1 and the exclusive-create
+   * collision is guaranteed. The loser's retry re-enters the hook and
+   * passes straight through (release already exists). Children import
+   * the COMMITTED dist build, mirroring how two real forked UI servers
+   * load the module — mutation-verified: swapping the journal's
+   * link(2) for an overwriting rename() fails these tests.
+   */
+  async function runForcedRace(fieldA: string, fieldB: string): Promise<[string, string]> {
+    const syncDir = nodePath.join(dir, 'sync');
+    await fs.mkdir(syncDir, { recursive: true });
+    const childScript = nodePath.join(dir, 'child.mjs');
+    const distUrl = pathToFileURL(nodePath.resolve(__dirname, '../../../dist/sensorMap/legacyMirror.js')).href;
+    await fs.writeFile(childScript, [
+      "import { promises as fsp, existsSync } from 'node:fs';",
+      "import { setTimeout as delay } from 'node:timers/promises';",
+      'const [persistDir, field, childId, syncDir] = process.argv.slice(2);',
+      'const realWriteFile = fsp.writeFile.bind(fsp);',
+      'fsp.writeFile = async (file, ...rest) => {',
+      '  const result = await realWriteFile(file, ...rest);',
+      "  if (typeof file === 'string' && file.includes('legacy-conversion-journal.') && file.endsWith('.tmp')) {",
+      '    await realWriteFile(`${syncDir}/ready-${childId}`, \'\');',
+      '    const deadline = Date.now() + 15000;',
+      '    while (!existsSync(`${syncDir}/release`)) {',
+      "      if (Date.now() > deadline) throw new Error('barrier release never arrived');",
+      '      await delay(5);',
+      '    }',
+      '  }',
+      '  return result;',
+      '};',
+      `const { journalConversionBaseline } = await import(${JSON.stringify(distUrl)});`,
+      'const log = { info() {}, warn() {}, debug() {} };',
+      'const outcome = await journalConversionBaseline(persistDir, { [field]: true }, log);',
+      'process.stdout.write(outcome);',
+    ].join('\n'));
+
+    const run = (field: string, childId: string): Promise<string> => new Promise((resolve, reject) => {
+      execFile(process.execPath, [childScript, dir, field, childId, syncDir], (err, stdout) =>
+        (err ? reject(err) : resolve(stdout.trim())));
+    });
+    const pA = run(fieldA, 'a');
+    const pB = run(fieldB, 'b');
+
+    // Release the barrier only once BOTH children have read the
+    // (empty) journal and staged their temp file for sequence 1.
+    const deadline = Date.now() + 10_000;
+    for (;;) {
+      const ready = await Promise.all([
+        fs.stat(nodePath.join(syncDir, 'ready-a')).then(() => true, () => false),
+        fs.stat(nodePath.join(syncDir, 'ready-b')).then(() => true, () => false),
+      ]);
+      if (ready[0] && ready[1]) {
+        break;
+      }
+      if (Date.now() > deadline) {
+        throw new Error('children never both reached the pre-commit barrier');
+      }
+      await new Promise(r => setTimeout(r, 10));
+    }
+    await fs.writeFile(nodePath.join(syncDir, 'release'), '');
+    return Promise.all([pA, pB]) as Promise<[string, string]>;
+  }
+
+  it('TWO WRITER PROCESSES forced onto the SAME sequence number: distinct baselines both survive (PR #46 round-3 P1)', async () => {
+    const outcomes = await runForcedRace('temperatureSensors', 'windSensors');
+    expect(outcomes.slice().sort()).toEqual(['appended', 'appended']);
+
+    const entries = await readEntries();
+    expect(entries).toHaveLength(2);
+    const baselines = entries.map(e => Object.keys(e.legacy)[0]).sort();
+    expect(baselines).toEqual(['temperatureSensors', 'windSensors']);
+  }, 20_000);
+
+  it('TWO WRITER PROCESSES forced onto the SAME sequence number with the IDENTICAL baseline: one appends, the loser deduplicates on retry', async () => {
+    const outcomes = await runForcedRace('temperatureSensors', 'temperatureSensors');
+    // Deterministic under the barrier: exactly one child wins the
+    // link; the other EEXISTs, re-reads, sees the identical baseline,
+    // and returns 'unchanged'.
+    expect(outcomes.slice().sort()).toEqual(['appended', 'unchanged']);
+    expect(await readEntries()).toHaveLength(1);
+  }, 20_000);
 });
 
 describe('projection property test (finding 5 — reviewer requirement)', () => {

@@ -506,7 +506,7 @@ Note the `windspeedmph` entry combines `threshold` and `displayUnit` — canonic
 This prevents an older plugin's UI from partially rewriting a newer configuration and corrupting it silently.
 
 **Migration event:** first UI save on a legacy config atomically:
-0. Writes the **immutable legacy snapshot** (see below) and awaits success BEFORE any config.json mutation
+0. Writes the **immutable legacy snapshot** (see below) and awaits success BEFORE any config.json mutation — on a reconversion whose legacy fields differ from the surviving snapshot, appends the **conversion-journal baseline** (§5.1b) instead, under the same await-before-mutation rule
 1. Reads effective sensor map (compat-translated)
 2. Computes minimal-diff canonical serialization against v2 baseline (§11.3)
 3. Writes as sparse canonical `sensorMap[]`
@@ -533,6 +533,46 @@ persist dir via the atomic persistence helper, BEFORE config.json is touched.
 Never overwritten (first conversion wins). This is the provenance record and
 the source of truth for the documented manual late-rollback procedure. Kept
 forever.
+
+**1b. Conversion journal — append-only (2026-08-20, production drill
+finding).** The current-state rollback leaves the PROJECTED MIRROR form of
+the legacy fields, which never equals the original authored fields, so a
+later reconversion legitimately presents a legacy baseline that mismatches
+the immutable snapshot. Refusing that save would make the documented
+rollback a one-way door. Instead, a conversion whose legacy fields differ
+from the snapshot appends the pre-conversion baseline to the
+`legacy-conversion-journal/` DIRECTORY — one immutable
+`entry-NNNNNN.json` file per baseline (same persist dir, same
+`LEGACY_SENSOR_FIELDS`-only vocabulary, durable + read back BEFORE
+config.json can be mutated) — and proceeds with outcome `journaled`.
+The journal is append-only and deduplicates only against its
+highest-numbered entry, so repeated rollback/reconvert cycles of an
+unedited map do not grow it while genuinely different baselines are
+always preserved. The original snapshot is never modified by this path.
+A journal entry that cannot be parsed or fails shape validation refuses
+the save (`conversion-journal-error`) — the journal is an audit record
+and is never quarantined, rewritten, or restarted. Shape validation is
+strict about the VOCABULARY: every entry's `legacy` keys must be in
+`LEGACY_SENSOR_FIELDS`, and unknown entry keys or unrecognized files in
+the journal directory are rejected (OS dotfiles are ignored) — an
+injected credential (e.g. `apiKey`) must never be accepted and
+re-persisted by a later append (PR #46 review P2).
+
+CROSS-PROCESS append safety (PR #46 review round 3, P1): HB UI X forks
+a SEPARATE custom-UI server process per client socket, so a module-level
+mutex cannot serialize all journal writers — the round-2 promise-chain
+lock was reproduced losing an entry across two processes. Safety is
+structural instead: each entry file is committed with the same
+exclusive-create link(2) idiom as the snapshot, so no writer can ever
+replace shared state; a writer that loses the sequence-number race
+(EEXIST) re-reads and re-decides — 'unchanged' if the winner recorded
+the same baseline, otherwise an append under the next number. The
+in-process lock is retained only to keep local concurrency from burning
+retries. Proven by a two-process regression test (distinct baselines
+both survive; identical baselines yield exactly one entry). Restoring a
+journaled baseline is documented in the README: the snapshot-restore
+procedure with the fields sourced from the chosen entry file's `legacy`
+object.
 
 **2. Synchronized legacy mirror — time-boxed.** Every automated v2 UI save
 re-emits legacy sensor fields alongside `configVersion: 2` + `sensorMap`,
@@ -635,11 +675,14 @@ zero writes:
   while the config would enable sensors → `no-station-inventory`
   refusal rather than composing an empty map.
 - **Snapshot verification.** On 'exists', the surviving snapshot is
-  compared against the authoritative pre-conversion fields:
-  mismatch/corrupt → refusal (`legacy-snapshot-mismatch` /
-  `legacy-snapshot-corrupt`); the snapshot is never overwritten.
-  Concurrent first conversions are race-safe (exclusive-create; losers
-  verify the winner's payload).
+  compared against the authoritative pre-conversion fields: a match
+  proceeds (`exists`); a MISMATCH is the reconversion path — the
+  differing baseline is durably appended to the conversion journal
+  (§5.1b) before proceeding (`journaled`), and any journal failure
+  refuses the save (`conversion-journal-error`); corrupt →
+  refusal (`legacy-snapshot-corrupt`). The snapshot itself is never
+  overwritten. Concurrent first conversions are race-safe
+  (exclusive-create; losers verify the winner's payload).
 
 The gate's ordering integration suite is
 `tests/integration/composeSave.test.ts`: the full compose → update →
@@ -1413,6 +1456,41 @@ When any of these appears in a non-motion row (default or user override), the pl
 Tests: for every non-motion kind, submit an override with each of these fields; verify the specific warn is emitted and the field is absent from the resulting effective row.
 
 ## 17. Decision log
+
+- **2026-08-20 (c)**: Conversion journal is a directory of immutable
+  entry files (PR #46 review round 3). The round-2 single-file journal
+  guarded by an in-process promise mutex was proven unsafe across
+  PROCESSES: HB UI X forks a custom-UI server per client socket
+  (verified in plugins-settings-ui.service — `fork()` per client
+  handler), and two Node processes reproduced a lost baseline. Rather
+  than a cross-process lockfile (stale-lock stealing is its own race
+  surface), the journal became `legacy-conversion-journal/` with one
+  exclusive-created (link(2)) `entry-NNNNNN.json` per baseline — no
+  writer ever replaces shared state, so lost updates are structurally
+  impossible; sequence-number collisions re-read and re-decide. A
+  pre-release single-FILE journal (only unreleased beta.13 builds
+  could have written one) fails the save closed with migration
+  guidance. Two-process regression tests prove distinct baselines both
+  survive and identical baselines converge to one entry.
+
+- **2026-08-20 (b)**: Conversion journal — rollback is a two-way door
+  (production-drill finding, pre-beta.13 review). The full drill on
+  real data proved the sequence: legacy `L0` converts (snapshot stores
+  `L0`) → current-state rollback exposes the projected mirror `M` →
+  reconversion refused `legacy-snapshot-mismatch` because `M ≠ L0` —
+  the documented rollback locked the user out of v2. Decision: keep
+  the snapshot permanently immutable AND record each later
+  pre-conversion legacy baseline in an append-only conversion journal
+  (the `legacy-conversion-journal/` directory, §5.1b) before allowing
+  the reconversion; `legacy-snapshot-mismatch` is retired as a refusal and
+  replaced by the `journaled` success outcome (journal failures refuse
+  as `conversion-journal-error`, fail-closed). The required lifecycle
+  test (`legacy → v2 save → verified-mirror rollback → re-enable → v2
+  save`, original snapshot byte-identical, rolled-back baseline
+  preserved) lives in `tests/integration/composeSave.test.ts`. Also
+  from the drill: applying config.json edits requires a FULL
+  Homebridge restart — child-bridge-only restarts reuse the parent's
+  in-memory config (documented in README + plugin-ui.md).
 
 - **2026-08-20**: PR C as-built — save activation (GA task #69;
   finding 5 CLOSES here). The editor's save path runs EXCLUSIVELY

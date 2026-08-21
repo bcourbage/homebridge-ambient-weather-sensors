@@ -38,7 +38,10 @@ Opt in one of two ways:
 - Enable `_sensorMapV2` under the "Advanced (v2.0 preview)"
   fieldset in the plugin's config UI.
 
-Then restart Homebridge.
+Then restart Homebridge. (Here and in the rollback steps below, a
+full Homebridge restart is required — restarting only this plugin's
+child bridge reuses the configuration the main Homebridge process
+read at its own startup and will not pick up config.json changes.)
 
 **What the flag does (since v2.0.0-beta.8):** it selects the LIVE v2
 reconciliation path. Accessory registration, naming, and value
@@ -95,6 +98,15 @@ paths, from fastest to most thorough:
   markers — freeze on current 1.7.x, restore the snapshot (next
   path), or upgrade back to 2.x and re-save in the editor to
   regenerate the mirror.
+
+  This rollback is a two-way door. The settings it leaves behind are
+  the synchronized mirror form, not your original authored fields, so
+  if you later re-enable the flag and save again, the editor records
+  that rolled-back baseline in an append-only conversion journal (the
+  `legacy-conversion-journal` folder next to the snapshot, one
+  numbered entry file per baseline, same secret-free field set)
+  before converting — your original snapshot is never modified, and
+  the configuration you rolled back to is never lost.
 - **Rollback to your ORIGINAL (pre-conversion) settings:** open
   `legacy-config-snapshot.json` and use its `legacy` object. In the
   plugin's config block, delete every legacy sensor-configuration
@@ -105,6 +117,19 @@ paths, from fastest to most thorough:
   `configVersion`, and `_legacyMirror`, disable `_sensorMapV2`, and
   unset the `SENSOR_MAP_V2` environment variable if you use it.
   Restart.
+- **Rollback to a JOURNALED (post-rollback) baseline:** if you rolled
+  back and later reconverted, the settings you rolled back to are in
+  the `legacy-conversion-journal` folder (same directory as the
+  snapshot), one file per baseline: `entry-000001.json`,
+  `entry-000002.json`, … Pick the file you want — the
+  HIGHEST-numbered entry is the most recent pre-reconversion
+  baseline — and restore it exactly like the snapshot, sourcing the
+  fields from that file's `legacy` object: delete every legacy
+  sensor-configuration field, copy in the entry's `legacy` fields as
+  the replacement (entries are sparse, so replace rather than
+  overlay), delete `sensorMap`, `configVersion`, and `_legacyMirror`,
+  disable `_sensorMapV2`, unset the `SENSOR_MAP_V2` environment
+  variable if you use it, and do a full Homebridge restart.
 - **Custom v2-only sensors** (added through the editor for fields the
   plugin has no built-in definition for): no 1.x release can operate
   or update them. The 1.7.x freeze preserves their cached tiles at

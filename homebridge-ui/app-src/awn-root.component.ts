@@ -212,6 +212,10 @@ interface StationGroup {
               <code>legacy-config-snapshot.json</code> (plugin data directory)
             } @else if (sr.snapshot === 'exists') {
               — the existing legacy snapshot was verified before writing
+            } @else if (sr.snapshot === 'journaled') {
+              — your pre-conversion settings were recorded in the
+              <code>legacy-conversion-journal</code> folder; the
+              original legacy snapshot is untouched
             }.
             Homebridge applies structural changes on the next restart.
           </div>
@@ -363,7 +367,7 @@ export class AwnRootComponent {
   protected readonly reloadRequired = signal(false);
   protected readonly confirmOpen = signal(false);
   protected readonly saveResult = signal<
-    | { ok: true; snapshot: 'written' | 'exists' | 'not-applicable' }
+    | { ok: true; snapshot: 'written' | 'exists' | 'journaled' | 'not-applicable' }
     | { ok: false; code: string; message: string }
     | null
   >(null);

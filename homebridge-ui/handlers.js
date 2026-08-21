@@ -18,7 +18,7 @@ import { buildEffectiveSensorMap, partitionOverrideLayers } from '../dist/sensor
 import { canonicalizeSensorMap } from '../dist/sensorMap/canonicalizeSensorMap.js';
 import { compatToOverrides } from '../dist/sensorMap/compat.js';
 import { detectConfigMode } from '../dist/sensorMap/configMode.js';
-import { composeV2ConfigSave, recognizeMirror, verifyLegacySnapshot, writeLegacySnapshot, } from '../dist/sensorMap/legacyMirror.js';
+import { composeV2ConfigSave, journalConversionBaseline, recognizeMirror, verifyLegacySnapshot, writeLegacySnapshot, } from '../dist/sensorMap/legacyMirror.js';
 import { sensorMapShapeError } from '../dist/sensorMap/platformEffectiveMap.js';
 import { STATION_MAC_REGEX } from '../dist/sensorMap/validation.js';
 import { shadowModeEnabled } from '../dist/sensorMap/shadowMode.js';
@@ -361,7 +361,13 @@ export async function handleComposeSave(deps, payload) {
     // ---- 9. Snapshot-first, race-safe: attempt the exclusive-create
     //         write; on 'exists', verify the surviving content against
     //         the authoritative pre-conversion fields (review P1-6) —
-    //         never overwrite, never silently bless a mismatch.
+    //         never overwrite. A verified MISMATCH is the reconversion
+    //         path (the documented current-state rollback leaves the
+    //         projected mirror form, which never equals the original):
+    //         the differing baseline is recorded durably in the
+    //         append-only conversion journal BEFORE config.json can be
+    //         mutated, so the rollback remains a two-way door without
+    //         ever touching the original snapshot.
     let snapshot = 'not-applicable';
     if (composed.snapshot !== undefined) {
         let outcome;
@@ -371,20 +377,26 @@ export async function handleComposeSave(deps, payload) {
         catch (e) {
             return { ok: false, error: { code: 'snapshot-write-failed', message: `Legacy snapshot write failed: ${e.message}. The save was aborted; config.json was not touched.` } };
         }
+        snapshot = outcome;
         if (outcome === 'exists') {
             const verdict = await verifyLegacySnapshot(deps.persistDir, composed.snapshot);
             if (verdict === 'mismatch') {
-                return {
-                    ok: false,
-                    error: {
-                        code: 'legacy-snapshot-mismatch',
-                        message: 'A legacy snapshot from an earlier conversion attempt exists but does not match the current '
-                            + 'legacy configuration. Refusing to convert: the snapshot is immutable and will not be overwritten. '
-                            + 'Resolve manually (inspect legacy-config-snapshot.json in the plugin data directory).',
-                    },
-                };
+                try {
+                    await journalConversionBaseline(deps.persistDir, composed.snapshot, deps.log);
+                }
+                catch (e) {
+                    return {
+                        ok: false,
+                        error: {
+                            code: 'conversion-journal-error',
+                            message: `Recording the pre-conversion legacy baseline failed: ${e.message} `
+                                + 'The save was aborted; config.json was not touched.',
+                        },
+                    };
+                }
+                snapshot = 'journaled';
             }
-            if (verdict === 'corrupt' || verdict === 'absent') {
+            else if (verdict === 'corrupt' || verdict === 'absent') {
                 return {
                     ok: false,
                     error: {
@@ -394,7 +406,6 @@ export async function handleComposeSave(deps, payload) {
                 };
             }
         }
-        snapshot = outcome;
     }
     return {
         ok: true,

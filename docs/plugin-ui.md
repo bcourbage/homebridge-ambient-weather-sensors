@@ -99,7 +99,14 @@ problems surface as banners), but the editor is the recommended path.
   written to an immutable snapshot
   (`legacy-config-snapshot.json` in the plugin's data directory)
   **before** `config.json` changes, so a rollback path always
-  exists.
+  exists. Converting again after a rollback also works: the
+  rolled-back settings are recorded first in the append-only
+  `legacy-conversion-journal` folder (one numbered entry file per
+  baseline), so neither the original snapshot nor the rolled-back
+  state is ever lost. A journal entry is restored with the same
+  procedure as the snapshot, sourcing the fields from the chosen
+  entry file's `legacy` object — see the README's rollback section
+  for the exact steps.
 - **Guarded saves**: every save is validated server-side against
   the same rules the runtime uses. Changes that would register,
   deregister, or re-register an accessory require explicit
@@ -108,6 +115,9 @@ problems surface as banners), but the editor is the recommended path.
   are refused with the reason; nothing is written on any refusal.
 - **Restart to apply structure**: the saved configuration takes full
   effect (registrations included) on the next Homebridge restart.
+  Restart Homebridge itself, not just this plugin's child bridge — a
+  child-bridge restart reuses the configuration the main Homebridge
+  process already holds in memory and will not pick up the save.
 
 Assigning unrecognized fields to new custom sensors (declaring a
 kind, measurement, and source unit) arrives in an upcoming beta.

@@ -25,6 +25,19 @@
  *      secrets (only `LEGACY_SENSOR_FIELDS`). Provenance + the manual
  *      late-rollback procedure's source of truth.
  *
+ *      Conversions AFTER the first (a user who performed the
+ *      current-state rollback and later re-enables v2 converts from
+ *      the projected mirror form, which differs from the original)
+ *      leave the snapshot untouched and instead append the
+ *      pre-conversion legacy baseline to the CONVERSION JOURNAL
+ *      (the `legacy-conversion-journal/` directory: one immutable
+ *      exclusive-created entry file per baseline, append-only,
+ *      deduplicated against the latest entry, same secret-free
+ *      vocabulary). The entry is durable and read back BEFORE
+ *      config.json is mutated, so no operative legacy state is ever
+ *      lost to a reconversion; a corrupt journal fails the save
+ *      closed.
+ *
  *   2. SYNCHRONIZED MIRROR (time-boxed). Every automated v2 UI save
  *      re-emits legacy sensor fields ALONGSIDE `configVersion: 2` +
  *      `sensorMap`, projected from the effective v2 map by
@@ -91,6 +104,13 @@ import { type Clock, type Logger } from './persistence/atomicWrite.js';
 export declare const LEGACY_MIRROR_KEY = "_legacyMirror";
 /** Persist-dir filename of the immutable first-conversion snapshot. */
 export declare const LEGACY_SNAPSHOT_FILE = "legacy-config-snapshot.json";
+/** Persist-dir DIRECTORY of the append-only conversion journal that
+ * records the pre-conversion legacy baseline of every conversion AFTER
+ * the first (reconversion following a current-state rollback). One
+ * immutable `entry-NNNNNN.json` file per baseline — a directory of
+ * exclusive-created files rather than one mutable file, so concurrent
+ * writer PROCESSES can never overwrite each other's entries. */
+export declare const LEGACY_JOURNAL_DIR = "legacy-conversion-journal";
 /**
  * The legacy sensor-configuration vocabulary the snapshot preserves and
  * the mirror maintains. Deliberately excludes API credentials
@@ -212,9 +232,51 @@ export declare function writeLegacySnapshot(persistDir: string, legacyFields: Re
  *   - 'absent':   no snapshot on disk (caller should write one);
  *   - 'match':    the stored legacy subset equals the authoritative
  *                 fields (key-order-insensitive) — proceed as 'exists';
- *   - 'mismatch': the stored subset differs — REFUSE the conversion
- *                 (never overwrite; the snapshot is immutable);
+ *   - 'mismatch': the stored subset differs — the RECONVERSION case
+ *                 (a post-rollback config carries the projected
+ *                 mirror form, never the original): the caller must
+ *                 durably record the current baseline via
+ *                 `journalConversionBaseline` BEFORE proceeding, and
+ *                 abort if that fails. The snapshot itself is
+ *                 immutable and is never overwritten;
  *   - 'corrupt':  unreadable/unparsable/mis-shaped — REFUSE.
  */
 export declare function verifyLegacySnapshot(persistDir: string, authoritativeLegacyFields: Record<string, unknown>): Promise<'absent' | 'match' | 'mismatch' | 'corrupt'>;
+/**
+ * Record the pre-conversion legacy baseline of a conversion AFTER the
+ * first — the reconversion path: a user who performed the documented
+ * current-state rollback holds the projected mirror form, which the
+ * immutable snapshot correctly reports as a mismatch, yet their
+ * operative legacy state must not be lost when they re-enable v2 and
+ * save. The journal is APPEND-ONLY (entries are never rewritten or
+ * removed) and holds only `LEGACY_SENSOR_FIELDS` — never API secrets.
+ *
+ * Returns 'unchanged' without writing when the baseline equals the
+ * journal's latest entry (key-order-insensitive), so repeated
+ * rollback/reconvert cycles of an unedited map do not grow the
+ * journal.
+ *
+ * Fail-closed contract, same standard as the snapshot: callers MUST
+ * await this before mutating config.json, and any throw — an existing
+ * journal that cannot be parsed or fails shape validation, a write
+ * error, or a read-back that does not match what was written — must
+ * abort the save. A corrupt journal is never quarantined or replaced:
+ * it is an audit record, and the failure message directs manual
+ * inspection instead.
+ *
+ * CROSS-PROCESS append safety (review PR #46 round-3 P1): HB UI X
+ * forks a separate UI server per client socket, so any number of
+ * writer processes may append concurrently. The journal is therefore
+ * a DIRECTORY of immutable entry files (`entry-000001.json`, …), each
+ * committed with the same exclusive-create link(2) idiom as the
+ * snapshot: writers never replace shared state, so a lost update is
+ * structurally impossible. An append reads the directory, deduplicates
+ * against the highest-numbered entry, and tries to link the next
+ * sequence number; losing the race (EEXIST) re-reads and re-decides —
+ * if the winner recorded the same baseline the retry returns
+ * 'unchanged', otherwise it appends under the next number. The
+ * in-process `withJournalLock` merely keeps local concurrency from
+ * burning retries.
+ */
+export declare function journalConversionBaseline(persistDir: string, legacyFields: Record<string, unknown>, log: Logger, clock?: Clock): Promise<'appended' | 'unchanged'>;
 //# sourceMappingURL=legacyMirror.d.ts.map
