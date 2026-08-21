@@ -163,6 +163,57 @@ export interface EditorStateDto {
   notes: EditorDiagnosticDto[];
 }
 
+/**
+ * One row-level difference in the RUNTIME ACCESSORY SET (configured
+ * AND enabled rows — the filter reconciliation applies) between the
+ * current on-disk configuration and a previewed proposal.
+ * `structural: true` means the registration set changes: an 'added'
+ * row REGISTERS an accessory, a 'removed' row (including a disable)
+ * DEREGISTERS one, and a structural 'modified' row RE-REGISTERS
+ * (its HAP service graph changes). These are the cases the
+ * confirmation UX exists for.
+ */
+export interface PreviewChangeDto {
+  stationMac: string;
+  dataPoint: string;
+  change: 'added' | 'removed' | 'modified';
+  structural: boolean;
+  before?: EditorRowDto;
+  after?: EditorRowDto;
+}
+
+/**
+ * Response of request '/preview-save' — a server-authoritative dry
+ * run of the save. NO writes happen; the browser never computes
+ * signatures or diffs itself. `digest` is the stateless confirmation
+ * token a structural save must present (activated with the save path
+ * in a later release; carried here so the preview contract is
+ * complete).
+ */
+export type PreviewResultDto =
+  | {
+    ok: true;
+    /** The canonical sensorMap the save would write (§11.3/§17.4). */
+    canonicalSensorMap: unknown[];
+    /** Proposed effective rows, resolved by the server. */
+    rows: EditorRowDto[];
+    changes: PreviewChangeDto[];
+    structuralChangeCount: number;
+    /**
+     * sha256 over canonical JSON of (on-disk block, canonical map,
+     * sorted current accessory set, sorted proposed accessory set) —
+     * bound to the previewed CONSEQUENCES, not just the typed inputs.
+     */
+    digest: string;
+    warnings: EditorDiagnosticDto[];
+    notes: EditorDiagnosticDto[];
+  }
+  | {
+    ok: false;
+    /** A structured refusal — same codes the save itself uses. */
+    error: { code: string; message: string; [detail: string]: unknown };
+  };
+
 /** One selectable unit with its human-facing label (#70 vocabulary). */
 export interface UnitOptionDto {
   unit: string;

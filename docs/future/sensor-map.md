@@ -801,12 +801,21 @@ A centralized persistence helper handles all writes. Implementation requirements
 - **Cleanup of stale `.tmp` files** on startup: any `<name>.*.tmp` older than 1 hour is removed
 - **File permissions** match Homebridge's own persistence files (0640 on Unix; inherit on Windows)
 - **`fsync` before rename** for durability on power-loss scenarios (behind a `PERSIST_FSYNC=1` env flag; defaults false for performance)
-- **Cross-platform rename** — POSIX `rename()` atomically replaces existing files; Windows `MoveFileExW(MOVEFILE_REPLACE_EXISTING)` equivalent used via Node's `fs.rename`. Fallback to unlink + rename with warn if platform doesn't support atomic replace.
-- **Corrupt-file quarantine** — on read, if the file is missing, malformed, or has unrecognized `schemaVersion`:
+- **Cross-platform rename** — POSIX `rename()` atomically replaces existing files; Windows `MoveFileExW(MOVEFILE_REPLACE_EXISTING)` equivalent used via Node's `fs.rename`. There is NO unlink-plus-rename fallback: if the rename fails, the destination is left untouched, the orphan temp file is unlinked best-effort, and the error re-throws so the caller can skip advancing its flush watermarks.
+- **Corrupt-file quarantine** — on read, if the file is malformed or has an unrecognized `schemaVersion` (a MISSING file is the normal first-boot state — read as empty, never quarantined):
   1. Rename to `<name>.corrupt-<ISO-8601-timestamp>.json` (preserves evidence)
   2. Log a warn including the quarantine path
   3. Start with an empty in-memory store
   4. Continue normally
+
+  Quarantine belongs to each store's OWNING WRITER, not universally to
+  one process: the platform for `discovery.json` and `notices.json`,
+  the UI server for `ui-state.json` (§8.5). Every OTHER consumer reads
+  with `quarantineCorrupt: false` — the platform when it loads
+  `ui-state.json`, and all of the UI bridge's endpoints (including
+  `/preview-save`'s zero-write contract): a corrupt file is read as
+  empty and left byte-identical in place, and recovery happens on the
+  owning writer's next load.
 
 ### 8.7 Station inventory sources when AWN unavailable
 
@@ -1388,6 +1397,39 @@ When any of these appears in a non-motion row (default or user override), the pl
 Tests: for every non-motion kind, submit an override with each of these fields; verify the specific warn is emitted and the field is absent from the resulting effective row.
 
 ## 17. Decision log
+
+- **2026-08-19 (c)**: PR B as-built — draft editor + `/preview-save`
+  (GA task #69). The preview endpoint shares the save's exact pipeline
+  by construction: `runSavePipeline()` (authoritative on-disk config,
+  base staleness check, mode + sensorMap-shape gates, proposal
+  shape/seeding, §8.7 inventory, same-machinery validation, canonical
+  serialization, divergence gate) is the single implementation behind
+  `/compose-save` and `/preview-save`; the preview performs zero
+  writes — not even the legacy snapshot (the UI bridge reads the
+  persistence stores with `quarantineCorrupt: false`: it is not their
+  §8 single writer, so corrupt-file recovery is never its side
+  effect). It returns the canonical sensorMap, the proposed effective
+  rows, and a diff over the RUNTIME ACCESSORY SET — configured AND
+  enabled rows, the same filter reconciliation applies (review #43
+  round 1): disabling a row is `removed` (its accessory deregisters),
+  enabling is `added` (it registers), and `modified` rows are
+  structural iff `structuralSignature` changes. The STATELESS
+  confirmation digest is sha256 over the canonical JSON of (on-disk
+  block, canonical sensorMap, sorted current accessory set, sorted
+  proposed accessory set) — binding the CONSEQUENCES, so discovery or
+  inventory drift after a preview invalidates its token even when the
+  typed inputs are unchanged. PR C's `/compose-save` recomputes the
+  same `computeSaveConsequences()` and refuses a structural save
+  whose presented digest does not match. The `sensor-map-shape` hard
+  stop now also gates preview AND save (previously only the runtime
+  and `/editor-state`): a draft composed against a config the runtime
+  refuses to interpret must not silently replace it. Client drafts
+  are patches over authored fragments (no resolver semantics in the
+  browser; the only ordering fact used is §3.3.2 later-field-wins for
+  patch placement); edits target the row's authoring layer, defaults
+  draft new station-scoped fragments, and PR B does not author new
+  global templates from the UI. Kind/measurement editing and
+  unrecognized-field assignment are deferred past PR B.
 
 - **2026-08-19 (b)**: Editor framework decision (GA task #69). Constrained
   Angular 21 LTS confirmed after a documented framework-free vs framework

@@ -30,13 +30,25 @@ export interface Logger {
     warn(msg: string): void;
     debug(msg: string): void;
 }
+/** Read-behavior options for `readJsonStore` and the store loaders. */
+export interface ReadStoreOptions {
+    /**
+     * Quarantine (rename aside) a corrupt file so the writer can start
+     * fresh. Default true — correct for the file's SINGLE WRITER (§8).
+     * READ-ONLY consumers (the UI bridge) must pass false: they are not
+     * the writer, so recovery mutation is not theirs to perform, and
+     * endpoints like /preview-save promise zero writes of any kind.
+     */
+    quarantineCorrupt?: boolean;
+}
 /**
  * Read a JSON store file. Returns the parsed object on success, or
  * undefined on any failure (with the file quarantined and a warn
- * logged). Caller supplies a validator that rejects malformed shapes
- * — e.g., checks `schemaVersion === 1`.
+ * logged, unless `quarantineCorrupt: false`). Caller supplies a
+ * validator that rejects malformed shapes — e.g., checks
+ * `schemaVersion === 1`.
  */
-export declare function readJsonStore<T>(filePath: string, validator: (raw: unknown) => raw is T, log: Logger, clock?: Clock): Promise<T | undefined>;
+export declare function readJsonStore<T>(filePath: string, validator: (raw: unknown) => raw is T, log: Logger, clock?: Clock, opts?: ReadStoreOptions): Promise<T | undefined>;
 /**
  * Write a JSON store atomically. The temp file is closed and renamed
  * over the target path in one step (POSIX + modern Windows both

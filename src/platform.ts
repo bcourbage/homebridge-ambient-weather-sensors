@@ -1775,7 +1775,12 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
         initial,
       });
     }
-    const uiState = await loadUiStateStore(path.join(persistDir, UI_STATE_FILE), persistLog);
+    // ui-state.json is UI-SERVER-owned (§8.5): the platform is a
+    // read-only consumer here, so a corrupt file is read as empty and
+    // left in place — quarantine-rename belongs to the owning writer,
+    // never to this process (review #43 round 3).
+    const uiState = await loadUiStateStore(
+      path.join(persistDir, UI_STATE_FILE), persistLog, undefined, { quarantineCorrupt: false });
     return { uiState };
   }
 

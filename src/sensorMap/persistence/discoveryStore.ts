@@ -30,6 +30,7 @@ import {
   type Clock,
   type Logger,
   REAL_CLOCK,
+  type ReadStoreOptions,
 } from './atomicWrite.js';
 
 export const DISCOVERY_FILE = 'discovery.json';
@@ -64,8 +65,8 @@ export function emptyDiscoveryStore(): DiscoveryStore {
   return { schemaVersion: 1, entries: [] };
 }
 
-export async function loadDiscoveryStore(filePath: string, log: Logger, clock: Clock = REAL_CLOCK): Promise<DiscoveryStore> {
-  const loaded = await readJsonStore<DiscoveryStore>(filePath, isDiscoveryStore, log, clock);
+export async function loadDiscoveryStore(filePath: string, log: Logger, clock: Clock = REAL_CLOCK, opts: ReadStoreOptions = {}): Promise<DiscoveryStore> {
+  const loaded = await readJsonStore<DiscoveryStore>(filePath, isDiscoveryStore, log, clock, opts);
   return loaded ?? emptyDiscoveryStore();
 }
 

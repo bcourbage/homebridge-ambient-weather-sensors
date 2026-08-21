@@ -42,18 +42,33 @@ export interface Logger {
 
 const STALE_TEMP_AGE_MS = 60 * 60 * 1000;
 
+/** Read-behavior options for `readJsonStore` and the store loaders. */
+export interface ReadStoreOptions {
+  /**
+   * Quarantine (rename aside) a corrupt file so the writer can start
+   * fresh. Default true — correct for the file's SINGLE WRITER (§8).
+   * READ-ONLY consumers (the UI bridge) must pass false: they are not
+   * the writer, so recovery mutation is not theirs to perform, and
+   * endpoints like /preview-save promise zero writes of any kind.
+   */
+  quarantineCorrupt?: boolean;
+}
+
 /**
  * Read a JSON store file. Returns the parsed object on success, or
  * undefined on any failure (with the file quarantined and a warn
- * logged). Caller supplies a validator that rejects malformed shapes
- * — e.g., checks `schemaVersion === 1`.
+ * logged, unless `quarantineCorrupt: false`). Caller supplies a
+ * validator that rejects malformed shapes — e.g., checks
+ * `schemaVersion === 1`.
  */
 export async function readJsonStore<T>(
   filePath: string,
   validator: (raw: unknown) => raw is T,
   log: Logger,
   clock: Clock = REAL_CLOCK,
+  opts: ReadStoreOptions = {},
 ): Promise<T | undefined> {
+  const quarantineCorrupt = opts.quarantineCorrupt ?? true;
   let raw: string;
   try {
     raw = await fs.readFile(filePath, 'utf8');
@@ -73,12 +88,20 @@ export async function readJsonStore<T>(
     parsed = JSON.parse(raw);
   } catch (e) {
     const err = e as Error;
+    if (!quarantineCorrupt) {
+      log.warn(`Malformed JSON in ${filePath} (${err.message}); reading empty (read-only consumer, file left in place).`);
+      return undefined;
+    }
     const quarantined = await quarantine(filePath, log, clock);
     log.warn(`Malformed JSON in ${filePath} (${err.message}); quarantined to ${quarantined}. Starting empty.`);
     return undefined;
   }
 
   if (!validator(parsed)) {
+    if (!quarantineCorrupt) {
+      log.warn(`Unexpected schema in ${filePath}; reading empty (read-only consumer, file left in place).`);
+      return undefined;
+    }
     const quarantined = await quarantine(filePath, log, clock);
     log.warn(`Unexpected schema in ${filePath}; quarantined to ${quarantined}. Starting empty.`);
     return undefined;

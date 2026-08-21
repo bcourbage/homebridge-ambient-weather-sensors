@@ -135,6 +135,20 @@ export class HomebridgeService {
   }
 
   /**
+   * The plugin's config block as HB UI X's client API sees it — the
+   * `base` for /preview-save's staleness check. First block only:
+   * duplicate-block configs are already flagged by /editor-state and
+   * refused at the boundary.
+   */
+  async pluginConfigBlock(): Promise<unknown> {
+    if (!this.ipc) {
+      throw new Error('homebridge bridge is not available outside HB UI X');
+    }
+    const blocks = await this.ipc.getPluginConfig();
+    return Array.isArray(blocks) ? blocks[0] : undefined;
+  }
+
+  /**
    * Cached-accessory uniqueIds for §8.7 inventory (review #32 F1) —
    * the SAME extraction the save orchestrator uses, so /editor-state
    * and /compose-save see identical station inventories. Returns []

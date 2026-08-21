@@ -48,8 +48,8 @@ function isDiscoveryStore(raw) {
 export function emptyDiscoveryStore() {
     return { schemaVersion: 1, entries: [] };
 }
-export async function loadDiscoveryStore(filePath, log, clock = REAL_CLOCK) {
-    const loaded = await readJsonStore(filePath, isDiscoveryStore, log, clock);
+export async function loadDiscoveryStore(filePath, log, clock = REAL_CLOCK, opts = {}) {
+    const loaded = await readJsonStore(filePath, isDiscoveryStore, log, clock, opts);
     return loaded ?? emptyDiscoveryStore();
 }
 export async function saveDiscoveryStore(filePath, store, log) {

@@ -14,7 +14,7 @@
  * before the table is restored.
  */
 
-import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import * as nodePath from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -413,6 +413,31 @@ describe('discoverDevicesV2 — discovery tracker ownership (review P1-4)', () =
       expect(pairs.has(`${MAC}|weird_new_field`)).toBe(true);
       // The filtered-out station is NOT recorded.
       expect([...pairs].some(p => p.startsWith('99:99:99:99:99:99'))).toBe(false);
+    } finally {
+      rmSync(storageDir(api), { recursive: true, force: true });
+    }
+  });
+
+  it('a corrupt ui-state.json is NOT quarantined by the platform (UI-server-owned, review #43 round 3)', async () => {
+    const { platform, api } = makePlatform({ _sensorMapV2: true, temperatureSensors: true });
+    mockFetch([{ macAddress: MAC, info: { name: 'Home' }, lastData: { tempf: 68 } }]);
+    stubTimer();
+    const persistDir = nodePath.join(storageDir(api), 'plugin-data', 'ambient-weather');
+    try {
+      mkdirSync(persistDir, { recursive: true });
+      const uiStatePath = nodePath.join(persistDir, 'ui-state.json');
+      writeFileSync(uiStatePath, '{corrupt not json');
+      const bytesBefore = readFileSync(uiStatePath, 'utf8');
+
+      await reconcile(platform, 'legacy');
+
+      // Reconciliation proceeded (empty ui-state), the file is
+      // byte-identical in place, and NO quarantine rename happened —
+      // recovery of ui-state.json belongs to its owning writer (the
+      // UI server), never to the platform.
+      expect(routing(platform)).toBeDefined();
+      expect(readFileSync(uiStatePath, 'utf8')).toBe(bytesBefore);
+      expect(readdirSync(persistDir).filter(f => f.includes('.corrupt-'))).toEqual([]);
     } finally {
       rmSync(storageDir(api), { recursive: true, force: true });
     }

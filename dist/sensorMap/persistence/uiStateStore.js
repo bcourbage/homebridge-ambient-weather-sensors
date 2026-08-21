@@ -41,8 +41,8 @@ function isUiStateStore(raw) {
 export function emptyUiStateStore() {
     return { schemaVersion: 1, dismissedNoticeIds: [], forgottenFields: [] };
 }
-export async function loadUiStateStore(filePath, log, clock = REAL_CLOCK) {
-    const loaded = await readJsonStore(filePath, isUiStateStore, log, clock);
+export async function loadUiStateStore(filePath, log, clock = REAL_CLOCK, opts = {}) {
+    const loaded = await readJsonStore(filePath, isUiStateStore, log, clock, opts);
     return loaded ?? emptyUiStateStore();
 }
 /**

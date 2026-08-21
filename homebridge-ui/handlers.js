@@ -11,6 +11,7 @@
  *
  * See homebridge-ui/server.ts for the HB UI X bootstrap.
  */
+import { createHash } from 'crypto';
 import { promises as fs } from 'fs';
 import * as path from 'path';
 import { buildEffectiveSensorMap, partitionOverrideLayers } from '../dist/sensorMap/buildEffectiveMap.js';
@@ -25,6 +26,13 @@ import { loadDiscoveryStore, } from '../dist/sensorMap/persistence/discoveryStor
 import { loadNoticeStore, } from '../dist/sensorMap/persistence/noticesStore.js';
 import { loadUiStateStore, } from '../dist/sensorMap/persistence/uiStateStore.js';
 import { UNIT_VOCABULARY, unitOptionsFor } from '../dist/sensorMap/unitVocabulary.js';
+/**
+ * The UI bridge is a READ-ONLY consumer of the platform's persistence
+ * stores (§8 single-writer): it must never quarantine-rename a corrupt
+ * file — recovery mutation belongs to the writer (the platform), and
+ * endpoints like /preview-save promise zero writes of any kind.
+ */
+const READ_ONLY_STORE = { quarantineCorrupt: false };
 export async function handleGetStatus(deps, payload) {
     const config = extractConfig(payload);
     const modeResult = detectConfigMode(config);
@@ -41,16 +49,17 @@ export async function handleGetStatus(deps, payload) {
         readOnly: true,
         sensorMapEditorAvailable: false,
         composeSaveAvailable: true,
+        previewSaveAvailable: true,
     };
 }
 export async function handleGetDiscovery(deps) {
-    return loadDiscoveryStore(path.join(deps.persistDir, 'discovery.json'), deps.log);
+    return loadDiscoveryStore(path.join(deps.persistDir, 'discovery.json'), deps.log, undefined, READ_ONLY_STORE);
 }
 export async function handleGetNotices(deps) {
-    return loadNoticeStore(path.join(deps.persistDir, 'notices.json'), deps.log);
+    return loadNoticeStore(path.join(deps.persistDir, 'notices.json'), deps.log, undefined, READ_ONLY_STORE);
 }
 export async function handleGetUiState(deps) {
-    return loadUiStateStore(path.join(deps.persistDir, 'ui-state.json'), deps.log);
+    return loadUiStateStore(path.join(deps.persistDir, 'ui-state.json'), deps.log, undefined, READ_ONLY_STORE);
 }
 // ---- Internals ----------------------------------------------------
 function extractConfig(payload) {
@@ -84,19 +93,12 @@ const LEGACY_CATEGORY_TOGGLES = [
     'lightningSensors',
 ];
 /**
- * Compose a v2 save: validate the proposal, write/verify the immutable
- * legacy snapshot FIRST, and only then return the composed next config
- * for the client to persist through HB UI X's API. The composed config
- * physically cannot reach config.json before the snapshot is durable.
- *
- * Refusals return `{ ok: false, error }` (JSON-safe, editor-consumable)
- * and perform NO writes — with one deliberate exception: a successful
- * snapshot write followed by a later refusal is harmless (the snapshot
- * is the pre-conversion record either way and is verified on the next
- * attempt).
+ * Steps 1–7b of the guarded save: authoritative on-disk config, block
+ * location + staleness check, mode + sensorMap-shape gates, proposal
+ * shape/seeding, §8.7 inventory, same-machinery validation, canonical
+ * serialization, and the hard divergence gate. Performs NO writes.
  */
-export async function handleComposeSave(deps, payload) {
-    const p = (payload ?? {});
+async function runSavePipeline(deps, p) {
     // ---- 1. Authoritative on-disk config (never the client's copy).
     if (!deps.configPath) {
         return { ok: false, error: { code: 'config-unreadable', message: 'No config.json path available to the UI server.' } };
@@ -152,6 +154,16 @@ export async function handleComposeSave(deps, payload) {
     if (modeResult.mode === 'safe-mode') {
         return { ok: false, error: { code: 'safe-mode', message: 'UI saves are refused in safe mode (§5). Fix or restore the configuration first.' } };
     }
+    // ---- 3b. Malformed-sensorMap hard stop (same gate the runtime and
+    //          /editor-state apply): a present-but-non-array sensorMap
+    //          means the editor rendered ZERO rows, so any draft was
+    //          composed from nothing — previewing or saving it would
+    //          silently REPLACE a configuration the runtime refused to
+    //          interpret. Refuse; the user must repair config.json first.
+    const shapeErr = sensorMapShapeError(block, modeResult.mode);
+    if (shapeErr !== undefined) {
+        return { ok: false, error: { code: 'sensor-map-shape', message: shapeErr } };
+    }
     // ---- 4. Proposal shape. On a LEGACY config with NO proposal, the
     //         save is a pure migration: the proposal is seeded from the
     //         compat translation of the on-disk block (§5's "reads
@@ -170,8 +182,8 @@ export async function handleComposeSave(deps, payload) {
     //         discovery registry, cached-accessory MACs, override MACs.
     //         Assembled twice when the proposal is compat-seeded, so the
     //         seeded overrides' station scopes contribute their MACs.
-    const discovery = await loadDiscoveryStore(path.join(deps.persistDir, 'discovery.json'), deps.log);
-    const uiState = await loadUiStateStore(path.join(deps.persistDir, 'ui-state.json'), deps.log);
+    const discovery = await loadDiscoveryStore(path.join(deps.persistDir, 'discovery.json'), deps.log, undefined, READ_ONLY_STORE);
+    const uiState = await loadUiStateStore(path.join(deps.persistDir, 'ui-state.json'), deps.log, undefined, READ_ONLY_STORE);
     const assemble = (proposalForMacs) => assembleStationInventory({
         liveStations: p.liveStations,
         discovery,
@@ -279,6 +291,18 @@ export async function handleComposeSave(deps, payload) {
             },
         };
     }
+    return {
+        ok: true,
+        ctx: { block, modeResult, proposal, stations, discovery, uiState, effectiveMap, canonical },
+    };
+}
+export async function handleComposeSave(deps, payload) {
+    const p = (payload ?? {});
+    const r = await runSavePipeline(deps, p);
+    if (!r.ok) {
+        return r;
+    }
+    const { block, modeResult, effectiveMap, canonical } = r.ctx;
     // ---- 8. Compose. detectConfigMode's verdict is passed explicitly
     //         (it is the single authority on "legacy").
     const composed = composeV2ConfigSave(block, canonical, effectiveMap, modeResult.mode);
@@ -327,6 +351,159 @@ export async function handleComposeSave(deps, payload) {
         canonicalSensorMap: canonical,
         warnings: effectiveMap.warnings,
         notes: effectiveMap.notes,
+    };
+}
+// ---- Preview-save (GA task #69, PR B — no writes) -------------------
+/**
+ * Server-authoritative dry run of a save (design decision 2026-08-19:
+ * the structural-change confirmation must not make the browser a
+ * second signature calculator). Runs the EXACT save pipeline —
+ * validation, canonicalization, divergence gate — via runSavePipeline
+ * and returns what the save WOULD do: the canonical sensorMap, the
+ * proposed effective rows, a row-by-row diff against the current
+ * on-disk state with structural re-registration flags, and a digest.
+ *
+ * Performs NO writes of any kind — not even the legacy snapshot.
+ *
+ * The digest is the PR C confirmation token, computed by
+ * computeSaveConsequences(): sha256 over the canonical JSON of the
+ * on-disk block, the canonical sensorMap, AND the sorted current and
+ * proposed runtime accessory sets — binding the CONSEQUENCES, so
+ * discovery/inventory drift after a preview invalidates the token
+ * even when the typed inputs are unchanged. It is stateless — at save
+ * time /compose-save recomputes the same function and refuses a
+ * structural save whose presented digest does not match, proving the
+ * user confirmed THESE consequences against THIS base.
+ */
+export async function handlePreviewSave(deps, payload) {
+    const p = (payload ?? {});
+    const r = await runSavePipeline(deps, p);
+    if (!r.ok) {
+        return { ok: false, error: r.error };
+    }
+    const { effectiveMap, canonical } = r.ctx;
+    const consequences = computeSaveConsequences(r.ctx);
+    return {
+        ok: true,
+        canonicalSensorMap: canonical,
+        rows: consequences.proposedRows,
+        changes: consequences.changes,
+        structuralChangeCount: consequences.structuralChangeCount,
+        digest: consequences.digest,
+        warnings: effectiveMap.warnings.map(w => toDiagnosticDto('warning', w)),
+        notes: effectiveMap.notes.map(n => toDiagnosticDto('note', n)),
+    };
+}
+/**
+ * Compute the accessory-set consequences of a validated save pipeline
+ * result. THE diff is over the RUNTIME ACCESSORY SET — configured AND
+ * enabled rows, the same filter the platform's reconciliation applies
+ * (review #43 P1-1): a disabled row has no accessory, so disabling
+ * registers as 'removed' (the accessory DEregisters) and enabling as
+ * 'added' (it registers). 'modified' rows exist on both sides;
+ * structural iff the signature changed (re-registration).
+ *
+ * Single implementation for /preview-save today and /compose-save's
+ * digest verification in PR C.
+ */
+export function computeSaveConsequences(ctx) {
+    const { block, modeResult, proposal, stations, discovery, uiState, effectiveMap, canonical } = ctx;
+    // CURRENT effective state from the on-disk block over the SAME
+    // inventory: a legacy config's current state is its compat
+    // translation (what a migration preserves), a v2 config's is its
+    // sensorMap. Same-inventory comparison keeps the diff about the
+    // PROPOSAL, never about station drift.
+    const currentOverrides = modeResult.mode === 'legacy'
+        ? compatToOverrides(block, stations)
+        : (Array.isArray(block.sensorMap) ? block.sensorMap : []);
+    const currentMap = buildEffectiveSensorMap({
+        userOverrides: currentOverrides,
+        discovery,
+        uiState,
+        stations,
+        configMode: 'v2',
+    });
+    const currentLayers = acceptedOverrideLayers(currentOverrides, currentMap.errors);
+    const proposedLayers = acceptedOverrideLayers(proposal, effectiveMap.errors);
+    const accessorySet = (rows) => {
+        const out = new Map();
+        for (const row of rows) {
+            if (row.kind !== 'unrecognized' && row.enabled) {
+                out.set(`${row.stationMac}|${row.dataPoint}`, row);
+            }
+        }
+        return out;
+    };
+    const before = accessorySet(currentMap.rows);
+    const after = accessorySet(effectiveMap.rows);
+    // Fields whose change matters to the user. structuralSignature
+    // decides the `structural` flag (re-registration); the rest mark a
+    // row as modified-in-place. (No `enabled` here — both sides of a
+    // 'modified' pair are enabled by construction.)
+    const ROW_FIELDS = [
+        'structuralSignature', 'kind', 'measurement', 'name',
+        'sourceUnit', 'displayUnit', 'threshold', 'triggerEnabled',
+        'triggerDirection', 'batteryField', 'hasBatterySubService', 'embedName',
+    ];
+    const changes = [];
+    for (const [key, b] of before) {
+        const a = after.get(key);
+        if (!a) {
+            changes.push({
+                stationMac: b.stationMac, dataPoint: b.dataPoint,
+                change: 'removed', structural: true,
+                before: toEditorRowDto(b, currentLayers),
+            });
+            continue;
+        }
+        const differs = ROW_FIELDS.filter(f => b[f] !== a[f]);
+        if (differs.length > 0) {
+            changes.push({
+                stationMac: b.stationMac, dataPoint: b.dataPoint,
+                change: 'modified',
+                structural: b.structuralSignature !== a.structuralSignature,
+                before: toEditorRowDto(b, currentLayers),
+                after: toEditorRowDto(a, proposedLayers),
+            });
+        }
+    }
+    for (const [key, a] of after) {
+        if (!before.has(key)) {
+            changes.push({
+                stationMac: a.stationMac, dataPoint: a.dataPoint,
+                change: 'added', structural: true,
+                after: toEditorRowDto(a, proposedLayers),
+            });
+        }
+    }
+    changes.sort((x, y) => x.stationMac === y.stationMac
+        ? (x.dataPoint < y.dataPoint ? -1 : x.dataPoint > y.dataPoint ? 1 : 0)
+        : (x.stationMac < y.stationMac ? -1 : 1));
+    const proposedRows = effectiveMap.rows
+        .map(row => toEditorRowDto(row, proposedLayers))
+        .sort((a, b) => a.stationMac === b.stationMac
+        ? (a.dataPoint < b.dataPoint ? -1 : a.dataPoint > b.dataPoint ? 1 : 0)
+        : (a.stationMac < b.stationMac ? -1 : 1));
+    const setSummary = (set) => [...set.values()]
+        .map(row => ({
+        stationMac: row.stationMac,
+        dataPoint: row.dataPoint,
+        structuralSignature: row.structuralSignature,
+    }))
+        .sort((a, b) => `${a.stationMac}|${a.dataPoint}` < `${b.stationMac}|${b.dataPoint}` ? -1 : 1);
+    const digest = createHash('sha256')
+        .update(canonicalJsonLocal({
+        base: block,
+        canonical,
+        current: setSummary(before),
+        proposed: setSummary(after),
+    }))
+        .digest('hex');
+    return {
+        changes,
+        structuralChangeCount: changes.filter(c => c.structural).length,
+        digest,
+        proposedRows,
     };
 }
 /**
@@ -419,8 +596,8 @@ export async function handleGetEditorState(deps, payload) {
     // editor shows exactly what a pure migration would produce. The raw
     // sensorMap entries are UNTRUSTED (review round 2 F2): they stay
     // unknown[] until each consumer has applied its own guards.
-    const discovery = await loadDiscoveryStore(path.join(deps.persistDir, 'discovery.json'), deps.log);
-    const uiState = await loadUiStateStore(path.join(deps.persistDir, 'ui-state.json'), deps.log);
+    const discovery = await loadDiscoveryStore(path.join(deps.persistDir, 'discovery.json'), deps.log, undefined, READ_ONLY_STORE);
+    const uiState = await loadUiStateStore(path.join(deps.persistDir, 'ui-state.json'), deps.log, undefined, READ_ONLY_STORE);
     const sources = new Map();
     const rawSensorMap = Array.isArray(block.sensorMap) ? block.sensorMap : [];
     const assemble = (overridesForMacs) => assembleStationInventory({
@@ -452,26 +629,7 @@ export async function handleGetEditorState(deps, payload) {
         stations,
         configMode: 'v2',
     });
-    // Layer/origin metadata must reflect what the resolver ACCEPTED
-    // (review round 2 F2): partitionOverrideLayers requires validated
-    // overrides, and a resolver-REJECTED fragment must not label the
-    // surviving default row as override-authored. A rejected fragment
-    // also poisons its whole (station, dataPoint) key — every fragment
-    // for that key merged into the row that was rejected.
-    const structurallySafe = (o) => !!o && typeof o === 'object' && !Array.isArray(o)
-        && typeof o.dataPoint === 'string'
-        && (o.stationMac === undefined
-            || typeof o.stationMac === 'string');
-    const keyOf = (o) => `${o.stationMac !== undefined ? o.stationMac.toUpperCase() : '*'}|${o.dataPoint}`;
-    const rejectedIdx = new Set(effectiveMap.errors.map(e => e.overrideIndex));
-    const rejectedKeys = new Set();
-    overrides.forEach((o, i) => {
-        if (rejectedIdx.has(i) && structurallySafe(o)) {
-            rejectedKeys.add(keyOf(o));
-        }
-    });
-    const accepted = overrides.filter((o, i) => structurallySafe(o) && !rejectedIdx.has(i) && !rejectedKeys.has(keyOf(o)));
-    const layers = partitionOverrideLayers(accepted);
+    const layers = acceptedOverrideLayers(overrides, effectiveMap.errors);
     const rows = effectiveMap.rows
         .map(row => toEditorRowDto(row, layers))
         .sort((a, b) => a.stationMac === b.stationMac
@@ -516,6 +674,31 @@ export function handleGetVocabulary() {
         };
     }
     return { measurements };
+}
+/**
+ * Layer/origin metadata must reflect what the resolver ACCEPTED
+ * (review #32 round 2 F2): partitionOverrideLayers requires validated
+ * overrides, and a resolver-REJECTED fragment must not label the
+ * surviving default row as override-authored. A rejected fragment
+ * also poisons its whole (station, dataPoint) key — every fragment
+ * for that key merged into the row that was rejected. Shared by
+ * /editor-state and /preview-save.
+ */
+function acceptedOverrideLayers(overrides, errors) {
+    const structurallySafe = (o) => !!o && typeof o === 'object' && !Array.isArray(o)
+        && typeof o.dataPoint === 'string'
+        && (o.stationMac === undefined
+            || typeof o.stationMac === 'string');
+    const keyOf = (o) => `${o.stationMac !== undefined ? o.stationMac.toUpperCase() : '*'}|${o.dataPoint}`;
+    const rejectedIdx = new Set(errors.map(e => e.overrideIndex));
+    const rejectedKeys = new Set();
+    overrides.forEach((o, i) => {
+        if (rejectedIdx.has(i) && structurallySafe(o)) {
+            rejectedKeys.add(keyOf(o));
+        }
+    });
+    const accepted = overrides.filter((o, i) => structurallySafe(o) && !rejectedIdx.has(i) && !rejectedKeys.has(keyOf(o)));
+    return partitionOverrideLayers(accepted);
 }
 function toEditorRowDto(row, layers) {
     const dto = {

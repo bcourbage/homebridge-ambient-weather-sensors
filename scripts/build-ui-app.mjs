@@ -28,12 +28,14 @@ export function coldBuild() {
     cwd: uiDir,
     stdio: 'inherit',
   });
-  // Normalize trailing whitespace in the generated license report so
-  // `git diff --check` can stay a repository-wide gate. Deterministic:
-  // pure function of ng's output, applied on every cold build.
+  // Normalize trailing whitespace AND CRLF line endings in the
+  // generated license report (some upstream license texts, e.g.
+  // tslib's, ship with \r\n) so `git diff --check` can stay a
+  // repository-wide gate. Deterministic: pure function of ng's
+  // output, applied on every cold build.
   const licenses = path.join(appDir, '3rdpartylicenses.txt');
   if (fs.existsSync(licenses)) {
-    const normalized = fs.readFileSync(licenses, 'utf8').replace(/[ \t]+$/gm, '');
+    const normalized = fs.readFileSync(licenses, 'utf8').replace(/[ \t\r]+$/gm, '');
     fs.writeFileSync(licenses, normalized);
   }
 }
