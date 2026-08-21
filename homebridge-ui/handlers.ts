@@ -567,12 +567,15 @@ export async function handleComposeSave(
  *
  * Performs NO writes of any kind — not even the legacy snapshot.
  *
- * The digest is the PR C confirmation token: sha256 over the
- * canonical JSON of (the on-disk block, the canonical sensorMap).
- * It is stateless — at save time /compose-save re-derives the same
- * digest from its own pipeline results and refuses a structural save
- * whose presented digest does not match, proving the user confirmed
- * THIS preview against THIS base, not a stale one.
+ * The digest is the PR C confirmation token, computed by
+ * computeSaveConsequences(): sha256 over the canonical JSON of the
+ * on-disk block, the canonical sensorMap, AND the sorted current and
+ * proposed runtime accessory sets — binding the CONSEQUENCES, so
+ * discovery/inventory drift after a preview invalidates the token
+ * even when the typed inputs are unchanged. It is stateless — at save
+ * time /compose-save recomputes the same function and refuses a
+ * structural save whose presented digest does not match, proving the
+ * user confirmed THESE consequences against THIS base.
  */
 export async function handlePreviewSave(
   deps: HandlerDeps,

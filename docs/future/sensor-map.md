@@ -808,6 +808,13 @@ A centralized persistence helper handles all writes. Implementation requirements
   3. Start with an empty in-memory store
   4. Continue normally
 
+  Quarantine applies only to the file's single WRITER (the platform).
+  READ-ONLY consumers — the UI bridge's endpoints, including
+  `/preview-save`'s zero-write contract — read with
+  `quarantineCorrupt: false`: a corrupt file is read as empty and left
+  byte-identical in place, and recovery happens on the writer's next
+  startup.
+
 ### 8.7 Station inventory sources when AWN unavailable
 
 `buildEffectiveSensorMap` takes `stations: StationInventory`. UI server produces this by unioning, in preference order:

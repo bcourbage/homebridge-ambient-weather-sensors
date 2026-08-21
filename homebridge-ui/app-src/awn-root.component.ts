@@ -15,7 +15,7 @@
  * styles below add only what the page doesn't define.
  */
 import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
-import { FormBuilder, ReactiveFormsModule } from '@angular/forms';
+import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
 
 import { DraftStore } from './draft-store';
 import { HomebridgeService } from './homebridge.service';
@@ -50,6 +50,7 @@ interface StationGroup {
     .origin.unrecognized { background: var(--warn-bg); color: var(--warn-fg); }
     .station-meta { color: var(--fg-sub); font-size: 0.85rem; font-weight: 400; margin-left: 8px; }
     .muted { color: var(--fg-empty); }
+    .field-error { color: var(--error-fg); background: var(--error-bg); padding: 2px 8px; border-radius: 4px; font-size: 0.82rem; margin-right: 12px; }
     .dirty-dot {
       display: inline-block; width: 8px; height: 8px; border-radius: 999px;
       background: var(--warn-edge); margin-right: 6px;
@@ -111,7 +112,7 @@ interface StationGroup {
       @if (draftCount() > 0) {
         <div class="draft-bar">
           <span class="grow"><strong>{{ draftCount() }}</strong> draft change(s) — nothing is saved; preview runs the real save pipeline without writing.</span>
-          <button type="button" (click)="preview()" [disabled]="previewPending()">Preview changes</button>
+          <button type="button" (click)="preview()" [disabled]="previewPending() || editFormInvalid()">Preview changes</button>
           <button type="button" (click)="discardAll()">Discard drafts</button>
         </div>
       }
@@ -214,6 +215,9 @@ interface StationGroup {
                     <form [formGroup]="editForm!">
                       <label><input type="checkbox" formControlName="enabled" /> Enabled</label>
                       <label>Name <input type="text" formControlName="name" /></label>
+                      @if (editForm!.get('name')?.invalid) {
+                        <span class="field-error">Name is required — restore a value or use Reset row.</span>
+                      }
                       @if (displayUnitOptions(row).length > 0) {
                         <label>Display unit
                           <select formControlName="displayUnit">
@@ -225,6 +229,9 @@ interface StationGroup {
                       }
                       @if (row.kind === 'motion') {
                         <label>Threshold <input type="number" step="any" formControlName="threshold" /></label>
+                        @if (editForm!.get('threshold')?.invalid) {
+                          <span class="field-error">Threshold is required for this row — restore a value or use Reset row.</span>
+                        }
                         <label>Trigger
                           <select formControlName="triggerDirection">
                             <option value="above">above</option>
@@ -260,6 +267,8 @@ export class AwnRootComponent {
   protected readonly loadError = signal<string | undefined>(undefined);
   protected readonly previewResult = signal<PreviewResultDto | null>(null);
   protected readonly previewPending = signal(false);
+  /** True while an OPEN edit form holds an invalid (blanked) control. */
+  protected readonly editFormInvalid = signal(false);
   /** Bumped on every draft mutation so computed()s re-read the store. */
   protected readonly draftVersion = signal(0);
 
@@ -361,19 +370,32 @@ export class AwnRootComponent {
     if (this.isExpanded(row)) {
       this.expandedKey.set(null);
       this.editForm = null;
+      this.editFormInvalid.set(false);
       return;
     }
     const current = (field: 'enabled' | 'name' | 'displayUnit' | 'threshold' | 'triggerDirection'): unknown =>
       this.store.draftedValue(row, field) ?? (row as unknown as Record<string, unknown>)[field];
+    // Blank-control policy (review #43 round 2): a blanked required
+    // value is an INVALID form state — inline error, Preview blocked —
+    // never a silent no-draft. `name` is always required; `threshold`
+    // is required exactly when the row currently displays one (a
+    // threshold-less row may stay blank; removing an authored value
+    // is Remove override's job, and a default-sourced value cannot be
+    // removed by an override at all).
     this.editForm = this.fb.group({
       enabled: [current('enabled') === true],
-      name: [typeof current('name') === 'string' ? current('name') : ''],
+      name: [typeof current('name') === 'string' ? current('name') : '', Validators.required],
       displayUnit: [typeof current('displayUnit') === 'string' ? current('displayUnit') : ''],
-      threshold: [typeof current('threshold') === 'number' ? current('threshold') : null],
+      threshold: [
+        typeof current('threshold') === 'number' ? current('threshold') : null,
+        typeof current('threshold') === 'number' ? Validators.required : [],
+      ],
       triggerDirection: [current('triggerDirection') === 'below' ? 'below' : 'above'],
     });
+    this.editFormInvalid.set(this.editForm.invalid);
     this.editForm.valueChanges.subscribe((v: Record<string, unknown>) => {
       this.applyEdit(row, v);
+      this.editFormInvalid.set(this.editForm?.invalid ?? false);
     });
     this.expandedKey.set(this.rowKey(row));
   }
@@ -413,6 +435,7 @@ export class AwnRootComponent {
     // later form event would resurrect the override as patches.
     this.expandedKey.set(null);
     this.editForm = null;
+    this.editFormInvalid.set(false);
     this.bump();
   }
 
@@ -422,6 +445,7 @@ export class AwnRootComponent {
     // edited values, and the next form event would re-draft them.
     this.expandedKey.set(null);
     this.editForm = null;
+    this.editFormInvalid.set(false);
     this.bump();
   }
 
@@ -429,10 +453,14 @@ export class AwnRootComponent {
     this.store.discardAll();
     this.expandedKey.set(null);
     this.editForm = null;
+    this.editFormInvalid.set(false);
     this.bump();
   }
 
   protected async preview(): Promise<void> {
+    if (this.editFormInvalid()) {
+      return; // an invalid (blanked) control blocks previewing
+    }
     // Bind the request to the draft version it previews (review #43
     // P2-4): inputs stay editable while the request runs, and a
     // response for an OLDER draft must never install its results (or

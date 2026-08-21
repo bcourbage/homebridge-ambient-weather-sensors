@@ -380,6 +380,87 @@ describe('draft editing + preview (PR B — no persistence)', () => {
     expect(dirty()).toBe(false);
   });
 
+  it('a blanked NAME is an invalid form state: error shown, Preview blocked, proposal never diverges (review #43 round 2)', async () => {
+    const ipc = makeIpc(editorState(), [], PREVIEW_OK);
+    const fixture = await render(ipc);
+    const el = openEditor(fixture, 'windspeedmph');
+
+    // Make another field dirty, then blank the name.
+    const checkbox = el.querySelector('.editor-form input[type="checkbox"]') as HTMLInputElement;
+    checkbox.click();
+    await settle(fixture);
+    const name = el.querySelector('.editor-form input[type="text"]') as HTMLInputElement;
+    typeInto(name, '');
+    await settle(fixture);
+
+    expect(el.textContent).toContain('Name is required');
+    const previewBtn = [...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement;
+    expect(previewBtn.disabled).toBe(true);
+    previewBtn.click(); // disabled — must not fire
+    await settle(fixture);
+    expect(ipc.requests.some(r => r.path === '/preview-save')).toBe(false);
+
+    // Restore the name: error clears, Preview unblocks, and the
+    // submitted proposal carries ONLY the enabled change — no stale
+    // name draft from the blank interlude.
+    typeInto(name, 'Wind');
+    await settle(fixture);
+    expect(el.textContent).not.toContain('Name is required');
+    expect(previewBtn.disabled).toBe(false);
+    previewBtn.click();
+    await settle(fixture);
+    const req = ipc.requests.find(r => r.path === '/preview-save');
+    expect(req?.body).toMatchObject({
+      proposal: [{ dataPoint: 'windspeedmph', stationMac: MAC, enabled: true }],
+    });
+  });
+
+  it('a blanked THRESHOLD on a row that displays one blocks Preview until restored', async () => {
+    const ipc = makeIpc(editorState(), [], PREVIEW_OK);
+    const fixture = await render(ipc);
+    const el = openEditor(fixture, 'windspeedmph'); // threshold: 10
+    const checkbox = el.querySelector('.editor-form input[type="checkbox"]') as HTMLInputElement;
+    checkbox.click();
+    await settle(fixture);
+
+    const threshold = el.querySelector('.editor-form input[type="number"]') as HTMLInputElement;
+    typeInto(threshold, '');
+    await settle(fixture);
+    expect(el.textContent).toContain('Threshold is required');
+    const previewBtn = [...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement;
+    expect(previewBtn.disabled).toBe(true);
+
+    typeInto(threshold, '10');
+    await settle(fixture);
+    expect(el.textContent).not.toContain('Threshold is required');
+    expect(previewBtn.disabled).toBe(false);
+  });
+
+  it('closing an invalid form unblocks Preview (the blank state is gone with the form)', async () => {
+    const ipc = makeIpc(editorState(), [], PREVIEW_OK);
+    const fixture = await render(ipc);
+    const el = openEditor(fixture, 'windspeedmph');
+    const checkbox = el.querySelector('.editor-form input[type="checkbox"]') as HTMLInputElement;
+    checkbox.click();
+    await settle(fixture);
+    typeInto(el.querySelector('.editor-form input[type="text"]') as HTMLInputElement, '');
+    await settle(fixture);
+
+    // Close the form while invalid: the blanked control disappears,
+    // its draft was already cleared, and Preview reflects the
+    // remaining (valid) drafts only.
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Close') as HTMLButtonElement).click();
+    await settle(fixture);
+    const previewBtn = [...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement;
+    expect(previewBtn.disabled).toBe(false);
+    previewBtn.click();
+    await settle(fixture);
+    const req = ipc.requests.find(r => r.path === '/preview-save');
+    expect(req?.body).toMatchObject({
+      proposal: [{ dataPoint: 'windspeedmph', stationMac: MAC, enabled: true }],
+    });
+  });
+
   it('Reset row closes the form so a later event cannot resurrect the edits', async () => {
     const ipc = makeIpc(editorState(), [], PREVIEW_OK);
     const fixture = await render(ipc);

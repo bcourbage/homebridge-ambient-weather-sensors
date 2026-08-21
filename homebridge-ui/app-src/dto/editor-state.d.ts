@@ -164,11 +164,14 @@ export interface EditorStateDto {
 }
 
 /**
- * One row-level difference between the current on-disk configuration
- * and a previewed proposal. `structural: true` means the accessory
- * would RE-REGISTER (its HAP service graph changes) — the case the
- * confirmation UX exists for. Added and removed configured rows are
- * always structural.
+ * One row-level difference in the RUNTIME ACCESSORY SET (configured
+ * AND enabled rows — the filter reconciliation applies) between the
+ * current on-disk configuration and a previewed proposal.
+ * `structural: true` means the registration set changes: an 'added'
+ * row REGISTERS an accessory, a 'removed' row (including a disable)
+ * DEREGISTERS one, and a structural 'modified' row RE-REGISTERS
+ * (its HAP service graph changes). These are the cases the
+ * confirmation UX exists for.
  */
 export interface PreviewChangeDto {
   stationMac: string;
@@ -196,7 +199,11 @@ export type PreviewResultDto =
     rows: EditorRowDto[];
     changes: PreviewChangeDto[];
     structuralChangeCount: number;
-    /** sha256 over canonical JSON of (on-disk block, canonical map). */
+    /**
+     * sha256 over canonical JSON of (on-disk block, canonical map,
+     * sorted current accessory set, sorted proposed accessory set) —
+     * bound to the previewed CONSEQUENCES, not just the typed inputs.
+     */
     digest: string;
     warnings: EditorDiagnosticDto[];
     notes: EditorDiagnosticDto[];
