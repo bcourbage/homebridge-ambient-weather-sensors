@@ -801,19 +801,21 @@ A centralized persistence helper handles all writes. Implementation requirements
 - **Cleanup of stale `.tmp` files** on startup: any `<name>.*.tmp` older than 1 hour is removed
 - **File permissions** match Homebridge's own persistence files (0640 on Unix; inherit on Windows)
 - **`fsync` before rename** for durability on power-loss scenarios (behind a `PERSIST_FSYNC=1` env flag; defaults false for performance)
-- **Cross-platform rename** — POSIX `rename()` atomically replaces existing files; Windows `MoveFileExW(MOVEFILE_REPLACE_EXISTING)` equivalent used via Node's `fs.rename`. Fallback to unlink + rename with warn if platform doesn't support atomic replace.
-- **Corrupt-file quarantine** — on read, if the file is missing, malformed, or has unrecognized `schemaVersion`:
+- **Cross-platform rename** — POSIX `rename()` atomically replaces existing files; Windows `MoveFileExW(MOVEFILE_REPLACE_EXISTING)` equivalent used via Node's `fs.rename`. There is NO unlink-plus-rename fallback: if the rename fails, the destination is left untouched, the orphan temp file is unlinked best-effort, and the error re-throws so the caller can skip advancing its flush watermarks.
+- **Corrupt-file quarantine** — on read, if the file is malformed or has an unrecognized `schemaVersion` (a MISSING file is the normal first-boot state — read as empty, never quarantined):
   1. Rename to `<name>.corrupt-<ISO-8601-timestamp>.json` (preserves evidence)
   2. Log a warn including the quarantine path
   3. Start with an empty in-memory store
   4. Continue normally
 
-  Quarantine applies only to the file's single WRITER (the platform).
-  READ-ONLY consumers — the UI bridge's endpoints, including
-  `/preview-save`'s zero-write contract — read with
-  `quarantineCorrupt: false`: a corrupt file is read as empty and left
-  byte-identical in place, and recovery happens on the writer's next
-  startup.
+  Quarantine belongs to each store's OWNING WRITER, not universally to
+  one process: the platform for `discovery.json` and `notices.json`,
+  the UI server for `ui-state.json` (§8.5). Every OTHER consumer reads
+  with `quarantineCorrupt: false` — the platform when it loads
+  `ui-state.json`, and all of the UI bridge's endpoints (including
+  `/preview-save`'s zero-write contract): a corrupt file is read as
+  empty and left byte-identical in place, and recovery happens on the
+  owning writer's next load.
 
 ### 8.7 Station inventory sources when AWN unavailable
 

@@ -404,9 +404,12 @@ export class AwnRootComponent {
    * Synchronize EVERY field with the form on every event (review #43
    * P1-3): a value differing from the row's original becomes a patch;
    * a value equal to the original CLEARS its patch — so reverting a
-   * control in the form always reverts the draft, and the proposal
-   * always matches what the form displays. Invalid transients (empty
-   * name, cleared number) clear their patch rather than drafting.
+   * control in the form always reverts the draft, and for VALID form
+   * states the proposal always matches what the form displays. An
+   * INVALID blank clears its patch too, but remains visibly blank —
+   * that state shows an inline error and blocks Preview entirely
+   * (round 2), so no proposal is generated while form and draft
+   * disagree.
    */
   private applyEdit(row: EditorRowDto, v: Record<string, unknown>): void {
     const sync = (field: 'enabled' | 'name' | 'displayUnit' | 'threshold' | 'triggerDirection',
