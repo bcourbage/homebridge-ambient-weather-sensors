@@ -540,29 +540,39 @@ the legacy fields, which never equals the original authored fields, so a
 later reconversion legitimately presents a legacy baseline that mismatches
 the immutable snapshot. Refusing that save would make the documented
 rollback a one-way door. Instead, a conversion whose legacy fields differ
-from the snapshot appends the pre-conversion baseline to
-`legacy-conversion-journal.json` (same persist dir, same
-`LEGACY_SENSOR_FIELDS`-only vocabulary, atomic write + read-back verify,
-durable BEFORE config.json can be mutated) and proceeds with outcome
-`journaled`. The journal is append-only and deduplicates only against its
-LATEST entry, so repeated rollback/reconvert cycles of an unedited map do
-not grow it while genuinely different baselines are always preserved. The
-original snapshot is never modified by this path. A journal that exists
-but cannot be parsed or fails shape validation refuses the save
-(`conversion-journal-error`) — it is an audit record and is never
-quarantined, rewritten, or restarted. Shape validation is strict about
-the VOCABULARY: every entry's `legacy` keys must be in
-`LEGACY_SENSOR_FIELDS`, and unknown envelope or entry keys are
-rejected — an injected credential (e.g. `apiKey`) must never be
-accepted and re-persisted by a later append (PR #46 review P2).
-Appends for the same journal are serialized end-to-end (read,
-deduplicate, write, read-back) by a per-path promise-chain mutex —
-concurrent saves cannot drop each other's baselines (PR #46 review
-P1); in-process serialization suffices because the journal's single
-writer (§8) is the UI server process, where all compose-save requests
-land. Restoring a journaled baseline is documented in the README: the
-snapshot-restore procedure with the fields sourced from the chosen
-entry's `legacy` object.
+from the snapshot appends the pre-conversion baseline to the
+`legacy-conversion-journal/` DIRECTORY — one immutable
+`entry-NNNNNN.json` file per baseline (same persist dir, same
+`LEGACY_SENSOR_FIELDS`-only vocabulary, durable + read back BEFORE
+config.json can be mutated) — and proceeds with outcome `journaled`.
+The journal is append-only and deduplicates only against its
+highest-numbered entry, so repeated rollback/reconvert cycles of an
+unedited map do not grow it while genuinely different baselines are
+always preserved. The original snapshot is never modified by this path.
+A journal entry that cannot be parsed or fails shape validation refuses
+the save (`conversion-journal-error`) — the journal is an audit record
+and is never quarantined, rewritten, or restarted. Shape validation is
+strict about the VOCABULARY: every entry's `legacy` keys must be in
+`LEGACY_SENSOR_FIELDS`, and unknown entry keys or unrecognized files in
+the journal directory are rejected (OS dotfiles are ignored) — an
+injected credential (e.g. `apiKey`) must never be accepted and
+re-persisted by a later append (PR #46 review P2).
+
+CROSS-PROCESS append safety (PR #46 review round 3, P1): HB UI X forks
+a SEPARATE custom-UI server process per client socket, so a module-level
+mutex cannot serialize all journal writers — the round-2 promise-chain
+lock was reproduced losing an entry across two processes. Safety is
+structural instead: each entry file is committed with the same
+exclusive-create link(2) idiom as the snapshot, so no writer can ever
+replace shared state; a writer that loses the sequence-number race
+(EEXIST) re-reads and re-decides — 'unchanged' if the winner recorded
+the same baseline, otherwise an append under the next number. The
+in-process lock is retained only to keep local concurrency from burning
+retries. Proven by a two-process regression test (distinct baselines
+both survive; identical baselines yield exactly one entry). Restoring a
+journaled baseline is documented in the README: the snapshot-restore
+procedure with the fields sourced from the chosen entry file's `legacy`
+object.
 
 **2. Synchronized legacy mirror — time-boxed.** Every automated v2 UI save
 re-emits legacy sensor fields alongside `configVersion: 2` + `sensorMap`,
@@ -1447,6 +1457,22 @@ Tests: for every non-motion kind, submit an override with each of these fields; 
 
 ## 17. Decision log
 
+- **2026-08-20 (c)**: Conversion journal is a directory of immutable
+  entry files (PR #46 review round 3). The round-2 single-file journal
+  guarded by an in-process promise mutex was proven unsafe across
+  PROCESSES: HB UI X forks a custom-UI server per client socket
+  (verified in plugins-settings-ui.service — `fork()` per client
+  handler), and two Node processes reproduced a lost baseline. Rather
+  than a cross-process lockfile (stale-lock stealing is its own race
+  surface), the journal became `legacy-conversion-journal/` with one
+  exclusive-created (link(2)) `entry-NNNNNN.json` per baseline — no
+  writer ever replaces shared state, so lost updates are structurally
+  impossible; sequence-number collisions re-read and re-decide. A
+  pre-release single-FILE journal (only unreleased beta.13 builds
+  could have written one) fails the save closed with migration
+  guidance. Two-process regression tests prove distinct baselines both
+  survive and identical baselines converge to one entry.
+
 - **2026-08-20 (b)**: Conversion journal — rollback is a two-way door
   (production-drill finding, pre-beta.13 review). The full drill on
   real data proved the sequence: legacy `L0` converts (snapshot stores
@@ -1455,8 +1481,8 @@ Tests: for every non-motion kind, submit an override with each of these fields; 
   the documented rollback locked the user out of v2. Decision: keep
   the snapshot permanently immutable AND record each later
   pre-conversion legacy baseline in an append-only conversion journal
-  (`legacy-conversion-journal.json`, §5.1b) before allowing the
-  reconversion; `legacy-snapshot-mismatch` is retired as a refusal and
+  (the `legacy-conversion-journal/` directory, §5.1b) before allowing
+  the reconversion; `legacy-snapshot-mismatch` is retired as a refusal and
   replaced by the `journaled` success outcome (journal failures refuse
   as `conversion-journal-error`, fail-closed). The required lifecycle
   test (`legacy → v2 save → verified-mirror rollback → re-enable → v2

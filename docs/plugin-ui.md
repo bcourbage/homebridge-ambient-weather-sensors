@@ -100,12 +100,13 @@ problems surface as banners), but the editor is the recommended path.
   (`legacy-config-snapshot.json` in the plugin's data directory)
   **before** `config.json` changes, so a rollback path always
   exists. Converting again after a rollback also works: the
-  rolled-back settings are recorded in an append-only
-  `legacy-conversion-journal.json` first, so neither the original
-  snapshot nor the rolled-back state is ever lost. A journal entry is
-  restored with the same procedure as the snapshot, sourcing the
-  fields from the chosen entry's `legacy` object — see the README's
-  rollback section for the exact steps.
+  rolled-back settings are recorded first in the append-only
+  `legacy-conversion-journal` folder (one numbered entry file per
+  baseline), so neither the original snapshot nor the rolled-back
+  state is ever lost. A journal entry is restored with the same
+  procedure as the snapshot, sourcing the fields from the chosen
+  entry file's `legacy` object — see the README's rollback section
+  for the exact steps.
 - **Guarded saves**: every save is validated server-side against
   the same rules the runtime uses. Changes that would register,
   deregister, or re-register an accessory require explicit

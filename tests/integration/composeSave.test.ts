@@ -11,7 +11,7 @@
  * refusal (safe mode, stale base, invalid rows, empty inventory,
  * snapshot corruption, snapshot/journal write failure).
  */
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 
@@ -19,7 +19,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { handleComposeSave, handlePreviewSave, syntheticProbeMac, type HandlerDeps } from '../../homebridge-ui/handlers';
 import { composeAndPersist, type OrchestratorDeps } from '../../homebridge-ui/saveOrchestrator';
-import { LEGACY_JOURNAL_FILE, LEGACY_SENSOR_FIELDS, LEGACY_SNAPSHOT_FILE, recognizeMirror } from '../../src/sensorMap/legacyMirror';
+import { LEGACY_JOURNAL_DIR, LEGACY_SENSOR_FIELDS, LEGACY_SNAPSHOT_FILE, recognizeMirror } from '../../src/sensorMap/legacyMirror';
 
 const MAC = 'AA:BB:CC:DD:EE:01';
 const silentLog = { info: () => {}, warn: () => {}, debug: () => {} };
@@ -67,6 +67,20 @@ const LEGACY_BLOCK = {
   extendedSensors: true,
   windSensors: true,
 };
+
+function journalDir(rig: Rig): string {
+  return path.join(rig.persistDir, LEGACY_JOURNAL_DIR);
+}
+
+/** Read the journal directory's entry files in sequence order. */
+function readJournalEntries(rig: Rig): Array<{ savedAt: string; legacy: Record<string, unknown> }> {
+  return readdirSync(journalDir(rig))
+    .filter(n => !n.startsWith('.'))
+    .sort()
+    .map(n => JSON.parse(readFileSync(path.join(journalDir(rig), n), 'utf8')) as {
+      savedAt: string; legacy: Record<string, unknown>;
+    });
+}
 
 function discoveryStore(rig: Rig, macs: string[] = [MAC]): void {
   writeFileSync(path.join(rig.persistDir, 'discovery.json'), JSON.stringify({
@@ -648,30 +662,31 @@ describe('immutable snapshot lifecycle', () => {
       expect(result.snapshot).toBe('journaled');
     }
     expect(readFileSync(snapPath, 'utf8')).toBe(staleBody); // untouched
-    const journal = JSON.parse(readFileSync(path.join(rig.persistDir, LEGACY_JOURNAL_FILE), 'utf8'));
-    expect(journal.schemaVersion).toBe(1);
-    expect(journal.entries).toHaveLength(1);
-    expect(journal.entries[0].legacy).toEqual({
+    const entries = readJournalEntries(rig);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].legacy).toEqual({
       temperatureSensors: true, humiditySensors: false,
       extendedSensors: true, windSensors: true,
     });
   });
 
-  it('a corrupt conversion journal fails a reconversion closed and is never replaced', async () => {
+  it('a corrupt conversion-journal entry fails a reconversion closed and is never replaced', async () => {
     const rig = makeRig(LEGACY_BLOCK);
     discoveryStore(rig);
     writeFileSync(path.join(rig.persistDir, LEGACY_SNAPSHOT_FILE), JSON.stringify({
       schemaVersion: 1, savedAt: '2026-01-01T00:00:00Z',
       legacy: { temperatureSensors: false }, // forces the journal path
     }, null, 2));
-    const journalPath = path.join(rig.persistDir, LEGACY_JOURNAL_FILE);
-    writeFileSync(journalPath, '{not json');
+    mkdirSync(journalDir(rig), { recursive: true });
+    const entryFile = path.join(journalDir(rig), 'entry-000001.json');
+    writeFileSync(entryFile, '{not json');
     const result = await handleComposeSave(rig.deps, { base: LEGACY_BLOCK });
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error.code).toBe('conversion-journal-error');
     }
-    expect(readFileSync(journalPath, 'utf8')).toBe('{not json'); // untouched
+    expect(readFileSync(entryFile, 'utf8')).toBe('{not json'); // untouched
+    expect(readdirSync(journalDir(rig))).toEqual(['entry-000001.json']); // nothing added
   });
 
   it('a corrupt snapshot refuses the conversion', async () => {
@@ -771,7 +786,7 @@ describe('subsequent v2 saves', () => {
     expect(statSync(snapPath).mtimeMs).toBe(mtimeBefore);
     // v2-mode saves never touch the conversion journal either — it
     // records LEGACY conversion baselines only.
-    expect(existsSync(path.join(rig.persistDir, LEGACY_JOURNAL_FILE))).toBe(false);
+    expect(existsSync(journalDir(rig))).toBe(false);
   });
 });
 
@@ -799,7 +814,6 @@ describe('rollback is a two-way door (conversion journal)', () => {
     const rig = makeRig(LEGACY_BLOCK);
     discoveryStore(rig);
     const snapPath = path.join(rig.persistDir, LEGACY_SNAPSHOT_FILE);
-    const journalPath = path.join(rig.persistDir, LEGACY_JOURNAL_FILE);
 
     // First conversion writes the immutable snapshot.
     const first = await handleComposeSave(rig.deps, { base: LEGACY_BLOCK });
@@ -831,16 +845,15 @@ describe('rollback is a two-way door (conversion journal)', () => {
     // The original snapshot is byte-identical, and the journal holds
     // exactly the rolled-back operative baseline.
     expect(readFileSync(snapPath, 'utf8')).toBe(snapshotBytes);
-    const journal = JSON.parse(readFileSync(journalPath, 'utf8'));
-    expect(journal.schemaVersion).toBe(1);
-    expect(journal.entries).toHaveLength(1);
+    const entries = readJournalEntries(rig);
+    expect(entries).toHaveLength(1);
     const expectedBaseline: Record<string, unknown> = {};
     for (const key of LEGACY_SENSOR_FIELDS) {
       if (reEnabled[key] !== undefined) {
         expectedBaseline[key] = reEnabled[key];
       }
     }
-    expect(journal.entries[0].legacy).toEqual(expectedBaseline);
+    expect(entries[0].legacy).toEqual(expectedBaseline);
 
     // An identical second rollback/reconvert cycle deduplicates: the
     // journal stays at one entry and the snapshot stays untouched.
@@ -851,14 +864,13 @@ describe('rollback is a two-way door (conversion journal)', () => {
     if (third.ok) {
       expect(third.snapshot).toBe('journaled');
     }
-    expect(JSON.parse(readFileSync(journalPath, 'utf8')).entries).toHaveLength(1);
+    expect(readJournalEntries(rig)).toHaveLength(1);
     expect(readFileSync(snapPath, 'utf8')).toBe(snapshotBytes);
   });
 
   it('an EDITED rolled-back baseline appends a second journal entry instead of deduplicating', async () => {
     const rig = makeRig(LEGACY_BLOCK);
     discoveryStore(rig);
-    const journalPath = path.join(rig.persistDir, LEGACY_JOURNAL_FILE);
 
     const first = await handleComposeSave(rig.deps, { base: LEGACY_BLOCK });
     expect(first.ok).toBe(true);
@@ -882,8 +894,8 @@ describe('rollback is a two-way door (conversion journal)', () => {
     if (third.ok) {
       expect(third.snapshot).toBe('journaled');
     }
-    const journal = JSON.parse(readFileSync(journalPath, 'utf8'));
-    expect(journal.entries).toHaveLength(2);
-    expect(journal.entries[1].legacy.windSensors).toBe(false);
+    const entries = readJournalEntries(rig);
+    expect(entries).toHaveLength(2);
+    expect(entries[1].legacy.windSensors).toBe(false);
   });
 });

@@ -30,11 +30,13 @@
  *      the projected mirror form, which differs from the original)
  *      leave the snapshot untouched and instead append the
  *      pre-conversion legacy baseline to the CONVERSION JOURNAL
- *      (`legacy-conversion-journal.json`, append-only, deduplicated
- *      against its latest entry, same secret-free vocabulary). The
- *      journal is written and read back BEFORE config.json is
- *      mutated, so no operative legacy state is ever lost to a
- *      reconversion; a corrupt journal fails the save closed.
+ *      (the `legacy-conversion-journal/` directory: one immutable
+ *      exclusive-created entry file per baseline, append-only,
+ *      deduplicated against the latest entry, same secret-free
+ *      vocabulary). The entry is durable and read back BEFORE
+ *      config.json is mutated, so no operative legacy state is ever
+ *      lost to a reconversion; a corrupt journal fails the save
+ *      closed.
  *
  *   2. SYNCHRONIZED MIRROR (time-boxed). Every automated v2 UI save
  *      re-emits legacy sensor fields ALONGSIDE `configVersion: 2` +
@@ -104,10 +106,13 @@ import { REAL_CLOCK, } from './persistence/atomicWrite.js';
 export const LEGACY_MIRROR_KEY = '_legacyMirror';
 /** Persist-dir filename of the immutable first-conversion snapshot. */
 export const LEGACY_SNAPSHOT_FILE = 'legacy-config-snapshot.json';
-/** Persist-dir filename of the append-only conversion journal that
+/** Persist-dir DIRECTORY of the append-only conversion journal that
  * records the pre-conversion legacy baseline of every conversion AFTER
- * the first (reconversion following a current-state rollback). */
-export const LEGACY_JOURNAL_FILE = 'legacy-conversion-journal.json';
+ * the first (reconversion following a current-state rollback). One
+ * immutable `entry-NNNNNN.json` file per baseline — a directory of
+ * exclusive-created files rather than one mutable file, so concurrent
+ * writer PROCESSES can never overwrite each other's entries. */
+export const LEGACY_JOURNAL_DIR = 'legacy-conversion-journal';
 /** Mirror-metadata schema version — module internal (stamped into and
  * validated against `_legacyMirror.version`; consumers interact with it
  * only through `recognizeMirror`'s 'invalid' state). */
@@ -618,19 +623,19 @@ export async function verifyLegacySnapshot(persistDir, authoritativeLegacyFields
     return canonicalJson(legacy) === canonicalJson(subset) ? 'match' : 'mismatch';
 }
 /**
- * Per-journal-path serialization of the read/deduplicate/write/read-back
- * sequence. Without it, concurrent appends race: both read the same
- * entry list, both rename their own rewrite over the file, and the
- * loser's baseline is silently dropped while both callers report
- * 'appended' — the exact data loss the journal exists to prevent
- * (review PR #46 P1, reproduced). The chain is failure-safe: a
- * rejected operation settles its link, so later appends still run.
- *
- * In-process serialization is sufficient because the journal has ONE
- * writer process by the same §8 single-writer convention as every
- * other persist-dir store: only the UI server's compose-save boundary
- * writes it, and concurrent saves from multiple browser sessions all
- * land in that one bridge process.
+ * Per-journal-path serialization of the read/deduplicate/append
+ * sequence WITHIN this process. This is an efficiency measure (it
+ * keeps concurrent in-process appends from burning exclusive-create
+ * retries), NOT the correctness mechanism: HB UI X forks a SEPARATE
+ * custom-UI server process per client socket (verified in
+ * plugins-settings-ui.service — `fork()` inside each client handler),
+ * so a module-level lock can never serialize all journal writers
+ * (review PR #46 round-3 P1, reproduced with two processes).
+ * Cross-process safety comes from the journal's on-disk shape:
+ * immutable, independently link(2)-created entry FILES that no writer
+ * ever replaces — see `journalConversionBaseline`. The chain is
+ * failure-safe: a rejected operation settles its link, so later
+ * appends still run.
  */
 const journalLocks = new Map();
 async function withJournalLock(file, fn) {
@@ -659,7 +664,8 @@ async function withJournalLock(file, fn) {
  *
  * Returns 'unchanged' without writing when the baseline equals the
  * journal's latest entry (key-order-insensitive), so repeated
- * rollback/reconvert cycles of an unedited map do not grow the file.
+ * rollback/reconvert cycles of an unedited map do not grow the
+ * journal.
  *
  * Fail-closed contract, same standard as the snapshot: callers MUST
  * await this before mutating config.json, and any throw — an existing
@@ -669,103 +675,145 @@ async function withJournalLock(file, fn) {
  * it is an audit record, and the failure message directs manual
  * inspection instead.
  *
- * Concurrent calls for the same journal are serialized end-to-end
- * (read, deduplicate, write, read-back) so no append can overwrite
- * another's entry; see `withJournalLock`.
+ * CROSS-PROCESS append safety (review PR #46 round-3 P1): HB UI X
+ * forks a separate UI server per client socket, so any number of
+ * writer processes may append concurrently. The journal is therefore
+ * a DIRECTORY of immutable entry files (`entry-000001.json`, …), each
+ * committed with the same exclusive-create link(2) idiom as the
+ * snapshot: writers never replace shared state, so a lost update is
+ * structurally impossible. An append reads the directory, deduplicates
+ * against the highest-numbered entry, and tries to link the next
+ * sequence number; losing the race (EEXIST) re-reads and re-decides —
+ * if the winner recorded the same baseline the retry returns
+ * 'unchanged', otherwise it appends under the next number. The
+ * in-process `withJournalLock` merely keeps local concurrency from
+ * burning retries.
  */
 export async function journalConversionBaseline(persistDir, legacyFields, log, clock = REAL_CLOCK) {
-    const file = path.join(persistDir, LEGACY_JOURNAL_FILE);
+    const dir = path.join(persistDir, LEGACY_JOURNAL_DIR);
     const subset = {};
     for (const key of LEGACY_SENSOR_FIELDS) {
         if (legacyFields[key] !== undefined) {
             subset[key] = legacyFields[key];
         }
     }
-    return withJournalLock(file, async () => {
-        const entries = await readConversionJournal(file);
-        const latest = entries[entries.length - 1];
-        if (latest !== undefined && canonicalJson(latest.legacy) === canonicalJson(subset)) {
-            return 'unchanged';
+    return withJournalLock(dir, async () => {
+        // Fail closed on a pre-release single-FILE journal (shipped only on
+        // unreleased 2.0.0-beta.13 builds): its entries are an audit record
+        // this code no longer maintains and must not be silently ignored.
+        const legacySingleFile = path.join(persistDir, `${LEGACY_JOURNAL_DIR}.json`);
+        if (await fs.stat(legacySingleFile).then(() => true, () => false)) {
+            throw new Error(`a pre-release single-file conversion journal exists (${legacySingleFile}). `
+                + 'Move its entries into the legacy-conversion-journal directory manually (one entry-NNNNNN.json file '
+                + 'per entry, numbered in order) or remove the file after preserving its contents.');
         }
-        entries.push({ savedAt: clock.iso(), legacy: subset });
-        const body = JSON.stringify({ schemaVersion: 1, entries }, null, 2);
-        await fs.mkdir(persistDir, { recursive: true });
-        const tmp = path.join(persistDir, `${LEGACY_JOURNAL_FILE}.${process.pid}.${Math.floor(Math.random() * 1e9).toString(36)}.tmp`);
-        try {
-            await fs.writeFile(tmp, body, { encoding: 'utf8', mode: 0o640 });
-            await fs.rename(tmp, file);
+        const maxAttempts = 50;
+        for (let attempt = 0; attempt < maxAttempts; attempt++) {
+            const entries = await readConversionJournal(dir);
+            const latest = entries[entries.length - 1];
+            if (latest !== undefined && canonicalJson(latest.legacy) === canonicalJson(subset)) {
+                return 'unchanged';
+            }
+            const seq = (latest?.seq ?? 0) + 1;
+            const entryFile = path.join(dir, journalEntryFileName(seq));
+            const body = JSON.stringify({ schemaVersion: 1, savedAt: clock.iso(), legacy: subset }, null, 2);
+            await fs.mkdir(dir, { recursive: true });
+            // Temp file lives OUTSIDE the journal directory so readers never
+            // see in-flight writes as journal content.
+            const tmp = path.join(persistDir, `${LEGACY_JOURNAL_DIR}.${process.pid}.${Math.floor(Math.random() * 1e9).toString(36)}.tmp`);
+            try {
+                await fs.writeFile(tmp, body, { encoding: 'utf8', mode: 0o640 });
+                await fs.link(tmp, entryFile);
+            }
+            catch (e) {
+                if (e.code === 'EEXIST') {
+                    // Another writer (possibly another process) took this
+                    // sequence number — re-read and re-decide.
+                    continue;
+                }
+                throw e;
+            }
+            finally {
+                await fs.unlink(tmp).catch(() => { });
+            }
+            const readBack = await fs.readFile(entryFile, 'utf8');
+            if (readBack !== body) {
+                throw new Error(`conversion journal read-back does not match what was written (${entryFile})`);
+            }
+            log.info(`Conversion journal: pre-conversion legacy baseline appended as ${entryFile}.`);
+            return 'appended';
         }
-        finally {
-            await fs.unlink(tmp).catch(() => { });
-        }
-        const readBack = await fs.readFile(file, 'utf8');
-        if (readBack !== body) {
-            throw new Error(`conversion journal read-back does not match what was written (${file})`);
-        }
-        log.info(`Conversion journal: pre-conversion legacy baseline appended to ${file}.`);
-        return 'appended';
+        throw new Error(`conversion journal append gave up after ${maxAttempts} sequence-number collisions (${dir}).`);
     });
 }
+function journalEntryFileName(seq) {
+    return `entry-${String(seq).padStart(6, '0')}.json`;
+}
+const JOURNAL_ENTRY_PATTERN = /^entry-(\d{6})\.json$/;
 const LEGACY_FIELD_SET = new Set(LEGACY_SENSOR_FIELDS);
 /**
- * Read and strictly validate the journal envelope. ENOENT is a fresh
- * journal (empty list); every other read/parse/shape failure throws —
- * the caller's save must fail closed rather than risk overwriting or
- * silently restarting an audit record it cannot interpret. Strictness
- * includes the VOCABULARY (review PR #46 P2, reproduced): every
- * `legacy` key must be in `LEGACY_SENSOR_FIELDS` — a journal carrying
- * anything else (e.g. an injected `apiKey`) is rejected rather than
- * accepted and re-persisted by the next append, which would break the
- * credential-free promise. Unknown envelope keys and unknown entry
- * keys are rejected for the same reason: this version cannot vouch
- * for content it does not understand.
+ * Read and strictly validate the journal directory. A missing
+ * directory is a fresh journal (empty list); every other failure
+ * throws — the caller's save must fail closed rather than risk
+ * ignoring or restarting an audit record it cannot interpret.
+ * Strictness includes the VOCABULARY (review PR #46 P2, reproduced):
+ * every entry's `legacy` key must be in `LEGACY_SENSOR_FIELDS` — a
+ * journal carrying anything else (e.g. an injected `apiKey`) is
+ * rejected rather than blessed. Unknown entry-file keys and files the
+ * pattern does not recognize are rejected for the same reason: this
+ * version cannot vouch for content it does not understand. Dotfiles
+ * (`.DS_Store` and friends) are ignored — OS metadata must not brick
+ * the journal.
  */
-async function readConversionJournal(file) {
-    let raw;
+async function readConversionJournal(dir) {
+    let names;
     try {
-        raw = await fs.readFile(file, 'utf8');
+        names = await fs.readdir(dir);
     }
     catch (e) {
         if (e.code === 'ENOENT') {
             return [];
         }
-        throw new Error(`conversion journal is unreadable (${file}): ${e.message}. Inspect it manually; it is never overwritten.`);
+        throw new Error(`conversion journal is unreadable (${dir}): ${e.message}. Inspect it manually; it is never rewritten.`);
     }
-    let parsed;
-    try {
-        parsed = JSON.parse(raw);
-    }
-    catch {
-        throw new Error(`conversion journal is not valid JSON (${file}). Inspect it manually; it is never overwritten.`);
-    }
-    const envelope = parsed;
-    const shapeError = (detail) => new Error(`conversion journal has an unrecognized shape (${detail}) (${file}). Inspect it manually; it is never overwritten.`);
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || envelope.schemaVersion !== 1 || !Array.isArray(envelope.entries)) {
-        throw shapeError('envelope');
-    }
-    for (const key of Object.keys(parsed)) {
-        if (key !== 'schemaVersion' && key !== 'entries') {
-            throw shapeError(`unknown envelope key '${key}'`);
+    const shapeError = (detail) => new Error(`conversion journal has an unrecognized shape (${detail}) (${dir}). Inspect it manually; it is never rewritten.`);
+    const entries = [];
+    for (const name of names) {
+        if (name.startsWith('.')) {
+            continue;
         }
-    }
-    for (const entry of envelope.entries) {
-        const e = entry;
-        if (!entry || typeof entry !== 'object' || Array.isArray(entry)
+        const match = JOURNAL_ENTRY_PATTERN.exec(name);
+        if (!match) {
+            throw shapeError(`unexpected file '${name}'`);
+        }
+        const seq = Number(match[1]);
+        const file = path.join(dir, name);
+        let parsed;
+        try {
+            parsed = JSON.parse(await fs.readFile(file, 'utf8'));
+        }
+        catch {
+            throw new Error(`conversion journal entry is not valid JSON (${file}). Inspect it manually; it is never rewritten.`);
+        }
+        const e = parsed;
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)
+            || e.schemaVersion !== 1
             || typeof e.savedAt !== 'string' || Number.isNaN(Date.parse(e.savedAt))
             || !e.legacy || typeof e.legacy !== 'object' || Array.isArray(e.legacy)) {
-            throw shapeError('entry');
+            throw shapeError(`entry '${name}'`);
         }
-        for (const key of Object.keys(entry)) {
-            if (key !== 'savedAt' && key !== 'legacy') {
-                throw shapeError(`unknown entry key '${key}'`);
+        for (const key of Object.keys(parsed)) {
+            if (key !== 'schemaVersion' && key !== 'savedAt' && key !== 'legacy') {
+                throw shapeError(`unknown entry key '${key}' in '${name}'`);
             }
         }
         for (const key of Object.keys(e.legacy)) {
             if (!LEGACY_FIELD_SET.has(key)) {
-                throw shapeError(`field '${key}' is outside the legacy sensor-configuration vocabulary`);
+                throw shapeError(`field '${key}' in '${name}' is outside the legacy sensor-configuration vocabulary`);
             }
         }
+        entries.push({ seq, savedAt: e.savedAt, legacy: e.legacy });
     }
-    return envelope.entries;
+    return entries.sort((a, b) => a.seq - b.seq);
 }
 //# sourceMappingURL=legacyMirror.js.map

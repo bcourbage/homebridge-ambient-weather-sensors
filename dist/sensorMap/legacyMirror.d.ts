@@ -30,11 +30,13 @@
  *      the projected mirror form, which differs from the original)
  *      leave the snapshot untouched and instead append the
  *      pre-conversion legacy baseline to the CONVERSION JOURNAL
- *      (`legacy-conversion-journal.json`, append-only, deduplicated
- *      against its latest entry, same secret-free vocabulary). The
- *      journal is written and read back BEFORE config.json is
- *      mutated, so no operative legacy state is ever lost to a
- *      reconversion; a corrupt journal fails the save closed.
+ *      (the `legacy-conversion-journal/` directory: one immutable
+ *      exclusive-created entry file per baseline, append-only,
+ *      deduplicated against the latest entry, same secret-free
+ *      vocabulary). The entry is durable and read back BEFORE
+ *      config.json is mutated, so no operative legacy state is ever
+ *      lost to a reconversion; a corrupt journal fails the save
+ *      closed.
  *
  *   2. SYNCHRONIZED MIRROR (time-boxed). Every automated v2 UI save
  *      re-emits legacy sensor fields ALONGSIDE `configVersion: 2` +
@@ -102,10 +104,13 @@ import { type Clock, type Logger } from './persistence/atomicWrite.js';
 export declare const LEGACY_MIRROR_KEY = "_legacyMirror";
 /** Persist-dir filename of the immutable first-conversion snapshot. */
 export declare const LEGACY_SNAPSHOT_FILE = "legacy-config-snapshot.json";
-/** Persist-dir filename of the append-only conversion journal that
+/** Persist-dir DIRECTORY of the append-only conversion journal that
  * records the pre-conversion legacy baseline of every conversion AFTER
- * the first (reconversion following a current-state rollback). */
-export declare const LEGACY_JOURNAL_FILE = "legacy-conversion-journal.json";
+ * the first (reconversion following a current-state rollback). One
+ * immutable `entry-NNNNNN.json` file per baseline — a directory of
+ * exclusive-created files rather than one mutable file, so concurrent
+ * writer PROCESSES can never overwrite each other's entries. */
+export declare const LEGACY_JOURNAL_DIR = "legacy-conversion-journal";
 /**
  * The legacy sensor-configuration vocabulary the snapshot preserves and
  * the mirror maintains. Deliberately excludes API credentials
@@ -248,7 +253,8 @@ export declare function verifyLegacySnapshot(persistDir: string, authoritativeLe
  *
  * Returns 'unchanged' without writing when the baseline equals the
  * journal's latest entry (key-order-insensitive), so repeated
- * rollback/reconvert cycles of an unedited map do not grow the file.
+ * rollback/reconvert cycles of an unedited map do not grow the
+ * journal.
  *
  * Fail-closed contract, same standard as the snapshot: callers MUST
  * await this before mutating config.json, and any throw — an existing
@@ -258,9 +264,19 @@ export declare function verifyLegacySnapshot(persistDir: string, authoritativeLe
  * it is an audit record, and the failure message directs manual
  * inspection instead.
  *
- * Concurrent calls for the same journal are serialized end-to-end
- * (read, deduplicate, write, read-back) so no append can overwrite
- * another's entry; see `withJournalLock`.
+ * CROSS-PROCESS append safety (review PR #46 round-3 P1): HB UI X
+ * forks a separate UI server per client socket, so any number of
+ * writer processes may append concurrently. The journal is therefore
+ * a DIRECTORY of immutable entry files (`entry-000001.json`, …), each
+ * committed with the same exclusive-create link(2) idiom as the
+ * snapshot: writers never replace shared state, so a lost update is
+ * structurally impossible. An append reads the directory, deduplicates
+ * against the highest-numbered entry, and tries to link the next
+ * sequence number; losing the race (EEXIST) re-reads and re-decides —
+ * if the winner recorded the same baseline the retry returns
+ * 'unchanged', otherwise it appends under the next number. The
+ * in-process `withJournalLock` merely keeps local concurrency from
+ * burning retries.
  */
 export declare function journalConversionBaseline(persistDir: string, legacyFields: Record<string, unknown>, log: Logger, clock?: Clock): Promise<'appended' | 'unchanged'>;
 //# sourceMappingURL=legacyMirror.d.ts.map

@@ -213,9 +213,9 @@ interface StationGroup {
             } @else if (sr.snapshot === 'exists') {
               — the existing legacy snapshot was verified before writing
             } @else if (sr.snapshot === 'journaled') {
-              — your pre-conversion settings were recorded in
-              <code>legacy-conversion-journal.json</code>; the original
-              legacy snapshot is untouched
+              — your pre-conversion settings were recorded in the
+              <code>legacy-conversion-journal</code> folder; the
+              original legacy snapshot is untouched
             }.
             Homebridge applies structural changes on the next restart.
           </div>
