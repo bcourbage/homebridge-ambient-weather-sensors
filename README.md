@@ -38,7 +38,10 @@ Opt in one of two ways:
 - Enable `_sensorMapV2` under the "Advanced (v2.0 preview)"
   fieldset in the plugin's config UI.
 
-Then restart Homebridge.
+Then restart Homebridge. (Here and in the rollback steps below, a
+full Homebridge restart is required — restarting only this plugin's
+child bridge reuses the configuration the main Homebridge process
+read at its own startup and will not pick up config.json changes.)
 
 **What the flag does (since v2.0.0-beta.8):** it selects the LIVE v2
 reconciliation path. Accessory registration, naming, and value
@@ -95,6 +98,15 @@ paths, from fastest to most thorough:
   markers — freeze on current 1.7.x, restore the snapshot (next
   path), or upgrade back to 2.x and re-save in the editor to
   regenerate the mirror.
+
+  This rollback is a two-way door. The settings it leaves behind are
+  the synchronized mirror form, not your original authored fields, so
+  if you later re-enable the flag and save again, the editor records
+  that rolled-back baseline in an append-only conversion journal
+  (`legacy-conversion-journal.json`, next to the snapshot, same
+  secret-free field set) before converting — your original snapshot
+  is never modified, and the configuration you rolled back to is
+  never lost.
 - **Rollback to your ORIGINAL (pre-conversion) settings:** open
   `legacy-config-snapshot.json` and use its `legacy` object. In the
   plugin's config block, delete every legacy sensor-configuration

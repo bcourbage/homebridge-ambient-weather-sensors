@@ -9,11 +9,13 @@ entries short and user-facing.
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/
 
-## [Unreleased]
+## [2.0.0-beta.13] — 2026-08-20
 
 ### Added
 
-- **The sensor-map editor can now save (GA task #69, PR C).** Drafted changes persist through the guarded snapshot-first boundary: the server validates the draft against the on-disk configuration, and any change that would register, deregister, or re-register a HomeKit accessory requires explicit confirmation of a server-verified preview. A save whose consequences drifted since that preview (for example, a station appearing in the meantime) is refused; on a legacy configuration, the first save converts it to the v2 format with the original settings preserved first in `legacy-config-snapshot.json`. Saving requires the sensor-map v2 flag to be on (with it off, the runtime could not read the saved map, so the editor stays preview-only and the server refuses saves outright). Nothing is written on any refusal; if the browser loses contact mid-save, the editor reports the outcome as uncertain and directs you to reload and inspect rather than claiming nothing changed. Structural changes take effect on the next Homebridge restart.
+- **The sensor-map editor can now save (GA task #69, PR C).** Drafted changes persist through the guarded snapshot-first boundary: the server validates the draft against the on-disk configuration, and any change that would register, deregister, or re-register a HomeKit accessory requires explicit confirmation of a server-verified preview. A save whose consequences drifted since that preview (for example, a station appearing in the meantime) is refused; on a legacy configuration, the first save converts it to the v2 format with the original settings preserved first in `legacy-config-snapshot.json`. Saving requires the sensor-map v2 flag to be on (with it off, the runtime could not read the saved map, so the editor stays preview-only and the server refuses saves outright). Nothing is written on any refusal; if the browser loses contact mid-save, the editor reports the outcome as uncertain and directs you to reload and inspect rather than claiming nothing changed. Structural changes take effect on the next full Homebridge restart (restarting only the plugin's child bridge does not re-read the configuration).
+
+- **Rolling back and returning to v2 both work now (production-drill finding).** The documented current-state rollback leaves the synchronized mirror form of your settings, which differs from the original snapshot, so re-enabling v2 and saving again used to be refused. Such a reconversion now records the rolled-back settings in an append-only `legacy-conversion-journal.json` (next to the snapshot, same credential-free field set) before converting, so nothing is lost in either direction; the original snapshot is never modified.
 
 ## [2.0.0-beta.12] — 2026-08-20
 

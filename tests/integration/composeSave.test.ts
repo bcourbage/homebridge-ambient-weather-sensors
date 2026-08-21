@@ -5,10 +5,11 @@
  *
  *   /compose-save → await → updatePluginConfig(...) → savePluginConfig()
  *
- * with the immutable legacy snapshot durable on disk BEFORE
+ * with the pre-conversion legacy record (immutable snapshot, or the
+ * conversion-journal baseline on reconversion) durable on disk BEFORE
  * updatePluginConfig is invoked, and ZERO update/save calls on any
  * refusal (safe mode, stale base, invalid rows, empty inventory,
- * snapshot mismatch/corruption, snapshot write failure).
+ * snapshot corruption, snapshot/journal write failure).
  */
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -18,7 +19,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { handleComposeSave, handlePreviewSave, syntheticProbeMac, type HandlerDeps } from '../../homebridge-ui/handlers';
 import { composeAndPersist, type OrchestratorDeps } from '../../homebridge-ui/saveOrchestrator';
-import { LEGACY_SNAPSHOT_FILE, recognizeMirror } from '../../src/sensorMap/legacyMirror';
+import { LEGACY_JOURNAL_FILE, LEGACY_SENSOR_FIELDS, LEGACY_SNAPSHOT_FILE, recognizeMirror } from '../../src/sensorMap/legacyMirror';
 
 const MAC = 'AA:BB:CC:DD:EE:01';
 const silentLog = { info: () => {}, warn: () => {}, debug: () => {} };
@@ -632,7 +633,7 @@ describe('immutable snapshot lifecycle', () => {
     }
   });
 
-  it('an existing MISMATCHING snapshot refuses the conversion and is never overwritten', async () => {
+  it('an existing MISMATCHING snapshot journals the differing baseline and proceeds; the snapshot is never overwritten', async () => {
     const rig = makeRig(LEGACY_BLOCK);
     discoveryStore(rig);
     const snapPath = path.join(rig.persistDir, LEGACY_SNAPSHOT_FILE);
@@ -642,11 +643,35 @@ describe('immutable snapshot lifecycle', () => {
     }, null, 2);
     writeFileSync(snapPath, staleBody);
     const result = await handleComposeSave(rig.deps, { base: LEGACY_BLOCK });
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error.code).toBe('legacy-snapshot-mismatch');
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.snapshot).toBe('journaled');
     }
     expect(readFileSync(snapPath, 'utf8')).toBe(staleBody); // untouched
+    const journal = JSON.parse(readFileSync(path.join(rig.persistDir, LEGACY_JOURNAL_FILE), 'utf8'));
+    expect(journal.schemaVersion).toBe(1);
+    expect(journal.entries).toHaveLength(1);
+    expect(journal.entries[0].legacy).toEqual({
+      temperatureSensors: true, humiditySensors: false,
+      extendedSensors: true, windSensors: true,
+    });
+  });
+
+  it('a corrupt conversion journal fails a reconversion closed and is never replaced', async () => {
+    const rig = makeRig(LEGACY_BLOCK);
+    discoveryStore(rig);
+    writeFileSync(path.join(rig.persistDir, LEGACY_SNAPSHOT_FILE), JSON.stringify({
+      schemaVersion: 1, savedAt: '2026-01-01T00:00:00Z',
+      legacy: { temperatureSensors: false }, // forces the journal path
+    }, null, 2));
+    const journalPath = path.join(rig.persistDir, LEGACY_JOURNAL_FILE);
+    writeFileSync(journalPath, '{not json');
+    const result = await handleComposeSave(rig.deps, { base: LEGACY_BLOCK });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('conversion-journal-error');
+    }
+    expect(readFileSync(journalPath, 'utf8')).toBe('{not json'); // untouched
   });
 
   it('a corrupt snapshot refuses the conversion', async () => {
@@ -744,5 +769,121 @@ describe('subsequent v2 saves', () => {
     }
     expect(readFileSync(snapPath, 'utf8')).toBe(snapBefore);
     expect(statSync(snapPath).mtimeMs).toBe(mtimeBefore);
+    // v2-mode saves never touch the conversion journal either — it
+    // records LEGACY conversion baselines only.
+    expect(existsSync(path.join(rig.persistDir, LEGACY_JOURNAL_FILE))).toBe(false);
+  });
+});
+
+describe('rollback is a two-way door (conversion journal)', () => {
+  /** The documented current-state rollback: delete the three markers
+   * and disable the flag; the remaining synchronized mirror fields ARE
+   * the working legacy configuration. */
+  function documentedRollback(nextConfig: Record<string, unknown>): Record<string, unknown> {
+    const rolled = { ...nextConfig };
+    delete rolled.sensorMap;
+    delete rolled.configVersion;
+    delete rolled._legacyMirror;
+    delete rolled._sensorMapV2;
+    return rolled;
+  }
+
+  function persistAsConfig(rig: Rig, block: Record<string, unknown>): void {
+    writeFileSync(rig.configPath, JSON.stringify({
+      bridge: { name: 'Test Bridge' },
+      platforms: [block],
+    }, null, 2));
+  }
+
+  it('legacy → v2 save → verified-mirror rollback → re-enable → v2 save succeeds, preserving the snapshot and journaling the rolled-back baseline', async () => {
+    const rig = makeRig(LEGACY_BLOCK);
+    discoveryStore(rig);
+    const snapPath = path.join(rig.persistDir, LEGACY_SNAPSHOT_FILE);
+    const journalPath = path.join(rig.persistDir, LEGACY_JOURNAL_FILE);
+
+    // First conversion writes the immutable snapshot.
+    const first = await handleComposeSave(rig.deps, { base: LEGACY_BLOCK });
+    expect(first.ok).toBe(true);
+    if (!first.ok) {
+      return;
+    }
+    expect(first.snapshot).toBe('written');
+    const snapshotBytes = readFileSync(snapPath, 'utf8');
+
+    // The rollback precondition the documentation requires: the mirror
+    // must be RECOGNIZED before the marker-deletion rollback is used.
+    expect(recognizeMirror(first.nextConfig as never).state).toBe('recognized');
+    const reEnabled = { ...documentedRollback(first.nextConfig), _sensorMapV2: true };
+    persistAsConfig(rig, reEnabled);
+
+    // Reconversion: the projected mirror form differs from the
+    // original, so the save journals it and proceeds — the rollback is
+    // not a one-way door.
+    const second = await handleComposeSave(rig.deps, { base: reEnabled });
+    expect(second.ok).toBe(true);
+    if (!second.ok) {
+      return;
+    }
+    expect(second.snapshot).toBe('journaled');
+    expect(second.nextConfig.configVersion).toBe(2);
+    expect(recognizeMirror(second.nextConfig as never).state).toBe('recognized');
+
+    // The original snapshot is byte-identical, and the journal holds
+    // exactly the rolled-back operative baseline.
+    expect(readFileSync(snapPath, 'utf8')).toBe(snapshotBytes);
+    const journal = JSON.parse(readFileSync(journalPath, 'utf8'));
+    expect(journal.schemaVersion).toBe(1);
+    expect(journal.entries).toHaveLength(1);
+    const expectedBaseline: Record<string, unknown> = {};
+    for (const key of LEGACY_SENSOR_FIELDS) {
+      if (reEnabled[key] !== undefined) {
+        expectedBaseline[key] = reEnabled[key];
+      }
+    }
+    expect(journal.entries[0].legacy).toEqual(expectedBaseline);
+
+    // An identical second rollback/reconvert cycle deduplicates: the
+    // journal stays at one entry and the snapshot stays untouched.
+    const rolledAgain = { ...documentedRollback(second.nextConfig), _sensorMapV2: true };
+    persistAsConfig(rig, rolledAgain);
+    const third = await handleComposeSave(rig.deps, { base: rolledAgain });
+    expect(third.ok).toBe(true);
+    if (third.ok) {
+      expect(third.snapshot).toBe('journaled');
+    }
+    expect(JSON.parse(readFileSync(journalPath, 'utf8')).entries).toHaveLength(1);
+    expect(readFileSync(snapPath, 'utf8')).toBe(snapshotBytes);
+  });
+
+  it('an EDITED rolled-back baseline appends a second journal entry instead of deduplicating', async () => {
+    const rig = makeRig(LEGACY_BLOCK);
+    discoveryStore(rig);
+    const journalPath = path.join(rig.persistDir, LEGACY_JOURNAL_FILE);
+
+    const first = await handleComposeSave(rig.deps, { base: LEGACY_BLOCK });
+    expect(first.ok).toBe(true);
+    if (!first.ok) {
+      return;
+    }
+    const reEnabled = { ...documentedRollback(first.nextConfig), _sensorMapV2: true };
+    persistAsConfig(rig, reEnabled);
+    const second = await handleComposeSave(rig.deps, { base: reEnabled });
+    expect(second.ok).toBe(true);
+    if (!second.ok) {
+      return;
+    }
+
+    // Roll back again, then hand-edit a legacy field before the third
+    // conversion — a genuinely different baseline must be preserved.
+    const edited = { ...documentedRollback(second.nextConfig), _sensorMapV2: true, windSensors: false };
+    persistAsConfig(rig, edited);
+    const third = await handleComposeSave(rig.deps, { base: edited });
+    expect(third.ok).toBe(true);
+    if (third.ok) {
+      expect(third.snapshot).toBe('journaled');
+    }
+    const journal = JSON.parse(readFileSync(journalPath, 'utf8'));
+    expect(journal.entries).toHaveLength(2);
+    expect(journal.entries[1].legacy.windSensors).toBe(false);
   });
 });

@@ -8,9 +8,11 @@
  * Homebridge provides no server-side config-write API — persistence is
  * client-side by platform design — so the ordering guarantee lives in
  * this sequence: the composed config that could mutate config.json is
- * not handed to HB UI X until the server has durably written (or
- * verified) the immutable legacy snapshot. Any compose refusal or
- * failure produces ZERO update/save calls.
+ * not handed to HB UI X until the server has made the pre-conversion
+ * legacy record durable — the immutable snapshot on a first
+ * conversion; an appended conversion-journal baseline on a
+ * reconversion. Any compose refusal or failure produces ZERO
+ * update/save calls.
  *
  * Framework-free and dependency-injected so the integration suite can
  * drive it against the REAL handler with an event-logging fake of the

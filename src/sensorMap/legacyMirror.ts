@@ -25,6 +25,17 @@
  *      secrets (only `LEGACY_SENSOR_FIELDS`). Provenance + the manual
  *      late-rollback procedure's source of truth.
  *
+ *      Conversions AFTER the first (a user who performed the
+ *      current-state rollback and later re-enables v2 converts from
+ *      the projected mirror form, which differs from the original)
+ *      leave the snapshot untouched and instead append the
+ *      pre-conversion legacy baseline to the CONVERSION JOURNAL
+ *      (`legacy-conversion-journal.json`, append-only, deduplicated
+ *      against its latest entry, same secret-free vocabulary). The
+ *      journal is written and read back BEFORE config.json is
+ *      mutated, so no operative legacy state is ever lost to a
+ *      reconversion; a corrupt journal fails the save closed.
+ *
  *   2. SYNCHRONIZED MIRROR (time-boxed). Every automated v2 UI save
  *      re-emits legacy sensor fields ALONGSIDE `configVersion: 2` +
  *      `sensorMap`, projected from the effective v2 map by
@@ -110,6 +121,11 @@ export const LEGACY_MIRROR_KEY = '_legacyMirror';
 
 /** Persist-dir filename of the immutable first-conversion snapshot. */
 export const LEGACY_SNAPSHOT_FILE = 'legacy-config-snapshot.json';
+
+/** Persist-dir filename of the append-only conversion journal that
+ * records the pre-conversion legacy baseline of every conversion AFTER
+ * the first (reconversion following a current-state rollback). */
+export const LEGACY_JOURNAL_FILE = 'legacy-conversion-journal.json';
 
 /** Mirror-metadata schema version — module internal (stamped into and
  * validated against `_legacyMirror.version`; consumers interact with it
@@ -670,4 +686,113 @@ export async function verifyLegacySnapshot(
     }
   }
   return canonicalJson(legacy) === canonicalJson(subset) ? 'match' : 'mismatch';
+}
+
+/** One recorded pre-conversion baseline in the conversion journal. */
+interface ConversionJournalEntry {
+  savedAt: string;
+  legacy: Record<string, unknown>;
+}
+
+/**
+ * Record the pre-conversion legacy baseline of a conversion AFTER the
+ * first — the reconversion path: a user who performed the documented
+ * current-state rollback holds the projected mirror form, which the
+ * immutable snapshot correctly reports as a mismatch, yet their
+ * operative legacy state must not be lost when they re-enable v2 and
+ * save. The journal is APPEND-ONLY (entries are never rewritten or
+ * removed) and holds only `LEGACY_SENSOR_FIELDS` — never API secrets.
+ *
+ * Returns 'unchanged' without writing when the baseline equals the
+ * journal's latest entry (key-order-insensitive), so repeated
+ * rollback/reconvert cycles of an unedited map do not grow the file.
+ *
+ * Fail-closed contract, same standard as the snapshot: callers MUST
+ * await this before mutating config.json, and any throw — an existing
+ * journal that cannot be parsed or fails shape validation, a write
+ * error, or a read-back that does not match what was written — must
+ * abort the save. A corrupt journal is never quarantined or replaced:
+ * it is an audit record, and the failure message directs manual
+ * inspection instead.
+ */
+export async function journalConversionBaseline(
+  persistDir: string,
+  legacyFields: Record<string, unknown>,
+  log: Logger,
+  clock: Clock = REAL_CLOCK,
+): Promise<'appended' | 'unchanged'> {
+  const file = path.join(persistDir, LEGACY_JOURNAL_FILE);
+  const subset: Record<string, unknown> = {};
+  for (const key of LEGACY_SENSOR_FIELDS) {
+    if (legacyFields[key] !== undefined) {
+      subset[key] = legacyFields[key];
+    }
+  }
+
+  const entries = await readConversionJournal(file);
+  const latest = entries[entries.length - 1];
+  if (latest !== undefined && canonicalJson(latest.legacy) === canonicalJson(subset)) {
+    return 'unchanged';
+  }
+
+  entries.push({ savedAt: clock.iso(), legacy: subset });
+  const body = JSON.stringify({ schemaVersion: 1, entries }, null, 2);
+
+  await fs.mkdir(persistDir, { recursive: true });
+  const tmp = path.join(
+    persistDir,
+    `${LEGACY_JOURNAL_FILE}.${process.pid}.${Math.floor(Math.random() * 1e9).toString(36)}.tmp`,
+  );
+  try {
+    await fs.writeFile(tmp, body, { encoding: 'utf8', mode: 0o640 });
+    await fs.rename(tmp, file);
+  } finally {
+    await fs.unlink(tmp).catch(() => { /* best-effort */ });
+  }
+
+  const readBack = await fs.readFile(file, 'utf8');
+  if (readBack !== body) {
+    throw new Error(`conversion journal read-back does not match what was written (${file})`);
+  }
+  log.info(`Conversion journal: pre-conversion legacy baseline appended to ${file}.`);
+  return 'appended';
+}
+
+/**
+ * Read and strictly validate the journal envelope. ENOENT is a fresh
+ * journal (empty list); every other read/parse/shape failure throws —
+ * the caller's save must fail closed rather than risk overwriting or
+ * silently restarting an audit record it cannot interpret.
+ */
+async function readConversionJournal(file: string): Promise<ConversionJournalEntry[]> {
+  let raw: string;
+  try {
+    raw = await fs.readFile(file, 'utf8');
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') {
+      return [];
+    }
+    throw new Error(`conversion journal is unreadable (${file}): ${(e as Error).message}. Inspect it manually; it is never overwritten.`);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error(`conversion journal is not valid JSON (${file}). Inspect it manually; it is never overwritten.`);
+  }
+  const envelope = parsed as { schemaVersion?: unknown; entries?: unknown };
+  const shapeError = (): Error =>
+    new Error(`conversion journal has an unrecognized shape (${file}). Inspect it manually; it is never overwritten.`);
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || envelope.schemaVersion !== 1 || !Array.isArray(envelope.entries)) {
+    throw shapeError();
+  }
+  for (const entry of envelope.entries) {
+    const e = entry as { savedAt?: unknown; legacy?: unknown };
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)
+      || typeof e.savedAt !== 'string' || Number.isNaN(Date.parse(e.savedAt))
+      || !e.legacy || typeof e.legacy !== 'object' || Array.isArray(e.legacy)) {
+      throw shapeError();
+    }
+  }
+  return envelope.entries as ConversionJournalEntry[];
 }

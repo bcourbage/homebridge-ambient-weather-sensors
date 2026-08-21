@@ -22,6 +22,7 @@ import { compatToOverrides, type LegacyConfig } from '../dist/sensorMap/compat.j
 import { detectConfigMode, type ConfigInputShape } from '../dist/sensorMap/configMode.js';
 import {
   composeV2ConfigSave,
+  journalConversionBaseline,
   recognizeMirror,
   verifyLegacySnapshot,
   writeLegacySnapshot,
@@ -211,17 +212,22 @@ export type ComposeSaveError =
   | { code: 'canonical-divergence'; message: string; rows: DivergentRow[] }
   | { code: 'confirmation-required'; message: string; structuralChangeCount: number }
   | { code: 'stale-confirmation'; message: string }
-  | { code: 'legacy-snapshot-mismatch'; message: string }
   | { code: 'legacy-snapshot-corrupt'; message: string }
-  | { code: 'snapshot-write-failed'; message: string };
+  | { code: 'snapshot-write-failed'; message: string }
+  | { code: 'conversion-journal-error'; message: string };
 
 export type ComposeSaveResult =
   | {
     ok: true;
     /** The composed platform block the CLIENT must persist verbatim. */
     nextConfig: Record<string, unknown>;
-    /** Snapshot outcome: written now, already present (verified), or not a legacy conversion. */
-    snapshot: 'written' | 'exists' | 'not-applicable';
+    /**
+     * Snapshot outcome: written now, already present (verified as the
+     * same original), journaled (a reconversion whose differing
+     * baseline was recorded in the conversion journal while the
+     * original snapshot stayed untouched), or not a legacy conversion.
+     */
+    snapshot: 'written' | 'exists' | 'journaled' | 'not-applicable';
     /** The canonical sensorMap embedded in nextConfig (informational). */
     canonicalSensorMap: SensorMapOverride[];
     /**
@@ -266,16 +272,19 @@ export interface ComposeSavePayload {
 
 /**
  * Compose a v2 save: validate the proposal, verify the structural
- * confirmation digest, write/verify the immutable legacy snapshot
- * FIRST, and only then return the composed next config for the client
- * to persist through HB UI X's API. The composed config physically
- * cannot reach config.json before the snapshot is durable.
+ * confirmation digest, make the pre-conversion legacy record durable
+ * FIRST (the immutable snapshot on a first conversion; an appended
+ * conversion-journal baseline on a reconversion whose legacy fields
+ * differ from the original), and only then return the composed next
+ * config for the client to persist through HB UI X's API. The
+ * composed config physically cannot reach config.json before that
+ * record is durable.
  *
  * Refusals return `{ ok: false, error }` (JSON-safe, editor-consumable)
  * and perform NO writes — with one deliberate exception: a successful
  * snapshot write followed by a later refusal is harmless (the snapshot
  * is the pre-conversion record either way and is verified on the next
- * attempt).
+ * attempt); the same holds for a journal append.
  */
 /**
  * Everything the validation pipeline resolves for a proposed save.
@@ -587,8 +596,14 @@ export async function handleComposeSave(
   // ---- 9. Snapshot-first, race-safe: attempt the exclusive-create
   //         write; on 'exists', verify the surviving content against
   //         the authoritative pre-conversion fields (review P1-6) —
-  //         never overwrite, never silently bless a mismatch.
-  let snapshot: 'written' | 'exists' | 'not-applicable' = 'not-applicable';
+  //         never overwrite. A verified MISMATCH is the reconversion
+  //         path (the documented current-state rollback leaves the
+  //         projected mirror form, which never equals the original):
+  //         the differing baseline is recorded durably in the
+  //         append-only conversion journal BEFORE config.json can be
+  //         mutated, so the rollback remains a two-way door without
+  //         ever touching the original snapshot.
+  let snapshot: 'written' | 'exists' | 'journaled' | 'not-applicable' = 'not-applicable';
   if (composed.snapshot !== undefined) {
     let outcome: 'written' | 'exists';
     try {
@@ -596,20 +611,24 @@ export async function handleComposeSave(
     } catch (e) {
       return { ok: false, error: { code: 'snapshot-write-failed', message: `Legacy snapshot write failed: ${(e as Error).message}. The save was aborted; config.json was not touched.` } };
     }
+    snapshot = outcome;
     if (outcome === 'exists') {
       const verdict = await verifyLegacySnapshot(deps.persistDir, composed.snapshot);
       if (verdict === 'mismatch') {
-        return {
-          ok: false,
-          error: {
-            code: 'legacy-snapshot-mismatch',
-            message: 'A legacy snapshot from an earlier conversion attempt exists but does not match the current '
-              + 'legacy configuration. Refusing to convert: the snapshot is immutable and will not be overwritten. '
-              + 'Resolve manually (inspect legacy-config-snapshot.json in the plugin data directory).',
-          },
-        };
-      }
-      if (verdict === 'corrupt' || verdict === 'absent') {
+        try {
+          await journalConversionBaseline(deps.persistDir, composed.snapshot, deps.log);
+        } catch (e) {
+          return {
+            ok: false,
+            error: {
+              code: 'conversion-journal-error',
+              message: `Recording the pre-conversion legacy baseline failed: ${(e as Error).message} `
+                + 'The save was aborted; config.json was not touched.',
+            },
+          };
+        }
+        snapshot = 'journaled';
+      } else if (verdict === 'corrupt' || verdict === 'absent') {
         return {
           ok: false,
           error: {
@@ -619,7 +638,6 @@ export async function handleComposeSave(
         };
       }
     }
-    snapshot = outcome;
   }
 
   return {

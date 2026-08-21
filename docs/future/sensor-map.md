@@ -506,7 +506,7 @@ Note the `windspeedmph` entry combines `threshold` and `displayUnit` — canonic
 This prevents an older plugin's UI from partially rewriting a newer configuration and corrupting it silently.
 
 **Migration event:** first UI save on a legacy config atomically:
-0. Writes the **immutable legacy snapshot** (see below) and awaits success BEFORE any config.json mutation
+0. Writes the **immutable legacy snapshot** (see below) and awaits success BEFORE any config.json mutation — on a reconversion whose legacy fields differ from the surviving snapshot, appends the **conversion-journal baseline** (§5.1b) instead, under the same await-before-mutation rule
 1. Reads effective sensor map (compat-translated)
 2. Computes minimal-diff canonical serialization against v2 baseline (§11.3)
 3. Writes as sparse canonical `sensorMap[]`
@@ -533,6 +533,24 @@ persist dir via the atomic persistence helper, BEFORE config.json is touched.
 Never overwritten (first conversion wins). This is the provenance record and
 the source of truth for the documented manual late-rollback procedure. Kept
 forever.
+
+**1b. Conversion journal — append-only (2026-08-20, production drill
+finding).** The current-state rollback leaves the PROJECTED MIRROR form of
+the legacy fields, which never equals the original authored fields, so a
+later reconversion legitimately presents a legacy baseline that mismatches
+the immutable snapshot. Refusing that save would make the documented
+rollback a one-way door. Instead, a conversion whose legacy fields differ
+from the snapshot appends the pre-conversion baseline to
+`legacy-conversion-journal.json` (same persist dir, same
+`LEGACY_SENSOR_FIELDS`-only vocabulary, atomic write + read-back verify,
+durable BEFORE config.json can be mutated) and proceeds with outcome
+`journaled`. The journal is append-only and deduplicates only against its
+LATEST entry, so repeated rollback/reconvert cycles of an unedited map do
+not grow it while genuinely different baselines are always preserved. The
+original snapshot is never modified by this path. A journal that exists
+but cannot be parsed or fails shape validation refuses the save
+(`conversion-journal-error`) — it is an audit record and is never
+quarantined, rewritten, or restarted.
 
 **2. Synchronized legacy mirror — time-boxed.** Every automated v2 UI save
 re-emits legacy sensor fields alongside `configVersion: 2` + `sensorMap`,
@@ -635,11 +653,14 @@ zero writes:
   while the config would enable sensors → `no-station-inventory`
   refusal rather than composing an empty map.
 - **Snapshot verification.** On 'exists', the surviving snapshot is
-  compared against the authoritative pre-conversion fields:
-  mismatch/corrupt → refusal (`legacy-snapshot-mismatch` /
-  `legacy-snapshot-corrupt`); the snapshot is never overwritten.
-  Concurrent first conversions are race-safe (exclusive-create; losers
-  verify the winner's payload).
+  compared against the authoritative pre-conversion fields: a match
+  proceeds (`exists`); a MISMATCH is the reconversion path — the
+  differing baseline is durably appended to the conversion journal
+  (§5.1b) before proceeding (`journaled`), and any journal failure
+  refuses the save (`conversion-journal-error`); corrupt →
+  refusal (`legacy-snapshot-corrupt`). The snapshot itself is never
+  overwritten. Concurrent first conversions are race-safe
+  (exclusive-create; losers verify the winner's payload).
 
 The gate's ordering integration suite is
 `tests/integration/composeSave.test.ts`: the full compose → update →
@@ -1413,6 +1434,25 @@ When any of these appears in a non-motion row (default or user override), the pl
 Tests: for every non-motion kind, submit an override with each of these fields; verify the specific warn is emitted and the field is absent from the resulting effective row.
 
 ## 17. Decision log
+
+- **2026-08-20 (b)**: Conversion journal — rollback is a two-way door
+  (production-drill finding, pre-beta.13 review). The full drill on
+  real data proved the sequence: legacy `L0` converts (snapshot stores
+  `L0`) → current-state rollback exposes the projected mirror `M` →
+  reconversion refused `legacy-snapshot-mismatch` because `M ≠ L0` —
+  the documented rollback locked the user out of v2. Decision: keep
+  the snapshot permanently immutable AND record each later
+  pre-conversion legacy baseline in an append-only conversion journal
+  (`legacy-conversion-journal.json`, §5.1b) before allowing the
+  reconversion; `legacy-snapshot-mismatch` is retired as a refusal and
+  replaced by the `journaled` success outcome (journal failures refuse
+  as `conversion-journal-error`, fail-closed). The required lifecycle
+  test (`legacy → v2 save → verified-mirror rollback → re-enable → v2
+  save`, original snapshot byte-identical, rolled-back baseline
+  preserved) lives in `tests/integration/composeSave.test.ts`. Also
+  from the drill: applying config.json edits requires a FULL
+  Homebridge restart — child-bridge-only restarts reuse the parent's
+  in-memory config (documented in README + plugin-ui.md).
 
 - **2026-08-20**: PR C as-built — save activation (GA task #69;
   finding 5 CLOSES here). The editor's save path runs EXCLUSIVELY

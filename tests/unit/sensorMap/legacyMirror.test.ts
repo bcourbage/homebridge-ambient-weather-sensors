@@ -9,10 +9,12 @@ import { detectConfigMode } from '../../../src/sensorMap/configMode';
 import { buildEffectiveSensorMap } from '../../../src/sensorMap/buildEffectiveMap';
 import { defaultRowFor } from '../../../src/sensorMap/defaultMap';
 import {
+  LEGACY_JOURNAL_FILE,
   LEGACY_MIRROR_KEY,
   LEGACY_SENSOR_FIELDS,
   LEGACY_SNAPSHOT_FILE,
   composeV2ConfigSave,
+  journalConversionBaseline,
   mirrorHash,
   projectLegacyMirror,
   recognizeMirror,
@@ -333,6 +335,65 @@ describe('writeLegacySnapshot (immutable, atomic, no secrets)', () => {
     // No orphan temp files left behind.
     const entries = await fs.readdir(dir);
     expect(entries.filter(e => e.endsWith('.tmp'))).toHaveLength(0);
+  });
+});
+
+describe('journalConversionBaseline (append-only, deduplicated, no secrets)', () => {
+  let dir: string;
+  const log = { info: () => {}, warn: () => {}, debug: () => {} };
+  const clock = { iso: () => '2026-08-20T00:00:00.000Z', now: () => 1_755_648_000_000 };
+  const journalPath = (): string => nodePath.join(dir, LEGACY_JOURNAL_FILE);
+
+  beforeEach(async () => {
+    dir = await fs.mkdtemp(nodePath.join(os.tmpdir(), 'aws-journal-'));
+  });
+  afterEach(async () => {
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  it('appends a fresh baseline, excluding secrets by the field allowlist', async () => {
+    const outcome = await journalConversionBaseline(dir, { temperatureSensors: true, apiKey: 'secret' }, log, clock);
+    expect(outcome).toBe('appended');
+    const raw = JSON.parse(await fs.readFile(journalPath(), 'utf8')) as {
+      schemaVersion: number;
+      entries: Array<{ savedAt: string; legacy: Record<string, unknown> }>;
+    };
+    expect(raw.schemaVersion).toBe(1);
+    expect(raw.entries).toHaveLength(1);
+    expect(raw.entries[0].savedAt).toBe('2026-08-20T00:00:00.000Z');
+    expect(raw.entries[0].legacy).toEqual({ temperatureSensors: true });
+    const entries = await fs.readdir(dir);
+    expect(entries.filter(e => e.endsWith('.tmp'))).toHaveLength(0);
+  });
+
+  it('deduplicates against the LATEST entry only (key order never matters)', async () => {
+    await journalConversionBaseline(dir, { temperatureSensors: true, windSensors: false }, log, clock);
+    // Same baseline, different key order → unchanged, still one entry.
+    expect(await journalConversionBaseline(dir, { windSensors: false, temperatureSensors: true }, log, clock)).toBe('unchanged');
+    // A different baseline appends...
+    expect(await journalConversionBaseline(dir, { temperatureSensors: false }, log, clock)).toBe('appended');
+    // ...and returning to an OLDER baseline appends again (only the
+    // latest entry deduplicates — history is never rewritten).
+    expect(await journalConversionBaseline(dir, { temperatureSensors: true, windSensors: false }, log, clock)).toBe('appended');
+    const raw = JSON.parse(await fs.readFile(journalPath(), 'utf8')) as { entries: unknown[] };
+    expect(raw.entries).toHaveLength(3);
+  });
+
+  it('fails closed on an unparsable journal and never rewrites it', async () => {
+    await fs.writeFile(journalPath(), '{not json');
+    await expect(journalConversionBaseline(dir, { temperatureSensors: true }, log, clock)).rejects.toThrow(/not valid JSON/);
+    expect(await fs.readFile(journalPath(), 'utf8')).toBe('{not json');
+  });
+
+  it('fails closed on an unrecognized schemaVersion or malformed entries', async () => {
+    await fs.writeFile(journalPath(), JSON.stringify({ schemaVersion: 99, entries: [] }));
+    await expect(journalConversionBaseline(dir, { temperatureSensors: true }, log, clock)).rejects.toThrow(/unrecognized shape/);
+
+    await fs.writeFile(journalPath(), JSON.stringify({ schemaVersion: 1, entries: [{ savedAt: 'not-a-date', legacy: {} }] }));
+    await expect(journalConversionBaseline(dir, { temperatureSensors: true }, log, clock)).rejects.toThrow(/unrecognized shape/);
+
+    await fs.writeFile(journalPath(), JSON.stringify({ schemaVersion: 1, entries: [{ savedAt: '2026-01-01T00:00:00Z', legacy: [] }] }));
+    await expect(journalConversionBaseline(dir, { temperatureSensors: true }, log, clock)).rejects.toThrow(/unrecognized shape/);
   });
 });
 
