@@ -505,57 +505,97 @@ describe('journalConversionBaseline (append-only entry files, deduplicated, no s
     await expect(journalConversionBaseline(dir, { temperatureSensors: true }, log, clock)).resolves.toBe('appended');
   });
 
-  it('TWO WRITER PROCESSES with distinct baselines both survive (PR #46 round-3 P1: HB UI X forks a UI server per client)', async () => {
-    // A module-level lock cannot serialize separate processes — this
-    // is the reproduced cross-process loss case. Safety must come
-    // from the exclusive-create entry files. The child imports the
-    // COMMITTED dist build (the repo tracks dist and CI rebuilds it),
-    // mirroring how two real forked UI servers load the module.
+  /**
+   * Cross-process rig with a FORCED same-sequence-number race (review
+   * PR #46 round 4): without a barrier, sequential child scheduling
+   * would let even the old unsafe read-modify-replace implementation
+   * pass (A commits entry 1, B then reads it and commits entry 2). The
+   * barrier makes the test discriminating: each child patches
+   * fs.promises.writeFile (the exact object the dist module binds)
+   * BEFORE importing the module; after writing its journal TEMP file —
+   * i.e. after it has read the directory and chosen a sequence number,
+   * but before the commit — it signals `ready-<id>` and blocks until
+   * the parent's `release` marker. The parent releases only once BOTH
+   * children are ready, so both hold seq 1 and the exclusive-create
+   * collision is guaranteed. The loser's retry re-enters the hook and
+   * passes straight through (release already exists). Children import
+   * the COMMITTED dist build, mirroring how two real forked UI servers
+   * load the module — mutation-verified: swapping the journal's
+   * link(2) for an overwriting rename() fails these tests.
+   */
+  async function runForcedRace(fieldA: string, fieldB: string): Promise<[string, string]> {
+    const syncDir = nodePath.join(dir, 'sync');
+    await fs.mkdir(syncDir, { recursive: true });
     const childScript = nodePath.join(dir, 'child.mjs');
     const distUrl = pathToFileURL(nodePath.resolve(__dirname, '../../../dist/sensorMap/legacyMirror.js')).href;
     await fs.writeFile(childScript, [
-      `import { journalConversionBaseline } from ${JSON.stringify(distUrl)};`,
-      'const [persistDir, field] = process.argv.slice(2);',
+      "import { promises as fsp, existsSync } from 'node:fs';",
+      "import { setTimeout as delay } from 'node:timers/promises';",
+      'const [persistDir, field, childId, syncDir] = process.argv.slice(2);',
+      'const realWriteFile = fsp.writeFile.bind(fsp);',
+      'fsp.writeFile = async (file, ...rest) => {',
+      '  const result = await realWriteFile(file, ...rest);',
+      "  if (typeof file === 'string' && file.includes('legacy-conversion-journal.') && file.endsWith('.tmp')) {",
+      '    await realWriteFile(`${syncDir}/ready-${childId}`, \'\');',
+      '    const deadline = Date.now() + 15000;',
+      '    while (!existsSync(`${syncDir}/release`)) {',
+      "      if (Date.now() > deadline) throw new Error('barrier release never arrived');",
+      '      await delay(5);',
+      '    }',
+      '  }',
+      '  return result;',
+      '};',
+      `const { journalConversionBaseline } = await import(${JSON.stringify(distUrl)});`,
       'const log = { info() {}, warn() {}, debug() {} };',
       'const outcome = await journalConversionBaseline(persistDir, { [field]: true }, log);',
       'process.stdout.write(outcome);',
     ].join('\n'));
 
-    const run = (field: string): Promise<string> => new Promise((resolve, reject) => {
-      execFile(process.execPath, [childScript, dir, field], (err, stdout) =>
+    const run = (field: string, childId: string): Promise<string> => new Promise((resolve, reject) => {
+      execFile(process.execPath, [childScript, dir, field, childId, syncDir], (err, stdout) =>
         (err ? reject(err) : resolve(stdout.trim())));
     });
-    const outcomes = await Promise.all([run('temperatureSensors'), run('windSensors')]);
-    expect(outcomes.sort()).toEqual(['appended', 'appended']);
+    const pA = run(fieldA, 'a');
+    const pB = run(fieldB, 'b');
+
+    // Release the barrier only once BOTH children have read the
+    // (empty) journal and staged their temp file for sequence 1.
+    const deadline = Date.now() + 10_000;
+    for (;;) {
+      const ready = await Promise.all([
+        fs.stat(nodePath.join(syncDir, 'ready-a')).then(() => true, () => false),
+        fs.stat(nodePath.join(syncDir, 'ready-b')).then(() => true, () => false),
+      ]);
+      if (ready[0] && ready[1]) {
+        break;
+      }
+      if (Date.now() > deadline) {
+        throw new Error('children never both reached the pre-commit barrier');
+      }
+      await new Promise(r => setTimeout(r, 10));
+    }
+    await fs.writeFile(nodePath.join(syncDir, 'release'), '');
+    return Promise.all([pA, pB]) as Promise<[string, string]>;
+  }
+
+  it('TWO WRITER PROCESSES forced onto the SAME sequence number: distinct baselines both survive (PR #46 round-3 P1)', async () => {
+    const outcomes = await runForcedRace('temperatureSensors', 'windSensors');
+    expect(outcomes.slice().sort()).toEqual(['appended', 'appended']);
 
     const entries = await readEntries();
     expect(entries).toHaveLength(2);
     const baselines = entries.map(e => Object.keys(e.legacy)[0]).sort();
     expect(baselines).toEqual(['temperatureSensors', 'windSensors']);
-  });
+  }, 20_000);
 
-  it('TWO WRITER PROCESSES with the identical baseline: exactly one entry survives', async () => {
-    const childScript = nodePath.join(dir, 'child.mjs');
-    const distUrl = pathToFileURL(nodePath.resolve(__dirname, '../../../dist/sensorMap/legacyMirror.js')).href;
-    await fs.writeFile(childScript, [
-      `import { journalConversionBaseline } from ${JSON.stringify(distUrl)};`,
-      'const [persistDir, field] = process.argv.slice(2);',
-      'const log = { info() {}, warn() {}, debug() {} };',
-      'const outcome = await journalConversionBaseline(persistDir, { [field]: true }, log);',
-      'process.stdout.write(outcome);',
-    ].join('\n'));
-
-    const run = (field: string): Promise<string> => new Promise((resolve, reject) => {
-      execFile(process.execPath, [childScript, dir, field], (err, stdout) =>
-        (err ? reject(err) : resolve(stdout.trim())));
-    });
-    const outcomes = await Promise.all([run('temperatureSensors'), run('temperatureSensors')]);
-    // Either both raced ('appended' + 'unchanged') or they ran back to
-    // back with the same result — in every interleaving the journal
-    // holds exactly one entry for the one distinct baseline.
-    expect(outcomes).toContain('appended');
+  it('TWO WRITER PROCESSES forced onto the SAME sequence number with the IDENTICAL baseline: one appends, the loser deduplicates on retry', async () => {
+    const outcomes = await runForcedRace('temperatureSensors', 'temperatureSensors');
+    // Deterministic under the barrier: exactly one child wins the
+    // link; the other EEXISTs, re-reads, sees the identical baseline,
+    // and returns 'unchanged'.
+    expect(outcomes.slice().sort()).toEqual(['appended', 'unchanged']);
     expect(await readEntries()).toHaveLength(1);
-  });
+  }, 20_000);
 });
 
 describe('projection property test (finding 5 — reviewer requirement)', () => {
