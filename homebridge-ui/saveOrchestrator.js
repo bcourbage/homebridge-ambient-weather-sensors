@@ -70,6 +70,7 @@ export async function composeAndPersist(deps, args) {
         proposal: args.proposal,
         cachedAccessoryUniqueIds,
         liveStations: args.liveStations,
+        confirmDigest: args.confirmDigest,
     });
     if (!result || result.ok !== true) {
         // Refusal or malformed response: NO update, NO save.

@@ -142,7 +142,12 @@ export interface EditorDiagnosticDto {
 export interface EditorStateDto {
   configMode: 'legacy' | 'v2' | 'safe-mode';
   v2FlagEnabled: boolean;
-  /** False until PR C activates the real save path (finding 5). */
+  /**
+   * True when this server's save path is live (PR C, finding 5) —
+   * the client gates every save-capable control on it, so a newer
+   * page against an older bridge stays read-only. False in safe mode
+   * and on the malformed-sensorMap hard stop.
+   */
   editorAvailable: boolean;
   version: string;
   stations: EditorStationDto[];

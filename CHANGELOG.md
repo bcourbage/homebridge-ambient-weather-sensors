@@ -9,6 +9,12 @@ entries short and user-facing.
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/
 
+## [Unreleased]
+
+### Added
+
+- **The sensor-map editor can now save (GA task #69, PR C).** Drafted changes persist through the guarded snapshot-first boundary: the server validates the draft against the on-disk configuration, and any change that would register, deregister, or re-register a HomeKit accessory requires explicit confirmation of a server-verified preview. A save whose consequences drifted since that preview (for example, a station appearing in the meantime) is refused; on a legacy configuration, the first save converts it to the v2 format with the original settings preserved first in `legacy-config-snapshot.json`. Nothing is written on any refusal, and structural changes take effect on the next Homebridge restart.
+
 ## [2.0.0-beta.12] — 2026-08-20
 
 ### Added

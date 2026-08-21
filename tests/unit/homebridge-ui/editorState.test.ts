@@ -103,7 +103,7 @@ describe('/editor-state — v2 configuration', () => {
     const dto = await handleGetEditorState(rig.deps, {});
 
     expect(dto.configMode).toBe('v2');
-    expect(dto.editorAvailable).toBe(false);
+    expect(dto.editorAvailable).toBe(true); // PR C: save path live
     expect(dto.errors).toEqual([]);
 
     const byDp = new Map(dto.rows.filter(r => r.stationMac === MAC).map(r => [r.dataPoint, r]));
@@ -395,6 +395,7 @@ describe('/editor-state — legacy and troubled configurations', () => {
     expect(dto.configMode).toBe('safe-mode');
     expect(dto.rows).toEqual([]);
     expect(dto.stations).toEqual([]);
+    // Safe mode stays fail-closed even with the PR C save path live.
     expect(dto.editorAvailable).toBe(false);
     expect(dto.warnings.some(w => /newer plugin version/.test(w.message))).toBe(true);
     // The banner appears exactly once (detectConfigMode already folds

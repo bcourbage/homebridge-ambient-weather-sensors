@@ -36,6 +36,13 @@ export interface HomebridgeIpc {
   getPluginConfig(): Promise<unknown[]>;
   /** §8.7 inventory source 3 — cached HomeKit accessories. */
   getCachedAccessories?(): Promise<unknown[]>;
+  /**
+   * Persistence half of the save boundary (PR C). Optional in the
+   * interface so read-only fakes physically cannot persist; the save
+   * path requires both and fails closed when either is absent.
+   */
+  updatePluginConfig?(config: unknown[]): Promise<unknown>;
+  savePluginConfig?(): Promise<unknown>;
 }
 
 /**
@@ -146,6 +153,33 @@ export class HomebridgeService {
     }
     const blocks = await this.ipc.getPluginConfig();
     return Array.isArray(blocks) ? blocks[0] : undefined;
+  }
+
+  /**
+   * Dependency bundle for composeAndPersist — the ONE save route
+   * (PR C / finding 5). Throws when the bridge lacks the persistence
+   * API rather than degrading: a save must never silently no-op.
+   */
+  orchestratorDeps(): {
+    request(path: string, payload?: unknown): Promise<unknown>;
+    getPluginConfig(): Promise<Array<Record<string, unknown>>>;
+    updatePluginConfig(config: Array<Record<string, unknown>>): Promise<unknown>;
+    savePluginConfig(): Promise<unknown>;
+    getCachedAccessories?(): Promise<unknown[]>;
+  } {
+    const ipc = this.ipc;
+    if (!ipc || !ipc.updatePluginConfig || !ipc.savePluginConfig) {
+      throw new Error('This Homebridge UI does not expose the config persistence API; saving is unavailable.');
+    }
+    return {
+      request: (path, payload) => ipc.request(path, payload),
+      getPluginConfig: () => ipc.getPluginConfig() as Promise<Array<Record<string, unknown>>>,
+      updatePluginConfig: (config) => ipc.updatePluginConfig!(config),
+      savePluginConfig: () => ipc.savePluginConfig!(),
+      ...(ipc.getCachedAccessories
+        ? { getCachedAccessories: () => ipc.getCachedAccessories!() }
+        : {}),
+    };
   }
 
   /**

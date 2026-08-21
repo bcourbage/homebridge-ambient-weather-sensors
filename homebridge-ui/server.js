@@ -4,11 +4,12 @@
  * in ./handlers.ts.
  *
  * v2.0.0-beta.* scope: the OBSERVATION endpoints are read-only; the
- * sensor-map editor has not shipped. /compose-save is the guarded
- * write BOUNDARY for the upcoming editor (#69): it never writes
+ * sensor-map EDITOR IS LIVE (#69 PR C). /compose-save is the guarded
+ * write BOUNDARY — the editor's ONLY save route: it never writes
  * config.json itself (Homebridge provides no server-side config-write
- * API) — it validates, snapshots first, and returns the composed
- * config for the CLIENT to persist. See sensor-map.md §5.
+ * API) — it validates against the on-disk config, verifies the
+ * structural confirmation digest, snapshots first, and returns the
+ * composed config for the CLIENT to persist. See sensor-map.md §5.
  *
  * Endpoints exposed:
  *

@@ -1398,6 +1398,26 @@ Tests: for every non-motion kind, submit an override with each of these fields; 
 
 ## 17. Decision log
 
+- **2026-08-20**: PR C as-built — save activation (GA task #69;
+  finding 5 CLOSES here). The editor's save path runs EXCLUSIVELY
+  through `composeAndPersist` → `/compose-save`. The boundary gained
+  the STRUCTURAL CONFIRMATION GATE, placed after the shared pipeline
+  and BEFORE composition/snapshot: `computeSaveConsequences()` is
+  recomputed from the current on-disk config and inventory; a save
+  with structural consequences (register/deregister/re-register)
+  refuses without a digest (`confirmation-required`, which never
+  echoes a usable digest — /preview-save is the only source, forcing
+  the confirmation UX), and ANY provided digest that mismatches the
+  recomputation refuses as `stale-confirmation`, structural or not.
+  The client shows a confirmation modal listing the structural
+  changes before a structural save; in-place saves go direct, always
+  carrying the previewed digest. `sensorMapEditorAvailable` and
+  `editorAvailable` flip true (safe mode and the sensorMap-shape hard
+  stop stay false, and the client gates every save control on the
+  server's flag). The pure-migration first save remains digest-free
+  by construction — it has zero accessory consequences (§11
+  equivalence, proven on production data pre-beta.12).
+
 - **2026-08-19 (c)**: PR B as-built — draft editor + `/preview-save`
   (GA task #69). The preview endpoint shares the save's exact pipeline
   by construction: `runSavePipeline()` (authoritative on-disk config,

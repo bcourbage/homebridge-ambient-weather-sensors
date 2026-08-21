@@ -46,7 +46,7 @@ function editorState(overrides: Partial<EditorStateDto> = {}): EditorStateDto {
   return {
     configMode: 'v2',
     v2FlagEnabled: true,
-    editorAvailable: false,
+    editorAvailable: true,
     version: 'test',
     stations: [
       { mac: MAC, name: 'Roof', source: 'discovery' },
@@ -81,15 +81,31 @@ function makeIpc(
   state: EditorStateDto,
   cachedAccessories?: unknown[],
   previewResult?: PreviewResultDto,
-): HomebridgeIpc & { requests: Array<{ path: string; body: unknown }> } {
+  composeResult?: unknown,
+): HomebridgeIpc & {
+  requests: Array<{ path: string; body: unknown }>;
+  persisted: Array<{ event: string; arg?: unknown }>;
+} {
   const requests: Array<{ path: string; body: unknown }> = [];
-  // Deliberately NO updatePluginConfig / savePluginConfig here: the
-  // PR B component must never need them — persistence is PR C.
+  const persisted: Array<{ event: string; arg?: unknown }> = [];
+  // WITHOUT composeResult the fake has NO updatePluginConfig /
+  // savePluginConfig: preview-only flows must never need them.
   return {
     requests,
-    getPluginConfig: async () => [{}],
+    persisted,
+    getPluginConfig: async () => [{ platform: 'AmbientWeatherSensors' }],
     ...(cachedAccessories !== undefined
       ? { getCachedAccessories: async () => cachedAccessories }
+      : {}),
+    ...(composeResult !== undefined
+      ? {
+        updatePluginConfig: async (arg: unknown[]) => {
+          persisted.push({ event: 'update', arg });
+        },
+        savePluginConfig: async () => {
+          persisted.push({ event: 'save' });
+        },
+      }
       : {}),
     request: async (path: string, body?: unknown) => {
       requests.push({ path, body });
@@ -101,6 +117,9 @@ function makeIpc(
       }
       if (path === '/preview-save' && previewResult !== undefined) {
         return previewResult;
+      }
+      if (path === '/compose-save' && composeResult !== undefined) {
+        return composeResult;
       }
       throw new Error(`unexpected path ${path}`);
     },
@@ -265,7 +284,7 @@ describe('draft editing + preview (PR B — no persistence)', () => {
 
     const req = ipc.requests.find(r => r.path === '/preview-save');
     expect(req?.body).toEqual({
-      base: {}, // getPluginConfig()[0]
+      base: { platform: 'AmbientWeatherSensors' }, // getPluginConfig()[0]
       proposal: [{ dataPoint: 'tempinf', stationMac: OTHER_MAC, name: 'Patio Temp' }],
       cachedAccessoryUniqueIds: [],
     });
@@ -550,6 +569,136 @@ describe('draft editing + preview (PR B — no persistence)', () => {
     expect([...paths].sort()).toEqual(['/editor-state', '/preview-save', '/vocabulary']);
     expect('updatePluginConfig' in ipc).toBe(false);
     expect('savePluginConfig' in ipc).toBe(false);
+  });
+});
+
+describe('save flow (PR C / finding 5 — the ONE route is composeAndPersist)', () => {
+  async function settle(fixture: ComponentFixture<AwnRootComponent>): Promise<void> {
+    await new Promise((r) => setTimeout(r, 0));
+    await fixture.whenStable();
+    fixture.detectChanges();
+  }
+  function openEditor(fixture: ComponentFixture<AwnRootComponent>, dp: string): HTMLElement {
+    const el = fixture.nativeElement as HTMLElement;
+    const tr = [...el.querySelectorAll('tbody tr')]
+      .find(r => r.querySelector('td code')?.textContent === dp)!;
+    (tr.querySelector('button') as HTMLButtonElement).click();
+    fixture.detectChanges();
+    return el;
+  }
+  function typeInto(input: HTMLInputElement, value: string): void {
+    input.value = value;
+    input.dispatchEvent(new Event('input'));
+  }
+  const btn = (el: HTMLElement, label: string): HTMLButtonElement | undefined =>
+    [...el.querySelectorAll('button')].find(b => b.textContent === label) as HTMLButtonElement | undefined;
+
+  const NON_STRUCTURAL_PREVIEW: PreviewResultDto = {
+    ok: true, canonicalSensorMap: [], rows: [],
+    changes: [{
+      stationMac: OTHER_MAC, dataPoint: 'tempinf', change: 'modified', structural: false,
+      before: editorState().rows[2], after: { ...editorState().rows[2], name: 'Patio Temp' },
+    }],
+    structuralChangeCount: 0, digest: 'cd'.repeat(32), warnings: [], notes: [],
+  };
+  const STRUCTURAL_PREVIEW: PreviewResultDto = {
+    ...NON_STRUCTURAL_PREVIEW,
+    changes: [{
+      stationMac: OTHER_MAC, dataPoint: 'tempinf', change: 'removed', structural: true,
+      before: editorState().rows[2],
+    }],
+    structuralChangeCount: 1, digest: 'ef'.repeat(32),
+  };
+  const NEXT_CONFIG = {
+    platform: 'AmbientWeatherSensors', configVersion: 2,
+    sensorMap: [{ dataPoint: 'tempinf', stationMac: OTHER_MAC, name: 'Patio Temp' }],
+    _legacyMirror: { version: 1, hash: 'x' },
+  };
+  const COMPOSE_OK = {
+    ok: true, nextConfig: NEXT_CONFIG, snapshot: 'written',
+    canonicalSensorMap: [], warnings: [], notes: [],
+  };
+
+  async function draftAndPreview(fixture: ComponentFixture<AwnRootComponent>): Promise<HTMLElement> {
+    const el = openEditor(fixture, 'tempinf');
+    typeInto(el.querySelector('.editor-form input[type="text"]') as HTMLInputElement, 'Patio Temp');
+    await settle(fixture);
+    btn(el, 'Preview changes')!.click();
+    await settle(fixture);
+    return el;
+  }
+
+  it('a non-structural save persists verbatim through update → save with the preview digest', async () => {
+    const ipc = makeIpc(editorState(), [], NON_STRUCTURAL_PREVIEW, COMPOSE_OK);
+    const fixture = await render(ipc);
+    const el = await draftAndPreview(fixture);
+
+    btn(el, 'Save changes')!.click();
+    await settle(fixture);
+
+    const compose = ipc.requests.find(r => r.path === '/compose-save');
+    expect((compose?.body as { confirmDigest?: string }).confirmDigest).toBe('cd'.repeat(32));
+    expect(ipc.persisted.map(p => p.event)).toEqual(['update', 'save']);
+    // Verbatim: the composed block replaces the edited one, mirror included.
+    const updated = (ipc.persisted[0].arg as unknown[])[0];
+    expect(updated).toEqual(NEXT_CONFIG);
+    expect(el.textContent).toContain('Saved.');
+    expect(el.textContent).toContain('legacy-config-snapshot.json');
+  });
+
+  it('a structural save opens the confirmation modal; Cancel persists NOTHING', async () => {
+    const ipc = makeIpc(editorState(), [], STRUCTURAL_PREVIEW, COMPOSE_OK);
+    const fixture = await render(ipc);
+    const el = await draftAndPreview(fixture);
+
+    btn(el, 'Save changes')!.click();
+    await settle(fixture);
+    expect(el.querySelector('.modal')).not.toBeNull();
+    expect(el.textContent).toContain('Confirm registration changes');
+
+    btn(el, 'Cancel')!.click();
+    await settle(fixture);
+    expect(el.querySelector('.modal')).toBeNull();
+    expect(ipc.requests.some(r => r.path === '/compose-save')).toBe(false);
+    expect(ipc.persisted).toEqual([]);
+  });
+
+  it('Confirm save sends the digest and persists', async () => {
+    const ipc = makeIpc(editorState(), [], STRUCTURAL_PREVIEW, COMPOSE_OK);
+    const fixture = await render(ipc);
+    const el = await draftAndPreview(fixture);
+    btn(el, 'Save changes')!.click();
+    await settle(fixture);
+    btn(el, 'Confirm save')!.click();
+    await settle(fixture);
+
+    const compose = ipc.requests.find(r => r.path === '/compose-save');
+    expect((compose?.body as { confirmDigest?: string }).confirmDigest).toBe('ef'.repeat(32));
+    expect(ipc.persisted.map(p => p.event)).toEqual(['update', 'save']);
+    expect(el.querySelector('.modal')).toBeNull();
+  });
+
+  it('a compose refusal persists NOTHING and renders the structured refusal', async () => {
+    const refusal = {
+      ok: false,
+      error: { code: 'stale-confirmation', message: 'The configuration changed since this save was previewed.' },
+    };
+    const ipc = makeIpc(editorState(), [], NON_STRUCTURAL_PREVIEW, refusal);
+    const fixture = await render(ipc);
+    const el = await draftAndPreview(fixture);
+    btn(el, 'Save changes')!.click();
+    await settle(fixture);
+
+    expect(ipc.persisted).toEqual([]);
+    expect(el.textContent).toContain('Save refused (stale-confirmation)');
+    expect(el.textContent).toContain('Nothing was written.');
+  });
+
+  it('no Save button when the server says the editor is unavailable', async () => {
+    const ipc = makeIpc(editorState({ editorAvailable: false }), [], NON_STRUCTURAL_PREVIEW, COMPOSE_OK);
+    const fixture = await render(ipc);
+    const el = await draftAndPreview(fixture);
+    expect(btn(el, 'Save changes')).toBeUndefined();
   });
 });
 

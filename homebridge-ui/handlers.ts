@@ -100,8 +100,13 @@ export interface StatusPayload {
    * below rather than by repurposing this boolean.
    */
   readOnly: true;
-  /** The sensor-map row editor has not shipped yet (#69). */
-  sensorMapEditorAvailable: false;
+  /**
+   * The sensor-map row editor is LIVE (#69 PR C): the editor's save
+   * path runs exclusively through composeAndPersist → /compose-save,
+   * with structural saves gated on the /preview-save confirmation
+   * digest. This is the finding-5 closure flag.
+   */
+  sensorMapEditorAvailable: true;
   /**
    * The guarded compose-save boundary is installed: any sensorMap
    * write MUST flow through /compose-save (snapshot-first). Ordinary
@@ -131,7 +136,7 @@ export async function handleGetStatus(deps: HandlerDeps, payload: unknown): Prom
     configWarnings: modeResult.warnings,
     safeModeBanner: modeResult.safeModeBanner,
     readOnly: true,
-    sensorMapEditorAvailable: false,
+    sensorMapEditorAvailable: true,
     composeSaveAvailable: true,
     previewSaveAvailable: true,
   };
@@ -199,6 +204,8 @@ export type ComposeSaveError =
   | { code: 'invalid-rows'; message: string; rows: RowValidationError[] }
   | { code: 'no-station-inventory'; message: string }
   | { code: 'canonical-divergence'; message: string; rows: DivergentRow[] }
+  | { code: 'confirmation-required'; message: string; structuralChangeCount: number }
+  | { code: 'stale-confirmation'; message: string }
   | { code: 'legacy-snapshot-mismatch'; message: string }
   | { code: 'legacy-snapshot-corrupt'; message: string }
   | { code: 'snapshot-write-failed'; message: string };
@@ -239,13 +246,25 @@ export interface ComposeSavePayload {
    */
   cachedAccessoryUniqueIds?: unknown;
   liveStations?: unknown;
+  /**
+   * The confirmation digest from /preview-save (PR C / finding 5).
+   * REQUIRED when the save has structural consequences (accessories
+   * registering, deregistering, or re-registering): the server
+   * recomputes computeSaveConsequences() from the CURRENT on-disk
+   * config and inventory and refuses a missing or mismatched digest —
+   * proving the user confirmed THESE consequences, not a stale
+   * preview. Never returned by a refusal: the only way to obtain it
+   * is /preview-save, which is what forces the confirmation UX.
+   */
+  confirmDigest?: unknown;
 }
 
 /**
- * Compose a v2 save: validate the proposal, write/verify the immutable
- * legacy snapshot FIRST, and only then return the composed next config
- * for the client to persist through HB UI X's API. The composed config
- * physically cannot reach config.json before the snapshot is durable.
+ * Compose a v2 save: validate the proposal, verify the structural
+ * confirmation digest, write/verify the immutable legacy snapshot
+ * FIRST, and only then return the composed next config for the client
+ * to persist through HB UI X's API. The composed config physically
+ * cannot reach config.json before the snapshot is durable.
  *
  * Refusals return `{ ok: false, error }` (JSON-safe, editor-consumable)
  * and perform NO writes — with one deliberate exception: a successful
@@ -501,6 +520,40 @@ export async function handleComposeSave(
     return r;
   }
   const { block, modeResult, effectiveMap, canonical } = r.ctx;
+
+  // ---- 7c. STRUCTURAL CONFIRMATION GATE (PR C / finding 5): the
+  //          consequences are recomputed HERE, from the current
+  //          on-disk config and inventory — never trusted from the
+  //          client. A save that would register, deregister, or
+  //          re-register accessories requires the digest issued by
+  //          /preview-save for exactly these consequences; anything
+  //          missing or mismatched fails closed BEFORE the snapshot
+  //          or composition. The fresh digest is deliberately NOT
+  //          included in the refusal — the only way to get one is to
+  //          preview, which is what puts the confirmation in front
+  //          of the user.
+  const consequences = computeSaveConsequences(r.ctx);
+  if (p.confirmDigest !== undefined && p.confirmDigest !== consequences.digest) {
+    return {
+      ok: false,
+      error: {
+        code: 'stale-confirmation',
+        message: 'The configuration, station inventory, or discovery state changed since this save was previewed. '
+          + 'Preview again and re-confirm; nothing was written.',
+      },
+    };
+  }
+  if (consequences.structuralChangeCount > 0 && p.confirmDigest === undefined) {
+    return {
+      ok: false,
+      error: {
+        code: 'confirmation-required',
+        message: `This save would register, deregister, or re-register ${consequences.structuralChangeCount} `
+          + 'accessor(y/ies). Preview the changes and confirm them first; nothing was written.',
+        structuralChangeCount: consequences.structuralChangeCount,
+      },
+    };
+  }
 
   // ---- 8. Compose. detectConfigMode's verdict is passed explicitly
   //         (it is the single authority on "legacy").
@@ -902,7 +955,7 @@ export async function handleGetEditorState(
   return {
     configMode: modeResult.mode,
     v2FlagEnabled,
-    editorAvailable: false, // flips true in PR C (finding 5 closure)
+    editorAvailable: true, // PR C: the save path is live (finding 5)
     version: deps.version,
     stations: stations.map(st => {
       const mac = st.macAddress.toUpperCase();

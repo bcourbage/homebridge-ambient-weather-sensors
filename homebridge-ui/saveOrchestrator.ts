@@ -48,6 +48,13 @@ export interface ComposeAndPersistArgs {
    * (multi-Home) setups must pass the block their editor loaded.
    */
   base?: Record<string, unknown>;
+  /**
+   * The /preview-save confirmation digest (PR C / finding 5). The
+   * server REQUIRES it for saves with structural consequences and
+   * refuses stale or mismatched values — pass the digest of the
+   * preview the user actually confirmed.
+   */
+  confirmDigest?: string;
 }
 
 export async function composeAndPersist(
@@ -109,6 +116,7 @@ export async function composeAndPersist(
     proposal: args.proposal,
     cachedAccessoryUniqueIds,
     liveStations: args.liveStations,
+    confirmDigest: args.confirmDigest,
   }) as ComposeSaveResult;
 
   if (!result || result.ok !== true) {

@@ -67,26 +67,24 @@ Warnings, row-validation errors, and ownership notes (for example a
 disabled sensor that owns a battery field other rows reference)
 appear as banners above the table.
 
-## Today: read-only
+## Using the editor
 
-Nothing on this page writes configuration. The panels observe; every
-setting is still changed through the standard form below or by
-editing `config.json` directly. The page follows Homebridge UI X's
-light/dark theme, including live theme switches.
+The status, discovery, and notices panels are read-only observations.
+The sensor map is the editor: Edit on any row opens its controls, and
+changes are DRAFTS until saved. "Preview changes" dry-runs a draft
+through the real save pipeline without writing anything, and shows
+exactly which accessories would register, deregister, or re-register.
+The page follows Homebridge UI X's light/dark theme, including live
+theme switches.
 
-There is nothing to configure on the page itself. The relevant
-switch is in the form below it: **Advanced (v2.0 preview) → Enable
-sensor-map v2 live path**, which selects the live v2 pipeline and
-populates the discovery and sensor-map panels. Hand-authoring
-`configVersion: 2` and a `sensorMap` array in `config.json` is
-possible (the table renders it, and validation problems surface as
-banners), but the format is documented for the editor's benefit in
-`docs/future/sensor-map.md` and hand-editing is not the recommended
-path.
+The v2 opt-in switch lives in the form below the panels: **Advanced
+(v2.0 preview) → Enable sensor-map v2 live path**, which selects the
+live v2 pipeline and populates the discovery and sensor-map panels.
+Hand-authoring `configVersion: 2` and a `sensorMap` array in
+`config.json` remains possible (the table renders it, and validation
+problems surface as banners), but the editor is the recommended path.
 
-## At release: the sensor-map editor
-
-The v2.0.0 release turns this table into the editor:
+## How saving works
 
 - **Per-row editing**: enable or disable a row, rename it, choose
   display units (matching AmbientWeather.net's unit choices), and set
@@ -94,9 +92,6 @@ The v2.0.0 release turns this table into the editor:
 - **Per-station exceptions**: override a setting for one station
   while a global choice keeps applying to the others, matching the
   layer model shown in the table today.
-- **Assigning unrecognized fields**: turn a field the plugin does
-  not know into a real sensor by declaring its kind, measurement,
-  and source unit.
 - **Guided migration**: on a legacy configuration, the first save
   converts the config to the v2 format. Your original settings are
   written to an immutable snapshot
@@ -104,10 +99,13 @@ The v2.0.0 release turns this table into the editor:
   **before** `config.json` changes, so a rollback path always
   exists.
 - **Guarded saves**: every save is validated server-side against
-  the same rules the runtime uses, and structural changes (rows that
-  would re-register an accessory) are shown for confirmation before
-  anything is written. Invalid rows are refused with the reason;
-  nothing is written on a refusal.
+  the same rules the runtime uses. Changes that would register,
+  deregister, or re-register an accessory require explicit
+  confirmation of a server-verified preview; a save whose
+  consequences drifted since that preview is refused. Invalid rows
+  are refused with the reason; nothing is written on any refusal.
+- **Restart to apply structure**: the saved configuration takes full
+  effect (registrations included) on the next Homebridge restart.
 
-Until then, the editor controls stay hidden and the page remains
-strictly read-only.
+Assigning unrecognized fields to new custom sensors (declaring a
+kind, measurement, and source unit) arrives in an upcoming beta.
