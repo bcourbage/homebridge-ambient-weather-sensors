@@ -74,6 +74,7 @@ const V2_BLOCK = {
   name: 'Test Station',
   apiKey: 'SECRET-API-KEY-XYZ',
   applicationKey: 'SECRET-APP-KEY-XYZ',
+  _sensorMapV2: true,
   configVersion: 2,
   sensorMap: [
     { dataPoint: 'tempf', name: 'Outdoor Temp' },
@@ -351,6 +352,37 @@ describe('/editor-state — raw invalid fragments (crash + false-origin countere
     expect(dto.authored[0].dataPoint).toBeUndefined();
     expect(dto.authored[0].identityRaw).toEqual({ dataPoint: null });
     expect(dto.authored[0].fields).toEqual({ enabled: false });
+  });
+});
+
+describe('/editor-state — v2-flag gating (review #45 P1-1)', () => {
+  it('flag OFF: editorAvailable false with a directing banner (rows still preview)', async () => {
+    const rig = makeRig([LEGACY_BLOCK]); // no _sensorMapV2, env {}
+    discoveryStore(rig, [{ mac: MAC, dataPoint: 'tempf' }]);
+    const dto = await handleGetEditorState(rig.deps, {});
+    expect(dto.v2FlagEnabled).toBe(false);
+    expect(dto.editorAvailable).toBe(false);
+    const banner = dto.warnings.find(w => w.code === 'v2-flag-off');
+    expect(banner).toBeDefined();
+    expect(banner?.message).toContain('restart Homebridge');
+    expect(dto.rows.length).toBeGreaterThan(0); // the preview stays useful
+  });
+
+  it('flag ON via config field enables the editor', async () => {
+    const rig = makeRig([{ ...LEGACY_BLOCK, _sensorMapV2: true }]);
+    discoveryStore(rig, [{ mac: MAC, dataPoint: 'tempf' }]);
+    const dto = await handleGetEditorState(rig.deps, {});
+    expect(dto.v2FlagEnabled).toBe(true);
+    expect(dto.editorAvailable).toBe(true);
+    expect(dto.warnings.find(w => w.code === 'v2-flag-off')).toBeUndefined();
+  });
+
+  it('flag ON via environment variable enables the editor', async () => {
+    const rig = makeRig([LEGACY_BLOCK]);
+    discoveryStore(rig, [{ mac: MAC, dataPoint: 'tempf' }]);
+    const dto = await handleGetEditorState({ ...rig.deps, env: { SENSOR_MAP_V2: '1' } }, {});
+    expect(dto.v2FlagEnabled).toBe(true);
+    expect(dto.editorAvailable).toBe(true);
   });
 });
 

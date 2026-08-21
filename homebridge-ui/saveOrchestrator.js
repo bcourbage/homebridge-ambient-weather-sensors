@@ -77,8 +77,41 @@ export async function composeAndPersist(deps, args) {
         return result ?? { ok: false, error: { code: 'invalid-proposal', message: 'Empty response from /compose-save.' } };
     }
     const nextArray = cfgArray.map((b, i) => (i === index ? result.nextConfig : b));
-    await deps.updatePluginConfig(nextArray);
-    await deps.savePluginConfig();
+    // Post-compose persistence failures are INDETERMINATE (review #45
+    // P1-2): HB UI X may have taken effect and then rejected, or lost
+    // the response. Never tell the user "nothing was written" here —
+    // report the failed stage and direct them to reload and inspect
+    // before retrying. (The legacy snapshot is already durable either
+    // way; a retry re-verifies it.)
+    try {
+        await deps.updatePluginConfig(nextArray);
+    }
+    catch (e) {
+        return {
+            ok: false,
+            error: {
+                code: 'persistence-indeterminate',
+                stage: 'updatePluginConfig',
+                message: `updatePluginConfig failed after the save was composed: ${e.message}. The staged `
+                    + 'configuration state is uncertain — reload the plugin settings and inspect the configuration before '
+                    + 'retrying. The legacy snapshot (when applicable) was already written and is verified on retry.',
+            },
+        };
+    }
+    try {
+        await deps.savePluginConfig();
+    }
+    catch (e) {
+        return {
+            ok: false,
+            error: {
+                code: 'persistence-indeterminate',
+                stage: 'savePluginConfig',
+                message: `savePluginConfig failed after the configuration was staged: ${e.message}. The save `
+                    + 'MAY have been applied — reload the plugin settings and inspect the configuration before retrying.',
+            },
+        };
+    }
     return result;
 }
 /** Deterministic deep JSON (sorted keys) for block matching. */

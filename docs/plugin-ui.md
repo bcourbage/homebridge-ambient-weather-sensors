@@ -80,6 +80,8 @@ theme switches.
 The v2 opt-in switch lives in the form below the panels: **Advanced
 (v2.0 preview) → Enable sensor-map v2 live path**, which selects the
 live v2 pipeline and populates the discovery and sensor-map panels.
+Saving from the editor requires the flag: with it off the table is a
+preview only, and the page says so.
 Hand-authoring `configVersion: 2` and a `sensorMap` array in
 `config.json` remains possible (the table renders it, and validation
 problems surface as banners), but the editor is the recommended path.

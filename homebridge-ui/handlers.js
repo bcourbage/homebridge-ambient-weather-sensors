@@ -303,6 +303,25 @@ export async function handleComposeSave(deps, payload) {
         return r;
     }
     const { block, modeResult, effectiveMap, canonical } = r.ctx;
+    // ---- 7b2. V2-FLAG GATE (review #45 P1-1): saving converts the
+    //           configuration to v2, and a v2 config with the flag OFF
+    //           is exactly the dangerous state the rollback docs warn
+    //           about (the flag-off runtime cannot read sensorMap and
+    //           can deregister cached accessories). The editor is
+    //           disabled client-side when the flag is off; this is the
+    //           fail-closed server backstop. Previews stay available —
+    //           a dry run is how users decide whether to opt in.
+    if (detectV2FlagSource(block, deps.env ?? process.env) === 'none') {
+        return {
+            ok: false,
+            error: {
+                code: 'v2-flag-off',
+                message: 'The sensor-map v2 flag is off, so the runtime would not read a saved sensor map — and a v2 '
+                    + 'configuration with the flag off can deregister cached accessories. Enable "Advanced (v2.0 preview) → '
+                    + 'Enable sensor-map v2 live path" in the settings form, restart Homebridge, and retry. Nothing was written.',
+            },
+        };
+    }
     // ---- 7c. STRUCTURAL CONFIRMATION GATE (PR C / finding 5): the
     //          consequences are recomputed HERE, from the current
     //          on-disk config and inventory — never trusted from the
@@ -586,6 +605,15 @@ export async function handleGetEditorState(deps, payload) {
     for (const w of modeResult.warnings) {
         warnings.push({ severity: 'warning', code: 'config-mode', message: w });
     }
+    if (!v2FlagEnabled && modeResult.mode !== 'safe-mode') {
+        warnings.push({
+            severity: 'warning',
+            code: 'v2-flag-off',
+            message: 'The sensor-map v2 flag is off: the table below is a preview and saving is disabled. To edit for '
+                + 'real, enable "Advanced (v2.0 preview) → Enable sensor-map v2 live path" in the settings form and '
+                + 'restart Homebridge.',
+        });
+    }
     if (modeResult.mode === 'safe-mode') {
         return {
             configMode: 'safe-mode',
@@ -674,7 +702,7 @@ export async function handleGetEditorState(deps, payload) {
     return {
         configMode: modeResult.mode,
         v2FlagEnabled,
-        editorAvailable: true, // PR C: the save path is live (finding 5)
+        editorAvailable: v2FlagEnabled, // PR C: save path live, gated on the v2 opt-in (review #45 P1-1)
         version: deps.version,
         stations: stations.map(st => {
             const mac = st.macAddress.toUpperCase();

@@ -65,6 +65,7 @@ const LEGACY_BLOCK = {
   platform: 'AmbientWeatherSensors',
   name: 'Test Station',
   apiKey: 'k', applicationKey: 'a',
+  _sensorMapV2: true,
   temperatureSensors: true,
   windSensors: true,
 };
@@ -75,6 +76,7 @@ const V2_BLOCK = {
   platform: 'AmbientWeatherSensors',
   name: 'Test Station',
   apiKey: 'k', applicationKey: 'a',
+  _sensorMapV2: true,
   configVersion: 2,
   sensorMap: [CUSTOM_ROW],
 };

@@ -50,33 +50,48 @@ a compare-only "shadow mode" that logged divergences without ever
 touching registration; that observer has been retired in favor of
 the real thing.)
 
-**Rollback (legacy-compatible configs, the normal case):** beta.8
-never migrates your config or generates `sensorMap` on its own, so
-unless you hand-authored `configVersion: 2` / `sensorMap` fields,
-turning the flag off and restarting cleanly returns you to v1.7
-behavior. Accessories the v2 path structurally re-registered while
-it was on may need their room assignments redone in Apple Home.
-Downgrading to the 1.7.x line is safe under the same condition.
+**Saving from the editor converts your configuration.** The
+sensor-map editor's first save rewrites the plugin's config block to
+the v2 format (`configVersion: 2` plus a `sensorMap`). Before
+`config.json` changes, your original 1.x settings are preserved in an
+immutable snapshot: `legacy-config-snapshot.json` in the plugin's
+data directory (`<homebridge storage>/plugin-data/ambient-weather/`).
+The saved block also carries a synchronized 1.7.x mirror of the
+legacy fields, kept up to date on every save.
 
-**Rollback with a hand-authored v2 config:** if you added
-`configVersion: 2` + `sensorMap` yourself, restore a 1.x-compatible
-config BEFORE disabling the flag or downgrading: with the flag
-off, the v1 path cannot read `sensorMap` and can deregister your
-cached accessories. No 1.x release can operate or update custom
-v2-only sensors: v1.7.1's emergency freeze preserves their cached
-tiles at last-known values, and restoring a legacy config and
-resuming normal 1.x reconciliation removes them. For an emergency
-downgrade while a v2 config is still in place, install **v1.7.1**
-(not v1.7.0 or earlier): it freezes safely, with cached
-accessories preserved but no longer updating, until you restore a
-legacy config.
+**Rollback before any editor save (legacy config, flag on):** the
+plugin never converts your configuration on its own, so turning the
+flag off and restarting cleanly returns you to v1.7 behavior.
+Accessories the v2 path structurally re-registered while it was on
+may need their room assignments redone in Apple Home. Downgrading to
+the 1.7.x line is safe under the same condition.
 
-The plugin's settings page gains v2 preview panels: status,
-discovery, notices, and a read-only sensor-map table.
-[docs/plugin-ui.md](./docs/plugin-ui.md) explains what they show
-and what becomes editable at release. See
-`docs/future/sensor-map.md` for the full design if you're
-curious about the shape of the v2 config.
+**Rollback after an editor save (or any v2 config):** do NOT simply
+turn the flag off — with the flag off, the v1 path cannot read
+`sensorMap` and can deregister your cached accessories. Instead:
+
+- **To return to 1.x behavior on 2.x:** restore a 1.x-shaped config
+  first (copy the fields from `legacy-config-snapshot.json` back into
+  the plugin's config block, replacing `configVersion` and
+  `sensorMap`), then disable the flag and restart.
+- **For an emergency downgrade with the v2 config still in place:**
+  install the current **1.7.x** release (never v1.7.0 or earlier).
+  It freezes safely: cached accessories stay in HomeKit at their
+  last-known values, updates stop, and the log explains how to
+  resume. The mirror keeps that freeze safe; it does not make 1.7.x
+  operate the v2 config.
+- **Custom v2-only sensors** (added through the editor for fields the
+  plugin has no built-in definition for): no 1.x release can operate
+  or update them. The 1.7.x freeze preserves their cached tiles at
+  last-known values, and restoring a legacy config and resuming
+  normal 1.x reconciliation removes them.
+
+The plugin's settings page carries the v2 panels: status, discovery,
+notices, and the sensor-map editor (draft, preview, and save with
+guarded confirmation — saving requires the v2 flag).
+[docs/plugin-ui.md](./docs/plugin-ui.md) explains each panel and how
+saving works. See `docs/future/sensor-map.md` for the full design if
+you're curious about the shape of the v2 config.
 
 ## What's New in v1.7.2
 

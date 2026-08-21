@@ -309,7 +309,7 @@ describe('draft editing + preview (PR B — no persistence)', () => {
     // 'added' registers — never a blanket "re-registers".
     expect(el.querySelector('.structural-chip')?.textContent).toBe('registers');
     expect(el.textContent).toContain('1 accessory would register, deregister, or re-register on save');
-    expect(el.textContent).toContain('this preview wrote nothing');
+    expect(el.textContent).toContain('This preview wrote nothing; saving will ask for confirmation first.');
   });
 
   it('renders a structured refusal', async () => {
@@ -690,8 +690,98 @@ describe('save flow (PR C / finding 5 — the ONE route is composeAndPersist)', 
     await settle(fixture);
 
     expect(ipc.persisted).toEqual([]);
-    expect(el.textContent).toContain('Save refused (stale-confirmation)');
-    expect(el.textContent).toContain('Nothing was written.');
+    // The banner renders the structured message verbatim — the
+    // component never adds its own "nothing was written" claim
+    // (review #45 P1-2: indeterminate failures must not be assured).
+    expect(el.textContent).toContain('Save failed (stale-confirmation)');
+  });
+
+  it('editing is LOCKED while a save is in flight (review #45 P2-4)', async () => {
+    let resolveCompose!: (v: unknown) => void;
+    const requests: Array<{ path: string; body: unknown }> = [];
+    const persisted: string[] = [];
+    const ipc: HomebridgeIpc & { requests: typeof requests } = {
+      requests,
+      getPluginConfig: async () => [{ platform: 'AmbientWeatherSensors' }],
+      getCachedAccessories: async () => [],
+      updatePluginConfig: async () => {
+        persisted.push('update');
+      },
+      savePluginConfig: async () => {
+        persisted.push('save');
+      },
+      request: async (path: string, body?: unknown) => {
+        requests.push({ path, body });
+        if (path === '/editor-state') {
+          return editorState();
+        }
+        if (path === '/vocabulary') {
+          return VOCAB;
+        }
+        if (path === '/preview-save') {
+          return NON_STRUCTURAL_PREVIEW;
+        }
+        return new Promise((r) => {
+          resolveCompose = r; // /compose-save: resolves when the test says
+        });
+      },
+    };
+    const fixture = await render(ipc);
+    const el = await draftAndPreview(fixture);
+    btn(el, 'Save changes')!.click();
+    // Flush microtasks only (no whenStable — the compose promise is
+    // deliberately pending) so the async chain reaches /compose-save.
+    await new Promise((r) => setTimeout(r, 0));
+    fixture.detectChanges();
+
+    // The open form is closed and every draft control disables — a
+    // slow save cannot race a newer draft into the post-save discard.
+    expect(el.querySelector('.editor-form')).toBeNull();
+    for (const b of [...el.querySelectorAll('button')].filter(x => x.textContent === 'Edit')) {
+      expect((b as HTMLButtonElement).disabled).toBe(true);
+    }
+
+    resolveCompose(COMPOSE_OK);
+    await settle(fixture);
+    expect(el.textContent).toContain('Saved.');
+    expect(persisted).toEqual(['update', 'save']);
+    for (const b of [...el.querySelectorAll('button')].filter(x => x.textContent === 'Edit')) {
+      expect((b as HTMLButtonElement).disabled).toBe(false);
+    }
+  });
+
+  it('a persistence failure renders as INDETERMINATE, never as nothing-was-written (review #45 P1-2)', async () => {
+    const requests: Array<{ path: string; body: unknown }> = [];
+    const ipc: HomebridgeIpc & { requests: typeof requests } = {
+      requests,
+      getPluginConfig: async () => [{ platform: 'AmbientWeatherSensors' }],
+      getCachedAccessories: async () => [],
+      updatePluginConfig: async () => {
+        throw new Error('ipc channel dropped');
+      },
+      savePluginConfig: async () => undefined,
+      request: async (path: string, body?: unknown) => {
+        requests.push({ path, body });
+        if (path === '/editor-state') {
+          return editorState();
+        }
+        if (path === '/vocabulary') {
+          return VOCAB;
+        }
+        if (path === '/preview-save') {
+          return NON_STRUCTURAL_PREVIEW;
+        }
+        return COMPOSE_OK;
+      },
+    };
+    const fixture = await render(ipc);
+    const el = await draftAndPreview(fixture);
+    btn(el, 'Save changes')!.click();
+    await settle(fixture);
+
+    expect(el.textContent).toContain('Save failed (persistence-indeterminate)');
+    expect(el.textContent).toContain('reload the plugin settings');
+    expect(el.textContent).not.toContain('Nothing was written');
   });
 
   it('no Save button when the server says the editor is unavailable', async () => {

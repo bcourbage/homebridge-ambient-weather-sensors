@@ -60,6 +60,7 @@ const LEGACY_BLOCK = {
   platform: 'AmbientWeatherSensors',
   name: 'Test Station',
   apiKey: 'k', applicationKey: 'a',
+  _sensorMapV2: true, // saves require the v2 opt-in (review #45 P1-1)
   temperatureSensors: true,
   humiditySensors: false,
   extendedSensors: true,
@@ -190,6 +191,62 @@ describe('structural confirmation digest (PR C / finding 5)', () => {
     if (!result.ok) {
       expect(result.error.code).toBe('stale-confirmation');
     }
+  });
+});
+
+describe('v2-flag gate on saves (review #45 P1-1)', () => {
+  it('a save with the flag OFF is refused — the preview still works', async () => {
+    const flagOff = { ...LEGACY_BLOCK } as Record<string, unknown>;
+    delete flagOff._sensorMapV2;
+    const rig = makeRig(flagOff);
+    discoveryStore(rig);
+    const preview = await handlePreviewSave(rig.deps, { base: flagOff });
+    expect(preview.ok).toBe(true); // dry runs are how users decide to opt in
+    const save = await handleComposeSave(rig.deps, { base: flagOff });
+    expect(save.ok).toBe(false);
+    if (!save.ok) {
+      expect(save.error.code).toBe('v2-flag-off');
+      expect(save.error.message).toContain('restart Homebridge');
+    }
+    expect(existsSync(path.join(rig.persistDir, LEGACY_SNAPSHOT_FILE))).toBe(false);
+  });
+});
+
+describe('post-compose persistence failures are INDETERMINATE (review #45 P1-2)', () => {
+  it('updatePluginConfig rejecting reports the stage and never claims nothing was written', async () => {
+    const rig = makeRig(LEGACY_BLOCK);
+    discoveryStore(rig);
+    const client = makeClient(rig);
+    client.deps.updatePluginConfig = async () => {
+      throw new Error('ipc channel dropped');
+    };
+    const result = await composeAndPersist(client.deps, {});
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('persistence-indeterminate');
+      expect((result.error as { stage: string }).stage).toBe('updatePluginConfig');
+      expect(result.error.message).toContain('reload the plugin settings');
+      expect(result.error.message).not.toContain('Nothing was written');
+    }
+  });
+
+  it('savePluginConfig rejecting AFTER update took effect reports uncertainty', async () => {
+    const rig = makeRig(LEGACY_BLOCK);
+    discoveryStore(rig);
+    const client = makeClient(rig);
+    client.deps.savePluginConfig = async () => {
+      throw new Error('save endpoint 500');
+    };
+    const result = await composeAndPersist(client.deps, {});
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('persistence-indeterminate');
+      expect((result.error as { stage: string }).stage).toBe('savePluginConfig');
+      expect(result.error.message).toContain('MAY have been applied');
+    }
+    // update DID take effect before the failure — the effect-then-throw shape.
+    expect(client.events).toEqual(['compose', 'update']);
+    expect(client.persistedArray).toBeDefined();
   });
 });
 

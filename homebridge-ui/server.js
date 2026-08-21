@@ -81,14 +81,14 @@ class UiServer extends HomebridgePluginUiServer {
         // first caller; refusals are structured { ok: false, error }.
         this.onRequest('/compose-save', (payload) => this.wrap(() => handleComposeSave(this.deps, payload)));
         // Sanitized read model + unit vocabulary for the row editor (#69).
-        // Both are READ-ONLY; the editor stays display-only until PR C
-        // activates the save path through /compose-save.
+        // Both are READ-ONLY reads; the editor's SAVE path (PR C) runs
+        // through /compose-save above.
         this.onRequest('/editor-state', (payload) => this.wrap(() => handleGetEditorState(this.deps, payload)));
         this.onRequest('/vocabulary', () => this.wrap(async () => handleGetVocabulary()));
         // Server-authoritative save DRY RUN (#69 PR B): the exact save
         // pipeline with zero writes — validation, canonical form, the
-        // structural diff, and the stateless confirmation digest the
-        // future save path (PR C) must present for structural changes.
+        // structural diff, and the stateless confirmation digest that
+        // /compose-save requires for structural changes.
         this.onRequest('/preview-save', (payload) => this.wrap(() => handlePreviewSave(this.deps, payload)));
         this.ready();
     }

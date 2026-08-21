@@ -127,8 +127,8 @@ interface StationGroup {
       @if (draftCount() > 0) {
         <div class="draft-bar">
           <span class="grow"><strong>{{ draftCount() }}</strong> draft change(s) — nothing is saved; preview runs the real save pipeline without writing.</span>
-          <button type="button" (click)="preview()" [disabled]="previewPending() || editFormInvalid()">Preview changes</button>
-          <button type="button" (click)="discardAll()">Discard drafts</button>
+          <button type="button" (click)="preview()" [disabled]="previewPending() || editFormInvalid() || saving()">Preview changes</button>
+          <button type="button" (click)="discardAll()" [disabled]="saving()">Discard drafts</button>
         </div>
       }
 
@@ -158,10 +158,10 @@ interface StationGroup {
               <div class="banner">
                 {{ pr.structuralChangeCount }} accessor{{ pr.structuralChangeCount === 1 ? 'y' : 'ies' }} would register, deregister, or re-register on save
                 (a re-registered accessory may need its HomeKit room assignment redone; a deregistered one leaves HomeKit).
-                Saving from this editor arrives in a later beta; this preview wrote nothing.
+                This preview wrote nothing; saving will ask for confirmation first.
               </div>
             } @else {
-              <div class="banner info">All changes apply in place; no accessory registers, deregisters, or re-registers. Saving from this editor arrives in a later beta; this preview wrote nothing.</div>
+              <div class="banner info">All changes apply in place; no accessory registers, deregisters, or re-registers. This preview wrote nothing.</div>
             }
           }
           @for (w of pr.warnings; track $index) {
@@ -205,7 +205,7 @@ interface StationGroup {
             Homebridge applies structural changes on the next restart.
           </div>
         } @else {
-          <div class="banner safe-mode">Save refused ({{ sr.code }}): {{ sr.message }} Nothing was written.</div>
+          <div class="banner safe-mode">Save failed ({{ sr.code }}): {{ sr.message }}</div>
         }
       }
       @if (confirmOpen() && previewResult()?.ok) {
@@ -272,7 +272,7 @@ interface StationGroup {
                 </td>
                 <td>
                   @if (row.kind !== 'unrecognized') {
-                    <button type="button" (click)="toggleEdit(row)">{{ isExpanded(row) ? 'Close' : 'Edit' }}</button>
+                    <button type="button" (click)="toggleEdit(row)" [disabled]="saving()">{{ isExpanded(row) ? 'Close' : 'Edit' }}</button>
                   }
                 </td>
               </tr>
@@ -606,6 +606,13 @@ export class AwnRootComponent {
   private async doSave(confirmDigest: string): Promise<void> {
     this.saving.set(true);
     this.saveResult.set(null);
+    // Lock editing for the duration (review #45 P2-4): the open form
+    // closes (no form events can draft mid-save) and Edit/Preview/
+    // Discard disable via saving() — a slow save can never race a
+    // newer draft into the post-save discard/reload.
+    this.expandedKey.set(null);
+    this.editForm = null;
+    this.editFormInvalid.set(false);
     try {
       const result = await composeAndPersist(this.hb.orchestratorDeps(), {
         proposal: this.store.proposal(),
