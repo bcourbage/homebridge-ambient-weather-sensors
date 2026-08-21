@@ -81,28 +81,30 @@ paths, from fastest to most thorough:
   (v1.7.0 and earlier DO attempt to read it, which is exactly why
   the emergency target is the current 1.7.x.)
 - **Operational rollback to your CURRENT settings** — only with a
-  healthy editor-saved mirror: this path requires the synchronized
-  legacy fields the editor maintains, so first open the plugin's
-  settings page and confirm there is NO "mirror is STALE" or
-  "metadata is INVALID" warning (a hand-edited `sensorMap`, or one
-  not produced by the editor, invalidates the mirror). If the mirror
-  is healthy: in the plugin's config block, delete exactly three
+  VERIFIED mirror: open the plugin's settings page and confirm it
+  positively shows **"Rollback mirror: verified"**. The absence of
+  warnings is NOT enough — a v2 config with no mirror at all shows no
+  warning either, and deleting its markers would expose an empty
+  legacy configuration and deregister accessories. With the verified
+  indicator shown: in the plugin's config block, delete exactly three
   things — `sensorMap`, `configVersion`, and `_legacyMirror` — keep
   everything else, ALSO disable `_sensorMapV2` in the block and unset
   the `SENSOR_MAP_V2` environment variable if you use it, then run
-  1.7.x (or 2.x with the flag off) and restart. If the mirror is
-  missing, stale, or warned about: do NOT delete the markers —
-  freeze on current 1.7.x, restore the snapshot (next path), or
-  upgrade back to 2.x and re-save in the editor to regenerate the
-  mirror.
+  1.7.x (or 2.x with the flag off) and restart. If the page shows any
+  other mirror status (absent, stale, or invalid): do NOT delete the
+  markers — freeze on current 1.7.x, restore the snapshot (next
+  path), or upgrade back to 2.x and re-save in the editor to
+  regenerate the mirror.
 - **Rollback to your ORIGINAL (pre-conversion) settings:** open
   `legacy-config-snapshot.json` and use its `legacy` object. In the
   plugin's config block, delete every legacy sensor-configuration
   field (the sensor category toggles, `extendedDisplayMode`,
   `thresholds`, `units`, `excludeSensors`, `includeOnly`), copy in
   the snapshot's `legacy` fields as the replacement — the snapshot
-  is sparse, so replace rather than overlay — and delete `sensorMap`,
-  `configVersion`, and `_legacyMirror`. Restart.
+  is sparse, so replace rather than overlay — delete `sensorMap`,
+  `configVersion`, and `_legacyMirror`, disable `_sensorMapV2`, and
+  unset the `SENSOR_MAP_V2` environment variable if you use it.
+  Restart.
 - **Custom v2-only sensors** (added through the editor for fields the
   plugin has no built-in definition for): no 1.x release can operate
   or update them. The 1.7.x freeze preserves their cached tiles at

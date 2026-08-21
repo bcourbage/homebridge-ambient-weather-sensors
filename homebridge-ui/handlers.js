@@ -18,7 +18,7 @@ import { buildEffectiveSensorMap, partitionOverrideLayers } from '../dist/sensor
 import { canonicalizeSensorMap } from '../dist/sensorMap/canonicalizeSensorMap.js';
 import { compatToOverrides } from '../dist/sensorMap/compat.js';
 import { detectConfigMode } from '../dist/sensorMap/configMode.js';
-import { composeV2ConfigSave, verifyLegacySnapshot, writeLegacySnapshot, } from '../dist/sensorMap/legacyMirror.js';
+import { composeV2ConfigSave, recognizeMirror, verifyLegacySnapshot, writeLegacySnapshot, } from '../dist/sensorMap/legacyMirror.js';
 import { sensorMapShapeError } from '../dist/sensorMap/platformEffectiveMap.js';
 import { STATION_MAC_REGEX } from '../dist/sensorMap/validation.js';
 import { shadowModeEnabled } from '../dist/sensorMap/shadowMode.js';
@@ -623,6 +623,7 @@ export async function handleGetEditorState(deps, payload) {
             stations: [],
             authored: [],
             authoredSource: 'sensorMap',
+            mirrorState: recognizeMirror(block).state,
             rows: [],
             warnings,
             errors: [],
@@ -646,6 +647,7 @@ export async function handleGetEditorState(deps, payload) {
             stations: [],
             authored: [],
             authoredSource: 'sensorMap',
+            mirrorState: recognizeMirror(block).state,
             rows: [],
             warnings,
             errors: [{ severity: 'error', code: 'sensor-map-shape', message: shapeError }],
@@ -714,6 +716,7 @@ export async function handleGetEditorState(deps, payload) {
         }),
         authored: overrides.map(toAuthoredFragmentDto),
         authoredSource: modeResult.mode === 'legacy' ? 'compat-seeded' : 'sensorMap',
+        mirrorState: recognizeMirror(block).state,
         rows,
         warnings,
         errors: effectiveMap.errors.map(e => toDiagnosticDto('error', e)),

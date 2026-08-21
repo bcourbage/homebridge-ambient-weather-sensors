@@ -86,7 +86,7 @@ function v2CachedAccessory(opts: {
 }
 
 describe('downgrade journeys: editor-generated v2 config + v2-written cache', () => {
-  it('DOCUMENTED current-state rollback (delete 3 markers, flag off) keeps every representable accessory; custom is the loss boundary', async () => {
+  it('DOCUMENTED current-state rollback from the CONFIG-FLAG save path: compose preserves the flag, rollback disables it, representables survive', async () => {
     // ---- 1. The v2 config as the UI save flow writes it.
     const sensorMap = [
       { dataPoint: 'humidity', enabled: false },                 // disabled in v2 → stays gone in v1.7
@@ -100,12 +100,14 @@ describe('downgrade journeys: editor-generated v2 config + v2-written cache', ()
       stations: STATIONS,
       configMode: 'v2',
     });
-    // The mode passed to the composer is detectConfigMode's verdict
-    // (R4-3): a plain 1.x config with credentials only → 'legacy'.
+    // The NORMAL save path (review #45 round 4): the config-flag
+    // opt-in is present on the base — /compose-save requires it — and
+    // composition must PRESERVE it into the saved block.
     const { nextConfig } = composeV2ConfigSave(
-      { apiKey: 'k', applicationKey: 'k' }, sensorMap, v2Map,
+      { apiKey: 'k', applicationKey: 'k', _sensorMapV2: true }, sensorMap, v2Map,
       detectConfigMode({ } as never).mode,
     );
+    expect((nextConfig as Record<string, unknown>)._sensorMapV2).toBe(true);
 
     // ---- 2. The v2-written cache: native + extended + battery host.
     // ---- 1b. The DOCUMENTED current-state rollback (review #45
@@ -116,7 +118,11 @@ describe('downgrade journeys: editor-generated v2 config + v2-written cache', ()
     delete rolledBack.sensorMap;
     delete rolledBack.configVersion;
     delete rolledBack._legacyMirror;
-    expect('_sensorMapV2' in rolledBack).toBe(false); // flag off for 1.x behavior
+    // The documented procedure EXPLICITLY disables the config flag —
+    // without this deletion the live v2 path would stay enabled and
+    // this assertion catches any regression that forgets it.
+    delete rolledBack._sensorMapV2;
+    expect('_sensorMapV2' in rolledBack).toBe(false);
     expect(rolledBack.temperatureSensors).toBe(true); // the mirror's fields survive
 
     const api = new MockAPI();
@@ -208,6 +214,71 @@ describe('downgrade journeys: editor-generated v2 config + v2-written cache', ()
     expect(tempf.displayName).toBe('Outdoor Temperature');
 
     vi.restoreAllMocks();
+  });
+
+  it('DOCUMENTED current-state rollback from the ENVIRONMENT-FLAG save path: SENSOR_MAP_V2 must be unset for the legacy lifecycle', async () => {
+    // Variant: the opt-in came from the environment, so the config
+    // never carried _sensorMapV2 — the rollback is the three marker
+    // deletions plus UNSETTING the environment variable.
+    const sensorMap = [{ dataPoint: 'humidity', enabled: false }];
+    const v2Map = buildEffectiveSensorMap({
+      userOverrides: sensorMap,
+      discovery: emptyDiscoveryStore(),
+      uiState: emptyUiStateStore(),
+      stations: STATIONS,
+      configMode: 'v2',
+    });
+    const { nextConfig } = composeV2ConfigSave(
+      { apiKey: 'k', applicationKey: 'k' }, sensorMap, v2Map,
+      detectConfigMode({} as never).mode,
+    );
+    expect('_sensorMapV2' in (nextConfig as Record<string, unknown>)).toBe(false);
+    const rolledBack = { ...nextConfig } as Record<string, unknown>;
+    delete rolledBack.sensorMap;
+    delete rolledBack.configVersion;
+    delete rolledBack._legacyMirror;
+
+    // The env flag is UNSET for the legacy lifecycle (the platform
+    // reads process.env via shadowModeEnabled's default).
+    const envBefore = process.env.SENSOR_MAP_V2;
+    delete process.env.SENSOR_MAP_V2;
+    try {
+      const api = new MockAPI();
+      const platform = new AmbientWeatherSensorsPlatform(
+        new MockLogger() as never,
+        { platform: 'AmbientWeatherSensors', ...rolledBack } as never,
+        api as never,
+      );
+      const tempf = v2CachedAccessory({
+        dataPoint: 'tempf', type: 'Temperature', displayName: 'Outdoor Temperature',
+        kind: 'temperature', measurement: 'temperature', wrapperId: 'temperature', battery: true,
+        services: (a) => {
+          const svc = a.addService(MockServices.TemperatureSensor);
+          svc.addCharacteristic(MockCharacteristics.CurrentTemperature);
+          const batt = a.addService(MockServices.Battery);
+          batt.addCharacteristic(MockCharacteristics.StatusLowBattery);
+        },
+      });
+      platform.configureAccessory(tempf as never);
+      vi.spyOn(global, 'fetch').mockImplementation(async () => new Response(JSON.stringify([{
+        macAddress: MAC, info: { name: 'Home' },
+        lastData: { tempf: 68, humidity: 40, battout: 1 },
+      }]), { status: 200, headers: { 'content-type': 'application/json' } }));
+      vi.spyOn(global, 'setInterval').mockImplementation(() => 0 as unknown as ReturnType<typeof setInterval>);
+
+      api.emit('didFinishLaunching');
+      await vi.waitFor(() => {
+        expect(api.updated).toContain(tempf);
+      });
+      expect(api.unregistered).not.toContain(tempf);
+      // v2-disabled humidity stays excluded via the mirror.
+      expect(api.registered.some(a => (a.context.device as { uniqueId?: string }).uniqueId === `${MAC}-humidity`)).toBe(false);
+      vi.restoreAllMocks();
+    } finally {
+      if (envBefore !== undefined) {
+        process.env.SENSOR_MAP_V2 = envBefore;
+      }
+    }
   });
 
   it('HISTORICAL HAZARD (v1.7.0-era ONLY, not the documented journey): raw parser reads a STILL-MARKED v2 config via the mirror', async () => {

@@ -123,6 +123,17 @@ interface StationGroup {
           <div class="banner info">{{ n.message }}</div>
         }
       }
+      <!-- Positive rollback-mirror indicator (review #45 round 4):
+           the manual current-state rollback documented in the README
+           is authorized ONLY by 'verified' here — 'absent' produces
+           no warning banner anywhere, so silence is not a signal. -->
+      @if (state()!.configMode === 'v2') {
+        @if (state()!.mirrorState === 'recognized') {
+          <div class="banner info">Rollback mirror: verified. The documented current-state manual rollback (deleting the three v2 markers) is available for this configuration.</div>
+        } @else {
+          <div class="banner">Rollback mirror: {{ state()!.mirrorState }}. Do NOT use the marker-deletion rollback — freeze on the current 1.7.x, restore the snapshot, or re-save here to regenerate the mirror.</div>
+        }
+      }
 
       @if (draftCount() > 0) {
         <div class="draft-bar">

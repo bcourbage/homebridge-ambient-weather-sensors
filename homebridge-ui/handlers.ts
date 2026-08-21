@@ -22,6 +22,7 @@ import { compatToOverrides, type LegacyConfig } from '../dist/sensorMap/compat.j
 import { detectConfigMode, type ConfigInputShape } from '../dist/sensorMap/configMode.js';
 import {
   composeV2ConfigSave,
+  recognizeMirror,
   verifyLegacySnapshot,
   writeLegacySnapshot,
 } from '../dist/sensorMap/legacyMirror.js';
@@ -902,6 +903,7 @@ export async function handleGetEditorState(
       stations: [],
       authored: [],
       authoredSource: 'sensorMap',
+      mirrorState: recognizeMirror(block).state,
       rows: [],
       warnings,
       errors: [],
@@ -926,6 +928,7 @@ export async function handleGetEditorState(
       stations: [],
       authored: [],
       authoredSource: 'sensorMap',
+      mirrorState: recognizeMirror(block).state,
       rows: [],
       warnings,
       errors: [{ severity: 'error', code: 'sensor-map-shape', message: shapeError }],
@@ -1000,6 +1003,7 @@ export async function handleGetEditorState(
     }),
     authored: overrides.map(toAuthoredFragmentDto),
     authoredSource: modeResult.mode === 'legacy' ? 'compat-seeded' : 'sensorMap',
+    mirrorState: recognizeMirror(block).state,
     rows,
     warnings,
     errors: effectiveMap.errors.map(e => toDiagnosticDto('error', e)),

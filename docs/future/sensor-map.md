@@ -538,7 +538,10 @@ forever.
 re-emits legacy sensor fields alongside `configVersion: 2` + `sensorMap`,
 reverse-projected from the effective v2 map (`projectLegacyMirror`). Its
 value is the CURRENT-STATE MANUAL rollback — valid ONLY while the mirror
-is recognized (hash-matching, editor-generated): removing `sensorMap`,
+is recognized (hash-matching, editor-generated — surfaced positively as
+`mirrorState: 'recognized'` in `/editor-state` and "Rollback mirror:
+verified" on the plugin page; a mirror-less v2 config raises NO warning,
+so absence-of-warnings is not a check): removing `sensorMap`,
 `configVersion`, and `_legacyMirror` (and disabling `_sensorMapV2` /
 unsetting `SENSOR_MAP_V2`) leaves a working 1.x configuration of the
 current state, because the legacy fields are already synchronized in the

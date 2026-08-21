@@ -54,6 +54,7 @@ function editorState(overrides: Partial<EditorStateDto> = {}): EditorStateDto {
     ],
     authored: [],
     authoredSource: 'sensorMap',
+    mirrorState: 'recognized',
     rows: [
       {
         stationMac: MAC, dataPoint: 'tempf', kind: 'temperature', measurement: 'temperature',
@@ -185,6 +186,19 @@ describe('AwnRootComponent (TestBed, jsdom)', () => {
     expect(req?.body).toEqual({
       cachedAccessoryUniqueIds: [`${MAC}-tempf`, `${MAC}-windspeedmph`],
     });
+  });
+
+  it('shows the POSITIVE rollback-mirror indicator when the mirror is recognized (review #45 round 4)', async () => {
+    const verified = await render(makeIpc(editorState()));
+    expect((verified.nativeElement as HTMLElement).textContent).toContain('Rollback mirror: verified');
+  });
+
+  it('warns against the marker-deletion rollback for any non-recognized mirror state', async () => {
+    const absent = await render(makeIpc(editorState({ mirrorState: 'absent' })));
+    const text = (absent.nativeElement as HTMLElement).textContent!;
+    expect(text).toContain('Rollback mirror: absent');
+    expect(text).toContain('Do NOT use the marker-deletion rollback');
+    expect(text).not.toContain('Rollback mirror: verified');
   });
 
   it('renders duplicate diagnostics as separate banners (index-tracked)', async () => {

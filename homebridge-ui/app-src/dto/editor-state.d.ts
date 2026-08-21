@@ -158,6 +158,15 @@ export interface EditorStateDto {
    */
   authored: EditorAuthoredFragmentDto[];
   authoredSource: 'sensorMap' | 'compat-seeded';
+  /**
+   * Rollback-mirror recognition for the on-disk block (review #45
+   * round 4): the POSITIVE signal the current-state manual rollback
+   * requires. 'recognized' = editor-generated, hash-matching mirror —
+   * the three-marker deletion is safe; anything else means DO NOT
+   * delete the markers ('absent' produces no warning banner at all,
+   * which is exactly why absence-of-warnings was not a safe check).
+   */
+  mirrorState: 'recognized' | 'absent' | 'stale' | 'invalid';
   /** Server-resolved effective rows (preview view). */
   rows: EditorRowDto[];
   /** Row-validation failures (rejected fragments stay in `authored`). */
