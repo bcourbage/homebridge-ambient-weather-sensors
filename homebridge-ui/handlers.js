@@ -12,8 +12,9 @@
  * See homebridge-ui/server.ts for the HB UI X bootstrap.
  */
 import { createHash } from 'crypto';
-import { promises as fs } from 'fs';
+import { promises as fs, readFileSync } from 'fs';
 import * as path from 'path';
+import { fileURLToPath } from 'url';
 import { buildEffectiveSensorMap, partitionOverrideLayers } from '../dist/sensorMap/buildEffectiveMap.js';
 import { canonicalizeSensorMap } from '../dist/sensorMap/canonicalizeSensorMap.js';
 import { compatToOverrides } from '../dist/sensorMap/compat.js';
@@ -1229,43 +1230,159 @@ function canonicalJsonLocal(v) {
 export function blockDigest(block) {
     return createHash('sha256').update(canonicalJsonLocal(block)).digest('hex');
 }
+let cachedSchemaProperties;
 /**
- * The exact fields HB UI X's schema form has been OBSERVED to
- * materialize into its in-memory config as empty arrays when they are
- * absent from config.json (review #47 round 3, P2: an allowlist, not
- * a shape rule — an unknown future field holding an intentionally
- * empty array must refuse, not be discarded).
+ * The plugin's config.schema.json property map — the source of truth
+ * for what HB UI X's settings form can EXPRESS. Read from the package
+ * root (this file compiles into homebridge-ui/); packaging tests pin
+ * the schema into the published tarball. The path derives from
+ * import.meta.url — the package is ESM, where __dirname does not
+ * exist at runtime (it type-checks via @types/node and then throws in
+ * production only). A read failure propagates: without the schema the
+ * drift gate cannot separate form edits from form artifacts, and the
+ * save must refuse rather than guess.
  */
-const FORM_MATERIALIZED_ARRAY_KEYS = new Set([
-    'includeOnly', 'stationFilter', 'excludeSensors',
-]);
+function configSchemaProperties() {
+    if (!cachedSchemaProperties) {
+        const here = path.dirname(fileURLToPath(import.meta.url));
+        const raw = readFileSync(path.resolve(here, '..', 'config.schema.json'), 'utf8');
+        const parsed = JSON.parse(raw);
+        const properties = parsed.schema?.properties;
+        if (!properties || typeof properties !== 'object') {
+            throw new Error('config.schema.json has no schema.properties; cannot evaluate the settings form state.');
+        }
+        cachedSchemaProperties = properties;
+    }
+    return cachedSchemaProperties;
+}
 /**
- * First key on which the settings page's in-memory block meaningfully
- * differs from the on-disk block, or undefined when they agree
- * (review #47 P1-1). Tolerated: the allowlisted keys ABSENT on disk
- * whose in-memory value is an empty array — the schema form's
- * measured automatic materialization, semantically empty (every
- * consumer gates on a non-empty set). Everything else — a changed
- * value, a dropped key, an added key with content, an unknown key —
- * is an unsaved user edit the editor save would destroy.
+ * Is `value` something the schema form MATERIALIZES on its own for a
+ * key absent from config.json? Measured on HB UI X 5.28: the form
+ * value fills every declared `default` (top-level AND nested inside
+ * object properties like `thresholds`/`units`), and has also been
+ * observed to materialize empty arrays for array-typed keys with no
+ * default (beta.13 smoke on the production box). Anything else in a
+ * form-only key is a real user edit.
  */
-function settingsFormDrift(formBlock, diskBlock) {
-    const keys = new Set([...Object.keys(formBlock), ...Object.keys(diskBlock)]);
-    for (const key of keys) {
-        const inForm = key in formBlock;
-        const onDisk = key in diskBlock;
-        if (inForm && !onDisk) {
-            const v = formBlock[key];
-            if (FORM_MATERIALIZED_ARRAY_KEYS.has(key) && Array.isArray(v) && v.length === 0) {
+function isMaterializedDefault(value, prop) {
+    if (prop.default !== undefined && canonicalJsonLocal(value) === canonicalJsonLocal(prop.default)) {
+        return true;
+    }
+    if (prop.type === 'array' && Array.isArray(value) && value.length === 0) {
+        return true;
+    }
+    if (prop.properties && value && typeof value === 'object' && !Array.isArray(value)) {
+        return Object.entries(value).every(([k, v]) => {
+            const nested = prop.properties[k];
+            return nested !== undefined && isMaterializedDefault(v, nested);
+        });
+    }
+    return false;
+}
+/**
+ * Compare one schema-declared property between the form state and the
+ * on-disk block. Object properties recurse per their nested schema:
+ * the form materializes nested defaults too, so `thresholds` from a
+ * disk block holding two keys legitimately comes back with the full
+ * default family filled in. Returns the dotted path of the first real
+ * difference, or undefined.
+ */
+function propDrift(formValue, diskValue, prop, pathPrefix) {
+    if (prop.properties
+        && formValue && typeof formValue === 'object' && !Array.isArray(formValue)
+        && diskValue && typeof diskValue === 'object' && !Array.isArray(diskValue)) {
+        const form = formValue;
+        const disk = diskValue;
+        for (const key of new Set([...Object.keys(form), ...Object.keys(disk)])) {
+            const nested = prop.properties[key];
+            const at = `${pathPrefix}.${key}`;
+            if (!nested) {
+                // A nested key the schema does not declare: the form cannot
+                // express it (it is dropped from the form value), so a
+                // disk-only occurrence is a form artifact, not an edit. A
+                // form-side occurrence has no legitimate origin — fail closed.
+                if (key in form) {
+                    return at;
+                }
                 continue;
             }
-            return key;
+            const inForm = key in form;
+            const onDisk = key in disk;
+            if (inForm && onDisk) {
+                const d = propDrift(form[key], disk[key], nested, at);
+                if (d !== undefined) {
+                    return d;
+                }
+            }
+            else if (inForm) {
+                if (!isMaterializedDefault(form[key], nested)) {
+                    return at;
+                }
+            }
+            else {
+                return at; // schema-declared, on disk, cleared in the form
+            }
         }
-        if (!inForm && onDisk) {
-            return key;
+        return undefined;
+    }
+    return canonicalJsonLocal(formValue) === canonicalJsonLocal(diskValue) ? undefined : pathPrefix;
+}
+/**
+ * First property path on which the settings page's in-memory block
+ * holds an UNSAVED USER EDIT relative to the on-disk block, or
+ * undefined when it holds none (review #47 P1-1).
+ *
+ * Scope (measured on HB UI X 5.28): the settings modal's schema form
+ * binds two-way into pluginConfig[0] and REPLACES the block with the
+ * form VALUE — which contains only schema-declared properties, with
+ * every declared default materialized. Consequences for this gate:
+ *
+ *   - Keys outside config.schema.json (`platform`, `_bridge`,
+ *     `sensorMap`, the mirror metadata) are invisible to the form —
+ *     the user cannot edit them there, the form value never carries
+ *     them, and the composed save preserves them from disk. A
+ *     disk-only occurrence is therefore the form replacement at work,
+ *     never an edit (refusing it would refuse EVERY production save);
+ *     an occurrence on BOTH sides (a session that never rendered the
+ *     form is a pristine copy of disk) must still MATCH; a form-only
+ *     occurrence has no legitimate origin at all — fail closed
+ *     (review #47 round 3, P2: an allowlist, not a shape rule).
+ *   - For schema-declared keys: a form-only key whose value is a
+ *     materialized default is a form artifact, not an edit. A
+ *     form-only key with any OTHER value, a changed value, or a key
+ *     cleared from the form is a real unsaved edit the editor save
+ *     would destroy: refuse.
+ */
+function settingsFormDrift(formBlock, diskBlock) {
+    const schema = configSchemaProperties();
+    for (const key of new Set([...Object.keys(formBlock), ...Object.keys(diskBlock)])) {
+        const prop = schema[key];
+        const inForm = key in formBlock;
+        const onDisk = key in diskBlock;
+        if (!prop) {
+            if (inForm && onDisk) {
+                if (canonicalJsonLocal(formBlock[key]) !== canonicalJsonLocal(diskBlock[key])) {
+                    return key;
+                }
+            }
+            else if (inForm) {
+                return key;
+            }
+            continue;
         }
-        if (canonicalJsonLocal(formBlock[key]) !== canonicalJsonLocal(diskBlock[key])) {
-            return key;
+        if (inForm && onDisk) {
+            const d = propDrift(formBlock[key], diskBlock[key], prop, key);
+            if (d !== undefined) {
+                return d;
+            }
+        }
+        else if (inForm) {
+            if (!isMaterializedDefault(formBlock[key], prop)) {
+                return key;
+            }
+        }
+        else {
+            return key; // schema-declared, on disk, cleared in the form
         }
     }
     return undefined;

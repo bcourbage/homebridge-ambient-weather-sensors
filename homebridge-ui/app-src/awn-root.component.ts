@@ -94,8 +94,14 @@ interface StationGroup {
     }
     .change-row { padding: 4px 0; border-bottom: 1px solid var(--row-rule); font-size: 0.88rem; }
     /* In-flow confirmation card (beta.14 smoke #4): a fixed overlay
-       is unusable inside HB UI X's content-height iframe. */
-    .modal {
+       is unusable inside HB UI X's content-height iframe. The class
+       name must stay OUT of Bootstrap's namespace: HB UI X mirrors
+       its stylesheets into this iframe, and Bootstrap's ".modal"
+       rule (display:none; position:fixed) hid this card entirely
+       while confirmOpen disabled every control (beta.14 smoke #6).
+       display:block is set explicitly as a second line of defense. */
+    .confirm-card {
+      display: block;
       background: var(--panel-bg); color: var(--fg);
       border: 2px solid var(--warn-edge); border-radius: 8px;
       padding: 16px 20px; max-width: 640px; margin: 12px 0;
@@ -303,7 +309,7 @@ interface StationGroup {
            Save and scrolls itself into view; every other control
            disables while it is open. -->
       @if (confirmOpen() && previewResult()?.ok) {
-          <div class="modal" #confirmPanel>
+          <div class="confirm-card" #confirmPanel>
             <h3>Confirm registration changes</h3>
             <p>These accessories will register, deregister, or re-register when saved. A re-registered accessory may need its HomeKit room assignment redone; a deregistered one leaves HomeKit.</p>
             @for (c of structuralChanges(); track $index) {

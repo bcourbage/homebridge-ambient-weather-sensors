@@ -95,7 +95,9 @@ describe('custom-UI theme palette', () => {
       path.resolve(__dirname, '../../../homebridge-ui/app-src/awn-root.component.ts'), 'utf8');
     const stylesMatch = componentSource.match(/styles:\s*`([\s\S]*?)`/);
     expect(stylesMatch).not.toBeNull();
-    expect(stylesMatch![1]).not.toMatch(/position:\s*fixed/);
+    // Comments may DESCRIBE the hazard; only live declarations count.
+    const declarationsOnly = stylesMatch![1].replace(/\/\*[\s\S]*?\*\//g, '');
+    expect(declarationsOnly).not.toMatch(/position:\s*fixed/);
     expect(componentSource).not.toContain('modal-backdrop');
   });
 

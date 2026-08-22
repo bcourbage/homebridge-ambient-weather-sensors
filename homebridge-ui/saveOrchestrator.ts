@@ -188,19 +188,48 @@ async function unfreezeQuietly(deps: OrchestratorDeps): Promise<boolean> {
   }
 }
 
+/**
+ * Read HB UI X's in-memory config as an immutable, canonical-shape
+ * snapshot. Two production behaviors are handled here (both measured
+ * on HB UI X 5.28):
+ *
+ *   - getPluginConfig() returns HB UI X's LIVE array — the same object
+ *     graph on every call — so a naive mid-save re-check would compare
+ *     that array against itself and always pass. The deep clone makes
+ *     each read independent.
+ *   - The settings modal's schema form binds TWO-WAY into
+ *     pluginConfig[0] and replaces the block with the form VALUE,
+ *     which carries only schema properties — `platform` is not one, so
+ *     every session block arrives WITHOUT its platform key and the
+ *     identity filter below would see zero AmbientWeatherSensors
+ *     blocks (the beta.14 "No AmbientWeatherSensors configuration is
+ *     loaded" failure). HB UI X itself re-injects the key on every
+ *     write (updateConfigBlocks and the backend both force
+ *     `block[pluginType] = pluginAlias`), so restoring it here is the
+ *     same normalization the platform applies — added only when the
+ *     key is absent, never overwriting an explicit value.
+ */
+async function readSessionBlocks(
+  deps: OrchestratorDeps,
+  timeouts: { request: number; persist: number },
+): Promise<Array<Record<string, unknown>>> {
+  const cfgArray = JSON.parse(JSON.stringify(
+    await withTimeout(deps.getPluginConfig(), timeouts.request, 'the Homebridge UI (getPluginConfig)'),
+  )) as Array<Record<string, unknown>>;
+  for (const block of cfgArray) {
+    if (block && typeof block === 'object' && !('platform' in block)) {
+      block.platform = 'AmbientWeatherSensors';
+    }
+  }
+  return cfgArray;
+}
+
 async function composeAndPersistFrozen(
   deps: OrchestratorDeps,
   args: ComposeAndPersistArgs,
 ): Promise<ComposeSaveResult> {
-  // HB UI X's getPluginConfig() returns ITS live in-memory array — the
-  // same object graph on every call — so a naive mid-save re-check
-  // would compare that array against itself and always pass. Snapshot
-  // an immutable copy up front; the re-check then compares the LIVE
-  // state against what this save actually read.
   const timeouts = deps.timeouts ?? DEFAULT_TIMEOUTS;
-  const cfgArray = JSON.parse(JSON.stringify(
-    await withTimeout(deps.getPluginConfig(), timeouts.request, 'the Homebridge UI (getPluginConfig)'),
-  )) as Array<Record<string, unknown>>;
+  const cfgArray = await readSessionBlocks(deps, timeouts);
   const blocks = cfgArray.filter(b => b && b.platform === 'AmbientWeatherSensors');
 
   const digestSession = args.baseDigest !== undefined;
@@ -345,7 +374,7 @@ async function composeAndPersistFrozen(
   //      in-memory config and refuse if ANYTHING changed while the
   //      validation ran — an edit that raced the save would otherwise
   //      be erased by the clear-then-set below.
-  const recheck = await withTimeout(deps.getPluginConfig(), timeouts.request, 'the Homebridge UI (getPluginConfig)');
+  const recheck = await readSessionBlocks(deps, timeouts);
   if (deepJson(recheck) !== deepJson(cfgArray)) {
     return {
       ok: false,

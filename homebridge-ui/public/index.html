@@ -83,7 +83,11 @@
       background: var(--btn-bg); color: var(--btn-fg); border: 1px solid var(--btn-edge);
     }
     #awn button:hover { background: var(--btn-hover); }
-    #awn .row  { display: flex; align-items: center; gap: 8px; }
+    /* Not named ".row": HB UI X mirrors its stylesheets (Bootstrap
+       included) into this iframe, and Bootstrap's grid ".row"/".row > *"
+       rules would fight this layout. Class names here must stay out
+       of Bootstrap's namespace (see bootstrapNamespace.test.ts). */
+    #awn .title-row { display: flex; align-items: center; gap: 8px; }
     #awn .grow { flex: 1; }
     #awn code { background: var(--code-bg); color: var(--fg); padding: 1px 4px; border-radius: 3px; font-size: 0.85em; }
   </style>
@@ -105,7 +109,7 @@
 
     <div id="warnings"></div>
 
-    <h2 class="row">
+    <h2 class="title-row">
       <span class="grow">Status</span>
       <button id="refresh">Refresh</button>
     </h2>
@@ -135,7 +139,7 @@
     <awn-root></awn-root>
   </div>
   <!-- awn-app:assets:begin -->
-  <script type="module" src="app/main-WH4QDKRW.js"></script>
+  <script type="module" src="app/main-FBZRSCUF.js"></script>
   <!-- awn-app:assets:end -->
 
   <script>

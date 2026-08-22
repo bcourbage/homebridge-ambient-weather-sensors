@@ -1428,3 +1428,119 @@ describe('lost responses become visible outcomes (beta.14 smoke: the frozen save
     expect(client.events).toEqual(['freeze', 'unfreeze']);
   });
 });
+
+describe('HB UI X form-value replacement (beta.14 smoke #6, measured on 5.28)', () => {
+  // HB UI X's settings modal binds its schema form two-way into
+  // pluginConfig[0] and REPLACES the block with the form VALUE: only
+  // schema-declared properties survive (`platform` does not), and
+  // every declared default is materialized — top-level and nested.
+  // This helper reproduces that measured shape from the real
+  // config.schema.json, so these tests exercise exactly what a
+  // production session hands the orchestrator.
+  const SCHEMA_PROPS = (JSON.parse(readFileSync(
+    path.resolve(__dirname, '../../config.schema.json'), 'utf8',
+  )) as { schema: { properties: Record<string, { default?: unknown; properties?: Record<string, { default?: unknown }> }> } })
+    .schema.properties;
+
+  function formValueOf(block: Record<string, unknown>): Record<string, unknown> {
+    const out: Record<string, unknown> = {};
+    for (const [key, prop] of Object.entries(SCHEMA_PROPS)) {
+      const nestedDefaults = prop.properties
+        ? Object.fromEntries(Object.entries(prop.properties)
+          .filter(([, np]) => np.default !== undefined)
+          .map(([nk, np]) => [nk, np.default]))
+        : undefined;
+      if (key in block) {
+        out[key] = nestedDefaults && block[key] && typeof block[key] === 'object'
+          ? { ...nestedDefaults, ...(block[key] as Record<string, unknown>) }
+          : block[key];
+      } else if (prop.default !== undefined) {
+        out[key] = prop.default;
+      } else if (nestedDefaults && Object.keys(nestedDefaults).length > 0) {
+        out[key] = nestedDefaults;
+      }
+    }
+    return out;
+  }
+
+  function sessionClient(rig: Rig, sessionBlocks: Array<Record<string, unknown>>): ReturnType<typeof makeClient> {
+    const client = makeClient(rig);
+    client.deps.getPluginConfig = async () => JSON.parse(JSON.stringify(sessionBlocks)) as Array<Record<string, unknown>>;
+    return client;
+  }
+
+  it('a pristine form-replaced session (platform dropped, defaults materialized) SAVES', async () => {
+    const rig = makeRig(LEGACY_BLOCK);
+    discoveryStore(rig);
+    const client = sessionClient(rig, [formValueOf(LEGACY_BLOCK)]);
+    const result = await composeAndPersist(client.deps, {
+      baseDigest: blockDigest(LEGACY_BLOCK),
+      blockIndex: 0,
+    });
+    expect(result.ok).toBe(true);
+    expect(client.events).toEqual(['freeze', 'compose', 'commit', 'update', 'save', 'unfreeze']);
+    // The write carries the canonical platform key even though the
+    // session copy lost it (HB UI X re-injects it too; belt and
+    // braces so a merge-through never persists a platformless block).
+    expect(client.persistedArray![0].platform).toBe('AmbientWeatherSensors');
+  });
+
+  it('a REAL edit hiding inside the replacement noise still refuses: changed value, and non-default form-only value', async () => {
+    const rig = makeRig(LEGACY_BLOCK);
+    discoveryStore(rig);
+
+    const changed = formValueOf({ ...LEGACY_BLOCK, humiditySensors: true }); // disk: false
+    const r1 = await composeAndPersist(sessionClient(rig, [changed]).deps, {
+      baseDigest: blockDigest(LEGACY_BLOCK), blockIndex: 0,
+    });
+    expect(!r1.ok && r1.error.code).toBe('unsaved-settings-changes');
+    expect(!r1.ok && r1.error.message).toContain("'humiditySensors'");
+
+    const formOnly = { ...formValueOf(LEGACY_BLOCK), co2Sensors: true }; // absent on disk, default false
+    const r2 = await composeAndPersist(sessionClient(rig, [formOnly]).deps, {
+      baseDigest: blockDigest(LEGACY_BLOCK), blockIndex: 0,
+    });
+    expect(!r2.ok && r2.error.code).toBe('unsaved-settings-changes');
+    expect(!r2.ok && r2.error.message).toContain("'co2Sensors'");
+    expect(existsSync(path.join(rig.persistDir, LEGACY_SNAPSHOT_FILE))).toBe(false);
+  });
+
+  it('nested defaults materialized into a sparse thresholds object pass; a nested EDIT refuses with its path', async () => {
+    const sparse = { ...LEGACY_BLOCK, thresholds: { windSpeedMph: 18 } };
+    const rig = makeRig(sparse);
+    discoveryStore(rig);
+
+    const pristine = formValueOf(sparse);
+    expect((pristine.thresholds as Record<string, unknown>).windSpeedMph).toBe(18);
+    expect((pristine.thresholds as Record<string, unknown>).uvEnabled).toBe(true); // materialized
+    const ok = await composeAndPersist(sessionClient(rig, [pristine]).deps, {
+      baseDigest: blockDigest(sparse), blockIndex: 0,
+    });
+    expect(ok.ok).toBe(true);
+
+    const rig2 = makeRig(sparse);
+    discoveryStore(rig2);
+    const edited = formValueOf(sparse);
+    (edited.thresholds as Record<string, unknown>).windSpeedMph = 30;
+    const r = await composeAndPersist(sessionClient(rig2, [edited]).deps, {
+      baseDigest: blockDigest(sparse), blockIndex: 0,
+    });
+    expect(!r.ok && r.error.code).toBe('unsaved-settings-changes');
+    expect(!r.ok && r.error.message).toContain("'thresholds.windSpeedMph'");
+  });
+
+  it('non-schema keys the form cannot express (_bridge) neither refuse the save nor get lost', async () => {
+    const bridged = { ...LEGACY_BLOCK, _bridge: { username: '0E:22:33:44:55:66', port: 51900 } };
+    const rig = makeRig(bridged);
+    discoveryStore(rig);
+    const client = sessionClient(rig, [formValueOf(bridged)]); // form value drops _bridge
+    const result = await composeAndPersist(client.deps, {
+      baseDigest: blockDigest(bridged),
+      blockIndex: 0,
+    });
+    expect(result.ok).toBe(true);
+    // Composed from DISK, so the child-bridge settings survive the
+    // save even though the session copy never carried them.
+    expect(client.persistedArray![0]._bridge).toEqual({ username: '0E:22:33:44:55:66', port: 51900 });
+  });
+});

@@ -748,23 +748,28 @@ describe('save flow (PR C / finding 5 — the ONE route is composeAndPersist)', 
     expect(el.textContent).toContain('does not exactly match');
   });
 
-  it('a structural save opens the confirmation modal; Cancel persists NOTHING', async () => {
+  it('a structural save opens the confirmation card; Cancel persists NOTHING', async () => {
     const ipc = makeIpc(editorState(), [], STRUCTURAL_PREVIEW, COMPOSE_OK);
     const fixture = await render(ipc);
     const el = await draftAndPreview(fixture);
 
     btn(el, 'Save changes')!.click();
     await settle(fixture);
-    expect(el.querySelector('.modal')).not.toBeNull();
+    expect(el.querySelector('.confirm-card')).not.toBeNull();
     // In flow, not a fixed overlay (beta.14 smoke #4), and the other
-    // controls lock while the confirmation is open.
+    // controls lock while the confirmation is open. The class name
+    // must stay out of Bootstrap's namespace: HB UI X mirrors its
+    // stylesheets into the iframe and Bootstrap's .modal rule is
+    // display:none (beta.14 smoke #6) - bootstrapNamespace.test.ts
+    // pins every class this app uses against that inventory.
+    expect(el.querySelector('.modal')).toBeNull();
     expect(el.querySelector('.modal-backdrop')).toBeNull();
     expect((btn(el, 'Preview changes') as HTMLButtonElement).disabled).toBe(true);
     expect(el.textContent).toContain('Confirm registration changes');
 
     btn(el, 'Cancel')!.click();
     await settle(fixture);
-    expect(el.querySelector('.modal')).toBeNull();
+    expect(el.querySelector('.confirm-card')).toBeNull();
     expect(ipc.requests.some(r => r.path === '/compose-save')).toBe(false);
     expect(ipc.persisted.filter(p => p.event === 'update' || p.event === 'save')).toEqual([]);
   });
@@ -781,7 +786,7 @@ describe('save flow (PR C / finding 5 — the ONE route is composeAndPersist)', 
     const compose = ipc.requests.find(r => r.path === '/compose-save');
     expect((compose?.body as { confirmDigest?: string }).confirmDigest).toBe('ef'.repeat(32));
     expect(ipc.persisted.map(p => p.event).filter(e => e === 'update' || e === 'save')).toEqual(['update', 'save']);
-    expect(el.querySelector('.modal')).toBeNull();
+    expect(el.querySelector('.confirm-card')).toBeNull();
   });
 
   it('a compose refusal persists NOTHING and renders the structured refusal', async () => {
