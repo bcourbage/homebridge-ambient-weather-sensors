@@ -22,6 +22,9 @@
  *   /editor-state → sanitized editor read model (authored + effective)
  *   /vocabulary   → per-measurement unit options with display labels
  *   /preview-save → save dry run: exact pipeline, zero writes, digest
+ *   /commit-save  → commit phase of the save: same pipeline as
+ *                   /compose-save re-run from disk, plus the durable
+ *                   snapshot/journal write
  *
  * Ordinary legacy schema settings remain writable through HB UI X's
  * standard form and do NOT flow through /compose-save — the boundary
@@ -33,7 +36,7 @@
  */
 import * as path from 'path';
 import { HomebridgePluginUiServer, RequestError } from '@homebridge/plugin-ui-utils';
-import { handleComposeSave, handleGetDiscovery, handleGetEditorState, handleGetNotices, handleGetStatus, handleGetUiState, handleGetVocabulary, handlePreviewSave, } from './handlers.js';
+import { handleCommitSave, handleComposeSave, handleGetDiscovery, handleGetEditorState, handleGetNotices, handleGetStatus, handleGetUiState, handleGetVocabulary, handlePreviewSave, } from './handlers.js';
 /**
  * Version stamp displayed in the UI header. Update on every release
  * (or wire to package.json at build time in a later stage — the
@@ -74,12 +77,17 @@ class UiServer extends HomebridgePluginUiServer {
         this.onRequest('/discovery', () => this.wrap(() => handleGetDiscovery(this.deps)));
         this.onRequest('/notices', () => this.wrap(() => handleGetNotices(this.deps)));
         this.onRequest('/ui-state', () => this.wrap(() => handleGetUiState(this.deps)));
-        // The GUARDED write boundary (GA task #67 / finding 5): validates
-        // the proposal, writes/verifies the immutable legacy snapshot
-        // FIRST, and only then returns the composed next config for the
-        // client to persist via HB UI X's API. The row editor (#69) is its
-        // first caller; refusals are structured { ok: false, error }.
+        // The GUARDED write boundary (GA task #67 / finding 5), split into
+        // two phases (review #47 round 4): /compose-save runs every gate
+        // and the full composition WITHOUT writing anything; the client
+        // re-checks its frozen settings form, then /commit-save re-runs
+        // the same pipeline from disk and durably writes the snapshot or
+        // journal entry immediately before returning the persistable
+        // config — an attempt abandoned between the phases consumes
+        // nothing. The row editor (#69) is the caller; refusals are
+        // structured { ok: false, error }.
         this.onRequest('/compose-save', (payload) => this.wrap(() => handleComposeSave(this.deps, payload)));
+        this.onRequest('/commit-save', (payload) => this.wrap(() => handleCommitSave(this.deps, payload)));
         // Sanitized read model + unit vocabulary for the row editor (#69).
         // Both are READ-ONLY reads; the editor's SAVE path (PR C) runs
         // through /compose-save above.

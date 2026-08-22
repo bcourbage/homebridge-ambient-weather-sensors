@@ -20,6 +20,7 @@ import * as path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
+  blockDigest,
   handleGetEditorState,
   handleGetVocabulary,
   type HandlerDeps,
@@ -108,6 +109,11 @@ describe('/editor-state — v2 configuration', () => {
     expect(dto.configMode).toBe('v2');
     expect(dto.editorAvailable).toBe(true); // PR C: save path live
     expect(dto.errors).toEqual([]);
+    // The session staleness token (beta.13 smoke F1): the canonical
+    // digest of the on-disk block this state renders, plus where it
+    // sits among the plugin's platform blocks.
+    expect(dto.baseDigest).toBe(blockDigest(V2_BLOCK));
+    expect(dto.blockIndex).toBe(0);
 
     const byDp = new Map(dto.rows.filter(r => r.stationMac === MAC).map(r => [r.dataPoint, r]));
     expect(byDp.get('tempf')).toMatchObject({ origin: 'global', name: 'Outdoor Temp', kind: 'temperature' });
@@ -479,12 +485,16 @@ describe('/editor-state — legacy and troubled configurations', () => {
     expect(dto.warnings.filter(w => /newer plugin version/.test(w.message))).toHaveLength(1);
   });
 
-  it('duplicate platform blocks render the first with a warning', async () => {
+  it('duplicate platform blocks render the first with a warning and DISABLE the editor (review #47 P1-2)', async () => {
     const rig = makeRig([V2_BLOCK, { ...V2_BLOCK, name: 'Second' }]);
     discoveryStore(rig, [{ mac: MAC, dataPoint: 'tempf' }]);
     const dto = await handleGetEditorState(rig.deps, {});
     expect(dto.warnings.some(w => /2 AmbientWeatherSensors platform blocks/.test(w.message))).toBe(true);
     expect(dto.rows.length).toBeGreaterThan(0);
+    // The session token identifies a block by content while the client
+    // replaces by position — with multiple blocks those can disagree,
+    // so saving stays off until a multi-Home editor exists.
+    expect(dto.editorAvailable).toBe(false);
   });
 
   it('throws when no config path is available or no block exists', async () => {

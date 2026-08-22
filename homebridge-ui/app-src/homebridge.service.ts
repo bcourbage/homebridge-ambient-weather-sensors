@@ -43,6 +43,17 @@ export interface HomebridgeIpc {
    */
   updatePluginConfig?(config: unknown[]): Promise<unknown>;
   savePluginConfig?(): Promise<unknown>;
+  /**
+   * Settings-form freeze surface (review #47 round 3, P1): the save
+   * orchestrator disables HB UI X's Save button and hides the schema
+   * form for the duration of a save so no form edit can race the
+   * persistence. Optional — older bridges without them still get the
+   * orchestrator's re-read backstop.
+   */
+  disableSaveButton?(): void;
+  enableSaveButton?(): void;
+  hideSchemaForm?(): void;
+  showSchemaForm?(): void;
 }
 
 /**
@@ -147,14 +158,6 @@ export class HomebridgeService {
    * duplicate-block configs are already flagged by /editor-state and
    * refused at the boundary.
    */
-  async pluginConfigBlock(): Promise<unknown> {
-    if (!this.ipc) {
-      throw new Error('homebridge bridge is not available outside HB UI X');
-    }
-    const blocks = await this.ipc.getPluginConfig();
-    return Array.isArray(blocks) ? blocks[0] : undefined;
-  }
-
   /** Reload the iframe (seam so tests can observe without navigating). */
   reloadWindow(): void {
     this.document.defaultView?.location.reload();
@@ -170,17 +173,53 @@ export class HomebridgeService {
     getPluginConfig(): Promise<Array<Record<string, unknown>>>;
     updatePluginConfig(config: Array<Record<string, unknown>>): Promise<unknown>;
     savePluginConfig(): Promise<unknown>;
+    freezeSettingsForm(): void;
+    unfreezeSettingsForm(): void;
     getCachedAccessories?(): Promise<unknown[]>;
   } {
     const ipc = this.ipc;
     if (!ipc || !ipc.updatePluginConfig || !ipc.savePluginConfig) {
       throw new Error('This Homebridge UI does not expose the config persistence API; saving is unavailable.');
     }
+    // The settings-form freeze is part of the save's correctness (a
+    // missing control would reopen the form-edit race after the
+    // re-check), so a bridge without ALL FOUR controls cannot save —
+    // fail closed exactly like the missing persistence API above
+    // (review #47 round 4, P1).
+    if (!ipc.disableSaveButton || !ipc.enableSaveButton || !ipc.hideSchemaForm || !ipc.showSchemaForm) {
+      throw new Error('This Homebridge UI does not expose the settings-form controls; saving is unavailable.');
+    }
     return {
       request: (path, payload) => ipc.request(path, payload),
       getPluginConfig: () => ipc.getPluginConfig() as Promise<Array<Record<string, unknown>>>,
       updatePluginConfig: (config) => ipc.updatePluginConfig!(config),
       savePluginConfig: () => ipc.savePluginConfig!(),
+      // The form state itself survives: HB UI X re-renders the schema
+      // form from its in-memory config on showSchemaForm.
+      freezeSettingsForm: () => {
+        ipc.disableSaveButton!();
+        ipc.hideSchemaForm!();
+      },
+      // Each restore step runs INDEPENDENTLY: a throwing showSchemaForm
+      // must not leave the Save button dead, and vice versa (review
+      // #47 round 4, P1 — the orchestrator additionally guarantees a
+      // restore failure never masks the save outcome).
+      unfreezeSettingsForm: () => {
+        let firstFailure: unknown;
+        try {
+          ipc.showSchemaForm!();
+        } catch (e) {
+          firstFailure = e;
+        }
+        try {
+          ipc.enableSaveButton!();
+        } catch (e) {
+          firstFailure = firstFailure ?? e;
+        }
+        if (firstFailure !== undefined) {
+          throw firstFailure;
+        }
+      },
       ...(ipc.getCachedAccessories
         ? { getCachedAccessories: () => ipc.getCachedAccessories!() }
         : {}),

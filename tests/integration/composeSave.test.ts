@@ -17,7 +17,7 @@ import * as path from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { handleComposeSave, handlePreviewSave, syntheticProbeMac, type HandlerDeps } from '../../homebridge-ui/handlers';
+import { blockDigest, handleCommitSave, handleComposeSave, handlePreviewSave, syntheticProbeMac, type HandlerDeps } from '../../homebridge-ui/handlers';
 import { composeAndPersist, type OrchestratorDeps } from '../../homebridge-ui/saveOrchestrator';
 import { LEGACY_JOURNAL_DIR, LEGACY_SENSOR_FIELDS, LEGACY_SNAPSHOT_FILE, recognizeMirror } from '../../src/sensorMap/legacyMirror';
 
@@ -104,6 +104,19 @@ async function digestFor(rig: Rig, payload: Record<string, unknown>): Promise<st
   return preview.digest;
 }
 
+/**
+ * The realistic COMMIT flow (review #47 round 5): validate first,
+ * present the issued token to the commit — exactly what the
+ * orchestrator does.
+ */
+async function commitFor(rig: Rig, payload: Record<string, unknown>): Promise<Awaited<ReturnType<typeof handleCommitSave>>> {
+  const validated = await handleComposeSave(rig.deps, payload);
+  if (!validated.ok) {
+    throw new Error(`validate refused: ${validated.error.code}`);
+  }
+  return handleCommitSave(rig.deps, { ...payload, validationToken: validated.validationToken });
+}
+
 /** Event-logging fake of HB UI X's client API, wired to the REAL handler. */
 function makeClient(rig: Rig): {
   deps: OrchestratorDeps;
@@ -119,9 +132,13 @@ function makeClient(rig: Rig): {
   const cfg = JSON.parse(readFileSync(rig.configPath, 'utf8')) as { platforms: Array<Record<string, unknown>> };
   const deps: OrchestratorDeps = {
     async request(p, payload) {
-      expect(p).toBe('/compose-save');
-      state.events.push('compose');
-      return handleComposeSave(rig.deps, payload);
+      expect(['/compose-save', '/commit-save']).toContain(p);
+      if (p === '/compose-save') {
+        state.events.push('compose');
+        return handleComposeSave(rig.deps, payload);
+      }
+      state.events.push('commit');
+      return handleCommitSave(rig.deps, payload);
     },
     async getPluginConfig() {
       return cfg.platforms.filter(b => b.platform === 'AmbientWeatherSensors');
@@ -133,6 +150,12 @@ function makeClient(rig: Rig): {
     },
     async savePluginConfig() {
       state.events.push('save');
+    },
+    freezeSettingsForm() {
+      state.events.push('freeze');
+    },
+    unfreezeSettingsForm() {
+      state.events.push('unfreeze');
     },
   };
   return Object.assign(state, { deps });
@@ -188,7 +211,7 @@ describe('structural confirmation digest (PR C / finding 5)', () => {
     // Migration equivalence: converting the config touches no
     // accessories, so no confirmation is demanded and the snapshot is
     // written on the way through.
-    const result = await handleComposeSave(rig.deps, { base: LEGACY_BLOCK });
+    const result = await commitFor(rig, { base: LEGACY_BLOCK });
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.snapshot).toBe('written');
@@ -260,7 +283,7 @@ describe('post-compose persistence failures are INDETERMINATE (review #45 P1-2)'
       expect(result.error.message).toContain('MAY have been applied');
     }
     // update DID take effect before the failure — the effect-then-throw shape.
-    expect(client.events).toEqual(['compose', 'update']);
+    expect(client.events).toEqual(['freeze', 'compose', 'commit', 'update', 'update', 'unfreeze']);
     expect(client.persistedArray).toBeDefined();
   });
 });
@@ -283,7 +306,7 @@ describe('no-bypass: preview → confirm → compose → update → save (PR C)'
     // 2-4. Confirmed save through the ONE route.
     const result = await composeAndPersist(client.deps, { ...payload, confirmDigest: preview.digest });
     expect(result.ok).toBe(true);
-    expect(client.events).toEqual(['compose', 'update', 'save']);
+    expect(client.events).toEqual(['freeze', 'compose', 'commit', 'update', 'update', 'save', 'unfreeze']);
     expect(client.snapshotExistedAtUpdate).toBe(true); // durable BEFORE persistence
     // Verbatim persistence, synchronized mirror included.
     const persisted = client.persistedArray!.find(b => b.platform === 'AmbientWeatherSensors')!;
@@ -306,7 +329,7 @@ describe('no-bypass: preview → confirm → compose → update → save (PR C)'
     if (!result.ok) {
       expect(result.error.code).toBe('confirmation-required');
     }
-    expect(client.events).toEqual(['compose']); // no update, no save
+    expect(client.events).toEqual(['freeze', 'compose', 'unfreeze']); // no update, no save
     expect(client.persistedArray).toBeUndefined();
   });
 });
@@ -319,7 +342,7 @@ describe('ordering: snapshot is durable before the client persistence half runs'
 
     const result = await composeAndPersist(client.deps, {}); // pure migration
     expect(result.ok).toBe(true);
-    expect(client.events).toEqual(['compose', 'update', 'save']);
+    expect(client.events).toEqual(['freeze', 'compose', 'commit', 'update', 'update', 'save', 'unfreeze']);
     expect(client.snapshotExistedAtUpdate).toBe(true);
     if (result.ok) {
       expect(result.snapshot).toBe('written');
@@ -360,7 +383,9 @@ describe('ordering: snapshot is durable before the client persistence half runs'
     if (!result.ok) {
       expect(result.error.code).toBe('snapshot-write-failed');
     }
-    expect(client.events).toEqual(['compose']);
+    // Validate passes (dir readable, snapshot absent); the write fails
+    // at COMMIT — still zero config persistence.
+    expect(client.events).toEqual(['freeze', 'compose', 'commit', 'unfreeze']);
     expect(client.snapshotExistedAtUpdate).toBeUndefined();
   });
 });
@@ -398,7 +423,7 @@ describe('authoritative on-disk config (never the client copy)', () => {
     const client = makeClient(rig);
     const result = await composeAndPersist(client.deps, { proposal: [] });
     expect(result.ok).toBe(false);
-    expect(client.events).toEqual(['compose']);
+    expect(client.events).toEqual(['freeze', 'compose', 'unfreeze']);
   });
 });
 
@@ -461,7 +486,7 @@ describe('proposal normalization (identity-first → merge → body validation)'
       expect(result.error.code).toBe('invalid-rows');
       expect((result.error as { rows: unknown[] }).rows.length).toBeGreaterThan(0);
     }
-    expect(client.events).toEqual(['compose']);
+    expect(client.events).toEqual(['freeze', 'compose', 'unfreeze']);
     expect(existsSync(path.join(rig.persistDir, LEGACY_SNAPSHOT_FILE))).toBe(false);
   });
 });
@@ -637,10 +662,10 @@ describe('immutable snapshot lifecycle', () => {
   it('an existing MATCHING snapshot verifies and proceeds as exists', async () => {
     const rig = makeRig(LEGACY_BLOCK);
     discoveryStore(rig);
-    const first = await handleComposeSave(rig.deps, { base: LEGACY_BLOCK });
+    const first = await commitFor(rig, { base: LEGACY_BLOCK });
     expect(first.ok && first.snapshot === 'written').toBe(true);
     // Same legacy config converts again (config save never happened).
-    const again = await handleComposeSave(rig.deps, { base: LEGACY_BLOCK });
+    const again = await commitFor(rig, { base: LEGACY_BLOCK });
     expect(again.ok).toBe(true);
     if (again.ok) {
       expect(again.snapshot).toBe('exists');
@@ -656,7 +681,7 @@ describe('immutable snapshot lifecycle', () => {
       legacy: { temperatureSensors: false }, // differs from the live config
     }, null, 2);
     writeFileSync(snapPath, staleBody);
-    const result = await handleComposeSave(rig.deps, { base: LEGACY_BLOCK });
+    const result = await commitFor(rig, { base: LEGACY_BLOCK });
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.snapshot).toBe('journaled');
@@ -680,6 +705,8 @@ describe('immutable snapshot lifecycle', () => {
     mkdirSync(journalDir(rig), { recursive: true });
     const entryFile = path.join(journalDir(rig), 'entry-000001.json');
     writeFileSync(entryFile, '{not json');
+    // Two-phase: the corrupt journal refuses at VALIDATE, before any
+    // durable step could run.
     const result = await handleComposeSave(rig.deps, { base: LEGACY_BLOCK });
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -718,17 +745,23 @@ describe('immutable snapshot lifecycle', () => {
     }
   });
 
-  it('concurrent first conversions: exactly one written, the rest verify as exists, payload intact', async () => {
+  it('concurrent first conversions: exactly one written; the rest verify as exists or refuse as drift', async () => {
     const rig = makeRig(LEGACY_BLOCK);
     discoveryStore(rig);
     const results = await Promise.all([
-      handleComposeSave(rig.deps, { base: LEGACY_BLOCK }),
-      handleComposeSave(rig.deps, { base: LEGACY_BLOCK }),
-      handleComposeSave(rig.deps, { base: LEGACY_BLOCK }),
+      commitFor(rig, { base: LEGACY_BLOCK }),
+      commitFor(rig, { base: LEGACY_BLOCK }),
+      commitFor(rig, { base: LEGACY_BLOCK }),
     ]);
     const outcomes = results.map(r => (r.ok ? r.snapshot : `refused:${r.error.code}`));
     expect(outcomes.filter(o => o === 'written')).toHaveLength(1);
-    expect(outcomes.filter(o => o === 'exists')).toHaveLength(2);
+    // A loser either validated after the winner's write ('exists') or
+    // validated before it — its token then binds 'pending-write',
+    // which the commit's recomputation correctly reports as drift
+    // (retrying re-validates and succeeds as 'exists').
+    for (const o of outcomes) {
+      expect(['written', 'exists', 'refused:stale-confirmation']).toContain(o);
+    }
     const snap = JSON.parse(readFileSync(path.join(rig.persistDir, LEGACY_SNAPSHOT_FILE), 'utf8'));
     expect(snap.legacy.temperatureSensors).toBe(true);
   });
@@ -742,7 +775,7 @@ describe('explicit-base orchestration (review #67 P1-3)', () => {
     const clonedBase = JSON.parse(JSON.stringify(LEGACY_BLOCK)) as Record<string, unknown>;
     const result = await composeAndPersist(client.deps, { base: clonedBase });
     expect(result.ok).toBe(true);
-    expect(client.events).toEqual(['compose', 'update', 'save']);
+    expect(client.events).toEqual(['freeze', 'compose', 'commit', 'update', 'update', 'save', 'unfreeze']);
     const awsBlocks = (client.persistedArray ?? []).filter(b => b.platform === 'AmbientWeatherSensors');
     expect(awsBlocks).toHaveLength(1);
     expect(awsBlocks[0].configVersion).toBe(2);
@@ -816,7 +849,7 @@ describe('rollback is a two-way door (conversion journal)', () => {
     const snapPath = path.join(rig.persistDir, LEGACY_SNAPSHOT_FILE);
 
     // First conversion writes the immutable snapshot.
-    const first = await handleComposeSave(rig.deps, { base: LEGACY_BLOCK });
+    const first = await commitFor(rig, { base: LEGACY_BLOCK });
     expect(first.ok).toBe(true);
     if (!first.ok) {
       return;
@@ -833,7 +866,7 @@ describe('rollback is a two-way door (conversion journal)', () => {
     // Reconversion: the projected mirror form differs from the
     // original, so the save journals it and proceeds — the rollback is
     // not a one-way door.
-    const second = await handleComposeSave(rig.deps, { base: reEnabled });
+    const second = await commitFor(rig, { base: reEnabled });
     expect(second.ok).toBe(true);
     if (!second.ok) {
       return;
@@ -859,7 +892,7 @@ describe('rollback is a two-way door (conversion journal)', () => {
     // journal stays at one entry and the snapshot stays untouched.
     const rolledAgain = { ...documentedRollback(second.nextConfig), _sensorMapV2: true };
     persistAsConfig(rig, rolledAgain);
-    const third = await handleComposeSave(rig.deps, { base: rolledAgain });
+    const third = await commitFor(rig, { base: rolledAgain });
     expect(third.ok).toBe(true);
     if (third.ok) {
       expect(third.snapshot).toBe('journaled');
@@ -872,14 +905,14 @@ describe('rollback is a two-way door (conversion journal)', () => {
     const rig = makeRig(LEGACY_BLOCK);
     discoveryStore(rig);
 
-    const first = await handleComposeSave(rig.deps, { base: LEGACY_BLOCK });
+    const first = await commitFor(rig, { base: LEGACY_BLOCK });
     expect(first.ok).toBe(true);
     if (!first.ok) {
       return;
     }
     const reEnabled = { ...documentedRollback(first.nextConfig), _sensorMapV2: true };
     persistAsConfig(rig, reEnabled);
-    const second = await handleComposeSave(rig.deps, { base: reEnabled });
+    const second = await commitFor(rig, { base: reEnabled });
     expect(second.ok).toBe(true);
     if (!second.ok) {
       return;
@@ -889,7 +922,7 @@ describe('rollback is a two-way door (conversion journal)', () => {
     // conversion — a genuinely different baseline must be preserved.
     const edited = { ...documentedRollback(second.nextConfig), _sensorMapV2: true, windSensors: false };
     persistAsConfig(rig, edited);
-    const third = await handleComposeSave(rig.deps, { base: edited });
+    const third = await commitFor(rig, { base: edited });
     expect(third.ok).toBe(true);
     if (third.ok) {
       expect(third.snapshot).toBe('journaled');
@@ -897,5 +930,446 @@ describe('rollback is a two-way door (conversion journal)', () => {
     const entries = readJournalEntries(rig);
     expect(entries).toHaveLength(2);
     expect(entries[1].legacy.windSensors).toBe(false);
+  });
+});
+
+describe('session-digest staleness (beta.13 smoke F1: getPluginConfig is schema-form-mutated)', () => {
+  it('a contaminated base copy refuses stale-base while the SAME session succeeds via baseDigest', async () => {
+    const rig = makeRig(LEGACY_BLOCK);
+    discoveryStore(rig);
+    // The reproduced browser condition: HB UI X's settings form
+    // materializes schema defaults into the in-memory config that
+    // getPluginConfig() hands the client.
+    const contaminated = { ...LEGACY_BLOCK, includeOnly: [], stationFilter: [] };
+    const viaBase = await handlePreviewSave(rig.deps, { base: contaminated });
+    expect(viaBase.ok).toBe(false);
+    if (!viaBase.ok) {
+      expect(viaBase.error.code).toBe('stale-base');
+    }
+
+    const digest = blockDigest(LEGACY_BLOCK);
+    const viaDigest = await handlePreviewSave(rig.deps, { baseDigest: digest });
+    expect(viaDigest.ok).toBe(true);
+
+    const composed = await handleComposeSave(rig.deps, { baseDigest: digest, formBlock: LEGACY_BLOCK });
+    expect(composed.ok).toBe(true);
+    if (composed.ok) {
+      expect(composed.nextConfigDigest).toBe(blockDigest(composed.nextConfig));
+    }
+  });
+
+  it('a digest that matches no on-disk block refuses stale-base; a matching digest wins over a stale base', async () => {
+    const rig = makeRig(LEGACY_BLOCK);
+    discoveryStore(rig);
+    const wrong = await handleComposeSave(rig.deps, { baseDigest: 'f'.repeat(64), formBlock: LEGACY_BLOCK });
+    expect(wrong.ok).toBe(false);
+    if (!wrong.ok) {
+      expect(wrong.error.code).toBe('stale-base');
+    }
+    // baseDigest takes precedence: a contaminated base alongside a
+    // valid digest must not re-introduce the refusal.
+    const both = await handlePreviewSave(rig.deps, {
+      base: { ...LEGACY_BLOCK, includeOnly: [] },
+      baseDigest: blockDigest(LEGACY_BLOCK),
+    });
+    expect(both.ok).toBe(true);
+  });
+
+  it('composeAndPersist via baseDigest+blockIndex succeeds against a contaminated array and persists the composed block verbatim', async () => {
+    const rig = makeRig(LEGACY_BLOCK);
+    discoveryStore(rig);
+    const client = makeClient(rig);
+    // Contaminate what getPluginConfig returns, exactly as the
+    // schema form does in the real page.
+    const realGet = client.deps.getPluginConfig.bind(client.deps);
+    client.deps.getPluginConfig = async () =>
+      (await realGet()).map(b => ({ ...b, includeOnly: [], stationFilter: [] }));
+
+    const result = await composeAndPersist(client.deps, {
+      baseDigest: blockDigest(LEGACY_BLOCK),
+      blockIndex: 0,
+    });
+    expect(result.ok).toBe(true);
+    expect(client.events).toEqual(['freeze', 'compose', 'commit', 'update', 'update', 'save', 'unfreeze']);
+    if (!result.ok) {
+      return;
+    }
+
+    // The final update is the composed block VERBATIM: the preceding
+    // empty update truncated HB UI X's in-memory copy, so the merge
+    // cannot preserve the contamination or resurrect a key the
+    // compose deleted (which would stale the fresh mirror).
+    const persisted = (client.persistedArray ?? [])[0];
+    expect(persisted).toEqual(result.nextConfig);
+    expect('includeOnly' in persisted).toBe(false);
+    expect('stationFilter' in persisted).toBe(false);
+  });
+
+  it('an out-of-range blockIndex refuses before composing (zero writes)', async () => {
+    const rig = makeRig(LEGACY_BLOCK);
+    discoveryStore(rig);
+    const client = makeClient(rig);
+    const result = await composeAndPersist(client.deps, {
+      baseDigest: blockDigest(LEGACY_BLOCK),
+      blockIndex: 5,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('stale-base');
+    }
+    expect(client.events).toEqual(['freeze', 'unfreeze']);
+  });
+});
+
+describe('unsaved settings-form changes (review #47 P1-1)', () => {
+  it('a REAL form edit refuses the save with zero writes; saving the form first clears it', async () => {
+    const rig = makeRig(LEGACY_BLOCK);
+    discoveryStore(rig);
+    const client = makeClient(rig);
+    // The user changed a credential in the settings form (unsaved):
+    // the in-memory copy differs from disk beyond materialization.
+    const realGet = client.deps.getPluginConfig.bind(client.deps);
+    client.deps.getPluginConfig = async () =>
+      (await realGet()).map(b => ({ ...b, includeOnly: [], apiKey: 'edited-but-not-saved' }));
+
+    const result = await composeAndPersist(client.deps, {
+      baseDigest: blockDigest(LEGACY_BLOCK),
+      blockIndex: 0,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('unsaved-settings-changes');
+      expect(result.error.message).toContain("'apiKey'");
+    }
+    // Zero persistence AND zero snapshot: the refusal precedes the
+    // snapshot write.
+    expect(client.events).toEqual(['freeze', 'compose', 'unfreeze']);
+    expect(existsSync(path.join(rig.persistDir, LEGACY_SNAPSHOT_FILE))).toBe(false);
+  });
+
+  it('a dropped key and a changed nested value are unsaved edits too; a malformed formBlock refuses', async () => {
+    const rig = makeRig(LEGACY_BLOCK);
+    discoveryStore(rig);
+    const digest = blockDigest(LEGACY_BLOCK);
+
+    const dropped: Record<string, unknown> = { ...LEGACY_BLOCK };
+    delete dropped.temperatureSensors;
+    const r1 = await handleComposeSave(rig.deps, { baseDigest: digest, formBlock: dropped });
+    expect(!r1.ok && r1.error.code).toBe('unsaved-settings-changes');
+
+    const r2 = await handleComposeSave(rig.deps, {
+      baseDigest: digest,
+      formBlock: { ...LEGACY_BLOCK, humiditySensors: true }, // true vs false on disk
+    });
+    expect(!r2.ok && r2.error.code).toBe('unsaved-settings-changes');
+
+    const r3 = await handleComposeSave(rig.deps, { baseDigest: digest, formBlock: 'not-an-object' });
+    expect(!r3.ok && r3.error.code).toBe('unsaved-settings-changes');
+
+    // The exact disk state (with or without tolerated materialization)
+    // composes fine.
+    const r4 = await handleComposeSave(rig.deps, {
+      baseDigest: digest,
+      formBlock: { ...LEGACY_BLOCK, includeOnly: [], stationFilter: [] },
+    });
+    expect(r4.ok).toBe(true);
+  });
+});
+
+describe('multi-block hard refusal (review #47 P1-2)', () => {
+  const SECOND_BLOCK = { ...LEGACY_BLOCK, name: 'Second Home', apiKey: 'k2' };
+
+  it('two DISTINCT plugin blocks: preview and compose refuse even with a uniquely matching digest', async () => {
+    const rig = makeRig(LEGACY_BLOCK, [SECOND_BLOCK]);
+    discoveryStore(rig);
+    const digest = blockDigest(LEGACY_BLOCK); // uniquely matches block 0
+    const pv = await handlePreviewSave(rig.deps, { baseDigest: digest });
+    expect(!pv.ok && pv.error.code).toBe('ambiguous-platform-block');
+    const cs = await handleComposeSave(rig.deps, { baseDigest: digest, formBlock: LEGACY_BLOCK });
+    expect(!cs.ok && cs.error.code).toBe('ambiguous-platform-block');
+    expect(existsSync(path.join(rig.persistDir, LEGACY_SNAPSHOT_FILE))).toBe(false);
+  });
+
+  it('the orchestrator refuses two blocks client-side with zero requests, and a forged blockIndex with zero requests', async () => {
+    const rig = makeRig(LEGACY_BLOCK, [SECOND_BLOCK]);
+    discoveryStore(rig);
+    const twoBlocks = makeClient(rig);
+    const r1 = await composeAndPersist(twoBlocks.deps, {
+      baseDigest: blockDigest(LEGACY_BLOCK),
+      blockIndex: 0,
+    });
+    expect(!r1.ok && r1.error.code).toBe('ambiguous-platform-block');
+    expect(twoBlocks.events).toEqual(['freeze', 'unfreeze']);
+
+    // Single block, forged index: the orchestrator derives the
+    // position itself and refuses the disagreement before composing.
+    const rigOne = makeRig(LEGACY_BLOCK);
+    discoveryStore(rigOne);
+    const one = makeClient(rigOne);
+    const r2 = await composeAndPersist(one.deps, {
+      baseDigest: blockDigest(LEGACY_BLOCK),
+      blockIndex: 3,
+    });
+    expect(!r2.ok && r2.error.code).toBe('stale-base');
+    expect(one.events).toEqual(['freeze', 'unfreeze']);
+    expect(existsSync(path.join(rigOne.persistDir, LEGACY_SNAPSHOT_FILE))).toBe(false);
+  });
+});
+
+
+describe('settings-form gate hardening (review #47 round 3)', () => {
+  it('a digest save WITHOUT formBlock is refused before any snapshot exists (the gate is not optional)', async () => {
+    const rig = makeRig(LEGACY_BLOCK);
+    discoveryStore(rig);
+    const result = await handleComposeSave(rig.deps, { baseDigest: blockDigest(LEGACY_BLOCK) });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('unsaved-settings-changes');
+    }
+    expect(existsSync(path.join(rig.persistDir, LEGACY_SNAPSHOT_FILE))).toBe(false);
+  });
+
+  it('an UNKNOWN field holding an intentionally empty array refuses (allowlist, not a shape rule)', async () => {
+    const rig = makeRig(LEGACY_BLOCK);
+    discoveryStore(rig);
+    const result = await handleComposeSave(rig.deps, {
+      baseDigest: blockDigest(LEGACY_BLOCK),
+      formBlock: { ...LEGACY_BLOCK, futureField: [] },
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('unsaved-settings-changes');
+      expect(result.error.message).toContain("'futureField'");
+    }
+    expect(existsSync(path.join(rig.persistDir, LEGACY_SNAPSHOT_FILE))).toBe(false);
+  });
+
+  it('a settings mutation racing the compose is caught by the pre-persistence re-read (zero writes)', async () => {
+    const rig = makeRig(LEGACY_BLOCK);
+    discoveryStore(rig);
+    const client = makeClient(rig);
+    // Hostile simulation of the TOCTOU window: the freeze is
+    // client-cooperative, so model a writer that mutates the
+    // in-memory config AFTER the first read. The re-read taken just
+    // before persistence must refuse rather than erase the edit.
+    let reads = 0;
+    const realGet = client.deps.getPluginConfig.bind(client.deps);
+    client.deps.getPluginConfig = async () => {
+      reads += 1;
+      const blocks = await realGet();
+      return reads === 1 ? blocks : blocks.map(b => ({ ...b, apiKey: 'edited-mid-save' }));
+    };
+    const result = await composeAndPersist(client.deps, {
+      baseDigest: blockDigest(LEGACY_BLOCK),
+      blockIndex: 0,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('unsaved-settings-changes');
+      expect(result.error.message).toContain('while the save was running');
+    }
+    expect(client.events).toEqual(['freeze', 'compose', 'unfreeze']);
+    expect(reads).toBeGreaterThanOrEqual(2);
+    // The abandoned attempt consumed NOTHING durable: validation wrote
+    // no snapshot, and the commit phase was never reached (review #47
+    // round 4 — "nothing was written" is now literally true).
+    expect(existsSync(path.join(rig.persistDir, LEGACY_SNAPSHOT_FILE))).toBe(false);
+    expect(existsSync(journalDir(rig))).toBe(false);
+  });
+});
+
+
+describe('two-phase save: validate writes nothing (review #47 round 4)', () => {
+  it('the validate phase reports pending-write with NO snapshot on disk; commit then writes it', async () => {
+    const rig = makeRig(LEGACY_BLOCK);
+    discoveryStore(rig);
+    const validated = await handleComposeSave(rig.deps, { base: LEGACY_BLOCK });
+    expect(validated.ok).toBe(true);
+    if (validated.ok) {
+      expect(validated.snapshot).toBe('pending-write');
+    }
+    expect(existsSync(path.join(rig.persistDir, LEGACY_SNAPSHOT_FILE))).toBe(false);
+
+    const committed = await commitFor(rig, { base: LEGACY_BLOCK });
+    expect(committed.ok).toBe(true);
+    if (committed.ok) {
+      expect(committed.snapshot).toBe('written');
+      if (validated.ok) {
+        expect(committed.nextConfigDigest).toBe(validated.nextConfigDigest);
+      }
+    }
+    expect(existsSync(path.join(rig.persistDir, LEGACY_SNAPSHOT_FILE))).toBe(true);
+  });
+
+  it('a reconversion validates as pending-journal with NO journal entry written', async () => {
+    const rig = makeRig(LEGACY_BLOCK);
+    discoveryStore(rig);
+    writeFileSync(path.join(rig.persistDir, LEGACY_SNAPSHOT_FILE), JSON.stringify({
+      schemaVersion: 1, savedAt: '2026-01-01T00:00:00Z',
+      legacy: { temperatureSensors: false }, // differs -> journal path
+    }, null, 2));
+    const validated = await handleComposeSave(rig.deps, { base: LEGACY_BLOCK });
+    expect(validated.ok).toBe(true);
+    if (validated.ok) {
+      expect(validated.snapshot).toBe('pending-journal');
+    }
+    expect(existsSync(journalDir(rig))).toBe(false);
+  });
+
+  it('a corrupt journal refuses at VALIDATE, before anything could be recorded', async () => {
+    const rig = makeRig(LEGACY_BLOCK);
+    discoveryStore(rig);
+    writeFileSync(path.join(rig.persistDir, LEGACY_SNAPSHOT_FILE), JSON.stringify({
+      schemaVersion: 1, savedAt: '2026-01-01T00:00:00Z',
+      legacy: { temperatureSensors: false },
+    }, null, 2));
+    mkdirSync(journalDir(rig), { recursive: true });
+    writeFileSync(path.join(journalDir(rig), 'entry-000001.json'), '{not json');
+    const validated = await handleComposeSave(rig.deps, { base: LEGACY_BLOCK });
+    expect(validated.ok).toBe(false);
+    if (!validated.ok) {
+      expect(validated.error.code).toBe('conversion-journal-error');
+    }
+  });
+});
+
+describe('freeze failure safety (review #47 round 4)', () => {
+  it('a throwing freeze refuses cleanly, attempts the restore, and makes zero requests', async () => {
+    const rig = makeRig(LEGACY_BLOCK);
+    discoveryStore(rig);
+    const client = makeClient(rig);
+    client.deps.freezeSettingsForm = () => {
+      client.events.push('freeze-throw');
+      throw new Error('save button API rejected');
+    };
+    const result = await composeAndPersist(client.deps, {
+      baseDigest: blockDigest(LEGACY_BLOCK),
+      blockIndex: 0,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('unsaved-settings-changes');
+      expect(result.error.message).toContain('could not be frozen');
+    }
+    // A partial freeze is restored before refusing; nothing was
+    // requested or written.
+    expect(client.events).toEqual(['freeze-throw', 'unfreeze']);
+    expect(existsSync(path.join(rig.persistDir, LEGACY_SNAPSHOT_FILE))).toBe(false);
+  });
+
+  it('an unfreeze failure AFTER successful persistence never masks the save outcome', async () => {
+    const rig = makeRig(LEGACY_BLOCK);
+    discoveryStore(rig);
+    const client = makeClient(rig);
+    client.deps.unfreezeSettingsForm = () => {
+      client.events.push('unfreeze-throw');
+      throw new Error('showSchemaForm rejected');
+    };
+    const result = await composeAndPersist(client.deps, {
+      baseDigest: blockDigest(LEGACY_BLOCK),
+      blockIndex: 0,
+    });
+    // The save completed and persisted; the cleanup failure is
+    // swallowed rather than replacing the authoritative outcome.
+    expect(result.ok).toBe(true);
+    expect(client.events).toEqual(['freeze', 'compose', 'commit', 'update', 'update', 'save', 'unfreeze-throw']);
+  });
+});
+
+
+describe('server-enforced two-phase protocol (review #47 round 5)', () => {
+  it('a DIRECT commit without a validation token refuses with nothing recorded', async () => {
+    const rig = makeRig(LEGACY_BLOCK);
+    discoveryStore(rig);
+    const result = await handleCommitSave(rig.deps, { base: LEGACY_BLOCK });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('commit-without-validation');
+    }
+    expect(existsSync(path.join(rig.persistDir, LEGACY_SNAPSHOT_FILE))).toBe(false);
+    expect(existsSync(journalDir(rig))).toBe(false);
+  });
+
+  it('a token presented with a DIFFERENT proposal refuses with nothing recorded', async () => {
+    const rig = makeRig(LEGACY_BLOCK);
+    discoveryStore(rig);
+    const validated = await handleComposeSave(rig.deps, { base: LEGACY_BLOCK });
+    expect(validated.ok).toBe(true);
+    if (!validated.ok) {
+      return;
+    }
+    // The validated canonical map plus a DISABLED-row edit: zero
+    // structural consequences, so no earlier gate
+    // (confirmation-required) can mask the token check.
+    const result = await handleCommitSave(rig.deps, {
+      base: LEGACY_BLOCK,
+      proposal: [...validated.canonicalSensorMap, { dataPoint: 'humidity', enabled: false, name: 'Renamed After Validation' }],
+      validationToken: validated.validationToken,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('stale-confirmation');
+    }
+    expect(existsSync(path.join(rig.persistDir, LEGACY_SNAPSHOT_FILE))).toBe(false);
+    expect(existsSync(journalDir(rig))).toBe(false);
+  });
+
+  it('state drift between the phases refuses with nothing recorded', async () => {
+    const rig = makeRig(LEGACY_BLOCK);
+    discoveryStore(rig);
+    const digest = blockDigest(LEGACY_BLOCK);
+    const validated = await handleComposeSave(rig.deps, {
+      baseDigest: digest,
+      formBlock: LEGACY_BLOCK,
+    });
+    expect(validated.ok).toBe(true);
+    if (!validated.ok) {
+      return;
+    }
+    // The settings-form state the commit presents differs from the
+    // validated one (a tolerated materialization appeared in between —
+    // still a drift the token must catch, because the token binds the
+    // EXACT validated state).
+    const result = await handleCommitSave(rig.deps, {
+      baseDigest: digest,
+      formBlock: { ...LEGACY_BLOCK, includeOnly: [] },
+      validationToken: validated.validationToken,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('stale-confirmation');
+    }
+    expect(existsSync(path.join(rig.persistDir, LEGACY_SNAPSHOT_FILE))).toBe(false);
+    expect(existsSync(journalDir(rig))).toBe(false);
+  });
+});
+
+describe('settings-form restore failures are surfaced (review #47 round 5, P2)', () => {
+  it('an unfreeze failure after successful persistence returns ok WITH the restore flag', async () => {
+    const rig = makeRig(LEGACY_BLOCK);
+    discoveryStore(rig);
+    const client = makeClient(rig);
+    client.deps.unfreezeSettingsForm = () => {
+      client.events.push('unfreeze-throw');
+      throw new Error('showSchemaForm rejected');
+    };
+    const result = await composeAndPersist(client.deps, {
+      baseDigest: blockDigest(LEGACY_BLOCK),
+      blockIndex: 0,
+    });
+    expect(result.ok).toBe(true);
+    expect(result.settingsRestoreFailed).toBe(true);
+  });
+
+  it('a successful restore attaches NO flag', async () => {
+    const rig = makeRig(LEGACY_BLOCK);
+    discoveryStore(rig);
+    const client = makeClient(rig);
+    const result = await composeAndPersist(client.deps, {
+      baseDigest: blockDigest(LEGACY_BLOCK),
+      blockIndex: 0,
+    });
+    expect(result.ok).toBe(true);
+    expect(result.settingsRestoreFailed).toBeUndefined();
   });
 });

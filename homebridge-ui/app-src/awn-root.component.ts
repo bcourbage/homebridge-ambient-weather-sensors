@@ -98,6 +98,20 @@ interface StationGroup {
       padding: 16px 20px; max-width: 560px; width: 90%;
       max-height: 70vh; overflow-y: auto;
     }
+    /* The row table is wider than the panel on most screens. It
+       scrolls horizontally in its own container, and the action
+       column stays pinned to the right edge so Edit is always
+       visible (beta.13 smoke F2 - it rendered past the clipped
+       right edge and looked absent). The pinned cells need a solid
+       background or scrolled content bleeds through them. */
+    .table-scroll { overflow-x: auto; }
+    th.actions, td.actions {
+      position: sticky; right: 0;
+      background: var(--page-bg);
+      border-left: 1px solid var(--rule);
+      text-align: right;
+    }
+    th.actions { background: var(--panel-bg); }
   `,
   template: `
     <h2>Sensor map <span class="station-meta">draft editor preview</span></h2>
@@ -131,15 +145,22 @@ interface StationGroup {
         @if (state()!.mirrorState === 'recognized') {
           <div class="banner info">Rollback mirror: verified. The documented current-state manual rollback (deleting the three v2 markers) is available for this configuration.</div>
         } @else {
-          <div class="banner">Rollback mirror: {{ state()!.mirrorState }}. Do NOT use the marker-deletion rollback — freeze on the current 1.7.x, restore the snapshot, or re-save here to regenerate the mirror.</div>
+          <div class="banner">Rollback mirror: {{ state()!.mirrorState }}. Do NOT use the marker-deletion rollback. Freeze on the current 1.7.x, restore the snapshot, or save here again to regenerate the mirror.</div>
         }
       }
 
-      @if (draftCount() > 0) {
+      <!-- Always rendered while the editor is usable: appearing only
+           on the first draft shifted the whole page down mid-edit
+           (beta.13 smoke F3). -->
+      @if (state()!.rows.length > 0) {
         <div class="draft-bar">
-          <span class="grow"><strong>{{ draftCount() }}</strong> draft change(s) — nothing is saved; preview runs the real save pipeline without writing.</span>
-          <button type="button" (click)="preview()" [disabled]="previewPending() || editFormInvalid() || saving() || reloadRequired()">Preview changes</button>
-          <button type="button" (click)="discardAll()" [disabled]="saving() || reloadRequired()">Discard drafts</button>
+          @if (draftCount() > 0) {
+            <span class="grow"><strong>{{ draftCount() }}</strong> draft {{ draftCount() === 1 ? 'change' : 'changes' }}. Nothing is saved yet. Preview shows what saving would do without writing anything.</span>
+          } @else {
+            <span class="grow">No draft changes. Edit a row below to start.</span>
+          }
+          <button type="button" (click)="preview()" [disabled]="draftCount() === 0 || previewPending() || editFormInvalid() || saving() || reloadRequired()">Preview changes</button>
+          <button type="button" (click)="discardAll()" [disabled]="draftCount() === 0 || saving() || reloadRequired()">Discard drafts</button>
         </div>
       }
 
@@ -206,22 +227,31 @@ interface StationGroup {
       @if (saveResult(); as sr) {
         @if (sr.ok) {
           <div class="banner info">
-            Saved. The sensor map was written through the guarded boundary
+            Saved.
             @if (sr.snapshot === 'written') {
-              — your original legacy settings were preserved first in
-              <code>legacy-config-snapshot.json</code> (plugin data directory)
+              Your original legacy settings were preserved first in
+              <code>legacy-config-snapshot.json</code> (plugin data directory).
             } @else if (sr.snapshot === 'exists') {
-              — the existing legacy snapshot was verified before writing
+              The existing legacy snapshot was verified before writing.
             } @else if (sr.snapshot === 'journaled') {
-              — your pre-conversion settings were recorded in the
+              Your pre-conversion settings were recorded in the
               <code>legacy-conversion-journal</code> folder; the
-              original legacy snapshot is untouched
-            }.
-            Homebridge applies structural changes on the next restart.
+              original legacy snapshot is untouched.
+            }
+            Homebridge applies structural changes on the next full restart.
           </div>
         } @else {
           <div class="banner safe-mode">Save failed ({{ sr.code }}): {{ sr.message }}</div>
         }
+      }
+      @if (postSaveDrift()) {
+        <div class="banner safe-mode">The configuration on disk does not exactly match what was saved. Review the plugin configuration before editing further.</div>
+      }
+      @if (settingsRestoreFailed()) {
+        <div class="banner">
+          The settings form above could not be restored after the save. The save result shown here stands; reload the plugin settings page to restore the form.
+          <button type="button" (click)="reloadPage()">Reload now</button>
+        </div>
       }
       @if (reloadRequired()) {
         <div class="banner">
@@ -259,11 +289,12 @@ interface StationGroup {
           {{ group.title }}
           <span class="station-meta"><code>{{ group.mac }}</code> · {{ group.source }}</span>
         </h3>
+        <div class="table-scroll">
         <table>
           <thead>
             <tr>
               <th>Data point</th><th>Name</th><th>Kind</th><th>Units</th>
-              <th>Enabled</th><th>Layer</th><th>Battery</th><th></th>
+              <th>Enabled</th><th>Layer</th><th>Battery</th><th class="actions"></th>
             </tr>
           </thead>
           <tbody>
@@ -291,7 +322,7 @@ interface StationGroup {
                     <span class="muted">—</span>
                   }
                 </td>
-                <td>
+                <td class="actions">
                   @if (row.kind !== 'unrecognized') {
                     <button type="button" (click)="toggleEdit(row)" [disabled]="saving() || reloadRequired()">{{ isExpanded(row) ? 'Close' : 'Edit' }}</button>
                   }
@@ -304,7 +335,7 @@ interface StationGroup {
                       <label><input type="checkbox" formControlName="enabled" /> Enabled</label>
                       <label>Name <input type="text" formControlName="name" /></label>
                       @if (editForm!.get('name')?.invalid) {
-                        <span class="field-error">Name is required — restore a value or use Reset row.</span>
+                        <span class="field-error">Name is required. Restore a value or use Reset row.</span>
                       }
                       @if (displayUnitOptions(row).length > 0) {
                         <label>Display unit
@@ -318,7 +349,7 @@ interface StationGroup {
                       @if (row.kind === 'motion') {
                         <label>Threshold <input type="number" step="any" formControlName="threshold" /></label>
                         @if (editForm!.get('threshold')?.invalid) {
-                          <span class="field-error">Threshold is required for this row — restore a value or use Reset row.</span>
+                          <span class="field-error">Threshold is required for this row. Restore a value or use Reset row.</span>
                         }
                         <label>Trigger
                           <select formControlName="triggerDirection">
@@ -340,6 +371,7 @@ interface StationGroup {
             }
           </tbody>
         </table>
+        </div>
       }
     }
   `,
@@ -366,8 +398,23 @@ export class AwnRootComponent {
    */
   protected readonly reloadRequired = signal(false);
   protected readonly confirmOpen = signal(false);
+  /**
+   * Post-save receipt failure: the reloaded on-disk block does not
+   * match the digest of what /compose-save composed — the saved
+   * configuration drifted between this page and disk.
+   */
+  protected readonly postSaveDrift = signal(false);
+  /**
+   * The save outcome stands, but restoring the settings form (or its
+   * Save button) failed afterward — the page is degraded and only a
+   * reload fixes it (review #47 round 5, P2). Never silent.
+   */
+  protected readonly settingsRestoreFailed = signal(false);
   protected readonly saveResult = signal<
-    | { ok: true; snapshot: 'written' | 'exists' | 'journaled' | 'not-applicable' }
+    // The pending-* values belong to the validate phase and never
+    // reach here (a successful save reports the COMMIT outcome), but
+    // the wire type includes them.
+    | { ok: true; snapshot: 'written' | 'exists' | 'journaled' | 'not-applicable' | 'pending-write' | 'pending-journal' }
     | { ok: false; code: string; message: string }
     | null
   >(null);
@@ -579,12 +626,14 @@ export class AwnRootComponent {
     this.previewPending.set(true);
     this.previewResult.set(null);
     try {
-      const [base, cachedAccessoryUniqueIds] = await Promise.all([
-        this.hb.pluginConfigBlock(),
-        this.hb.cachedAccessoryUniqueIds(),
-      ]);
+      // The staleness token is the digest /editor-state issued for the
+      // block this session loaded — NEVER a block copy from
+      // homebridge.getPluginConfig(): HB UI X returns the schema
+      // form's mutated in-memory config, which does not byte-match
+      // disk (beta.13 smoke F1 — every preview refused stale-base).
+      const cachedAccessoryUniqueIds = await this.hb.cachedAccessoryUniqueIds();
       const result = await this.hb.request<PreviewResultDto>('/preview-save', {
-        base,
+        baseDigest: this.state()?.baseDigest,
         proposal: this.store.proposal(),
         cachedAccessoryUniqueIds,
       });
@@ -634,6 +683,8 @@ export class AwnRootComponent {
   private async doSave(confirmDigest: string): Promise<void> {
     this.saving.set(true);
     this.saveResult.set(null);
+    this.postSaveDrift.set(false);
+    this.settingsRestoreFailed.set(false);
     // Lock editing for the duration (review #45 P2-4): the open form
     // closes (no form events can draft mid-save) and Edit/Preview/
     // Discard disable via saving() — a slow save can never race a
@@ -645,7 +696,12 @@ export class AwnRootComponent {
       const result = await composeAndPersist(this.hb.orchestratorDeps(), {
         proposal: this.store.proposal(),
         confirmDigest,
+        baseDigest: this.state()?.baseDigest,
+        blockIndex: this.state()?.blockIndex,
       });
+      if (result.settingsRestoreFailed) {
+        this.settingsRestoreFailed.set(true);
+      }
       if (result.ok) {
         this.saveResult.set({ ok: true, snapshot: result.snapshot });
         // Reload the authoritative state: the config on disk changed,
@@ -657,6 +713,14 @@ export class AwnRootComponent {
         this.editFormInvalid.set(false);
         this.draftVersion.update(v => v + 1);
         await this.load();
+        // Post-save receipt: the reloaded on-disk block must be
+        // EXACTLY what /compose-save composed. A mismatch means
+        // something between this page and disk altered the block in
+        // flight (HB UI X's merge-style update, another session) —
+        // surface it instead of letting the drift pass silently.
+        if (this.state() !== null && this.state()!.baseDigest !== result.nextConfigDigest) {
+          this.postSaveDrift.set(true);
+        }
       } else {
         this.saveResult.set({ ok: false, code: result.error.code, message: result.error.message });
         if (result.error.code === 'persistence-indeterminate') {

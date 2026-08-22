@@ -149,6 +149,24 @@ export interface EditorStateDto {
    * and on the malformed-sensorMap hard stop.
    */
   editorAvailable: boolean;
+  /**
+   * Canonical digest of the on-disk platform block this state was
+   * derived from — the session staleness token. Preview and save
+   * requests pass it back as `baseDigest`; the server refuses when it
+   * no longer matches the disk block. NEVER derive a staleness token
+   * from homebridge.getPluginConfig(): HB UI X hands back the schema
+   * form's mutated in-memory copy, which does not byte-match disk.
+   */
+  baseDigest: string;
+  /**
+   * Index of that block among the plugin's platform blocks, in
+   * config.json order. A CROSS-CHECK only: composeAndPersist derives
+   * the write-back position itself from the single plugin block and
+   * refuses when this value disagrees (review #47 P1-2 — a supplied
+   * index is never trusted to pick the replacement target). Always 0
+   * while the editor requires exactly one block.
+   */
+  blockIndex: number;
   version: string;
   stations: EditorStationDto[];
   /**

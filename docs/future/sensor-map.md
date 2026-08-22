@@ -1457,6 +1457,120 @@ Tests: for every non-motion kind, submit an override with each of these fields; 
 
 ## 17. Decision log
 
+- **2026-08-21**: Session digest + verbatim persistence (beta.13
+  browser smoke, finding F1). The editor was unusable in the real HB
+  UI: every preview/save refused `stale-base`, because the client's
+  `base` came from `homebridge.getPluginConfig()`, which returns the
+  settings page's IN-MEMORY config — the object the standard schema
+  form mutates (it materializes defaults such as `includeOnly: []`),
+  so it never byte-matches disk. Reproduced against the installed
+  handlers: any added/removed key refuses. Two changes: (1)
+  `/editor-state` issues `baseDigest` (canonical digest of the on-disk
+  block it rendered) + `blockIndex`; preview and compose accept
+  `baseDigest` as the preferred staleness token (raw `base` remains
+  for callers holding a faithful copy), restoring the intended
+  semantics — "stale" now means the DISK changed since the session
+  loaded. (2) HB UI X applies `updatePluginConfig` by MERGE
+  (Object.assign), which silently resurrects keys a save removed —
+  a resurrected mirrored field stales the fresh mirror on arrival
+  (caught live by the new post-save receipt: compose returns
+  `nextConfigDigest`, and the editor compares it against the reloaded
+  state's `baseDigest`, warning on drift). Persistence is therefore an
+  empty `updatePluginConfig([])` (HB UI X truncates its copy) followed
+  by the real array (assigned verbatim into the now-empty slots) —
+  deterministic under every transport, unlike undefined-key tombstones
+  (which die in JSON transports; measured in the harness). Verified
+  end-to-end in `scripts/ui-harness/` — a dev-only rig that serves the
+  committed bundle against the real handlers with a faithful twin of
+  HB UI X's contamination, merge semantics, frozen injected body
+  style, and iframe height loop.
+
+  Review round 2 hardened two safety gaps the digest design opened:
+  (a) UNSAVED-SETTINGS GATE — editor persistence replaces the
+  in-memory config with the disk-derived composed block, so an unsaved
+  settings-form edit (a credential, a toggle) would be silently
+  discarded while the receipt read clean. The save flow sends the
+  in-memory block as `formBlock`; the server refuses any difference
+  from disk beyond the schema form's measured automatic
+  materialization (empty arrays for absent keys) with
+  `unsaved-settings-changes`. Fail-safe: unmeasured form normalization
+  refuses too, and saving/discarding the form clears it.
+  (b) EXACTLY-ONE-BLOCK INVARIANT — the digest identifies a block by
+  content while the client replaces by position; with multiple plugin
+  blocks those can disagree and corrupt another Home's block. Until a
+  multi-Home editor exists: `/editor-state` keeps
+  `editorAvailable: false`, the pipeline refuses previews and saves
+  outright, and composeAndPersist derives the write-back position from
+  the single plugin block itself — a supplied `blockIndex` is only
+  cross-checked and refused on disagreement, never trusted. (Round 3:
+  the refusal copy directs multi-Home users — a SUPPORTED setup, see
+  MultiHome.md — to the JSON config editor; it never calls their
+  blocks duplicates or tells them to delete one.)
+
+  Round 5 made the protocol SERVER-ENFORCED and the cleanup honest:
+  (g) VALIDATION TOKEN — `/commit-save` accepted the original payload
+  with no proof that `/compose-save` ran, so a direct commit (stale
+  client, console request, refactor) could consume the permanent
+  record without the frozen-form re-check, and the client's phase
+  cross-check ran only AFTER the record was written. `/compose-save`
+  now returns an opaque token binding the authoritative disk block,
+  the canonicalized proposal, the settings-form state, the
+  inventory-bound consequences digest, the composed output, and the
+  prospective record outcome; `/commit-save` recomputes the token from
+  CURRENT state and refuses before writing anything — absent token →
+  `commit-without-validation`, any drift → `stale-confirmation`. An
+  integrity token, not an auth token (the bridge trusts its session);
+  it exists so the ordering cannot be skipped by accident. Concurrent
+  first conversions now resolve as one 'written' plus 'exists' or a
+  clean drift refusal per loser (a retry re-validates and succeeds).
+  (h) RESTORE FAILURES SURFACED — `composeAndPersist` returns
+  `settingsRestoreFailed` alongside the authoritative outcome when the
+  form/Save-button restore failed, and the editor shows a "could not
+  be restored after the save, reload the plugin settings page" banner
+  with a Reload button instead of leaving a silently degraded page.
+
+  Round 4 made the save TWO-PHASE and the freeze failure-safe:
+  (e) TWO-PHASE COMPOSE/COMMIT — the snapshot/journal used to be
+  written during the single compose call, BEFORE the client's form
+  re-check, so an attempt abandoned at the re-check had already
+  consumed the permanent snapshot (and a later real conversion's
+  snapshot would describe the wrong baseline). `/compose-save` is now
+  the VALIDATE phase: every gate plus the full composition with
+  nothing durably recorded (prospective outcomes `pending-write` /
+  `pending-journal`; corrupt snapshot/journal refuse here);
+  `/commit-save` re-runs the same pipeline from disk and writes the
+  record immediately before returning the persistable config. The
+  orchestrator validates → re-checks the frozen form → commits →
+  cross-checks the two phases' `nextConfigDigest`s. An abandoned
+  attempt now consumes nothing — "nothing was written" is literally
+  true.
+  (f) FREEZE FAILURE-SAFETY — all four HB UI X form controls are
+  REQUIRED before a save (orchestratorDeps fails closed like the
+  missing persistence API); a freeze that throws is restored
+  best-effort and refused cleanly; the two restore steps run
+  independently (a throwing showSchemaForm cannot leave the Save
+  button dead); and an unfreeze failure after successful persistence
+  is swallowed — the save outcome is authoritative and cleanup can
+  never mask it.
+
+  Round 3 closed the remaining race and hardened the gate:
+  (c) SETTINGS-FORM FREEZE — `formBlock` was sampled once while the
+  schema form and HB UI X's Save button stayed live, so an edit made
+  DURING the compose was still erased (TOCTOU). composeAndPersist now
+  freezes the second writer for the whole operation (disable Save
+  button + hide the schema form before the first `getPluginConfig()`
+  read; both restored in `finally` — form state survives, HB UI X
+  re-renders it from its in-memory config), and, because the freeze is
+  client-cooperative, re-reads the config just before persistence and
+  refuses if ANYTHING changed while the compose ran.
+  (d) The gate is MANDATORY for digest saves — `/compose-save` refuses
+  a `baseDigest` request without `formBlock` (a stale bundle or future
+  refactor cannot bypass it; faithful callers use the raw-`base`
+  path) — and the empty-array tolerance became an explicit allowlist
+  of the fields HB UI X was observed materializing (`includeOnly`,
+  `stationFilter`, `excludeSensors`); an unknown field holding an
+  intentionally empty array refuses.
+
 - **2026-08-20 (c)**: Conversion journal is a directory of immutable
   entry files (PR #46 review round 3). The round-2 single-file journal
   guarded by an in-process promise mutex was proven unsafe across

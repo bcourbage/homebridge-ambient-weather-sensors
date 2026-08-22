@@ -17,6 +17,13 @@
      *   2. Every rule pairs background AND text color from the same
      *      palette (CSS variables below), so no element ever renders
      *      half ours / half theirs.
+     *   3. HB UI X additionally injects the LOAD-TIME theme's body
+     *      colors as an !important inline style it never re-sends, so
+     *      a live theme switch left the page ground frozen at the old
+     *      theme while our panels followed. The two body rules after
+     *      the palette definitions out-rank it (class > element
+     *      specificity, both !important) and key on the live-mirrored
+     *      theme classes; the color values are HB UI X's own.
      */
     #awn {
       --fg: #1a1a1a; --fg-sub: #666; --fg-empty: #6e6e6e;
@@ -28,6 +35,7 @@
       --on-bg: #c8e6c9;    --on-fg: #1b5e20;
       --off-bg: #ffcdd2;   --off-fg: #b71c1c;
       --btn-bg: #fff; --btn-fg: #1a1a1a; --btn-edge: #bbb; --btn-hover: #f0f0f0;
+      --page-bg: #FFFFFF;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
       color: var(--fg);
     }
@@ -41,8 +49,12 @@
       --on-bg: #1e3b21;    --on-fg: #a5d6a7;
       --off-bg: #4a1a1a;   --off-fg: #ef9a9a;
       --btn-bg: #2d2f33; --btn-fg: #e8eaed; --btn-edge: #5f6368; --btn-hover: #3c4043;
+      --page-bg: #242424;
     }
     body { margin: 0; padding: 16px; }
+    /* Header point 3: keep the page ground on the LIVE theme. */
+    body.dark-mode { background-color: #242424 !important; color: #FFFFFF !important; }
+    body:not(.dark-mode) { background-color: #FFFFFF !important; color: #000000 !important; }
     #awn h1   { font-size: 1.25rem; margin: 24px 0 4px 0; color: var(--fg); }
     #awn h2   { font-size: 1.05rem; margin: 20px 0 6px 0; border-bottom: 1px solid var(--rule); padding-bottom: 4px; color: var(--fg); }
     /* Subordinate headings inside a section (Bruno's beta.11 feedback:
@@ -123,7 +135,7 @@
     <awn-root></awn-root>
   </div>
   <!-- awn-app:assets:begin -->
-  <script type="module" src="app/main-MHFQ33HJ.js"></script>
+  <script type="module" src="app/main-RRY2WNUL.js"></script>
   <!-- awn-app:assets:end -->
 
   <script>
@@ -275,14 +287,20 @@
     // spins forever when the user clicks Save because HB UI X
     // waits for a signal that never comes. Every custom UI plugin
     // that embeds the schema form calls this before showSchemaForm.
+    // (The sensor-map editor temporarily disables the button and
+    // hides the form while one of ITS saves runs, so a form edit
+    // cannot race the guarded persistence; both are restored after.)
     homebridge.enableSaveButton();
 
     // Render HB UI X's schema-based config form ABOVE our preview
     // panels. Without this, enabling `customUi: true` in the schema
     // would hide the config form entirely — users would have no way
-    // to edit thresholds, excludes, etc. through the UI. Save flows
-    // through HB UI X, not through our server bridge, so the
-    // read-only Path B guarantee is preserved.
+    // to edit ordinary settings (credentials, toggles, filters)
+    // through the UI. Those fields save through HB UI X directly;
+    // sensor-map saves flow through the guarded server compose
+    // boundary (/compose-save) and only its RESULT is persisted via
+    // HB UI X. The two must not race: an editor save refuses while
+    // this form holds unsaved changes (unsaved-settings-changes).
     homebridge.showSchemaForm();
 
     // Kick off the observation-panel refresh in the background.

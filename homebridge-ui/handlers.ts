@@ -23,6 +23,7 @@ import { detectConfigMode, type ConfigInputShape } from '../dist/sensorMap/confi
 import {
   composeV2ConfigSave,
   journalConversionBaseline,
+  verifyConversionJournalReadable,
   recognizeMirror,
   verifyLegacySnapshot,
   writeLegacySnapshot,
@@ -197,6 +198,11 @@ const LEGACY_CATEGORY_TOGGLES = [
   'lightningSensors',
 ] as const;
 
+/** See ComposeSaveResult.snapshot for the phase semantics. */
+export type SnapshotOutcome =
+  | 'written' | 'exists' | 'journaled' | 'not-applicable'
+  | 'pending-write' | 'pending-journal';
+
 export type ComposeSaveError =
   | { code: 'config-unreadable'; message: string }
   | { code: 'no-platform-block'; message: string }
@@ -214,7 +220,9 @@ export type ComposeSaveError =
   | { code: 'stale-confirmation'; message: string }
   | { code: 'legacy-snapshot-corrupt'; message: string }
   | { code: 'snapshot-write-failed'; message: string }
-  | { code: 'conversion-journal-error'; message: string };
+  | { code: 'conversion-journal-error'; message: string }
+  | { code: 'unsaved-settings-changes'; message: string }
+  | { code: 'commit-without-validation'; message: string };
 
 export type ComposeSaveResult =
   | {
@@ -222,12 +230,35 @@ export type ComposeSaveResult =
     /** The composed platform block the CLIENT must persist verbatim. */
     nextConfig: Record<string, unknown>;
     /**
-     * Snapshot outcome: written now, already present (verified as the
-     * same original), journaled (a reconversion whose differing
-     * baseline was recorded in the conversion journal while the
-     * original snapshot stayed untouched), or not a legacy conversion.
+     * Canonical digest of `nextConfig` — the post-save receipt: after
+     * persisting and reloading /editor-state, the session's new
+     * `baseDigest` must equal this value, or something between the
+     * client and disk altered the block in flight (for example HB UI
+     * X's merge-style config update resurrecting a deleted key).
      */
-    snapshot: 'written' | 'exists' | 'journaled' | 'not-applicable';
+    nextConfigDigest: string;
+    /**
+     * Opaque token binding everything the validate phase verified —
+     * the authoritative disk block, the canonicalized proposal, the
+     * settings-form state, the inventory-bound consequences, the
+     * composed output, and the prospective record outcome. The COMMIT
+     * requires it and recomputes it from current state before writing
+     * anything (review #47 round 5): a commit without it, or with any
+     * drift since validation, refuses with zero writes.
+     */
+    validationToken: string;
+    /**
+     * Pre-conversion-record outcome. Commit phase: 'written' (snapshot
+     * created now), 'exists' (verified as the same original),
+     * 'journaled' (a reconversion whose differing baseline was
+     * appended to the conversion journal while the original snapshot
+     * stayed untouched), or 'not-applicable' (not a legacy
+     * conversion). Validate phase reports the PROSPECTIVE outcome
+     * without writing: 'pending-write' / 'pending-journal' instead of
+     * 'written' / 'journaled' (review #47 round 4 — an attempt
+     * abandoned after validation consumes nothing).
+     */
+    snapshot: SnapshotOutcome;
     /** The canonical sensorMap embedded in nextConfig (informational). */
     canonicalSensorMap: SensorMapOverride[];
     /**
@@ -245,9 +276,20 @@ export interface ComposeSavePayload {
   /**
    * The client's copy of the plugin config block it is editing. Used
    * ONLY to locate + staleness-check the on-disk block — never as the
-   * authoritative current configuration.
+   * authoritative current configuration. Only valid for callers that
+   * hold a FAITHFUL copy of the on-disk block; a browser client must
+   * send `baseDigest` instead (HB UI X's getPluginConfig() returns the
+   * schema form's mutated in-memory copy, which never byte-matches).
    */
   base?: unknown;
+  /**
+   * PREFERRED staleness token: the `baseDigest` issued by
+   * /editor-state for the block this editor session loaded. The
+   * server matches it against the canonical digest of each on-disk
+   * block; no match means the configuration changed since the session
+   * loaded. Takes precedence over `base` when both are present.
+   */
+  baseDigest?: unknown;
   /** Proposed sensor-map override state from the editor. */
   proposal?: unknown;
   /**
@@ -268,6 +310,26 @@ export interface ComposeSavePayload {
    * is /preview-save, which is what forces the confirmation UX.
    */
   confirmDigest?: unknown;
+  /**
+   * The settings page's in-memory copy of the block being edited
+   * (from getPluginConfig()), sent by the SAVE flow so the server can
+   * detect UNSAVED settings-form changes (review #47 P1-1): editor
+   * persistence replaces the in-memory config with the disk-derived
+   * composed block, so a form edit the user has not saved would be
+   * silently discarded. The server compares this against the on-disk
+   * block, tolerating only the schema form's measured automatic
+   * materialization (empty arrays for absent keys); any other
+   * difference refuses with `unsaved-settings-changes`.
+   */
+  formBlock?: unknown;
+  /**
+   * REQUIRED by /commit-save: the `validationToken` the validate
+   * phase returned. The commit recomputes the token from current
+   * state and refuses on absence or any mismatch, so the durable
+   * snapshot/journal write cannot happen without a fresh, matching
+   * validation (review #47 round 5). Ignored by /compose-save.
+   */
+  validationToken?: unknown;
 }
 
 /**
@@ -341,13 +403,44 @@ async function runSavePipeline(
   if (blocks.length === 0) {
     return { ok: false, error: { code: 'no-platform-block', message: 'No AmbientWeatherSensors platform block found in config.json.' } };
   }
+  // ---- 1b. Exactly-one-block invariant (review #47 P1-2). The
+  //          session token identifies a block by CONTENT, while the
+  //          client replaces a block by POSITION — with multiple
+  //          blocks those can disagree, composing one Home's block and
+  //          overwriting another's. Until a multi-Home editor exists,
+  //          previews and saves refuse outright; /editor-state keeps
+  //          `editorAvailable: false` for the same configs.
+  if (blocks.length > 1) {
+    return {
+      ok: false,
+      error: {
+        code: 'ambiguous-platform-block',
+        message: `${blocks.length} AmbientWeatherSensors platform blocks exist (a multi-Home setup; see MultiHome.md). `
+          + 'The sensor-map editor supports exactly one block, so it is read-only here. Edit sensorMap in the '
+          + 'JSON config editor instead.',
+      },
+    };
+  }
 
-  // ---- 2. Locate the block being edited by matching the client's
-  //         base copy — which doubles as the stale-session check: if
-  //         the on-disk block no longer equals what the client is
-  //         editing, refuse rather than compose against a stale view.
-  const baseJson = canonicalJsonLocal(p.base);
-  const matches = blocks.filter(b => canonicalJsonLocal(b) === baseJson);
+  // ---- 2. Locate the block being edited — which doubles as the
+  //         stale-session check: if the on-disk block no longer equals
+  //         what the client loaded, refuse rather than compose against
+  //         a stale view. The PREFERRED token is `baseDigest`, the
+  //         canonical digest /editor-state issued for the block it
+  //         rendered: HB UI X's getPluginConfig() hands the client the
+  //         settings page's IN-MEMORY config, which the standard
+  //         schema form mutates (it materializes schema defaults such
+  //         as `includeOnly: []`), so a client-side block copy can
+  //         NEVER be trusted to byte-match disk (beta.13 smoke:
+  //         preview refused stale-base on an untouched config). The
+  //         digest ties the session to what the EDITOR loaded from
+  //         disk instead. A raw `base` block is still accepted for
+  //         callers that hold a faithful copy.
+  const wantDigest = typeof p.baseDigest === 'string' && p.baseDigest.length > 0;
+  const baseJson = wantDigest ? undefined : canonicalJsonLocal(p.base);
+  const matches = blocks.filter(b => (wantDigest
+    ? blockDigest(b) === p.baseDigest
+    : canonicalJsonLocal(b) === baseJson));
   if (matches.length === 0) {
     return {
       ok: false,
@@ -355,15 +448,6 @@ async function runSavePipeline(
         code: 'stale-base',
         message: 'The configuration changed since this editor session loaded (or the submitted base does not match any '
           + 'AmbientWeatherSensors block). Reload the plugin config and retry.',
-      },
-    };
-  }
-  if (matches.length > 1) {
-    return {
-      ok: false,
-      error: {
-        code: 'ambiguous-platform-block',
-        message: `${matches.length} identical AmbientWeatherSensors blocks match the submitted base; cannot determine which to edit.`,
       },
     };
   }
@@ -524,9 +608,42 @@ async function runSavePipeline(
   };
 }
 
+/**
+ * VALIDATE phase of the two-phase save (review #47 round 4, P1-2):
+ * every gate and the full composition run, but NOTHING is durably
+ * recorded — no snapshot, no journal entry. The client re-checks its
+ * frozen settings form after this succeeds, then calls /commit-save;
+ * an attempt abandoned at the re-check therefore consumes nothing,
+ * and the permanent snapshot always describes the configuration
+ * immediately preceding an ACTUAL conversion. The `snapshot` result
+ * reports the prospective outcome ('pending-write' /
+ * 'pending-journal') so refusable record problems (corrupt snapshot,
+ * corrupt journal) surface here, before anything is written.
+ */
 export async function handleComposeSave(
   deps: HandlerDeps,
   payload: unknown,
+): Promise<ComposeSaveResult> {
+  return composeSaveInternal(deps, payload, false);
+}
+
+/**
+ * COMMIT phase: identical pipeline and gates, re-run from the current
+ * disk state (nothing is trusted from the validate phase), with the
+ * snapshot/journal written durably immediately before the persistable
+ * config is returned. The client persists the RESULT of this call.
+ */
+export async function handleCommitSave(
+  deps: HandlerDeps,
+  payload: unknown,
+): Promise<ComposeSaveResult> {
+  return composeSaveInternal(deps, payload, true);
+}
+
+async function composeSaveInternal(
+  deps: HandlerDeps,
+  payload: unknown,
+  persist: boolean,
 ): Promise<ComposeSaveResult> {
   const p = (payload ?? {}) as ComposeSavePayload;
   const r = await runSavePipeline(deps, p);
@@ -553,6 +670,56 @@ export async function handleComposeSave(
           + 'Enable sensor-map v2 live path" in the settings form, restart Homebridge, and retry. Nothing was written.',
       },
     };
+  }
+
+  // ---- 7b3. UNSAVED-SETTINGS GATE (review #47 P1-1): editor
+  //           persistence replaces HB UI X's in-memory config with the
+  //           disk-derived composed block, so a settings-form edit the
+  //           user has not saved (a credential, a toggle, a filter)
+  //           would be silently discarded — and the post-save receipt
+  //           would still read clean, because disk matches what was
+  //           composed. When the client supplies its in-memory copy,
+  //           refuse any difference from disk beyond the schema form's
+  //           measured automatic materialization (empty arrays for
+  //           absent keys). Fail-safe by design: unmeasured form
+  //           normalization refuses too, and saving or discarding the
+  //           form changes clears it. REQUIRED for digest sessions
+  //           (review #47 round 3, P2): a digest save comes from the
+  //           browser, where the settings form is always present —
+  //           omitting formBlock must not bypass the gate. Callers
+  //           without a form use the faithful raw-`base` path, whose
+  //           byte-equality proves the same thing.
+  if (typeof p.baseDigest === 'string' && p.formBlock === undefined) {
+    return {
+      ok: false,
+      error: {
+        code: 'unsaved-settings-changes',
+        message: 'The settings form state was not provided, so unsaved form changes cannot be ruled out. '
+          + 'Reload the plugin settings and retry; nothing was written.',
+      },
+    };
+  }
+  if (p.formBlock !== undefined) {
+    if (!p.formBlock || typeof p.formBlock !== 'object' || Array.isArray(p.formBlock)) {
+      return {
+        ok: false,
+        error: {
+          code: 'unsaved-settings-changes',
+          message: 'The settings form state could not be verified. Reload the plugin settings and retry; nothing was written.',
+        },
+      };
+    }
+    const drifted = settingsFormDrift(p.formBlock as Record<string, unknown>, block);
+    if (drifted !== undefined) {
+      return {
+        ok: false,
+        error: {
+          code: 'unsaved-settings-changes',
+          message: `The settings form has unsaved changes ('${drifted}'). Save or discard those changes in the `
+            + 'settings form first; nothing was written.',
+        },
+      };
+    }
   }
 
   // ---- 7c. STRUCTURAL CONFIRMATION GATE (PR C / finding 5): the
@@ -593,17 +760,110 @@ export async function handleComposeSave(
   //         (it is the single authority on "legacy").
   const composed = composeV2ConfigSave(block, canonical as unknown[], effectiveMap, modeResult.mode);
 
-  // ---- 9. Snapshot-first, race-safe: attempt the exclusive-create
-  //         write; on 'exists', verify the surviving content against
-  //         the authoritative pre-conversion fields (review P1-6) —
-  //         never overwrite. A verified MISMATCH is the reconversion
-  //         path (the documented current-state rollback leaves the
-  //         projected mirror form, which never equals the original):
-  //         the differing baseline is recorded durably in the
-  //         append-only conversion journal BEFORE config.json can be
-  //         mutated, so the rollback remains a two-way door without
-  //         ever touching the original snapshot.
-  let snapshot: 'written' | 'exists' | 'journaled' | 'not-applicable' = 'not-applicable';
+  // ---- 9a. Prospective pre-conversion-record outcome, READ-ONLY in
+  //          BOTH phases: every refusable record problem (corrupt
+  //          snapshot, unreadable journal) surfaces before anything
+  //          could be written, and the outcome is bound into the
+  //          validation token below (review #47 rounds 4–5).
+  let snapshot: SnapshotOutcome = 'not-applicable';
+  if (composed.snapshot !== undefined) {
+    const verdict = await verifyLegacySnapshot(deps.persistDir, composed.snapshot);
+    if (verdict === 'absent') {
+      snapshot = 'pending-write';
+    } else if (verdict === 'match') {
+      snapshot = 'exists';
+    } else if (verdict === 'mismatch') {
+      try {
+        await verifyConversionJournalReadable(deps.persistDir);
+      } catch (e) {
+        return {
+          ok: false,
+          error: {
+            code: 'conversion-journal-error',
+            message: `The conversion journal could not be read: ${(e as Error).message} `
+              + 'The save was refused; nothing was written.',
+          },
+        };
+      }
+      snapshot = 'pending-journal';
+    } else {
+      return {
+        ok: false,
+        error: {
+          code: 'legacy-snapshot-corrupt',
+          message: 'The existing legacy snapshot could not be read for verification. Refusing to convert.',
+        },
+      };
+    }
+  }
+
+  // ---- 9b. The validation token — SERVER-SIDE enforcement of the
+  //          two-phase protocol (review #47 round 5, P1): /commit-save
+  //          only writes when presented with the token /compose-save
+  //          issued for EXACTLY this state — the authoritative disk
+  //          block, the canonicalized proposal, the settings-form
+  //          state, the inventory-bound consequences, the composed
+  //          output, and the prospective record outcome. The commit
+  //          recomputes the token from CURRENT state, so a direct
+  //          commit (stale client, console request, future refactor)
+  //          refuses before anything is written, and any drift between
+  //          the phases refuses the same way. An integrity token, not
+  //          an auth token: the bridge already trusts its session —
+  //          the token guarantees VALIDATE-BEFORE-COMMIT on matching
+  //          state; it cannot prove the browser performed the
+  //          intervening settings-form re-read, which remains
+  //          client-enforced in composeAndPersist (pinned by the
+  //          hostile-mutation test).
+  const nextConfigDigest = blockDigest(composed.nextConfig);
+  const validationToken = createHash('sha256').update(canonicalJsonLocal({
+    v: 1,
+    baseDigest: blockDigest(block),
+    canonical,
+    formBlock: p.formBlock ?? null,
+    consequencesDigest: consequences.digest,
+    nextConfigDigest,
+    prospectiveRecord: snapshot,
+  })).digest('hex');
+
+  if (!persist) {
+    return {
+      ok: true,
+      nextConfig: composed.nextConfig,
+      nextConfigDigest,
+      validationToken,
+      snapshot,
+      canonicalSensorMap: canonical,
+      warnings: effectiveMap.warnings,
+      notes: effectiveMap.notes,
+    };
+  }
+  if (typeof p.validationToken !== 'string' || p.validationToken.length === 0) {
+    return {
+      ok: false,
+      error: {
+        code: 'commit-without-validation',
+        message: 'The commit did not present a validation token. Saves must validate first (/compose-save), '
+          + 're-check the settings form, and then commit. Nothing was written.',
+      },
+    };
+  }
+  if (p.validationToken !== validationToken) {
+    return {
+      ok: false,
+      error: {
+        code: 'stale-confirmation',
+        message: 'The configuration, proposal, settings form, or station inventory changed between validating '
+          + 'and committing this save. Preview again and retry; nothing was written.',
+      },
+    };
+  }
+
+  // ---- 9c. COMMIT: the durable pre-conversion record, race-safe —
+  //          exclusive-create snapshot write; on 'exists', verify
+  //          against the authoritative pre-conversion fields (review
+  //          P1-6), never overwrite; a verified MISMATCH is the
+  //          reconversion path and appends the baseline to the journal
+  //          BEFORE config.json can be mutated.
   if (composed.snapshot !== undefined) {
     let outcome: 'written' | 'exists';
     try {
@@ -643,6 +903,8 @@ export async function handleComposeSave(
   return {
     ok: true,
     nextConfig: composed.nextConfig,
+    nextConfigDigest,
+    validationToken,
     snapshot,
     canonicalSensorMap: canonical,
     warnings: effectiveMap.warnings,
@@ -890,8 +1152,9 @@ export async function handleGetEditorState(
     warnings.push({
       severity: 'warning',
       code: 'duplicate-platform-blocks',
-      message: `${blocks.length} AmbientWeatherSensors platform blocks found in config.json; showing the first. `
-        + 'Saving is refused while duplicates exist — remove the extra block(s).',
+      message: `${blocks.length} AmbientWeatherSensors platform blocks found in config.json (a multi-Home setup; `
+        + 'see MultiHome.md); showing the first. The sensor-map editor is read-only while more than one block '
+        + 'exists. Edit sensorMap in the JSON config editor instead.',
     });
   }
   const block = blocks[0];
@@ -917,6 +1180,8 @@ export async function handleGetEditorState(
       configMode: 'safe-mode',
       v2FlagEnabled,
       editorAvailable: false,
+      baseDigest: blockDigest(block),
+      blockIndex: 0,
       version: deps.version,
       stations: [],
       authored: [],
@@ -942,6 +1207,8 @@ export async function handleGetEditorState(
       configMode: modeResult.mode,
       v2FlagEnabled,
       editorAvailable: false,
+      baseDigest: blockDigest(block),
+      blockIndex: 0,
       version: deps.version,
       stations: [],
       authored: [],
@@ -1009,7 +1276,12 @@ export async function handleGetEditorState(
   return {
     configMode: modeResult.mode,
     v2FlagEnabled,
-    editorAvailable: v2FlagEnabled, // PR C: save path live, gated on the v2 opt-in (review #45 P1-1)
+    // PR C: save path live, gated on the v2 opt-in (review #45 P1-1).
+    // Multi-block configs stay read-only until a multi-Home editor
+    // exists (review #47 P1-2) — the save pipeline refuses them too.
+    editorAvailable: v2FlagEnabled && blocks.length === 1,
+    baseDigest: blockDigest(block),
+    blockIndex: 0,
     version: deps.version,
     stations: stations.map(st => {
       const mac = st.macAddress.toUpperCase();
@@ -1371,4 +1643,59 @@ function canonicalJsonLocal(v: unknown): string {
     return `{${entries.map(([k, val]) => `${JSON.stringify(k)}:${canonicalJsonLocal(val)}`).join(',')}}`;
   }
   return JSON.stringify(v);
+}
+
+/**
+ * Canonical digest of one platform block — the session staleness token
+ * issued by /editor-state (`baseDigest`) and verified by the save
+ * pipeline. Key order and absent-vs-undefined never change it.
+ */
+export function blockDigest(block: unknown): string {
+  return createHash('sha256').update(canonicalJsonLocal(block)).digest('hex');
+}
+
+/**
+ * The exact fields HB UI X's schema form has been OBSERVED to
+ * materialize into its in-memory config as empty arrays when they are
+ * absent from config.json (review #47 round 3, P2: an allowlist, not
+ * a shape rule — an unknown future field holding an intentionally
+ * empty array must refuse, not be discarded).
+ */
+const FORM_MATERIALIZED_ARRAY_KEYS: ReadonlySet<string> = new Set([
+  'includeOnly', 'stationFilter', 'excludeSensors',
+]);
+
+/**
+ * First key on which the settings page's in-memory block meaningfully
+ * differs from the on-disk block, or undefined when they agree
+ * (review #47 P1-1). Tolerated: the allowlisted keys ABSENT on disk
+ * whose in-memory value is an empty array — the schema form's
+ * measured automatic materialization, semantically empty (every
+ * consumer gates on a non-empty set). Everything else — a changed
+ * value, a dropped key, an added key with content, an unknown key —
+ * is an unsaved user edit the editor save would destroy.
+ */
+function settingsFormDrift(
+  formBlock: Record<string, unknown>,
+  diskBlock: Record<string, unknown>,
+): string | undefined {
+  const keys = new Set([...Object.keys(formBlock), ...Object.keys(diskBlock)]);
+  for (const key of keys) {
+    const inForm = key in formBlock;
+    const onDisk = key in diskBlock;
+    if (inForm && !onDisk) {
+      const v = formBlock[key];
+      if (FORM_MATERIALIZED_ARRAY_KEYS.has(key) && Array.isArray(v) && v.length === 0) {
+        continue;
+      }
+      return key;
+    }
+    if (!inForm && onDisk) {
+      return key;
+    }
+    if (canonicalJsonLocal(formBlock[key]) !== canonicalJsonLocal(diskBlock[key])) {
+      return key;
+    }
+  }
+  return undefined;
 }

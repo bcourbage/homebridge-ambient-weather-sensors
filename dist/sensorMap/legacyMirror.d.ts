@@ -279,4 +279,12 @@ export declare function verifyLegacySnapshot(persistDir: string, authoritativeLe
  * burning retries.
  */
 export declare function journalConversionBaseline(persistDir: string, legacyFields: Record<string, unknown>, log: Logger, clock?: Clock): Promise<'appended' | 'unchanged'>;
+/**
+ * Read-only validation of the conversion journal, for the VALIDATE
+ * phase of the two-phase save (review #47 round 4): a corrupt journal
+ * must refuse the save BEFORE anything is durably recorded, so an
+ * abandoned attempt cannot consume the permanent record. Throws the
+ * same errors an append would; writes nothing.
+ */
+export declare function verifyConversionJournalReadable(persistDir: string): Promise<void>;
 //# sourceMappingURL=legacyMirror.d.ts.map

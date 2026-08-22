@@ -20,10 +20,102 @@
  * at compile time; safe in the browser).
  */
 export async function composeAndPersist(deps, args) {
+    // The settings form and HB UI X's Save button are a SECOND writer of
+    // the same config; frozen for the whole operation so no form edit
+    // can land between the formBlock sample and the clear-then-set
+    // persistence (review #47 round 3, P1). Failure-safe (round 4): a
+    // freeze that throws may have PARTIALLY applied, so the restore is
+    // attempted before refusing; and an unfreeze failure never masks
+    // the authoritative save outcome — by the time cleanup runs, the
+    // save either persisted or refused, and THAT is what the caller
+    // must learn (with the restore failure flagged alongside it).
+    try {
+        await deps.freezeSettingsForm();
+    }
+    catch (e) {
+        const restored = await unfreezeQuietly(deps);
+        return {
+            ok: false,
+            error: {
+                code: 'unsaved-settings-changes',
+                message: `The settings form could not be frozen for the save: ${e instanceof Error ? e.message : String(e)}. `
+                    + 'Reload the plugin settings and retry; nothing was written.',
+            },
+            ...(restored ? {} : { settingsRestoreFailed: true }),
+        };
+    }
+    let outcome;
+    try {
+        outcome = await composeAndPersistFrozen(deps, args);
+    }
+    catch (e) {
+        const restored = await unfreezeQuietly(deps);
+        if (restored) {
+            throw e;
+        }
+        return {
+            ok: false,
+            error: {
+                code: 'invalid-proposal',
+                message: `The save failed (${e instanceof Error ? e.message : String(e)}) and the settings form could `
+                    + 'not be restored. Reload the plugin settings page.',
+            },
+            settingsRestoreFailed: true,
+        };
+    }
+    const restored = await unfreezeQuietly(deps);
+    return restored ? outcome : { ...outcome, settingsRestoreFailed: true };
+}
+/**
+ * Restore the settings form without ever throwing: the save outcome
+ * is authoritative, and a cleanup failure must not replace it (a
+ * completed save reported as a transport error is worse than a
+ * momentarily locked form). Returns whether the restore succeeded so
+ * the caller can FLAG the degraded page instead of hiding it.
+ */
+async function unfreezeQuietly(deps) {
+    try {
+        await deps.unfreezeSettingsForm();
+        return true;
+    }
+    catch {
+        return false;
+    }
+}
+async function composeAndPersistFrozen(deps, args) {
     const cfgArray = await deps.getPluginConfig();
     const blocks = cfgArray.filter(b => b && b.platform === 'AmbientWeatherSensors');
+    const digestSession = args.baseDigest !== undefined;
+    if (digestSession) {
+        if (typeof args.baseDigest !== 'string' || args.baseDigest.length === 0) {
+            return {
+                ok: false,
+                error: {
+                    code: 'stale-base',
+                    message: 'The editor session token is missing or malformed; reload and retry.',
+                },
+            };
+        }
+        // Exactly-one-block invariant (review #47 P1-2): the token
+        // identifies a block by CONTENT while this array is replaced by
+        // POSITION — with more than one block those can disagree, and a
+        // wrong position would overwrite another Home's configuration.
+        // The server refuses multi-block configs too; this is the
+        // client-side half, checked before any request is made.
+        if (blocks.length !== 1) {
+            return {
+                ok: false,
+                error: {
+                    code: 'ambiguous-platform-block',
+                    message: `${blocks.length} AmbientWeatherSensors platform blocks exist (a multi-Home setup; see MultiHome.md). `
+                        + 'The sensor-map editor supports exactly one block, so it is read-only here. Edit sensorMap in the '
+                        + 'JSON config editor instead.',
+                },
+            };
+        }
+    }
     let base = args.base;
-    if (base === undefined) {
+    if (!digestSession && base === undefined) {
         if (blocks.length !== 1) {
             return {
                 ok: false,
@@ -47,36 +139,96 @@ export async function composeAndPersist(deps, args) {
             cachedAccessoryUniqueIds = undefined; // inventory source is best-effort
         }
     }
-    // Locate the edited block in the FRESH config array by deep equality
+    // Locate where the composed block will be WRITTEN BACK in the
+    // getPluginConfig() array. In a digest session the position is
+    // DERIVED here — the single plugin block's index — never taken from
+    // the client-supplied blockIndex (review #47 P1-2: a forged or
+    // drifted index would compose one block and replace another); the
+    // supplied value is only cross-checked and refused on disagreement.
+    // The array's CONTENT is form-mutated and untrustworthy — the
+    // server does the real staleness check against disk via the digest.
+    // In the legacy base flow the block is located by deep equality
     // (review #67 P1-3): a separately deserialized base is never
     // reference-equal, and indexOf would silently APPEND the composed
-    // block as a duplicate. The server enforces the same exactly-one
-    // deep-match contract against disk.
-    const matchIndexes = cfgArray
-        .map((b, i) => (deepJson(b) === deepJson(base) ? i : -1))
-        .filter(i => i >= 0);
-    if (matchIndexes.length !== 1) {
-        return {
-            ok: false,
-            error: {
-                code: matchIndexes.length === 0 ? 'stale-base' : 'ambiguous-platform-block',
-                message: matchIndexes.length === 0
-                    ? 'The block being edited no longer matches the current plugin config; reload and retry.'
-                    : `${matchIndexes.length} identical blocks match the base; cannot determine which to replace.`,
-            },
-        };
+    // block as a duplicate.
+    let index;
+    if (digestSession) {
+        index = cfgArray.findIndex(b => b && b.platform === 'AmbientWeatherSensors');
+        if (args.blockIndex !== undefined && args.blockIndex !== index) {
+            return {
+                ok: false,
+                error: {
+                    code: 'stale-base',
+                    message: 'The editor session token no longer matches the plugin config layout; reload and retry.',
+                },
+            };
+        }
     }
-    const index = matchIndexes[0];
-    const result = await deps.request('/compose-save', {
-        base,
+    else {
+        const matchIndexes = cfgArray
+            .map((b, i) => (deepJson(b) === deepJson(base) ? i : -1))
+            .filter(i => i >= 0);
+        if (matchIndexes.length !== 1) {
+            return {
+                ok: false,
+                error: {
+                    code: matchIndexes.length === 0 ? 'stale-base' : 'ambiguous-platform-block',
+                    message: matchIndexes.length === 0
+                        ? 'The block being edited no longer matches the current plugin config; reload and retry.'
+                        : `${matchIndexes.length} identical blocks match the base; cannot determine which to replace.`,
+                },
+            };
+        }
+        index = matchIndexes[0];
+    }
+    const payload = {
+        base: digestSession ? undefined : base,
+        baseDigest: digestSession ? args.baseDigest : undefined,
+        // The in-memory block, so the server can refuse when the settings
+        // form holds UNSAVED user changes this save would discard
+        // (review #47 P1-1).
+        formBlock: digestSession ? cfgArray[index] : undefined,
         proposal: args.proposal,
         cachedAccessoryUniqueIds,
         liveStations: args.liveStations,
         confirmDigest: args.confirmDigest,
+    };
+    // ---- Phase 1 (VALIDATE): every gate and the full composition, with
+    //      NOTHING durably recorded. A refusal here — or at the re-check
+    //      below — therefore consumes neither the immutable snapshot nor
+    //      a journal entry (review #47 round 4).
+    const validated = await deps.request('/compose-save', payload);
+    if (!validated || validated.ok !== true) {
+        return validated ?? { ok: false, error: { code: 'invalid-proposal', message: 'Empty response from /compose-save.' } };
+    }
+    // ---- Re-check, behind the client-cooperative freeze: re-read the
+    //      in-memory config and refuse if ANYTHING changed while the
+    //      validation ran — an edit that raced the save would otherwise
+    //      be erased by the clear-then-set below.
+    const recheck = await deps.getPluginConfig();
+    if (deepJson(recheck) !== deepJson(cfgArray)) {
+        return {
+            ok: false,
+            error: {
+                code: 'unsaved-settings-changes',
+                message: 'The plugin settings changed while the save was running. Review the settings form and retry; '
+                    + 'nothing was written.',
+            },
+        };
+    }
+    // ---- Phase 2 (COMMIT): the same pipeline re-run from disk, with
+    //      the snapshot/journal written durably immediately before the
+    //      persistable config is returned. The validation token makes
+    //      the protocol SERVER-ENFORCED (review #47 round 5): the
+    //      commit recomputes it from current state and refuses BEFORE
+    //      writing on any drift since validation — no post-hoc client
+    //      comparison after the record was already consumed.
+    const result = await deps.request('/commit-save', {
+        ...payload,
+        validationToken: validated.validationToken,
     });
     if (!result || result.ok !== true) {
-        // Refusal or malformed response: NO update, NO save.
-        return result ?? { ok: false, error: { code: 'invalid-proposal', message: 'Empty response from /compose-save.' } };
+        return result ?? { ok: false, error: { code: 'invalid-proposal', message: 'Empty response from /commit-save.' } };
     }
     const nextArray = cfgArray.map((b, i) => (i === index ? result.nextConfig : b));
     // Post-compose persistence failures are INDETERMINATE (review #45
@@ -86,6 +238,19 @@ export async function composeAndPersist(deps, args) {
     // before retrying. (The legacy snapshot is already durable either
     // way; a retry re-verifies it.)
     try {
+        // HB UI X applies updatePluginConfig by MERGING each submitted
+        // block into its in-memory copy (Object.assign), so a key the
+        // composed config REMOVED — a legacy field the mirror omits, or a
+        // schema default the settings form materialized — would silently
+        // survive into the persisted file, and a resurrected mirrored
+        // field makes the freshly written mirror hash STALE on arrival
+        // (caught by the harness receipt check). The same code path
+        // TRUNCATES its copy to the submitted array length and assigns
+        // submitted blocks directly into empty slots, so an empty update
+        // followed by the real one is a verbatim replacement under every
+        // transport. The clear is in-memory only; nothing reaches disk
+        // before savePluginConfig.
+        await deps.updatePluginConfig([]);
         await deps.updatePluginConfig(nextArray);
     }
     catch (e) {
