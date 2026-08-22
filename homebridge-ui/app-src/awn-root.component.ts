@@ -134,7 +134,7 @@ interface StationGroup {
       text-align: right;
     }
     th.actions { background: var(--panel-bg); }
-    td.actions button { padding: 3px 9px; }
+    td.actions button { padding: 3px 9px; min-width: 58px; }
   `,
   template: `
     <h2>Sensor map <span class="station-meta">draft editor preview</span></h2>
@@ -317,7 +317,7 @@ interface StationGroup {
       @for (group of groups(); track group.mac) {
         <h3>
           {{ group.title }}
-          <span class="station-meta"><code>{{ group.mac }}</code> · {{ group.source }}</span>
+          <span class="station-meta"><code>{{ group.mac }}</code> ({{ group.source }})</span>
         </h3>
         <div class="table-scroll">
         <table>
@@ -422,9 +422,7 @@ interface StationGroup {
                       <!-- Read-only row facts that left the table
                            (Bruno's beta.14 column trim). -->
                       <span class="muted row-facts">
-                        {{ kindTitle(row) }}
-                        @if (row.batteryField) { · battery <code>{{ row.batteryField }}</code> }
-                        · {{ row.origin }} layer
+                        {{ kindTitle(row) }}@if (row.batteryField) {, battery <code>{{ row.batteryField }}</code>}, {{ row.origin }} layer
                       </span>
                     </form>
                   </td>
@@ -845,7 +843,13 @@ export class AwnRootComponent {
 
   /** Tooltip + accessible label for the Kind icon or badge. */
   protected kindTitle(row: EditorRowDto): string {
-    return row.kind === 'unrecognized' ? 'unrecognized field' : `${row.kind} · ${row.measurement}`;
+    if (row.kind === 'unrecognized') {
+      return 'unrecognized field';
+    }
+    // Kind and measurement often coincide (temperature, humidity);
+    // repeating them read as noise, and bullet separators are out
+    // (Bruno's beta.14 feedback).
+    return row.kind === row.measurement ? row.kind : `${row.kind} (${row.measurement})`;
   }
 
   /** Compact badge text for initialism kinds with no natural glyph. */

@@ -19,6 +19,14 @@
  * HB UI X client API. Only type imports reference server code (erased
  * at compile time; safe in the browser).
  */
+const DEFAULT_TIMEOUTS = { request: 30_000, persist: 20_000 };
+/** Reject after `ms` so a lost response becomes a visible outcome. */
+function withTimeout(work, ms, label) {
+    return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error(`no response from ${label} within ${Math.round(ms / 1000)} seconds`)), ms);
+        Promise.resolve(work).then(v => { clearTimeout(timer); resolve(v); }, e => { clearTimeout(timer); reject(e); });
+    });
+}
 export async function composeAndPersist(deps, args) {
     // The settings form and HB UI X's Save button are a SECOND writer of
     // the same config; frozen for the whole operation so no form edit
@@ -88,7 +96,8 @@ async function composeAndPersistFrozen(deps, args) {
     // would compare that array against itself and always pass. Snapshot
     // an immutable copy up front; the re-check then compares the LIVE
     // state against what this save actually read.
-    const cfgArray = JSON.parse(JSON.stringify(await deps.getPluginConfig()));
+    const timeouts = deps.timeouts ?? DEFAULT_TIMEOUTS;
+    const cfgArray = JSON.parse(JSON.stringify(await withTimeout(deps.getPluginConfig(), timeouts.request, 'the Homebridge UI (getPluginConfig)')));
     const blocks = cfgArray.filter(b => b && b.platform === 'AmbientWeatherSensors');
     const digestSession = args.baseDigest !== undefined;
     if (digestSession) {
@@ -107,7 +116,17 @@ async function composeAndPersistFrozen(deps, args) {
         // wrong position would overwrite another Home's configuration.
         // The server refuses multi-block configs too; this is the
         // client-side half, checked before any request is made.
-        if (blocks.length !== 1) {
+        if (blocks.length === 0) {
+            return {
+                ok: false,
+                error: {
+                    code: 'stale-base',
+                    message: 'No AmbientWeatherSensors configuration is loaded in this Homebridge UI session. Reload the '
+                        + 'plugin settings page and retry; nothing was written.',
+                },
+            };
+        }
+        if (blocks.length > 1) {
             return {
                 ok: false,
                 error: {
@@ -135,7 +154,7 @@ async function composeAndPersistFrozen(deps, args) {
     let cachedAccessoryUniqueIds;
     if (deps.getCachedAccessories) {
         try {
-            const cached = await deps.getCachedAccessories();
+            const cached = await withTimeout(deps.getCachedAccessories(), timeouts.request, 'the Homebridge UI (getCachedAccessories)');
             cachedAccessoryUniqueIds = cached
                 .map(a => a?.context?.device?.uniqueId)
                 .filter((u) => typeof u === 'string');
@@ -202,7 +221,7 @@ async function composeAndPersistFrozen(deps, args) {
     //      NOTHING durably recorded. A refusal here — or at the re-check
     //      below — therefore consumes neither the immutable snapshot nor
     //      a journal entry (review #47 round 4).
-    const validated = await deps.request('/compose-save', payload);
+    const validated = await withTimeout(deps.request('/compose-save', payload), timeouts.request, 'the plugin service (/compose-save)');
     if (!validated || validated.ok !== true) {
         return validated ?? { ok: false, error: { code: 'invalid-proposal', message: 'Empty response from /compose-save.' } };
     }
@@ -210,7 +229,7 @@ async function composeAndPersistFrozen(deps, args) {
     //      in-memory config and refuse if ANYTHING changed while the
     //      validation ran — an edit that raced the save would otherwise
     //      be erased by the clear-then-set below.
-    const recheck = await deps.getPluginConfig();
+    const recheck = await withTimeout(deps.getPluginConfig(), timeouts.request, 'the Homebridge UI (getPluginConfig)');
     if (deepJson(recheck) !== deepJson(cfgArray)) {
         return {
             ok: false,
@@ -228,14 +247,36 @@ async function composeAndPersistFrozen(deps, args) {
     //      commit recomputes it from current state and refuses BEFORE
     //      writing on any drift since validation — no post-hoc client
     //      comparison after the record was already consumed.
-    const result = await deps.request('/commit-save', {
+    const result = await withTimeout(deps.request('/commit-save', {
         ...payload,
         validationToken: validated.validationToken,
-    });
+    }), timeouts.request, 'the plugin service (/commit-save)');
     if (!result || result.ok !== true) {
         return result ?? { ok: false, error: { code: 'invalid-proposal', message: 'Empty response from /commit-save.' } };
     }
-    const nextArray = cfgArray.map((b, i) => (i === index ? result.nextConfig : b));
+    // HB UI X applies updatePluginConfig by MERGING each submitted block
+    // into its in-memory copy (Object.assign), so a key the composed
+    // config REMOVED — a legacy field the mirror omits, or a schema
+    // default the settings form materialized — would silently survive
+    // into the persisted file, and a resurrected mirrored field makes
+    // the freshly written mirror hash STALE on arrival. Explicit
+    // `undefined` tombstones for the removed keys make the merge produce
+    // EXACTLY the composed block (postMessage structured clone preserves
+    // undefined; HB UI X's JSON persistence then drops the keys). An
+    // earlier design cleared the array first (update([]) then the real
+    // one) — measured hazard on production: a save dying between the
+    // two calls left HB UI X's session holding ZERO blocks, poisoning
+    // every later save. A transport that drops undefined would merely
+    // leave stale keys, which the post-save receipt surfaces as drift —
+    // fail-visible, never fail-empty.
+    const previous = cfgArray[index] ?? {};
+    const replacedBlock = { ...result.nextConfig };
+    for (const key of Object.keys(previous)) {
+        if (!(key in result.nextConfig)) {
+            replacedBlock[key] = undefined;
+        }
+    }
+    const nextArray = cfgArray.map((b, i) => (i === index ? replacedBlock : b));
     // Post-compose persistence failures are INDETERMINATE (review #45
     // P1-2): HB UI X may have taken effect and then rejected, or lost
     // the response. Never tell the user "nothing was written" here —
@@ -243,20 +284,7 @@ async function composeAndPersistFrozen(deps, args) {
     // before retrying. (The legacy snapshot is already durable either
     // way; a retry re-verifies it.)
     try {
-        // HB UI X applies updatePluginConfig by MERGING each submitted
-        // block into its in-memory copy (Object.assign), so a key the
-        // composed config REMOVED — a legacy field the mirror omits, or a
-        // schema default the settings form materialized — would silently
-        // survive into the persisted file, and a resurrected mirrored
-        // field makes the freshly written mirror hash STALE on arrival
-        // (caught by the harness receipt check). The same code path
-        // TRUNCATES its copy to the submitted array length and assigns
-        // submitted blocks directly into empty slots, so an empty update
-        // followed by the real one is a verbatim replacement under every
-        // transport. The clear is in-memory only; nothing reaches disk
-        // before savePluginConfig.
-        await deps.updatePluginConfig([]);
-        await deps.updatePluginConfig(nextArray);
+        await withTimeout(deps.updatePluginConfig(nextArray), timeouts.persist, 'the Homebridge UI (updatePluginConfig)');
     }
     catch (e) {
         return {
@@ -271,7 +299,7 @@ async function composeAndPersistFrozen(deps, args) {
         };
     }
     try {
-        await deps.savePluginConfig();
+        await withTimeout(deps.savePluginConfig(), timeouts.persist, 'the Homebridge UI (savePluginConfig)');
     }
     catch (e) {
         return {

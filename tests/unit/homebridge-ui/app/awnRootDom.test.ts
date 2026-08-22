@@ -704,15 +704,15 @@ describe('save flow (PR C / finding 5 — the ONE route is composeAndPersist)', 
     // read, both restored after persistence completes.
     expect(ipc.persisted.map(p => p.event)).toEqual([
       'disableSaveButton', 'hideSchemaForm',
-      'update', 'update', 'save',
+      'update', 'save',
       'showSchemaForm', 'enableSaveButton',
     ]);
-    // Verbatim replacement: the FIRST update clears HB UI X's
-    // merge-prone in-memory copy; the second carries the composed block.
+    // The single update carries the composed block; undefined
+    // tombstones for removed keys serialize away at persistence.
     const updates = ipc.persisted.filter(p => p.event === 'update');
-    expect(updates[0].arg).toEqual([]);
-    const updated = (updates[1].arg as unknown[])[0];
-    expect(updated).toEqual(NEXT_CONFIG);
+    expect(updates).toHaveLength(1);
+    const updated = (updates[0].arg as unknown[])[0];
+    expect(JSON.parse(JSON.stringify(updated))).toEqual(NEXT_CONFIG);
     expect(el.textContent).toContain('Saved.');
     expect(el.textContent).toContain('legacy-config-snapshot.json');
     // Receipt clean: reloaded digest equals what compose produced.
@@ -780,7 +780,7 @@ describe('save flow (PR C / finding 5 — the ONE route is composeAndPersist)', 
 
     const compose = ipc.requests.find(r => r.path === '/compose-save');
     expect((compose?.body as { confirmDigest?: string }).confirmDigest).toBe('ef'.repeat(32));
-    expect(ipc.persisted.map(p => p.event).filter(e => e === 'update' || e === 'save')).toEqual(['update', 'update', 'save']);
+    expect(ipc.persisted.map(p => p.event).filter(e => e === 'update' || e === 'save')).toEqual(['update', 'save']);
     expect(el.querySelector('.modal')).toBeNull();
   });
 
@@ -857,7 +857,7 @@ describe('save flow (PR C / finding 5 — the ONE route is composeAndPersist)', 
     resolveCompose(COMPOSE_OK);
     await settle(fixture);
     expect(el.textContent).toContain('Saved.');
-    expect(persisted.filter(e => e === 'update' || e === 'save')).toEqual(['update', 'update', 'save']);
+    expect(persisted.filter(e => e === 'update' || e === 'save')).toEqual(['update', 'save']);
     for (const b of [...el.querySelectorAll('button')].filter(x => x.textContent === 'Edit')) {
       expect((b as HTMLButtonElement).disabled).toBe(false);
     }

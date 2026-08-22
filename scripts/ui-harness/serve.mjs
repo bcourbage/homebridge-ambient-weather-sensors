@@ -108,6 +108,16 @@ async function getPluginConfig() {
   return inMemoryBlocks;
 }
 function updatePluginConfig(next) {
+  // Decode the fake transport's undefined sentinel (structured-clone
+  // stand-in) so Object.assign copies real `undefined` tombstones,
+  // exactly as HB UI X's merge sees them over postMessage.
+  for (const block of next) {
+    for (const key of Object.keys(block)) {
+      if (block[key] === '__awn_undefined__') {
+        block[key] = undefined;
+      }
+    }
+  }
   for (let i = 0; i < next.length; i++) {
     if (inMemoryBlocks[i]) {
       Object.assign(inMemoryBlocks[i], next[i]);
