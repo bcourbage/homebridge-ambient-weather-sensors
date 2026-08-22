@@ -57,7 +57,7 @@ export interface OrchestratorDeps {
   timeouts?: { request: number; persist: number };
 }
 
-const DEFAULT_TIMEOUTS = { request: 30_000, persist: 20_000 };
+const DEFAULT_TIMEOUTS = { request: 15_000, persist: 12_000 };
 
 /** Reject after `ms` so a lost response becomes a visible outcome. */
 function withTimeout<T>(work: Promise<T> | T, ms: number, label: string): Promise<T> {
@@ -257,7 +257,14 @@ async function composeAndPersistFrozen(
   let cachedAccessoryUniqueIds: string[] | undefined;
   if (deps.getCachedAccessories) {
     try {
-      const cached = await withTimeout(deps.getCachedAccessories(), timeouts.request, 'the Homebridge UI (getCachedAccessories)');
+      // Best-effort inventory source with a SHORT leash: HB UI X's
+      // cached-accessories handler swallows its own errors WITHOUT
+      // responding (measured in 5.28: catch -> toastr, no
+      // requestResponse), which hung the whole save on the production
+      // box. Inventory has server-side sources; three seconds of
+      // silence here degrades to "no client contribution", never a
+      // frozen save.
+      const cached = await withTimeout(deps.getCachedAccessories(), 3_000, 'the Homebridge UI (getCachedAccessories)');
       cachedAccessoryUniqueIds = cached
         .map(a => (a as { context?: { device?: { uniqueId?: unknown } } })?.context?.device?.uniqueId)
         .filter((u): u is string => typeof u === 'string');

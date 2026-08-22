@@ -325,7 +325,7 @@ describe('draft editing + preview (PR B — no persistence)', () => {
 
     typeInto(el.querySelector('.editor-form input[type="text"]') as HTMLInputElement, 'Patio Temp');
     await settle(fixture);
-    expect(el.textContent).toContain('1 draft change.');
+    expect(el.textContent).toContain('1 draft change, not saved yet.');
 
     ([...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement).click();
     await settle(fixture);
@@ -390,7 +390,7 @@ describe('draft editing + preview (PR B — no persistence)', () => {
 
     ([...el.querySelectorAll('button')].find(b => b.textContent === 'Discard drafts') as HTMLButtonElement).click();
     await settle(fixture);
-    expect(el.textContent).toContain('No draft changes.');
+    expect(el.textContent).toContain('No draft changes yet.');
     expect(el.querySelector('.change-kind')).toBeNull();
   });
 
@@ -398,7 +398,7 @@ describe('draft editing + preview (PR B — no persistence)', () => {
     const ipc = makeIpc(editorState(), [], PREVIEW_OK);
     const fixture = await render(ipc);
     const el = openEditor(fixture, 'windspeedmph'); // motion row: all controls
-    const dirty = (): boolean => el.textContent!.includes('draft change.');
+    const dirty = (): boolean => el.textContent!.includes('draft change, not saved yet');
 
     // enabled: original false → toggle on → dirty → toggle off → clean
     const checkbox = el.querySelector('.editor-form input[type="checkbox"]') as HTMLInputElement;
@@ -537,11 +537,11 @@ describe('draft editing + preview (PR B — no persistence)', () => {
     const el = openEditor(fixture, 'tempinf');
     typeInto(el.querySelector('.editor-form input[type="text"]') as HTMLInputElement, 'Patio Temp');
     await settle(fixture);
-    expect(el.textContent).toContain('1 draft change.');
+    expect(el.textContent).toContain('1 draft change, not saved yet.');
 
     ([...el.querySelectorAll('button')].find(b => b.textContent === 'Reset row') as HTMLButtonElement).click();
     await settle(fixture);
-    expect(el.textContent).toContain('No draft changes.');
+    expect(el.textContent).toContain('No draft changes yet.');
     expect(el.querySelector('.editor-form')).toBeNull(); // form is closed
   });
 

@@ -111,7 +111,17 @@ interface StationGroup {
        scrollbar on typical widths (the scroll container stays as the
        fallback for narrow windows). */
     .table-scroll { overflow-x: auto; }
+    /* Fixed layout: column widths come from the header row, so an
+       opened editor row cannot reflow them (Bruno's beta.14 feedback:
+       the table visibly changed width on Edit). */
+    .table-scroll table { table-layout: fixed; }
+    th.dp { width: 22%; }
+    th.name { width: auto; }
+    th.kind-col { width: 52px; }
+    th.units { width: 14%; }
     .table-scroll th, .table-scroll td { padding: 5px 7px; }
+    .table-scroll td { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .table-scroll td.editor-form { overflow: visible; white-space: normal; }
     .unit-converted {
       color: var(--info-fg); background: var(--info-bg);
       padding: 0 5px; border-radius: 4px;
@@ -132,6 +142,7 @@ interface StationGroup {
       background: var(--page-bg);
       border-left: 1px solid var(--rule);
       text-align: right;
+      width: 84px;
     }
     th.actions { background: var(--panel-bg); }
     td.actions button { padding: 3px 9px; min-width: 58px; }
@@ -178,9 +189,9 @@ interface StationGroup {
       @if (state()!.rows.length > 0) {
         <div class="draft-bar">
           @if (draftCount() > 0) {
-            <span class="grow"><strong>{{ draftCount() }}</strong> draft {{ draftCount() === 1 ? 'change' : 'changes' }}. Nothing is saved yet. Preview shows what saving would do without writing anything.</span>
+            <span class="grow"><strong>{{ draftCount() }}</strong> draft {{ draftCount() === 1 ? 'change' : 'changes' }}, not saved yet.</span>
           } @else {
-            <span class="grow">No draft changes. Edit a row below to start.</span>
+            <span class="grow">No draft changes yet.</span>
           }
           <button type="button" (click)="preview()" [disabled]="draftCount() === 0 || previewPending() || editFormInvalid() || saving() || confirmOpen() || reloadRequired()">Preview changes</button>
           <button type="button" (click)="discardAll()" [disabled]="draftCount() === 0 || saving() || confirmOpen() || reloadRequired()">Discard drafts</button>
@@ -305,7 +316,7 @@ interface StationGroup {
             }
             <div class="draft-bar">
               <span class="grow"></span>
-              <button type="button" (click)="confirmSave()" [disabled]="saving()">Confirm save</button>
+              <button type="button" (click)="confirmSave()" [disabled]="saving()">{{ saving() ? 'Saving…' : 'Confirm save' }}</button>
               <button type="button" (click)="confirmOpen.set(false)">Cancel</button>
             </div>
           </div>
@@ -317,14 +328,14 @@ interface StationGroup {
       @for (group of groups(); track group.mac) {
         <h3>
           {{ group.title }}
-          <span class="station-meta"><code>{{ group.mac }}</code> ({{ group.source }})</span>
+          <span class="station-meta"><code [title]="'station learned from: ' + group.source">{{ group.mac }}</code></span>
         </h3>
         <div class="table-scroll">
         <table>
           <thead>
             <tr>
               <th class="state"></th>
-              <th>Data point</th><th>Name</th><th>Kind</th><th>Units</th>
+              <th class="dp">Data point</th><th class="name">Name</th><th class="kind-col">Kind</th><th class="units">Units</th>
               <th class="actions"></th>
             </tr>
           </thead>
@@ -754,6 +765,10 @@ export class AwnRootComponent {
     this.saveResult.set(null);
     this.postSaveDrift.set(false);
     this.settingsRestoreFailed.set(false);
+    // Immediate feedback where it will stay: the outcome area shows
+    // "Saving…" now and the result later (beta.14 smoke: a save whose
+    // only signs lived off-screen read as "did nothing").
+    setTimeout(() => this.saveOutcome()?.nativeElement?.scrollIntoView?.({ block: 'center' }), 0);
     // Lock editing for the duration (review #45 P2-4): the open form
     // closes (no form events can draft mid-save) and Edit/Preview/
     // Discard disable via saving() — a slow save can never race a

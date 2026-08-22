@@ -238,7 +238,17 @@ export class HomebridgeService {
       return [];
     }
     try {
-      const cached = await this.ipc.getCachedAccessories();
+      // Short leash: HB UI X's cached-accessories handler swallows its
+      // own errors WITHOUT responding, so an un-bounded await here
+      // would hang the preview forever. Three seconds of silence
+      // degrades to "no client contribution".
+      const cached = await new Promise<unknown[]>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('timeout')), 3_000);
+        this.ipc!.getCachedAccessories!().then(
+          v => { clearTimeout(timer); resolve(v); },
+          e => { clearTimeout(timer); reject(e); },
+        );
+      });
       return (Array.isArray(cached) ? cached : [])
         .map(a => (a as { context?: { device?: { uniqueId?: unknown } } })?.context?.device?.uniqueId)
         .filter((u): u is string => typeof u === 'string');
