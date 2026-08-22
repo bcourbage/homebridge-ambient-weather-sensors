@@ -80,6 +80,10 @@ interface StationGroup {
       background: var(--btn-bg); color: var(--btn-fg);
       border: 1px solid var(--btn-edge); border-radius: 4px; padding: 4px 8px;
     }
+    /* Dialog-shaped footer: Use defaults on the left (the one action
+       that changes saved configuration), OK / Cancel on the right. */
+    .editor-footer { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+    .editor-footer .grow { flex: 1; }
     .change-kind {
       display: inline-block; min-width: 64px; text-align: center;
       padding: 1px 7px; border-radius: 999px; font-size: 0.72rem; font-weight: 600;
@@ -395,8 +399,11 @@ interface StationGroup {
                   }
                 </td>
                 <td class="actions">
-                  @if (row.kind !== 'unrecognized') {
-                    <button type="button" (click)="toggleEdit(row)" [disabled]="saving() || confirmOpen() || reloadRequired()">{{ isExpanded(row) ? 'Close' : 'Edit' }}</button>
+                  <!-- The editor's own footer owns closing (OK /
+                       Cancel), so the column shows nothing while the
+                       row is open. -->
+                  @if (row.kind !== 'unrecognized' && !isExpanded(row)) {
+                    <button type="button" (click)="toggleEdit(row)" [disabled]="saving() || confirmOpen() || reloadRequired()">Edit</button>
                   }
                 </td>
               </tr>
@@ -407,7 +414,7 @@ interface StationGroup {
                       <label><input type="checkbox" formControlName="enabled" /> Enabled</label>
                       <label>Name <input type="text" formControlName="name" /></label>
                       @if (editForm!.get('name')?.invalid) {
-                        <span class="field-error">Name is required. Restore a value or use Reset row.</span>
+                        <span class="field-error">Name is required. Restore a value or choose Cancel.</span>
                       }
                       @if (displayUnitOptions(row).length > 0) {
                         <label>Display unit
@@ -421,7 +428,7 @@ interface StationGroup {
                       @if (row.kind === 'motion') {
                         <label>Threshold <input type="number" step="any" formControlName="threshold" /></label>
                         @if (editForm!.get('threshold')?.invalid) {
-                          <span class="field-error">Threshold is required for this row. Restore a value or use Reset row.</span>
+                          <span class="field-error">Threshold is required for this row. Restore a value or choose Cancel.</span>
                         }
                         <label>Trigger
                           <select formControlName="triggerDirection">
@@ -430,17 +437,25 @@ interface StationGroup {
                           </select>
                         </label>
                       }
-                      @if (row.origin === 'global' || row.origin === 'station') {
-                        <button type="button" (click)="removeOverride(row)">Remove override</button>
-                      }
-                      @if (isDirty(row)) {
-                        <button type="button" (click)="resetRow(row)">Reset row</button>
-                      }
                       <!-- Read-only row facts that left the table
                            (Bruno's beta.14 column trim). -->
                       <span class="muted row-facts">
                         {{ kindTitle(row) }}@if (row.batteryField) {, battery <code>{{ row.batteryField }}</code>}, {{ row.origin }} layer
                       </span>
+                      <!-- Dialog-shaped footer (Bruno's row-editor
+                           feedback): OK keeps this row's drafts and
+                           collapses; Cancel discards them and
+                           collapses; Use defaults drafts removal of
+                           the row's authored settings (previewable
+                           and savable like any edit). -->
+                      <div class="editor-footer">
+                        @if (row.origin === 'global' || row.origin === 'station') {
+                          <button type="button" (click)="useDefaults(row)" [disabled]="saving() || confirmOpen() || reloadRequired()">Use defaults</button>
+                        }
+                        <span class="grow"></span>
+                        <button type="button" (click)="toggleEdit(row)" [disabled]="saving() || confirmOpen() || reloadRequired()">OK</button>
+                        <button type="button" (click)="cancelRow(row)" [disabled]="saving() || confirmOpen() || reloadRequired()">Cancel</button>
+                      </div>
                     </form>
                   </td>
                 </tr>
@@ -611,7 +626,7 @@ export class AwnRootComponent {
     // never a silent no-draft. `name` is always required; `threshold`
     // is required exactly when the row currently displays one (a
     // threshold-less row may stay blank; removing an authored value
-    // is Remove override's job, and a default-sourced value cannot be
+    // is Use defaults' job, and a default-sourced value cannot be
     // removed by an override at all).
     this.editForm = this.fb.group({
       enabled: [current('enabled') === true],
@@ -663,7 +678,7 @@ export class AwnRootComponent {
     this.bump();
   }
 
-  protected removeOverride(row: EditorRowDto): void {
+  protected useDefaults(row: EditorRowDto): void {
     this.store.removeOverride(row);
     // Close the form: its controls show pre-removal values, and a
     // later form event would resurrect the override as patches.
@@ -673,7 +688,7 @@ export class AwnRootComponent {
     this.bump();
   }
 
-  protected resetRow(row: EditorRowDto): void {
+  protected cancelRow(row: EditorRowDto): void {
     this.store.resetRow(row);
     // Close the form (review #43 P1-3): the controls still hold the
     // edited values, and the next form event would re-draft them.

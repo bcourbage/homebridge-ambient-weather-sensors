@@ -516,10 +516,10 @@ describe('draft editing + preview (PR B — no persistence)', () => {
     typeInto(el.querySelector('.editor-form input[type="text"]') as HTMLInputElement, '');
     await settle(fixture);
 
-    // Close the form while invalid: the blanked control disappears,
-    // its draft was already cleared, and Preview reflects the
-    // remaining (valid) drafts only.
-    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Close') as HTMLButtonElement).click();
+    // OK the form away while invalid: the blanked control
+    // disappears, its draft was already cleared, and Preview reflects
+    // the remaining (valid) drafts only.
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'OK') as HTMLButtonElement).click();
     await settle(fixture);
     const previewBtn = [...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement;
     expect(previewBtn.disabled).toBe(false);
@@ -531,7 +531,7 @@ describe('draft editing + preview (PR B — no persistence)', () => {
     });
   });
 
-  it('Reset row closes the form so a later event cannot resurrect the edits', async () => {
+  it('Cancel discards the row draft and closes the form so a later event cannot resurrect the edits', async () => {
     const ipc = makeIpc(editorState(), [], PREVIEW_OK);
     const fixture = await render(ipc);
     const el = openEditor(fixture, 'tempinf');
@@ -539,10 +539,52 @@ describe('draft editing + preview (PR B — no persistence)', () => {
     await settle(fixture);
     expect(el.textContent).toContain('1 draft change, not saved yet.');
 
-    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Reset row') as HTMLButtonElement).click();
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Cancel') as HTMLButtonElement).click();
     await settle(fixture);
     expect(el.textContent).toContain('No draft changes yet.');
     expect(el.querySelector('.editor-form')).toBeNull(); // form is closed
+  });
+
+  it('OK collapses the row KEEPING its drafts, and the actions column shows nothing while open', async () => {
+    const ipc = makeIpc(editorState(), [], PREVIEW_OK);
+    const fixture = await render(ipc);
+    const el = openEditor(fixture, 'tempinf');
+
+    // While the editor is open, its footer owns closing: the row's
+    // actions cell holds no button.
+    const openTr = [...el.querySelectorAll('tbody tr')]
+      .find(r => r.querySelector('td code')?.textContent === 'tempinf')!;
+    expect(openTr.querySelector('td.actions button')).toBeNull();
+
+    typeInto(el.querySelector('.editor-form input[type="text"]') as HTMLInputElement, 'Patio Temp');
+    await settle(fixture);
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'OK') as HTMLButtonElement).click();
+    await settle(fixture);
+
+    expect(el.querySelector('.editor-form')).toBeNull(); // collapsed
+    expect(el.textContent).toContain('1 draft change, not saved yet.'); // draft survived
+    expect(openTr.querySelector('td.actions button')?.textContent).toBe('Edit');
+  });
+
+  it('Use defaults drafts removal of the authored settings and closes the form; default-origin rows do not offer it', async () => {
+    const ipc = makeIpc(editorState(), [], PREVIEW_OK);
+    const fixture = await render(ipc);
+    // origin 'station' → authored settings exist → button offered
+    const el = openEditor(fixture, 'windspeedmph');
+    const useDefaults = [...el.querySelectorAll('button')].find(b => b.textContent === 'Use defaults') as HTMLButtonElement;
+    expect(useDefaults).toBeDefined();
+    useDefaults.click();
+    await settle(fixture);
+    expect(el.querySelector('.editor-form')).toBeNull(); // closed
+    expect(el.textContent).toContain('1 draft change, not saved yet.'); // the removal is a draft
+
+    // Cancel-equivalent cleanup for the next assertion set.
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Discard drafts') as HTMLButtonElement).click();
+    await settle(fixture);
+
+    // origin 'default' → nothing authored → no Use defaults button
+    openEditor(fixture, 'tempinf');
+    expect([...el.querySelectorAll('button')].some(b => b.textContent === 'Use defaults')).toBe(false);
   });
 
   it('a stale in-flight preview never overwrites a newer draft (review #43 P2-4)', async () => {
