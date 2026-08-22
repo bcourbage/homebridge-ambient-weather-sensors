@@ -28,12 +28,12 @@ export async function composeAndPersist(deps, args) {
     // attempted before refusing; and an unfreeze failure never masks
     // the authoritative save outcome — by the time cleanup runs, the
     // save either persisted or refused, and THAT is what the caller
-    // must learn.
+    // must learn (with the restore failure flagged alongside it).
     try {
         await deps.freezeSettingsForm();
     }
     catch (e) {
-        await unfreezeQuietly(deps);
+        const restored = await unfreezeQuietly(deps);
         return {
             ok: false,
             error: {
@@ -41,27 +41,45 @@ export async function composeAndPersist(deps, args) {
                 message: `The settings form could not be frozen for the save: ${e instanceof Error ? e.message : String(e)}. `
                     + 'Reload the plugin settings and retry; nothing was written.',
             },
+            ...(restored ? {} : { settingsRestoreFailed: true }),
         };
     }
+    let outcome;
     try {
-        return await composeAndPersistFrozen(deps, args);
+        outcome = await composeAndPersistFrozen(deps, args);
     }
-    finally {
-        await unfreezeQuietly(deps);
+    catch (e) {
+        const restored = await unfreezeQuietly(deps);
+        if (restored) {
+            throw e;
+        }
+        return {
+            ok: false,
+            error: {
+                code: 'invalid-proposal',
+                message: `The save failed (${e instanceof Error ? e.message : String(e)}) and the settings form could `
+                    + 'not be restored. Reload the plugin settings page.',
+            },
+            settingsRestoreFailed: true,
+        };
     }
+    const restored = await unfreezeQuietly(deps);
+    return restored ? outcome : { ...outcome, settingsRestoreFailed: true };
 }
 /**
  * Restore the settings form without ever throwing: the save outcome
  * is authoritative, and a cleanup failure must not replace it (a
  * completed save reported as a transport error is worse than a
- * momentarily locked form, which a reload also fixes).
+ * momentarily locked form). Returns whether the restore succeeded so
+ * the caller can FLAG the degraded page instead of hiding it.
  */
 async function unfreezeQuietly(deps) {
     try {
         await deps.unfreezeSettingsForm();
+        return true;
     }
     catch {
-        // Swallowed deliberately; see above.
+        return false;
     }
 }
 async function composeAndPersistFrozen(deps, args) {
@@ -200,23 +218,17 @@ async function composeAndPersistFrozen(deps, args) {
     }
     // ---- Phase 2 (COMMIT): the same pipeline re-run from disk, with
     //      the snapshot/journal written durably immediately before the
-    //      persistable config is returned.
-    const result = await deps.request('/commit-save', payload);
+    //      persistable config is returned. The validation token makes
+    //      the protocol SERVER-ENFORCED (review #47 round 5): the
+    //      commit recomputes it from current state and refuses BEFORE
+    //      writing on any drift since validation — no post-hoc client
+    //      comparison after the record was already consumed.
+    const result = await deps.request('/commit-save', {
+        ...payload,
+        validationToken: validated.validationToken,
+    });
     if (!result || result.ok !== true) {
         return result ?? { ok: false, error: { code: 'invalid-proposal', message: 'Empty response from /commit-save.' } };
-    }
-    // Both phases composed from the same disk state (the digest pins
-    // it), so their outputs must agree; a mismatch means the world
-    // moved between them in a way the gates did not classify.
-    if (result.nextConfigDigest !== validated.nextConfigDigest) {
-        return {
-            ok: false,
-            error: {
-                code: 'stale-confirmation',
-                message: 'The configuration changed between validating and committing the save. Preview again and '
-                    + 'retry; the composed configuration was NOT applied to Homebridge.',
-            },
-        };
     }
     const nextArray = cfgArray.map((b, i) => (i === index ? result.nextConfig : b));
     // Post-compose persistence failures are INDETERMINATE (review #45

@@ -104,6 +104,19 @@ async function digestFor(rig: Rig, payload: Record<string, unknown>): Promise<st
   return preview.digest;
 }
 
+/**
+ * The realistic COMMIT flow (review #47 round 5): validate first,
+ * present the issued token to the commit — exactly what the
+ * orchestrator does.
+ */
+async function commitFor(rig: Rig, payload: Record<string, unknown>): Promise<Awaited<ReturnType<typeof handleCommitSave>>> {
+  const validated = await handleComposeSave(rig.deps, payload);
+  if (!validated.ok) {
+    throw new Error(`validate refused: ${validated.error.code}`);
+  }
+  return handleCommitSave(rig.deps, { ...payload, validationToken: validated.validationToken });
+}
+
 /** Event-logging fake of HB UI X's client API, wired to the REAL handler. */
 function makeClient(rig: Rig): {
   deps: OrchestratorDeps;
@@ -198,7 +211,7 @@ describe('structural confirmation digest (PR C / finding 5)', () => {
     // Migration equivalence: converting the config touches no
     // accessories, so no confirmation is demanded and the snapshot is
     // written on the way through.
-    const result = await handleCommitSave(rig.deps, { base: LEGACY_BLOCK });
+    const result = await commitFor(rig, { base: LEGACY_BLOCK });
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.snapshot).toBe('written');
@@ -649,10 +662,10 @@ describe('immutable snapshot lifecycle', () => {
   it('an existing MATCHING snapshot verifies and proceeds as exists', async () => {
     const rig = makeRig(LEGACY_BLOCK);
     discoveryStore(rig);
-    const first = await handleCommitSave(rig.deps, { base: LEGACY_BLOCK });
+    const first = await commitFor(rig, { base: LEGACY_BLOCK });
     expect(first.ok && first.snapshot === 'written').toBe(true);
     // Same legacy config converts again (config save never happened).
-    const again = await handleCommitSave(rig.deps, { base: LEGACY_BLOCK });
+    const again = await commitFor(rig, { base: LEGACY_BLOCK });
     expect(again.ok).toBe(true);
     if (again.ok) {
       expect(again.snapshot).toBe('exists');
@@ -668,7 +681,7 @@ describe('immutable snapshot lifecycle', () => {
       legacy: { temperatureSensors: false }, // differs from the live config
     }, null, 2);
     writeFileSync(snapPath, staleBody);
-    const result = await handleCommitSave(rig.deps, { base: LEGACY_BLOCK });
+    const result = await commitFor(rig, { base: LEGACY_BLOCK });
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.snapshot).toBe('journaled');
@@ -692,7 +705,9 @@ describe('immutable snapshot lifecycle', () => {
     mkdirSync(journalDir(rig), { recursive: true });
     const entryFile = path.join(journalDir(rig), 'entry-000001.json');
     writeFileSync(entryFile, '{not json');
-    const result = await handleCommitSave(rig.deps, { base: LEGACY_BLOCK });
+    // Two-phase: the corrupt journal refuses at VALIDATE, before any
+    // durable step could run.
+    const result = await handleComposeSave(rig.deps, { base: LEGACY_BLOCK });
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error.code).toBe('conversion-journal-error');
@@ -730,17 +745,23 @@ describe('immutable snapshot lifecycle', () => {
     }
   });
 
-  it('concurrent first conversions: exactly one written, the rest verify as exists, payload intact', async () => {
+  it('concurrent first conversions: exactly one written; the rest verify as exists or refuse as drift', async () => {
     const rig = makeRig(LEGACY_BLOCK);
     discoveryStore(rig);
     const results = await Promise.all([
-      handleCommitSave(rig.deps, { base: LEGACY_BLOCK }),
-      handleCommitSave(rig.deps, { base: LEGACY_BLOCK }),
-      handleCommitSave(rig.deps, { base: LEGACY_BLOCK }),
+      commitFor(rig, { base: LEGACY_BLOCK }),
+      commitFor(rig, { base: LEGACY_BLOCK }),
+      commitFor(rig, { base: LEGACY_BLOCK }),
     ]);
     const outcomes = results.map(r => (r.ok ? r.snapshot : `refused:${r.error.code}`));
     expect(outcomes.filter(o => o === 'written')).toHaveLength(1);
-    expect(outcomes.filter(o => o === 'exists')).toHaveLength(2);
+    // A loser either validated after the winner's write ('exists') or
+    // validated before it — its token then binds 'pending-write',
+    // which the commit's recomputation correctly reports as drift
+    // (retrying re-validates and succeeds as 'exists').
+    for (const o of outcomes) {
+      expect(['written', 'exists', 'refused:stale-confirmation']).toContain(o);
+    }
     const snap = JSON.parse(readFileSync(path.join(rig.persistDir, LEGACY_SNAPSHOT_FILE), 'utf8'));
     expect(snap.legacy.temperatureSensors).toBe(true);
   });
@@ -828,7 +849,7 @@ describe('rollback is a two-way door (conversion journal)', () => {
     const snapPath = path.join(rig.persistDir, LEGACY_SNAPSHOT_FILE);
 
     // First conversion writes the immutable snapshot.
-    const first = await handleCommitSave(rig.deps, { base: LEGACY_BLOCK });
+    const first = await commitFor(rig, { base: LEGACY_BLOCK });
     expect(first.ok).toBe(true);
     if (!first.ok) {
       return;
@@ -845,7 +866,7 @@ describe('rollback is a two-way door (conversion journal)', () => {
     // Reconversion: the projected mirror form differs from the
     // original, so the save journals it and proceeds — the rollback is
     // not a one-way door.
-    const second = await handleCommitSave(rig.deps, { base: reEnabled });
+    const second = await commitFor(rig, { base: reEnabled });
     expect(second.ok).toBe(true);
     if (!second.ok) {
       return;
@@ -871,7 +892,7 @@ describe('rollback is a two-way door (conversion journal)', () => {
     // journal stays at one entry and the snapshot stays untouched.
     const rolledAgain = { ...documentedRollback(second.nextConfig), _sensorMapV2: true };
     persistAsConfig(rig, rolledAgain);
-    const third = await handleCommitSave(rig.deps, { base: rolledAgain });
+    const third = await commitFor(rig, { base: rolledAgain });
     expect(third.ok).toBe(true);
     if (third.ok) {
       expect(third.snapshot).toBe('journaled');
@@ -884,14 +905,14 @@ describe('rollback is a two-way door (conversion journal)', () => {
     const rig = makeRig(LEGACY_BLOCK);
     discoveryStore(rig);
 
-    const first = await handleCommitSave(rig.deps, { base: LEGACY_BLOCK });
+    const first = await commitFor(rig, { base: LEGACY_BLOCK });
     expect(first.ok).toBe(true);
     if (!first.ok) {
       return;
     }
     const reEnabled = { ...documentedRollback(first.nextConfig), _sensorMapV2: true };
     persistAsConfig(rig, reEnabled);
-    const second = await handleCommitSave(rig.deps, { base: reEnabled });
+    const second = await commitFor(rig, { base: reEnabled });
     expect(second.ok).toBe(true);
     if (!second.ok) {
       return;
@@ -901,7 +922,7 @@ describe('rollback is a two-way door (conversion journal)', () => {
     // conversion — a genuinely different baseline must be preserved.
     const edited = { ...documentedRollback(second.nextConfig), _sensorMapV2: true, windSensors: false };
     persistAsConfig(rig, edited);
-    const third = await handleCommitSave(rig.deps, { base: edited });
+    const third = await commitFor(rig, { base: edited });
     expect(third.ok).toBe(true);
     if (third.ok) {
       expect(third.snapshot).toBe('journaled');
@@ -1169,7 +1190,7 @@ describe('two-phase save: validate writes nothing (review #47 round 4)', () => {
     }
     expect(existsSync(path.join(rig.persistDir, LEGACY_SNAPSHOT_FILE))).toBe(false);
 
-    const committed = await handleCommitSave(rig.deps, { base: LEGACY_BLOCK });
+    const committed = await commitFor(rig, { base: LEGACY_BLOCK });
     expect(committed.ok).toBe(true);
     if (committed.ok) {
       expect(committed.snapshot).toBe('written');
@@ -1252,5 +1273,103 @@ describe('freeze failure safety (review #47 round 4)', () => {
     // swallowed rather than replacing the authoritative outcome.
     expect(result.ok).toBe(true);
     expect(client.events).toEqual(['freeze', 'compose', 'commit', 'update', 'update', 'save', 'unfreeze-throw']);
+  });
+});
+
+
+describe('server-enforced two-phase protocol (review #47 round 5)', () => {
+  it('a DIRECT commit without a validation token refuses with nothing recorded', async () => {
+    const rig = makeRig(LEGACY_BLOCK);
+    discoveryStore(rig);
+    const result = await handleCommitSave(rig.deps, { base: LEGACY_BLOCK });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('commit-without-validation');
+    }
+    expect(existsSync(path.join(rig.persistDir, LEGACY_SNAPSHOT_FILE))).toBe(false);
+    expect(existsSync(journalDir(rig))).toBe(false);
+  });
+
+  it('a token presented with a DIFFERENT proposal refuses with nothing recorded', async () => {
+    const rig = makeRig(LEGACY_BLOCK);
+    discoveryStore(rig);
+    const validated = await handleComposeSave(rig.deps, { base: LEGACY_BLOCK });
+    expect(validated.ok).toBe(true);
+    if (!validated.ok) {
+      return;
+    }
+    // The validated canonical map plus a DISABLED-row edit: zero
+    // structural consequences, so no earlier gate
+    // (confirmation-required) can mask the token check.
+    const result = await handleCommitSave(rig.deps, {
+      base: LEGACY_BLOCK,
+      proposal: [...validated.canonicalSensorMap, { dataPoint: 'humidity', enabled: false, name: 'Renamed After Validation' }],
+      validationToken: validated.validationToken,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('stale-confirmation');
+    }
+    expect(existsSync(path.join(rig.persistDir, LEGACY_SNAPSHOT_FILE))).toBe(false);
+    expect(existsSync(journalDir(rig))).toBe(false);
+  });
+
+  it('state drift between the phases refuses with nothing recorded', async () => {
+    const rig = makeRig(LEGACY_BLOCK);
+    discoveryStore(rig);
+    const digest = blockDigest(LEGACY_BLOCK);
+    const validated = await handleComposeSave(rig.deps, {
+      baseDigest: digest,
+      formBlock: LEGACY_BLOCK,
+    });
+    expect(validated.ok).toBe(true);
+    if (!validated.ok) {
+      return;
+    }
+    // The settings-form state the commit presents differs from the
+    // validated one (a tolerated materialization appeared in between —
+    // still a drift the token must catch, because the token binds the
+    // EXACT validated state).
+    const result = await handleCommitSave(rig.deps, {
+      baseDigest: digest,
+      formBlock: { ...LEGACY_BLOCK, includeOnly: [] },
+      validationToken: validated.validationToken,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('stale-confirmation');
+    }
+    expect(existsSync(path.join(rig.persistDir, LEGACY_SNAPSHOT_FILE))).toBe(false);
+    expect(existsSync(journalDir(rig))).toBe(false);
+  });
+});
+
+describe('settings-form restore failures are surfaced (review #47 round 5, P2)', () => {
+  it('an unfreeze failure after successful persistence returns ok WITH the restore flag', async () => {
+    const rig = makeRig(LEGACY_BLOCK);
+    discoveryStore(rig);
+    const client = makeClient(rig);
+    client.deps.unfreezeSettingsForm = () => {
+      client.events.push('unfreeze-throw');
+      throw new Error('showSchemaForm rejected');
+    };
+    const result = await composeAndPersist(client.deps, {
+      baseDigest: blockDigest(LEGACY_BLOCK),
+      blockIndex: 0,
+    });
+    expect(result.ok).toBe(true);
+    expect(result.settingsRestoreFailed).toBe(true);
+  });
+
+  it('a successful restore attaches NO flag', async () => {
+    const rig = makeRig(LEGACY_BLOCK);
+    discoveryStore(rig);
+    const client = makeClient(rig);
+    const result = await composeAndPersist(client.deps, {
+      baseDigest: blockDigest(LEGACY_BLOCK),
+      blockIndex: 0,
+    });
+    expect(result.ok).toBe(true);
+    expect(result.settingsRestoreFailed).toBeUndefined();
   });
 });

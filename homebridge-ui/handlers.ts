@@ -221,7 +221,8 @@ export type ComposeSaveError =
   | { code: 'legacy-snapshot-corrupt'; message: string }
   | { code: 'snapshot-write-failed'; message: string }
   | { code: 'conversion-journal-error'; message: string }
-  | { code: 'unsaved-settings-changes'; message: string };
+  | { code: 'unsaved-settings-changes'; message: string }
+  | { code: 'commit-without-validation'; message: string };
 
 export type ComposeSaveResult =
   | {
@@ -236,6 +237,16 @@ export type ComposeSaveResult =
      * X's merge-style config update resurrecting a deleted key).
      */
     nextConfigDigest: string;
+    /**
+     * Opaque token binding everything the validate phase verified —
+     * the authoritative disk block, the canonicalized proposal, the
+     * settings-form state, the inventory-bound consequences, the
+     * composed output, and the prospective record outcome. The COMMIT
+     * requires it and recomputes it from current state before writing
+     * anything (review #47 round 5): a commit without it, or with any
+     * drift since validation, refuses with zero writes.
+     */
+    validationToken: string;
     /**
      * Pre-conversion-record outcome. Commit phase: 'written' (snapshot
      * created now), 'exists' (verified as the same original),
@@ -311,6 +322,14 @@ export interface ComposeSavePayload {
    * difference refuses with `unsaved-settings-changes`.
    */
   formBlock?: unknown;
+  /**
+   * REQUIRED by /commit-save: the `validationToken` the validate
+   * phase returned. The commit recomputes the token from current
+   * state and refuses on absence or any mismatch, so the durable
+   * snapshot/journal write cannot happen without a fresh, matching
+   * validation (review #47 round 5). Ignored by /compose-save.
+   */
+  validationToken?: unknown;
 }
 
 /**
@@ -741,20 +760,13 @@ async function composeSaveInternal(
   //         (it is the single authority on "legacy").
   const composed = composeV2ConfigSave(block, canonical as unknown[], effectiveMap, modeResult.mode);
 
-  // ---- 9. The pre-conversion record. VALIDATE phase (persist=false):
-  //         read-only verification only — the prospective outcome is
-  //         reported and every refusable record problem (corrupt
-  //         snapshot, unreadable journal) surfaces here, but nothing
-  //         is written, so an attempt abandoned at the client's form
-  //         re-check consumes neither the immutable snapshot nor a
-  //         journal entry (review #47 round 4). COMMIT phase: durable
-  //         and race-safe — exclusive-create snapshot write; on
-  //         'exists', verify against the authoritative pre-conversion
-  //         fields (review P1-6), never overwrite; a verified MISMATCH
-  //         is the reconversion path and appends the baseline to the
-  //         journal BEFORE config.json can be mutated.
+  // ---- 9a. Prospective pre-conversion-record outcome, READ-ONLY in
+  //          BOTH phases: every refusable record problem (corrupt
+  //          snapshot, unreadable journal) surfaces before anything
+  //          could be written, and the outcome is bound into the
+  //          validation token below (review #47 rounds 4–5).
   let snapshot: SnapshotOutcome = 'not-applicable';
-  if (composed.snapshot !== undefined && !persist) {
+  if (composed.snapshot !== undefined) {
     const verdict = await verifyLegacySnapshot(deps.persistDir, composed.snapshot);
     if (verdict === 'absent') {
       snapshot = 'pending-write';
@@ -784,7 +796,72 @@ async function composeSaveInternal(
       };
     }
   }
-  if (composed.snapshot !== undefined && persist) {
+
+  // ---- 9b. The validation token — SERVER-SIDE enforcement of the
+  //          two-phase protocol (review #47 round 5, P1): /commit-save
+  //          only writes when presented with the token /compose-save
+  //          issued for EXACTLY this state — the authoritative disk
+  //          block, the canonicalized proposal, the settings-form
+  //          state, the inventory-bound consequences, the composed
+  //          output, and the prospective record outcome. The commit
+  //          recomputes the token from CURRENT state, so a direct
+  //          commit (stale client, console request, future refactor)
+  //          refuses before anything is written, and any drift between
+  //          the phases refuses the same way. An integrity token, not
+  //          an auth token: the bridge already trusts its session —
+  //          the token exists so the re-check-then-commit ordering
+  //          cannot be skipped by accident.
+  const nextConfigDigest = blockDigest(composed.nextConfig);
+  const validationToken = createHash('sha256').update(canonicalJsonLocal({
+    v: 1,
+    baseDigest: blockDigest(block),
+    canonical,
+    formBlock: p.formBlock ?? null,
+    consequencesDigest: consequences.digest,
+    nextConfigDigest,
+    prospectiveRecord: snapshot,
+  })).digest('hex');
+
+  if (!persist) {
+    return {
+      ok: true,
+      nextConfig: composed.nextConfig,
+      nextConfigDigest,
+      validationToken,
+      snapshot,
+      canonicalSensorMap: canonical,
+      warnings: effectiveMap.warnings,
+      notes: effectiveMap.notes,
+    };
+  }
+  if (typeof p.validationToken !== 'string' || p.validationToken.length === 0) {
+    return {
+      ok: false,
+      error: {
+        code: 'commit-without-validation',
+        message: 'The commit did not present a validation token. Saves must validate first (/compose-save), '
+          + 're-check the settings form, and then commit. Nothing was written.',
+      },
+    };
+  }
+  if (p.validationToken !== validationToken) {
+    return {
+      ok: false,
+      error: {
+        code: 'stale-confirmation',
+        message: 'The configuration, proposal, settings form, or station inventory changed between validating '
+          + 'and committing this save. Preview again and retry; nothing was written.',
+      },
+    };
+  }
+
+  // ---- 9c. COMMIT: the durable pre-conversion record, race-safe —
+  //          exclusive-create snapshot write; on 'exists', verify
+  //          against the authoritative pre-conversion fields (review
+  //          P1-6), never overwrite; a verified MISMATCH is the
+  //          reconversion path and appends the baseline to the journal
+  //          BEFORE config.json can be mutated.
+  if (composed.snapshot !== undefined) {
     let outcome: 'written' | 'exists';
     try {
       outcome = await writeLegacySnapshot(deps.persistDir, composed.snapshot, deps.log);
@@ -823,7 +900,8 @@ async function composeSaveInternal(
   return {
     ok: true,
     nextConfig: composed.nextConfig,
-    nextConfigDigest: blockDigest(composed.nextConfig),
+    nextConfigDigest,
+    validationToken,
     snapshot,
     canonicalSensorMap: canonical,
     warnings: effectiveMap.warnings,

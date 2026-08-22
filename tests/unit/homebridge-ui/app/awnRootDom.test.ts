@@ -701,6 +701,22 @@ describe('save flow (PR C / finding 5 — the ONE route is composeAndPersist)', 
     expect(el.textContent).not.toContain('does not exactly match');
   });
 
+  it('a settings-form restore failure after a successful save is surfaced, never silent (review #47 round 5, P2)', async () => {
+    const ipc = makeIpc(editorState(), [], NON_STRUCTURAL_PREVIEW, COMPOSE_OK);
+    (ipc as unknown as Record<string, unknown>).showSchemaForm = () => {
+      throw new Error('modal already tearing down');
+    };
+    const fixture = await render(ipc);
+    const el = await draftAndPreview(fixture);
+    btn(el, 'Save changes')!.click();
+    await settle(fixture);
+    // The authoritative outcome stands...
+    expect(el.textContent).toContain('Saved.');
+    // ...and the degraded page is called out with a reload path.
+    expect(el.textContent).toContain('could not be restored after the save');
+    expect(btn(el, 'Reload now')).not.toBeNull();
+  });
+
   it('a post-save digest mismatch surfaces the drift warning (receipt check)', async () => {
     const ipc = makeIpc(editorState(), [], NON_STRUCTURAL_PREVIEW, {
       ...COMPOSE_OK,

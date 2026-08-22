@@ -1507,6 +1507,28 @@ Tests: for every non-motion kind, submit an override with each of these fields; 
   MultiHome.md — to the JSON config editor; it never calls their
   blocks duplicates or tells them to delete one.)
 
+  Round 5 made the protocol SERVER-ENFORCED and the cleanup honest:
+  (g) VALIDATION TOKEN — `/commit-save` accepted the original payload
+  with no proof that `/compose-save` ran, so a direct commit (stale
+  client, console request, refactor) could consume the permanent
+  record without the frozen-form re-check, and the client's phase
+  cross-check ran only AFTER the record was written. `/compose-save`
+  now returns an opaque token binding the authoritative disk block,
+  the canonicalized proposal, the settings-form state, the
+  inventory-bound consequences digest, the composed output, and the
+  prospective record outcome; `/commit-save` recomputes the token from
+  CURRENT state and refuses before writing anything — absent token →
+  `commit-without-validation`, any drift → `stale-confirmation`. An
+  integrity token, not an auth token (the bridge trusts its session);
+  it exists so the ordering cannot be skipped by accident. Concurrent
+  first conversions now resolve as one 'written' plus 'exists' or a
+  clean drift refusal per loser (a retry re-validates and succeeds).
+  (h) RESTORE FAILURES SURFACED — `composeAndPersist` returns
+  `settingsRestoreFailed` alongside the authoritative outcome when the
+  form/Save-button restore failed, and the editor shows a "could not
+  be restored after the save, reload the plugin settings page" banner
+  with a Reload button instead of leaving a silently degraded page.
+
   Round 4 made the save TWO-PHASE and the freeze failure-safe:
   (e) TWO-PHASE COMPOSE/COMMIT — the snapshot/journal used to be
   written during the single compose call, BEFORE the client's form

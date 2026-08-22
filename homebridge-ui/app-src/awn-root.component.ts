@@ -247,6 +247,12 @@ interface StationGroup {
       @if (postSaveDrift()) {
         <div class="banner safe-mode">The configuration on disk does not exactly match what was saved. Review the plugin configuration before editing further.</div>
       }
+      @if (settingsRestoreFailed()) {
+        <div class="banner">
+          The settings form above could not be restored after the save. The save result shown here stands; reload the plugin settings page to restore the form.
+          <button type="button" (click)="reloadPage()">Reload now</button>
+        </div>
+      }
       @if (reloadRequired()) {
         <div class="banner">
           <span>Editing is locked until this page is reloaded: the saved state is uncertain, so drafts and previews here may no longer match the configuration on disk. Reload, inspect the configuration, and only then retry.</span>
@@ -398,6 +404,12 @@ export class AwnRootComponent {
    * configuration drifted between this page and disk.
    */
   protected readonly postSaveDrift = signal(false);
+  /**
+   * The save outcome stands, but restoring the settings form (or its
+   * Save button) failed afterward — the page is degraded and only a
+   * reload fixes it (review #47 round 5, P2). Never silent.
+   */
+  protected readonly settingsRestoreFailed = signal(false);
   protected readonly saveResult = signal<
     // The pending-* values belong to the validate phase and never
     // reach here (a successful save reports the COMMIT outcome), but
@@ -672,6 +684,7 @@ export class AwnRootComponent {
     this.saving.set(true);
     this.saveResult.set(null);
     this.postSaveDrift.set(false);
+    this.settingsRestoreFailed.set(false);
     // Lock editing for the duration (review #45 P2-4): the open form
     // closes (no form events can draft mid-save) and Edit/Preview/
     // Discard disable via saving() — a slow save can never race a
@@ -686,6 +699,9 @@ export class AwnRootComponent {
         baseDigest: this.state()?.baseDigest,
         blockIndex: this.state()?.blockIndex,
       });
+      if (result.settingsRestoreFailed) {
+        this.settingsRestoreFailed.set(true);
+      }
       if (result.ok) {
         this.saveResult.set({ ok: true, snapshot: result.snapshot });
         // Reload the authoritative state: the config on disk changed,
