@@ -91,6 +91,37 @@ const deps = {
 // in-memory copy CONTAMINATED the way the schema form contaminates it;
 // updatePluginConfig MERGES (Object.assign); save persists via JSON
 // (dropping undefined tombstones), exactly like the real frontend.
+//
+// The contamination is a full FORM-VALUE REPLACEMENT (measured on HB
+// UI X 5.28): the settings modal's schema form binds two-way into
+// pluginConfig[0] and swaps the block for the form value, which (a)
+// carries ONLY schema-declared properties — `platform` is gone — and
+// (b) fills every declared default, nested object defaults included.
+const schemaProps = JSON.parse(
+  await fs.readFile(path.join(repo, 'config.schema.json'), 'utf8'),
+).schema.properties;
+function formValueOf(block) {
+  const out = {};
+  for (const [key, prop] of Object.entries(schemaProps)) {
+    if (key in block) {
+      out[key] = prop.properties && block[key] && typeof block[key] === 'object'
+        ? { ...Object.fromEntries(Object.entries(prop.properties)
+          .filter(([, np]) => np.default !== undefined)
+          .map(([nk, np]) => [nk, np.default])), ...block[key] }
+        : block[key];
+    } else if (prop.default !== undefined) {
+      out[key] = prop.default;
+    } else if (prop.properties) {
+      const nested = Object.fromEntries(Object.entries(prop.properties)
+        .filter(([, np]) => np.default !== undefined)
+        .map(([nk, np]) => [nk, np.default]));
+      if (Object.keys(nested).length > 0) {
+        out[key] = nested;
+      }
+    }
+  }
+  return out;
+}
 let inMemoryBlocks = null;
 async function loadBlocks() {
   const cfg = JSON.parse(await fs.readFile(configPath, 'utf8'));
@@ -98,17 +129,24 @@ async function loadBlocks() {
 }
 async function getPluginConfig() {
   if (inMemoryBlocks === null) {
-    inMemoryBlocks = (await loadBlocks()).map(b => ({
-      ...b,
-      // the schema form's materialized defaults
-      includeOnly: [],
-      stationFilter: [],
-    }));
+    inMemoryBlocks = (await loadBlocks()).map(formValueOf);
   }
   return inMemoryBlocks;
 }
 function updatePluginConfig(next) {
+  // Decode the fake transport's undefined sentinel (structured-clone
+  // stand-in) so Object.assign copies real `undefined` tombstones,
+  // exactly as HB UI X's merge sees them over postMessage.
+  for (const block of next) {
+    for (const key of Object.keys(block)) {
+      if (block[key] === '__awn_undefined__') {
+        block[key] = undefined;
+      }
+    }
+  }
   for (let i = 0; i < next.length; i++) {
+    // updateConfigBlocks re-injects the platform key on every write.
+    next[i].platform = 'AmbientWeatherSensors';
     if (inMemoryBlocks[i]) {
       Object.assign(inMemoryBlocks[i], next[i]);
     } else {
@@ -183,6 +221,9 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname === '/fake-homebridge.js') {
       return send(200, await fs.readFile(path.join(here, 'fake-homebridge.js')), 'text/javascript');
     }
+    if (url.pathname === '/vendor/bootstrap.css') {
+      return send(200, await fs.readFile(path.join(repo, 'node_modules', 'bootstrap', 'dist', 'css', 'bootstrap.min.css')), 'text/css');
+    }
     if (url.pathname.startsWith('/plugin/')) {
       const rel = url.pathname.slice('/plugin/'.length) || 'index.html';
       const file = path.normalize(path.join(publicDir, rel));
@@ -191,9 +232,14 @@ const server = http.createServer(async (req, res) => {
       }
       let data = await fs.readFile(file);
       if (rel === 'index.html') {
-        // Stand in for HB UI X's injected ui.js.
+        // Stand in for HB UI X's injected ui.js — AND for its style
+        // mirroring: plugin-ui-utils copies the parent document's
+        // stylesheets (Bootstrap included) into the iframe before the
+        // plugin app boots. Foreign rules landing on our class names
+        // are a real hazard (Bootstrap's `.modal` is display:none —
+        // beta.14 smoke #6), so the harness must serve them too.
         data = data.toString('utf8')
-          .replace('<head>', '<head><script src="/fake-homebridge.js"></script>');
+          .replace('<head>', '<head><link rel="stylesheet" href="/vendor/bootstrap.css"><script src="/fake-homebridge.js"></script>');
         return send(200, data, 'text/html');
       }
       return send(200, data, MIME[path.extname(file)] ?? 'application/octet-stream');
