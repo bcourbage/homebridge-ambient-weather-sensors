@@ -167,7 +167,12 @@ async function composeAndPersistFrozen(
   deps: OrchestratorDeps,
   args: ComposeAndPersistArgs,
 ): Promise<ComposeSaveResult> {
-  const cfgArray = await deps.getPluginConfig();
+  // HB UI X's getPluginConfig() returns ITS live in-memory array — the
+  // same object graph on every call — so a naive mid-save re-check
+  // would compare that array against itself and always pass. Snapshot
+  // an immutable copy up front; the re-check then compares the LIVE
+  // state against what this save actually read.
+  const cfgArray = JSON.parse(JSON.stringify(await deps.getPluginConfig())) as Array<Record<string, unknown>>;
   const blocks = cfgArray.filter(b => b && b.platform === 'AmbientWeatherSensors');
 
   const digestSession = args.baseDigest !== undefined;

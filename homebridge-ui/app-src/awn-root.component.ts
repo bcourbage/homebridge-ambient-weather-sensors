@@ -101,7 +101,16 @@ interface StationGroup {
        visible (beta.13 smoke F2 - it rendered past the clipped
        right edge and looked absent). The pinned cells need a solid
        background or scrolled content bleeds through them. */
+    /* Density: the page's default 6px/10px cell padding made the
+       table wider than the panel; tighter cells remove the horizontal
+       scrollbar on typical widths (the scroll container stays as the
+       fallback for narrow windows). */
     .table-scroll { overflow-x: auto; }
+    .table-scroll th, .table-scroll td { padding: 5px 7px; }
+    .unit-converted {
+      color: var(--info-fg); background: var(--info-bg);
+      padding: 0 5px; border-radius: 4px;
+    }
     th.state, td.state { width: 22px; padding-right: 2px; }
     .state-icon { width: 14px; height: 14px; vertical-align: -2px; }
     .state-icon.on  { color: var(--on-fg); }
@@ -120,6 +129,7 @@ interface StationGroup {
       text-align: right;
     }
     th.actions { background: var(--panel-bg); }
+    td.actions button { padding: 3px 9px; }
   `,
   template: `
     <h2>Sensor map <span class="station-meta">draft editor preview</span></h2>
@@ -229,6 +239,7 @@ interface StationGroup {
           <div class="banner safe-mode">Preview refused ({{ pr.error.code }}): {{ pr.error.message }}</div>
         }
       }
+      <div #saveOutcome>
       @if (saving()) {
         <p class="empty">Saving…</p>
       }
@@ -261,6 +272,7 @@ interface StationGroup {
           <button type="button" (click)="reloadPage()">Reload now</button>
         </div>
       }
+      </div>
       @if (reloadRequired()) {
         <div class="banner">
           <span>Editing is locked until this page is reloaded: the saved state is uncertain, so drafts and previews here may no longer match the configuration on disk. Reload, inspect the configuration, and only then retry.</span>
@@ -350,7 +362,13 @@ interface StationGroup {
                     }
                   }
                 </td>
-                <td>{{ unitCell(row) }}</td>
+                <td>
+                  @if (isConverted(row)) {
+                    <span class="unit-converted" [title]="'converted from ' + unitLabel(row.sourceUnit)">{{ unitLabel(row.displayUnit) }}</span>
+                  } @else {
+                    {{ unitCell(row) }}
+                  }
+                </td>
                 <td><span class="origin {{ row.origin }}">{{ row.origin }}</span></td>
                 <td>
                   @if (row.batteryField) {
@@ -367,7 +385,7 @@ interface StationGroup {
               </tr>
               @if (isExpanded(row)) {
                 <tr>
-                  <td colspan="8" class="editor-form">
+                  <td colspan="8" class="editor-form" (mousedown)="formPointerDown($event)">
                     <form [formGroup]="editForm!">
                       <label><input type="checkbox" formControlName="enabled" /> Enabled</label>
                       <label>Name <input type="text" formControlName="name" /></label>
@@ -704,6 +722,8 @@ export class AwnRootComponent {
    */
   /** The in-flow confirmation card, for scroll-into-view on open. */
   private readonly confirmPanel = viewChild<ElementRef<HTMLElement>>('confirmPanel');
+  /** The save-outcome banner area, brought into view after a save. */
+  private readonly saveOutcome = viewChild<ElementRef<HTMLElement>>('saveOutcome');
 
   protected saveClicked(pr: Extract<PreviewResultDto, { ok: true }>): void {
     if (pr.structuralChangeCount > 0) {
@@ -779,6 +799,11 @@ export class AwnRootComponent {
     } finally {
       this.saving.set(false);
       this.confirmOpen.set(false);
+      // The outcome banners render near the top of the editor while
+      // the user is usually scrolled at the table (beta.14 smoke:
+      // "save does nothing" was a refusal banner far off-screen).
+      // Bring the outcome into the visible window, whatever it says.
+      setTimeout(() => this.saveOutcome()?.nativeElement?.scrollIntoView?.({ block: 'center' }), 0);
     }
   }
 
@@ -789,6 +814,21 @@ export class AwnRootComponent {
   /** What a structural change DOES to the accessory (review #43 P1-1). */
   protected structuralVerb(change: 'added' | 'removed' | 'modified'): string {
     return change === 'added' ? 'registers' : change === 'removed' ? 'deregisters' : 're-registers';
+  }
+
+  /**
+   * Focus-scroll mitigation (beta.14 smoke): when a dropdown or input
+   * in the row editor is clicked, Safari scrolls the newly focused
+   * control toward the center of the scrollable ancestor — HB UI X's
+   * settings modal — yanking the page up or down. Focusing the
+   * control WITHOUT scrolling before the native focus-on-click runs
+   * makes the browser's own focus pass a no-op.
+   */
+  protected formPointerDown(ev: Event): void {
+    const t = ev.target as (HTMLElement & { focus(o?: { preventScroll?: boolean }): void }) | null;
+    if (t && (t.tagName === 'SELECT' || t.tagName === 'INPUT')) {
+      t.focus({ preventScroll: true });
+    }
   }
 
   /** Tooltip + accessible label for the leading state icon. */
@@ -835,7 +875,7 @@ export class AwnRootComponent {
     return parts.join(', ');
   }
 
-  private unitLabel(u: string | undefined): string {
+  protected unitLabel(u: string | undefined): string {
     return u === undefined ? '—' : (this.unitLabels().get(u) ?? u);
   }
 
@@ -843,9 +883,11 @@ export class AwnRootComponent {
     if (!row.sourceUnit) {
       return '—';
     }
-    const label = (u: string): string => this.unitLabels().get(u) ?? u;
-    return row.displayUnit && row.displayUnit !== row.sourceUnit
-      ? `${label(row.sourceUnit)} → ${label(row.displayUnit)}`
-      : label(row.sourceUnit);
+    return this.unitLabel(row.sourceUnit);
+  }
+
+  /** A row whose HomeKit display unit differs from the AWN source unit. */
+  protected isConverted(row: EditorRowDto): boolean {
+    return !!row.sourceUnit && !!row.displayUnit && row.displayUnit !== row.sourceUnit;
   }
 }

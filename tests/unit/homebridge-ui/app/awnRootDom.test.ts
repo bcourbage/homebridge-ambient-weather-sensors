@@ -185,7 +185,12 @@ describe('AwnRootComponent (TestBed, jsdom)', () => {
     expect(el.querySelectorAll('table')).toHaveLength(2);
     const text = el.textContent!;
     expect(text).toContain('°F');               // vocabulary label, not the unit code
-    expect(text).toContain('mph → ft/sec');     // source → display conversion
+    // Converted rows show the unit HomeKit DISPLAYS, highlighted,
+    // with the source unit in the tooltip (Bruno's beta.14 feedback).
+    expect(text).toContain('ft/sec');     // display unit of the conversion
+    const converted = el.querySelector('.unit-converted') as HTMLElement;
+    expect(converted).not.toBeNull();
+    expect(converted.getAttribute('title')).toBe('converted from mph');
     expect(text).toContain('battout');
     expect(ipc.requests.map(r => r.path).sort()).toEqual(['/editor-state', '/vocabulary']);
   });
