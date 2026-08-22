@@ -43,6 +43,17 @@ export interface HomebridgeIpc {
    */
   updatePluginConfig?(config: unknown[]): Promise<unknown>;
   savePluginConfig?(): Promise<unknown>;
+  /**
+   * Settings-form freeze surface (review #47 round 3, P1): the save
+   * orchestrator disables HB UI X's Save button and hides the schema
+   * form for the duration of a save so no form edit can race the
+   * persistence. Optional — older bridges without them still get the
+   * orchestrator's re-read backstop.
+   */
+  disableSaveButton?(): void;
+  enableSaveButton?(): void;
+  hideSchemaForm?(): void;
+  showSchemaForm?(): void;
 }
 
 /**
@@ -162,6 +173,8 @@ export class HomebridgeService {
     getPluginConfig(): Promise<Array<Record<string, unknown>>>;
     updatePluginConfig(config: Array<Record<string, unknown>>): Promise<unknown>;
     savePluginConfig(): Promise<unknown>;
+    freezeSettingsForm(): void;
+    unfreezeSettingsForm(): void;
     getCachedAccessories?(): Promise<unknown[]>;
   } {
     const ipc = this.ipc;
@@ -173,6 +186,16 @@ export class HomebridgeService {
       getPluginConfig: () => ipc.getPluginConfig() as Promise<Array<Record<string, unknown>>>,
       updatePluginConfig: (config) => ipc.updatePluginConfig!(config),
       savePluginConfig: () => ipc.savePluginConfig!(),
+      // The form state itself survives: HB UI X re-renders the schema
+      // form from its in-memory config on showSchemaForm.
+      freezeSettingsForm: () => {
+        ipc.disableSaveButton?.();
+        ipc.hideSchemaForm?.();
+      },
+      unfreezeSettingsForm: () => {
+        ipc.showSchemaForm?.();
+        ipc.enableSaveButton?.();
+      },
       ...(ipc.getCachedAccessories
         ? { getCachedAccessories: () => ipc.getCachedAccessories!() }
         : {}),

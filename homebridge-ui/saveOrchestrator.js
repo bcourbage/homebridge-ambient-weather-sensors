@@ -20,6 +20,19 @@
  * at compile time; safe in the browser).
  */
 export async function composeAndPersist(deps, args) {
+    // The settings form and HB UI X's Save button are a SECOND writer of
+    // the same config; frozen for the whole operation so no form edit
+    // can land between the formBlock sample and the clear-then-set
+    // persistence (review #47 round 3, P1). Unfrozen on every exit.
+    await deps.freezeSettingsForm();
+    try {
+        return await composeAndPersistFrozen(deps, args);
+    }
+    finally {
+        await deps.unfreezeSettingsForm();
+    }
+}
+async function composeAndPersistFrozen(deps, args) {
     const cfgArray = await deps.getPluginConfig();
     const blocks = cfgArray.filter(b => b && b.platform === 'AmbientWeatherSensors');
     const digestSession = args.baseDigest !== undefined;
@@ -44,8 +57,9 @@ export async function composeAndPersist(deps, args) {
                 ok: false,
                 error: {
                     code: 'ambiguous-platform-block',
-                    message: `${blocks.length} AmbientWeatherSensors blocks exist; the editor supports exactly one. `
-                        + 'Remove the duplicates or edit config.json directly.',
+                    message: `${blocks.length} AmbientWeatherSensors platform blocks exist (a multi-Home setup; see MultiHome.md). `
+                        + 'The sensor-map editor supports exactly one block, so it is read-only here. Edit sensorMap in the '
+                        + 'JSON config editor instead.',
                 },
             };
         }
@@ -132,6 +146,21 @@ export async function composeAndPersist(deps, args) {
     if (!result || result.ok !== true) {
         // Refusal or malformed response: NO update, NO save.
         return result ?? { ok: false, error: { code: 'invalid-proposal', message: 'Empty response from /compose-save.' } };
+    }
+    // Defense-in-depth behind the client-cooperative freeze: re-read the
+    // in-memory config and refuse if ANYTHING changed while the compose
+    // ran — an edit that raced the save would otherwise be erased by the
+    // clear-then-set below, with a clean-looking receipt.
+    const recheck = await deps.getPluginConfig();
+    if (deepJson(recheck) !== deepJson(cfgArray)) {
+        return {
+            ok: false,
+            error: {
+                code: 'unsaved-settings-changes',
+                message: 'The plugin settings changed while the save was running. Review the settings form and retry; '
+                    + 'nothing was written.',
+            },
+        };
     }
     const nextArray = cfgArray.map((b, i) => (i === index ? result.nextConfig : b));
     // Post-compose persistence failures are INDETERMINATE (review #45

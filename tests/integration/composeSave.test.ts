@@ -134,6 +134,12 @@ function makeClient(rig: Rig): {
     async savePluginConfig() {
       state.events.push('save');
     },
+    freezeSettingsForm() {
+      state.events.push('freeze');
+    },
+    unfreezeSettingsForm() {
+      state.events.push('unfreeze');
+    },
   };
   return Object.assign(state, { deps });
 }
@@ -260,7 +266,7 @@ describe('post-compose persistence failures are INDETERMINATE (review #45 P1-2)'
       expect(result.error.message).toContain('MAY have been applied');
     }
     // update DID take effect before the failure — the effect-then-throw shape.
-    expect(client.events).toEqual(['compose', 'update', 'update']);
+    expect(client.events).toEqual(['freeze', 'compose', 'update', 'update', 'unfreeze']);
     expect(client.persistedArray).toBeDefined();
   });
 });
@@ -283,7 +289,7 @@ describe('no-bypass: preview → confirm → compose → update → save (PR C)'
     // 2-4. Confirmed save through the ONE route.
     const result = await composeAndPersist(client.deps, { ...payload, confirmDigest: preview.digest });
     expect(result.ok).toBe(true);
-    expect(client.events).toEqual(['compose', 'update', 'update', 'save']);
+    expect(client.events).toEqual(['freeze', 'compose', 'update', 'update', 'save', 'unfreeze']);
     expect(client.snapshotExistedAtUpdate).toBe(true); // durable BEFORE persistence
     // Verbatim persistence, synchronized mirror included.
     const persisted = client.persistedArray!.find(b => b.platform === 'AmbientWeatherSensors')!;
@@ -306,7 +312,7 @@ describe('no-bypass: preview → confirm → compose → update → save (PR C)'
     if (!result.ok) {
       expect(result.error.code).toBe('confirmation-required');
     }
-    expect(client.events).toEqual(['compose']); // no update, no save
+    expect(client.events).toEqual(['freeze', 'compose', 'unfreeze']); // no update, no save
     expect(client.persistedArray).toBeUndefined();
   });
 });
@@ -319,7 +325,7 @@ describe('ordering: snapshot is durable before the client persistence half runs'
 
     const result = await composeAndPersist(client.deps, {}); // pure migration
     expect(result.ok).toBe(true);
-    expect(client.events).toEqual(['compose', 'update', 'update', 'save']);
+    expect(client.events).toEqual(['freeze', 'compose', 'update', 'update', 'save', 'unfreeze']);
     expect(client.snapshotExistedAtUpdate).toBe(true);
     if (result.ok) {
       expect(result.snapshot).toBe('written');
@@ -360,7 +366,7 @@ describe('ordering: snapshot is durable before the client persistence half runs'
     if (!result.ok) {
       expect(result.error.code).toBe('snapshot-write-failed');
     }
-    expect(client.events).toEqual(['compose']);
+    expect(client.events).toEqual(['freeze', 'compose', 'unfreeze']);
     expect(client.snapshotExistedAtUpdate).toBeUndefined();
   });
 });
@@ -398,7 +404,7 @@ describe('authoritative on-disk config (never the client copy)', () => {
     const client = makeClient(rig);
     const result = await composeAndPersist(client.deps, { proposal: [] });
     expect(result.ok).toBe(false);
-    expect(client.events).toEqual(['compose']);
+    expect(client.events).toEqual(['freeze', 'compose', 'unfreeze']);
   });
 });
 
@@ -461,7 +467,7 @@ describe('proposal normalization (identity-first → merge → body validation)'
       expect(result.error.code).toBe('invalid-rows');
       expect((result.error as { rows: unknown[] }).rows.length).toBeGreaterThan(0);
     }
-    expect(client.events).toEqual(['compose']);
+    expect(client.events).toEqual(['freeze', 'compose', 'unfreeze']);
     expect(existsSync(path.join(rig.persistDir, LEGACY_SNAPSHOT_FILE))).toBe(false);
   });
 });
@@ -742,7 +748,7 @@ describe('explicit-base orchestration (review #67 P1-3)', () => {
     const clonedBase = JSON.parse(JSON.stringify(LEGACY_BLOCK)) as Record<string, unknown>;
     const result = await composeAndPersist(client.deps, { base: clonedBase });
     expect(result.ok).toBe(true);
-    expect(client.events).toEqual(['compose', 'update', 'update', 'save']);
+    expect(client.events).toEqual(['freeze', 'compose', 'update', 'update', 'save', 'unfreeze']);
     const awsBlocks = (client.persistedArray ?? []).filter(b => b.platform === 'AmbientWeatherSensors');
     expect(awsBlocks).toHaveLength(1);
     expect(awsBlocks[0].configVersion).toBe(2);
@@ -918,7 +924,7 @@ describe('session-digest staleness (beta.13 smoke F1: getPluginConfig is schema-
     const viaDigest = await handlePreviewSave(rig.deps, { baseDigest: digest });
     expect(viaDigest.ok).toBe(true);
 
-    const composed = await handleComposeSave(rig.deps, { baseDigest: digest });
+    const composed = await handleComposeSave(rig.deps, { baseDigest: digest, formBlock: LEGACY_BLOCK });
     expect(composed.ok).toBe(true);
     if (composed.ok) {
       expect(composed.nextConfigDigest).toBe(blockDigest(composed.nextConfig));
@@ -928,7 +934,7 @@ describe('session-digest staleness (beta.13 smoke F1: getPluginConfig is schema-
   it('a digest that matches no on-disk block refuses stale-base; a matching digest wins over a stale base', async () => {
     const rig = makeRig(LEGACY_BLOCK);
     discoveryStore(rig);
-    const wrong = await handleComposeSave(rig.deps, { baseDigest: 'f'.repeat(64) });
+    const wrong = await handleComposeSave(rig.deps, { baseDigest: 'f'.repeat(64), formBlock: LEGACY_BLOCK });
     expect(wrong.ok).toBe(false);
     if (!wrong.ok) {
       expect(wrong.error.code).toBe('stale-base');
@@ -957,7 +963,7 @@ describe('session-digest staleness (beta.13 smoke F1: getPluginConfig is schema-
       blockIndex: 0,
     });
     expect(result.ok).toBe(true);
-    expect(client.events).toEqual(['compose', 'update', 'update', 'save']);
+    expect(client.events).toEqual(['freeze', 'compose', 'update', 'update', 'save', 'unfreeze']);
     if (!result.ok) {
       return;
     }
@@ -984,7 +990,7 @@ describe('session-digest staleness (beta.13 smoke F1: getPluginConfig is schema-
     if (!result.ok) {
       expect(result.error.code).toBe('stale-base');
     }
-    expect(client.events).toEqual([]);
+    expect(client.events).toEqual(['freeze', 'unfreeze']);
   });
 });
 
@@ -1010,7 +1016,7 @@ describe('unsaved settings-form changes (review #47 P1-1)', () => {
     }
     // Zero persistence AND zero snapshot: the refusal precedes the
     // snapshot write.
-    expect(client.events).toEqual(['compose']);
+    expect(client.events).toEqual(['freeze', 'compose', 'unfreeze']);
     expect(existsSync(path.join(rig.persistDir, LEGACY_SNAPSHOT_FILE))).toBe(false);
   });
 
@@ -1052,7 +1058,7 @@ describe('multi-block hard refusal (review #47 P1-2)', () => {
     const digest = blockDigest(LEGACY_BLOCK); // uniquely matches block 0
     const pv = await handlePreviewSave(rig.deps, { baseDigest: digest });
     expect(!pv.ok && pv.error.code).toBe('ambiguous-platform-block');
-    const cs = await handleComposeSave(rig.deps, { baseDigest: digest });
+    const cs = await handleComposeSave(rig.deps, { baseDigest: digest, formBlock: LEGACY_BLOCK });
     expect(!cs.ok && cs.error.code).toBe('ambiguous-platform-block');
     expect(existsSync(path.join(rig.persistDir, LEGACY_SNAPSHOT_FILE))).toBe(false);
   });
@@ -1066,7 +1072,7 @@ describe('multi-block hard refusal (review #47 P1-2)', () => {
       blockIndex: 0,
     });
     expect(!r1.ok && r1.error.code).toBe('ambiguous-platform-block');
-    expect(twoBlocks.events).toEqual([]);
+    expect(twoBlocks.events).toEqual(['freeze', 'unfreeze']);
 
     // Single block, forged index: the orchestrator derives the
     // position itself and refuses the disagreement before composing.
@@ -1078,7 +1084,64 @@ describe('multi-block hard refusal (review #47 P1-2)', () => {
       blockIndex: 3,
     });
     expect(!r2.ok && r2.error.code).toBe('stale-base');
-    expect(one.events).toEqual([]);
+    expect(one.events).toEqual(['freeze', 'unfreeze']);
     expect(existsSync(path.join(rigOne.persistDir, LEGACY_SNAPSHOT_FILE))).toBe(false);
+  });
+});
+
+
+describe('settings-form gate hardening (review #47 round 3)', () => {
+  it('a digest save WITHOUT formBlock is refused before any snapshot exists (the gate is not optional)', async () => {
+    const rig = makeRig(LEGACY_BLOCK);
+    discoveryStore(rig);
+    const result = await handleComposeSave(rig.deps, { baseDigest: blockDigest(LEGACY_BLOCK) });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('unsaved-settings-changes');
+    }
+    expect(existsSync(path.join(rig.persistDir, LEGACY_SNAPSHOT_FILE))).toBe(false);
+  });
+
+  it('an UNKNOWN field holding an intentionally empty array refuses (allowlist, not a shape rule)', async () => {
+    const rig = makeRig(LEGACY_BLOCK);
+    discoveryStore(rig);
+    const result = await handleComposeSave(rig.deps, {
+      baseDigest: blockDigest(LEGACY_BLOCK),
+      formBlock: { ...LEGACY_BLOCK, futureField: [] },
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('unsaved-settings-changes');
+      expect(result.error.message).toContain("'futureField'");
+    }
+    expect(existsSync(path.join(rig.persistDir, LEGACY_SNAPSHOT_FILE))).toBe(false);
+  });
+
+  it('a settings mutation racing the compose is caught by the pre-persistence re-read (zero writes)', async () => {
+    const rig = makeRig(LEGACY_BLOCK);
+    discoveryStore(rig);
+    const client = makeClient(rig);
+    // Hostile simulation of the TOCTOU window: the freeze is
+    // client-cooperative, so model a writer that mutates the
+    // in-memory config AFTER the first read. The re-read taken just
+    // before persistence must refuse rather than erase the edit.
+    let reads = 0;
+    const realGet = client.deps.getPluginConfig.bind(client.deps);
+    client.deps.getPluginConfig = async () => {
+      reads += 1;
+      const blocks = await realGet();
+      return reads === 1 ? blocks : blocks.map(b => ({ ...b, apiKey: 'edited-mid-save' }));
+    };
+    const result = await composeAndPersist(client.deps, {
+      baseDigest: blockDigest(LEGACY_BLOCK),
+      blockIndex: 0,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('unsaved-settings-changes');
+      expect(result.error.message).toContain('while the save was running');
+    }
+    expect(client.events).toEqual(['freeze', 'compose', 'unfreeze']);
+    expect(reads).toBeGreaterThanOrEqual(2);
   });
 });

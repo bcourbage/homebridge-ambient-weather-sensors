@@ -135,7 +135,7 @@
     <awn-root></awn-root>
   </div>
   <!-- awn-app:assets:begin -->
-  <script type="module" src="app/main-NYMIDGXY.js"></script>
+  <script type="module" src="app/main-V3B5MNWL.js"></script>
   <!-- awn-app:assets:end -->
 
   <script>
@@ -287,6 +287,9 @@
     // spins forever when the user clicks Save because HB UI X
     // waits for a signal that never comes. Every custom UI plugin
     // that embeds the schema form calls this before showSchemaForm.
+    // (The sensor-map editor temporarily disables the button and
+    // hides the form while one of ITS saves runs, so a form edit
+    // cannot race the guarded persistence; both are restored after.)
     homebridge.enableSaveButton();
 
     // Render HB UI X's schema-based config form ABOVE our preview

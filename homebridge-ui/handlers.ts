@@ -385,8 +385,9 @@ async function runSavePipeline(
       ok: false,
       error: {
         code: 'ambiguous-platform-block',
-        message: `${blocks.length} AmbientWeatherSensors platform blocks exist; the editor supports exactly one. `
-          + 'Remove the duplicates or edit config.json directly.',
+        message: `${blocks.length} AmbientWeatherSensors platform blocks exist (a multi-Home setup; see MultiHome.md). `
+          + 'The sensor-map editor supports exactly one block, so it is read-only here. Edit sensorMap in the '
+          + 'JSON config editor instead.',
       },
     };
   }
@@ -619,7 +620,22 @@ export async function handleComposeSave(
   //           measured automatic materialization (empty arrays for
   //           absent keys). Fail-safe by design: unmeasured form
   //           normalization refuses too, and saving or discarding the
-  //           form changes clears it.
+  //           form changes clears it. REQUIRED for digest sessions
+  //           (review #47 round 3, P2): a digest save comes from the
+  //           browser, where the settings form is always present —
+  //           omitting formBlock must not bypass the gate. Callers
+  //           without a form use the faithful raw-`base` path, whose
+  //           byte-equality proves the same thing.
+  if (typeof p.baseDigest === 'string' && p.formBlock === undefined) {
+    return {
+      ok: false,
+      error: {
+        code: 'unsaved-settings-changes',
+        message: 'The settings form state was not provided, so unsaved form changes cannot be ruled out. '
+          + 'Reload the plugin settings and retry; nothing was written.',
+      },
+    };
+  }
   if (p.formBlock !== undefined) {
     if (!p.formBlock || typeof p.formBlock !== 'object' || Array.isArray(p.formBlock)) {
       return {
@@ -979,8 +995,9 @@ export async function handleGetEditorState(
     warnings.push({
       severity: 'warning',
       code: 'duplicate-platform-blocks',
-      message: `${blocks.length} AmbientWeatherSensors platform blocks found in config.json; showing the first. `
-        + 'Saving is refused while duplicates exist — remove the extra block(s).',
+      message: `${blocks.length} AmbientWeatherSensors platform blocks found in config.json (a multi-Home setup; `
+        + 'see MultiHome.md); showing the first. The sensor-map editor is read-only while more than one block '
+        + 'exists. Edit sensorMap in the JSON config editor instead.',
     });
   }
   const block = blocks[0];
@@ -1481,14 +1498,25 @@ export function blockDigest(block: unknown): string {
 }
 
 /**
+ * The exact fields HB UI X's schema form has been OBSERVED to
+ * materialize into its in-memory config as empty arrays when they are
+ * absent from config.json (review #47 round 3, P2: an allowlist, not
+ * a shape rule — an unknown future field holding an intentionally
+ * empty array must refuse, not be discarded).
+ */
+const FORM_MATERIALIZED_ARRAY_KEYS: ReadonlySet<string> = new Set([
+  'includeOnly', 'stationFilter', 'excludeSensors',
+]);
+
+/**
  * First key on which the settings page's in-memory block meaningfully
  * differs from the on-disk block, or undefined when they agree
- * (review #47 P1-1). Tolerated: keys ABSENT on disk whose in-memory
- * value is an empty array — the schema form's measured automatic
- * materialization (`includeOnly: []`, `stationFilter: []`), which is
- * semantically empty (every consumer gates on a non-empty set).
- * Everything else — a changed value, a dropped key, an added key with
- * content — is an unsaved user edit the editor save would destroy.
+ * (review #47 P1-1). Tolerated: the allowlisted keys ABSENT on disk
+ * whose in-memory value is an empty array — the schema form's
+ * measured automatic materialization, semantically empty (every
+ * consumer gates on a non-empty set). Everything else — a changed
+ * value, a dropped key, an added key with content, an unknown key —
+ * is an unsaved user edit the editor save would destroy.
  */
 function settingsFormDrift(
   formBlock: Record<string, unknown>,
@@ -1500,7 +1528,7 @@ function settingsFormDrift(
     const onDisk = key in diskBlock;
     if (inForm && !onDisk) {
       const v = formBlock[key];
-      if (Array.isArray(v) && v.length === 0) {
+      if (FORM_MATERIALIZED_ARRAY_KEYS.has(key) && Array.isArray(v) && v.length === 0) {
         continue;
       }
       return key;

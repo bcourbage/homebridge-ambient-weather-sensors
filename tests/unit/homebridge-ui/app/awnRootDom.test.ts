@@ -108,6 +108,19 @@ function makeIpc(
         savePluginConfig: async () => {
           persisted.push({ event: 'save' });
         },
+        // The settings-form freeze surface (review #47 round 3, P1).
+        disableSaveButton: () => {
+          persisted.push({ event: 'disableSaveButton' });
+        },
+        enableSaveButton: () => {
+          persisted.push({ event: 'enableSaveButton' });
+        },
+        hideSchemaForm: () => {
+          persisted.push({ event: 'hideSchemaForm' });
+        },
+        showSchemaForm: () => {
+          persisted.push({ event: 'showSchemaForm' });
+        },
       }
       : {}),
     request: async (path: string, body?: unknown) => {
@@ -667,11 +680,19 @@ describe('save flow (PR C / finding 5 — the ONE route is composeAndPersist)', 
     // The in-memory block travels as formBlock so the server can refuse
     // when the settings form holds unsaved changes (review #47 P1-1).
     expect((compose?.body as { formBlock?: unknown }).formBlock).toEqual({ platform: 'AmbientWeatherSensors' });
-    expect(ipc.persisted.map(p => p.event)).toEqual(['update', 'update', 'save']);
+    // The settings form is FROZEN for the whole save (review #47
+    // round 3, P1): Save button off + form hidden before anything is
+    // read, both restored after persistence completes.
+    expect(ipc.persisted.map(p => p.event)).toEqual([
+      'disableSaveButton', 'hideSchemaForm',
+      'update', 'update', 'save',
+      'showSchemaForm', 'enableSaveButton',
+    ]);
     // Verbatim replacement: the FIRST update clears HB UI X's
     // merge-prone in-memory copy; the second carries the composed block.
-    expect(ipc.persisted[0].arg).toEqual([]);
-    const updated = (ipc.persisted[1].arg as unknown[])[0];
+    const updates = ipc.persisted.filter(p => p.event === 'update');
+    expect(updates[0].arg).toEqual([]);
+    const updated = (updates[1].arg as unknown[])[0];
     expect(updated).toEqual(NEXT_CONFIG);
     expect(el.textContent).toContain('Saved.');
     expect(el.textContent).toContain('legacy-config-snapshot.json');
@@ -706,7 +727,7 @@ describe('save flow (PR C / finding 5 — the ONE route is composeAndPersist)', 
     await settle(fixture);
     expect(el.querySelector('.modal')).toBeNull();
     expect(ipc.requests.some(r => r.path === '/compose-save')).toBe(false);
-    expect(ipc.persisted).toEqual([]);
+    expect(ipc.persisted.filter(p => p.event === 'update' || p.event === 'save')).toEqual([]);
   });
 
   it('Confirm save sends the digest and persists', async () => {
@@ -720,7 +741,7 @@ describe('save flow (PR C / finding 5 — the ONE route is composeAndPersist)', 
 
     const compose = ipc.requests.find(r => r.path === '/compose-save');
     expect((compose?.body as { confirmDigest?: string }).confirmDigest).toBe('ef'.repeat(32));
-    expect(ipc.persisted.map(p => p.event)).toEqual(['update', 'update', 'save']);
+    expect(ipc.persisted.map(p => p.event).filter(e => e === 'update' || e === 'save')).toEqual(['update', 'update', 'save']);
     expect(el.querySelector('.modal')).toBeNull();
   });
 
@@ -735,7 +756,7 @@ describe('save flow (PR C / finding 5 — the ONE route is composeAndPersist)', 
     btn(el, 'Save changes')!.click();
     await settle(fixture);
 
-    expect(ipc.persisted).toEqual([]);
+    expect(ipc.persisted.filter(p => p.event === 'update' || p.event === 'save')).toEqual([]);
     // The banner renders the structured message verbatim — the
     // component never adds its own "nothing was written" claim
     // (review #45 P1-2: indeterminate failures must not be assured).
@@ -790,7 +811,7 @@ describe('save flow (PR C / finding 5 — the ONE route is composeAndPersist)', 
     resolveCompose(COMPOSE_OK);
     await settle(fixture);
     expect(el.textContent).toContain('Saved.');
-    expect(persisted).toEqual(['update', 'update', 'save']);
+    expect(persisted.filter(e => e === 'update' || e === 'save')).toEqual(['update', 'update', 'save']);
     for (const b of [...el.querySelectorAll('button')].filter(x => x.textContent === 'Edit')) {
       expect((b as HTMLButtonElement).disabled).toBe(false);
     }

@@ -1502,7 +1502,28 @@ Tests: for every non-motion kind, submit an override with each of these fields; 
   `editorAvailable: false`, the pipeline refuses previews and saves
   outright, and composeAndPersist derives the write-back position from
   the single plugin block itself — a supplied `blockIndex` is only
-  cross-checked and refused on disagreement, never trusted.
+  cross-checked and refused on disagreement, never trusted. (Round 3:
+  the refusal copy directs multi-Home users — a SUPPORTED setup, see
+  MultiHome.md — to the JSON config editor; it never calls their
+  blocks duplicates or tells them to delete one.)
+
+  Round 3 closed the remaining race and hardened the gate:
+  (c) SETTINGS-FORM FREEZE — `formBlock` was sampled once while the
+  schema form and HB UI X's Save button stayed live, so an edit made
+  DURING the compose was still erased (TOCTOU). composeAndPersist now
+  freezes the second writer for the whole operation (disable Save
+  button + hide the schema form before the first `getPluginConfig()`
+  read; both restored in `finally` — form state survives, HB UI X
+  re-renders it from its in-memory config), and, because the freeze is
+  client-cooperative, re-reads the config just before persistence and
+  refuses if ANYTHING changed while the compose ran.
+  (d) The gate is MANDATORY for digest saves — `/compose-save` refuses
+  a `baseDigest` request without `formBlock` (a stale bundle or future
+  refactor cannot bypass it; faithful callers use the raw-`base`
+  path) — and the empty-array tolerance became an explicit allowlist
+  of the fields HB UI X was observed materializing (`includeOnly`,
+  `stationFilter`, `excludeSensors`); an unknown field holding an
+  intentionally empty array refuses.
 
 - **2026-08-20 (c)**: Conversion journal is a directory of immutable
   entry files (PR #46 review round 3). The round-2 single-file journal
