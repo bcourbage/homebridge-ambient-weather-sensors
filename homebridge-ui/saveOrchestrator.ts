@@ -38,10 +38,13 @@ export interface OrchestratorDeps {
    * after the formBlock sample was taken would be silently erased by
    * the clear-then-set persistence. Called BEFORE the first
    * getPluginConfig() read; unfreezeSettingsForm runs in `finally`.
-   * In the real page these disable HB UI X's Save button and hide
-   * the schema form (state survives: the form re-renders from HB UI
-   * X's in-memory config). The freeze is client-cooperative, so a
-   * pre-persistence re-read backstops it (see the call site).
+   * In the real page this disables HB UI X's Save button ONLY — the
+   * schema form must never be hidden mid-save: HB UI X binds the form
+   * two-way into pluginConfig[0], and destroying the form writes
+   * undefined through that binding, zeroing the session's config
+   * (measured on production). Form EDITS during the save are caught
+   * by the pre-persistence re-read, which refuses rather than
+   * persisting over them.
    */
   freezeSettingsForm(): void | Promise<unknown>;
   unfreezeSettingsForm(): void | Promise<unknown>;

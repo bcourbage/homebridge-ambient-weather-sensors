@@ -145,7 +145,7 @@ interface StationGroup {
       width: 84px;
     }
     th.actions { background: var(--panel-bg); }
-    td.actions button { padding: 3px 9px; min-width: 58px; }
+    td.actions button { padding: 3px 0; width: 62px; text-align: center; }
   `,
   template: `
     <h2>Sensor map <span class="station-meta">draft editor preview</span></h2>

@@ -703,9 +703,9 @@ describe('save flow (PR C / finding 5 — the ONE route is composeAndPersist)', 
     // round 3, P1): Save button off + form hidden before anything is
     // read, both restored after persistence completes.
     expect(ipc.persisted.map(p => p.event)).toEqual([
-      'disableSaveButton', 'hideSchemaForm',
+      'disableSaveButton',
       'update', 'save',
-      'showSchemaForm', 'enableSaveButton',
+      'enableSaveButton',
     ]);
     // The single update carries the composed block; undefined
     // tombstones for removed keys serialize away at persistence.
@@ -721,7 +721,7 @@ describe('save flow (PR C / finding 5 — the ONE route is composeAndPersist)', 
 
   it('a settings-form restore failure after a successful save is surfaced, never silent (review #47 round 5, P2)', async () => {
     const ipc = makeIpc(editorState(), [], NON_STRUCTURAL_PREVIEW, COMPOSE_OK);
-    (ipc as unknown as Record<string, unknown>).showSchemaForm = () => {
+    (ipc as unknown as Record<string, unknown>).enableSaveButton = () => {
       throw new Error('modal already tearing down');
     };
     const fixture = await render(ipc);
@@ -998,29 +998,35 @@ describe('settings-form freeze contract (review #47 round 4, P1)', () => {
     };
   }
 
-  it('a bridge missing ANY of the four form controls cannot save (fail closed)', () => {
-    for (const missing of ['disableSaveButton', 'enableSaveButton', 'hideSchemaForm', 'showSchemaForm'] as const) {
+  it('a bridge missing either Save button control cannot save (fail closed)', () => {
+    for (const missing of ['disableSaveButton', 'enableSaveButton'] as const) {
       TestBed.resetTestingModule();
       const ipc = fullIpc();
       delete (ipc as Record<string, unknown>)[missing];
       const service = serviceWith(ipc);
-      expect(() => service.orchestratorDeps(), missing).toThrow(/settings-form controls/);
+      expect(() => service.orchestratorDeps(), missing).toThrow(/Save button controls/);
     }
   });
 
-  it('the restore steps run INDEPENDENTLY: a throwing showSchemaForm never leaves the Save button dead', () => {
+  it('the freeze never touches the schema form (its two-way binding zeroes pluginConfig on destroy)', () => {
     const calls: string[] = [];
     const service = serviceWith(fullIpc({
-      showSchemaForm: () => {
-        calls.push('showSchemaForm');
-        throw new Error('modal already closing');
+      disableSaveButton: () => {
+        calls.push('disableSaveButton');
       },
       enableSaveButton: () => {
         calls.push('enableSaveButton');
       },
+      hideSchemaForm: () => {
+        calls.push('hideSchemaForm');
+      },
+      showSchemaForm: () => {
+        calls.push('showSchemaForm');
+      },
     }));
     const deps = service.orchestratorDeps();
-    expect(() => deps.unfreezeSettingsForm()).toThrow(/modal already closing/);
-    expect(calls).toEqual(['showSchemaForm', 'enableSaveButton']);
+    deps.freezeSettingsForm();
+    deps.unfreezeSettingsForm();
+    expect(calls).toEqual(['disableSaveButton', 'enableSaveButton']);
   });
 });
