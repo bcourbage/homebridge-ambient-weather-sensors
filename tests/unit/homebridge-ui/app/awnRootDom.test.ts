@@ -738,6 +738,10 @@ describe('save flow (PR C / finding 5 — the ONE route is composeAndPersist)', 
     btn(el, 'Save changes')!.click();
     await settle(fixture);
     expect(el.querySelector('.modal')).not.toBeNull();
+    // In flow, not a fixed overlay (beta.14 smoke #4), and the other
+    // controls lock while the confirmation is open.
+    expect(el.querySelector('.modal-backdrop')).toBeNull();
+    expect((btn(el, 'Preview changes') as HTMLButtonElement).disabled).toBe(true);
     expect(el.textContent).toContain('Confirm registration changes');
 
     btn(el, 'Cancel')!.click();

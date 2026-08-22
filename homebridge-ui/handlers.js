@@ -257,7 +257,7 @@ async function runSavePipeline(deps, p) {
             ok: false,
             error: {
                 code: 'invalid-rows',
-                message: `${effectiveMap.errors.length} proposed row(s) failed validation; nothing was written.`,
+                message: `${effectiveMap.errors.length} proposed ${effectiveMap.errors.length === 1 ? 'row' : 'rows'} failed validation; nothing was written.`,
                 rows: effectiveMap.errors,
             },
         };
@@ -305,9 +305,9 @@ async function runSavePipeline(deps, p) {
             error: {
                 code: 'canonical-divergence',
                 message: 'Canonical serialization would change the meaning of this configuration for '
-                    + `${divergent.length} row(s) — most commonly because multiple rows claim the same battery `
+                    + `${divergent.length} ${divergent.length === 1 ? 'row' : 'rows'}, most commonly because multiple rows claim the same battery `
                     + 'field and ownership depends on authoring order, which canonical (sorted) output does not '
-                    + "preserve. Make ownership explicit (set batteryField: null on the non-owning row(s), or "
+                    + "preserve. Make ownership explicit (set batteryField: null on each non-owning row, or "
                     + 'assign distinct battery fields) and retry. Nothing was written.',
                 rows: divergent,
             },
@@ -445,7 +445,7 @@ async function composeSaveInternal(deps, payload, persist) {
             error: {
                 code: 'confirmation-required',
                 message: `This save would register, deregister, or re-register ${consequences.structuralChangeCount} `
-                    + 'accessor(y/ies). Preview the changes and confirm them first; nothing was written.',
+                    + `${consequences.structuralChangeCount === 1 ? 'accessory' : 'accessories'}. Preview the changes and confirm them first; nothing was written.`,
                 structuralChangeCount: consequences.structuralChangeCount,
             },
         };

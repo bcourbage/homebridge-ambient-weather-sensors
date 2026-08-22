@@ -18,7 +18,7 @@
  * and theme variables (light + dark) apply to it as-is. Component
  * styles below add only what the page doesn't define.
  */
-import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, inject, signal, viewChild, type ElementRef } from '@angular/core';
 import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
 
 import { DraftStore } from './draft-store';
@@ -88,15 +88,12 @@ interface StationGroup {
       background: var(--warn-bg); color: var(--warn-fg);
     }
     .change-row { padding: 4px 0; border-bottom: 1px solid var(--row-rule); font-size: 0.88rem; }
-    .modal-backdrop {
-      position: fixed; inset: 0; background: rgba(0, 0, 0, 0.45);
-      display: flex; align-items: center; justify-content: center; z-index: 1000;
-    }
+    /* In-flow confirmation card (beta.14 smoke #4): a fixed overlay
+       is unusable inside HB UI X's content-height iframe. */
     .modal {
       background: var(--panel-bg); color: var(--fg);
-      border: 1px solid var(--rule); border-radius: 8px;
-      padding: 16px 20px; max-width: 560px; width: 90%;
-      max-height: 70vh; overflow-y: auto;
+      border: 2px solid var(--warn-edge); border-radius: 8px;
+      padding: 16px 20px; max-width: 640px; margin: 12px 0;
     }
     /* The row table is wider than the panel on most screens. It
        scrolls horizontally in its own container, and the action
@@ -105,6 +102,17 @@ interface StationGroup {
        right edge and looked absent). The pinned cells need a solid
        background or scrolled content bleeds through them. */
     .table-scroll { overflow-x: auto; }
+    th.state, td.state { width: 22px; padding-right: 2px; }
+    .state-icon { width: 14px; height: 14px; vertical-align: -2px; }
+    .state-icon.on  { color: var(--on-fg); }
+    .state-icon.off { color: var(--fg-empty); }
+    td.kind { white-space: nowrap; }
+    .kind-icon { width: 15px; height: 15px; vertical-align: -3px; color: var(--fg-sub); }
+    .kind-badge {
+      display: inline-block; padding: 0 5px; border-radius: 4px;
+      font-size: 0.72rem; font-weight: 600; letter-spacing: 0.02em;
+      background: var(--code-bg); color: var(--fg-sub);
+    }
     th.actions, td.actions {
       position: sticky; right: 0;
       background: var(--page-bg);
@@ -159,8 +167,8 @@ interface StationGroup {
           } @else {
             <span class="grow">No draft changes. Edit a row below to start.</span>
           }
-          <button type="button" (click)="preview()" [disabled]="draftCount() === 0 || previewPending() || editFormInvalid() || saving() || reloadRequired()">Preview changes</button>
-          <button type="button" (click)="discardAll()" [disabled]="draftCount() === 0 || saving() || reloadRequired()">Discard drafts</button>
+          <button type="button" (click)="preview()" [disabled]="draftCount() === 0 || previewPending() || editFormInvalid() || saving() || confirmOpen() || reloadRequired()">Preview changes</button>
+          <button type="button" (click)="discardAll()" [disabled]="draftCount() === 0 || saving() || confirmOpen() || reloadRequired()">Discard drafts</button>
         </div>
       }
 
@@ -209,12 +217,12 @@ interface StationGroup {
             <div class="draft-bar">
               <span class="grow">
                 @if (pr.structuralChangeCount > 0) {
-                  Saving will ask for confirmation of the {{ pr.structuralChangeCount }} registration change(s) above.
+                  Saving will ask for confirmation of the {{ pr.structuralChangeCount }} registration {{ pr.structuralChangeCount === 1 ? 'change' : 'changes' }} above.
                 } @else {
                   Saving applies these changes without registering or deregistering any accessory.
                 }
               </span>
-              <button type="button" (click)="saveClicked(pr)" [disabled]="saving() || reloadRequired()">Save changes</button>
+              <button type="button" (click)="saveClicked(pr)" [disabled]="saving() || confirmOpen() || reloadRequired()">Save changes</button>
             </div>
           }
         } @else {
@@ -259,9 +267,15 @@ interface StationGroup {
           <button type="button" (click)="reloadPage()">Reload now</button>
         </div>
       }
+      <!-- Rendered IN FLOW, not as a fixed overlay: inside HB UI X's
+           content-height iframe, position:fixed centers on the FULL
+           iframe box, which put the panel far outside the visible
+           window (beta.14 smoke #4 - the user saw only the grey
+           backdrop). The panel appears where the user just clicked
+           Save and scrolls itself into view; every other control
+           disables while it is open. -->
       @if (confirmOpen() && previewResult()?.ok) {
-        <div class="modal-backdrop">
-          <div class="modal">
+          <div class="modal" #confirmPanel>
             <h3>Confirm registration changes</h3>
             <p>These accessories will register, deregister, or re-register when saved. A re-registered accessory may need its HomeKit room assignment redone; a deregistered one leaves HomeKit.</p>
             @for (c of structuralChanges(); track $index) {
@@ -278,7 +292,6 @@ interface StationGroup {
               <button type="button" (click)="confirmOpen.set(false)">Cancel</button>
             </div>
           </div>
-        </div>
       }
 
       @if (groups().length === 0) {
@@ -293,27 +306,51 @@ interface StationGroup {
         <table>
           <thead>
             <tr>
+              <th class="state"></th>
               <th>Data point</th><th>Name</th><th>Kind</th><th>Units</th>
-              <th>Enabled</th><th>Layer</th><th>Battery</th><th class="actions"></th>
+              <th>Layer</th><th>Battery</th><th class="actions"></th>
             </tr>
           </thead>
           <tbody>
             @for (row of group.rows; track row.dataPoint) {
               <tr>
+                <td class="state" [title]="stateTitle(row)">
+                  @if (row.kind !== 'unrecognized') {
+                    @if (row.enabled) {
+                      <svg class="state-icon on" viewBox="0 0 16 16" role="img" aria-label="enabled"><circle cx="8" cy="8" r="7" fill="currentColor"/><path d="M4.8 8.3l2.1 2.1 4.3-4.6" stroke="var(--page-bg)" stroke-width="1.8" fill="none" stroke-linecap="round"/></svg>
+                    } @else {
+                      <svg class="state-icon off" viewBox="0 0 16 16" role="img" aria-label="disabled"><circle cx="8" cy="8" r="6.2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M5.2 8h5.6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+                    }
+                  }
+                </td>
                 <td>
                   @if (isDirty(row)) { <span class="dirty-dot" title="draft edits"></span> }
                   <code>{{ row.dataPoint }}</code>
                 </td>
                 <td>{{ row.name ?? '' }}</td>
-                <td>
-                  @if (row.kind === 'unrecognized') {
-                    <span class="muted">unrecognized</span>
-                  } @else {
-                    {{ row.kind }}<span class="muted"> · {{ row.measurement }}</span>
+                <td class="kind" [title]="kindTitle(row)">
+                  @switch (row.kind) {
+                    @case ('temperature') {
+                      <svg class="kind-icon" viewBox="0 0 16 16" role="img" [attr.aria-label]="kindTitle(row)"><path d="M6.8 2.5a1.7 1.7 0 013.4 0v6a3.4 3.4 0 11-3.4 0z" fill="none" stroke="currentColor" stroke-width="1.4"/><circle cx="8.5" cy="11.4" r="1.5" fill="currentColor"/></svg>
+                    }
+                    @case ('humidity') {
+                      <svg class="kind-icon" viewBox="0 0 16 16" role="img" [attr.aria-label]="kindTitle(row)"><path d="M8 2.2S3.8 7 3.8 10a4.2 4.2 0 108.4 0C12.2 7 8 2.2 8 2.2z" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>
+                    }
+                    @case ('light') {
+                      <svg class="kind-icon" viewBox="0 0 16 16" role="img" [attr.aria-label]="kindTitle(row)"><circle cx="8" cy="8" r="3" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M8 1.4v2M8 12.6v2M1.4 8h2M12.6 8h2M3.3 3.3l1.4 1.4M11.3 11.3l1.4 1.4M12.7 3.3l-1.4 1.4M4.7 11.3l-1.4 1.4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+                    }
+                    @case ('motion') {
+                      <svg class="kind-icon" viewBox="0 0 16 16" role="img" [attr.aria-label]="kindTitle(row)"><path d="M1.5 8h3l2-4.5 3 9 2-4.5h3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round"/></svg>
+                    }
+                    @case ('unrecognized') {
+                      <span class="kind-badge muted">?</span>
+                    }
+                    @default {
+                      <span class="kind-badge">{{ kindBadge(row.kind) }}</span>
+                    }
                   }
                 </td>
                 <td>{{ unitCell(row) }}</td>
-                <td>{{ row.kind === 'unrecognized' ? '—' : (row.enabled ? 'on' : 'off') }}</td>
                 <td><span class="origin {{ row.origin }}">{{ row.origin }}</span></td>
                 <td>
                   @if (row.batteryField) {
@@ -324,7 +361,7 @@ interface StationGroup {
                 </td>
                 <td class="actions">
                   @if (row.kind !== 'unrecognized') {
-                    <button type="button" (click)="toggleEdit(row)" [disabled]="saving() || reloadRequired()">{{ isExpanded(row) ? 'Close' : 'Edit' }}</button>
+                    <button type="button" (click)="toggleEdit(row)" [disabled]="saving() || confirmOpen() || reloadRequired()">{{ isExpanded(row) ? 'Close' : 'Edit' }}</button>
                   }
                 </td>
               </tr>
@@ -665,9 +702,16 @@ export class AwnRootComponent {
    * of the preview the user is looking at — the server re-derives and
    * verifies it before anything is written.
    */
+  /** The in-flow confirmation card, for scroll-into-view on open. */
+  private readonly confirmPanel = viewChild<ElementRef<HTMLElement>>('confirmPanel');
+
   protected saveClicked(pr: Extract<PreviewResultDto, { ok: true }>): void {
     if (pr.structuralChangeCount > 0) {
       this.confirmOpen.set(true);
+      // Bring the just-rendered card into the visible window: the
+      // scroll propagates through the same-origin iframe to HB UI X's
+      // scroll container (beta.14 smoke #4).
+      setTimeout(() => this.confirmPanel()?.nativeElement?.scrollIntoView?.({ block: 'center' }), 0);
       return;
     }
     void this.doSave(pr.digest);
@@ -745,6 +789,27 @@ export class AwnRootComponent {
   /** What a structural change DOES to the accessory (review #43 P1-1). */
   protected structuralVerb(change: 'added' | 'removed' | 'modified'): string {
     return change === 'added' ? 'registers' : change === 'removed' ? 'deregisters' : 're-registers';
+  }
+
+  /** Tooltip + accessible label for the leading state icon. */
+  protected stateTitle(row: EditorRowDto): string {
+    return row.kind === 'unrecognized' ? 'unrecognized field' : (row.enabled ? 'enabled' : 'disabled');
+  }
+
+  /** Tooltip + accessible label for the Kind icon or badge. */
+  protected kindTitle(row: EditorRowDto): string {
+    return row.kind === 'unrecognized' ? 'unrecognized field' : `${row.kind} · ${row.measurement}`;
+  }
+
+  /** Compact badge text for initialism kinds with no natural glyph. */
+  protected kindBadge(kind: string): string {
+    const badges: Record<string, string> = {
+      'co2': 'CO₂',
+      'co': 'CO',
+      'air-quality-pm25': 'PM2.5',
+      'air-quality-pm10': 'PM10',
+    };
+    return badges[kind] ?? kind;
   }
 
   protected changeSummary(before: EditorRowDto, after: EditorRowDto): string {

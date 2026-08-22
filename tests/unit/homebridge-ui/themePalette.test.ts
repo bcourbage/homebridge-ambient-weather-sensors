@@ -87,6 +87,18 @@ describe('custom-UI theme palette', () => {
     }
   });
 
+  it('the confirmation panel is never a fixed overlay (beta.14 smoke #4)', () => {
+    // position:fixed inside HB UI X's content-height iframe anchors to
+    // the FULL iframe box, so a "centered" overlay lands far outside
+    // the visible window. The confirmation card renders in flow.
+    const componentSource = readFileSync(
+      path.resolve(__dirname, '../../../homebridge-ui/app-src/awn-root.component.ts'), 'utf8');
+    const stylesMatch = componentSource.match(/styles:\s*`([\s\S]*?)`/);
+    expect(stylesMatch).not.toBeNull();
+    expect(stylesMatch![1]).not.toMatch(/position:\s*fixed/);
+    expect(componentSource).not.toContain('modal-backdrop');
+  });
+
   it('the static markup carries no inline color styles', () => {
     const markup = html.replace(/<style>[\s\S]*?<\/style>/, '').replace(/<script>[\s\S]*?<\/script>/, '');
     for (const m of markup.matchAll(/style\s*=\s*"([^"]*)"/g)) {
