@@ -1507,6 +1507,30 @@ Tests: for every non-motion kind, submit an override with each of these fields; 
   MultiHome.md — to the JSON config editor; it never calls their
   blocks duplicates or tells them to delete one.)
 
+  Round 4 made the save TWO-PHASE and the freeze failure-safe:
+  (e) TWO-PHASE COMPOSE/COMMIT — the snapshot/journal used to be
+  written during the single compose call, BEFORE the client's form
+  re-check, so an attempt abandoned at the re-check had already
+  consumed the permanent snapshot (and a later real conversion's
+  snapshot would describe the wrong baseline). `/compose-save` is now
+  the VALIDATE phase: every gate plus the full composition with
+  nothing durably recorded (prospective outcomes `pending-write` /
+  `pending-journal`; corrupt snapshot/journal refuse here);
+  `/commit-save` re-runs the same pipeline from disk and writes the
+  record immediately before returning the persistable config. The
+  orchestrator validates → re-checks the frozen form → commits →
+  cross-checks the two phases' `nextConfigDigest`s. An abandoned
+  attempt now consumes nothing — "nothing was written" is literally
+  true.
+  (f) FREEZE FAILURE-SAFETY — all four HB UI X form controls are
+  REQUIRED before a save (orchestratorDeps fails closed like the
+  missing persistence API); a freeze that throws is restored
+  best-effort and refused cleanly; the two restore steps run
+  independently (a throwing showSchemaForm cannot leave the Save
+  button dead); and an unfreeze failure after successful persistence
+  is swallowed — the save outcome is authoritative and cleanup can
+  never mask it.
+
   Round 3 closed the remaining race and hardened the gate:
   (c) SETTINGS-FORM FREEZE — `formBlock` was sampled once while the
   schema form and HB UI X's Save button stayed live, so an edit made

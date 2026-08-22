@@ -698,15 +698,6 @@ export async function journalConversionBaseline(persistDir, legacyFields, log, c
         }
     }
     return withJournalLock(dir, async () => {
-        // Fail closed on a pre-release single-FILE journal (shipped only on
-        // unreleased 2.0.0-beta.13 builds): its entries are an audit record
-        // this code no longer maintains and must not be silently ignored.
-        const legacySingleFile = path.join(persistDir, `${LEGACY_JOURNAL_DIR}.json`);
-        if (await fs.stat(legacySingleFile).then(() => true, () => false)) {
-            throw new Error(`a pre-release single-file conversion journal exists (${legacySingleFile}). `
-                + 'Move its entries into the legacy-conversion-journal directory manually (one entry-NNNNNN.json file '
-                + 'per entry, numbered in order) or remove the file after preserving its contents.');
-        }
         const maxAttempts = 50;
         for (let attempt = 0; attempt < maxAttempts; attempt++) {
             const entries = await readConversionJournal(dir);
@@ -746,6 +737,16 @@ export async function journalConversionBaseline(persistDir, legacyFields, log, c
         throw new Error(`conversion journal append gave up after ${maxAttempts} sequence-number collisions (${dir}).`);
     });
 }
+/**
+ * Read-only validation of the conversion journal, for the VALIDATE
+ * phase of the two-phase save (review #47 round 4): a corrupt journal
+ * must refuse the save BEFORE anything is durably recorded, so an
+ * abandoned attempt cannot consume the permanent record. Throws the
+ * same errors an append would; writes nothing.
+ */
+export async function verifyConversionJournalReadable(persistDir) {
+    await readConversionJournal(path.join(persistDir, LEGACY_JOURNAL_DIR));
+}
 function journalEntryFileName(seq) {
     return `entry-${String(seq).padStart(6, '0')}.json`;
 }
@@ -766,6 +767,16 @@ const LEGACY_FIELD_SET = new Set(LEGACY_SENSOR_FIELDS);
  * the journal.
  */
 async function readConversionJournal(dir) {
+    // Fail closed on a pre-release single-FILE journal (shipped only on
+    // unreleased 2.0.0-beta.13 builds): its entries are an audit record
+    // this code no longer maintains and must not be silently ignored.
+    // Lives in the READ so the validate phase refuses it too.
+    const legacySingleFile = `${dir}.json`;
+    if (await fs.stat(legacySingleFile).then(() => true, () => false)) {
+        throw new Error(`a pre-release single-file conversion journal exists (${legacySingleFile}). `
+            + 'Move its entries into the legacy-conversion-journal directory manually (one entry-NNNNNN.json file '
+            + 'per entry, numbered in order) or remove the file after preserving its contents.');
+    }
     let names;
     try {
         names = await fs.readdir(dir);

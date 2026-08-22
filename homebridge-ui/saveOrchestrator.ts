@@ -96,12 +96,43 @@ export async function composeAndPersist(
   // The settings form and HB UI X's Save button are a SECOND writer of
   // the same config; frozen for the whole operation so no form edit
   // can land between the formBlock sample and the clear-then-set
-  // persistence (review #47 round 3, P1). Unfrozen on every exit.
-  await deps.freezeSettingsForm();
+  // persistence (review #47 round 3, P1). Failure-safe (round 4): a
+  // freeze that throws may have PARTIALLY applied, so the restore is
+  // attempted before refusing; and an unfreeze failure never masks
+  // the authoritative save outcome — by the time cleanup runs, the
+  // save either persisted or refused, and THAT is what the caller
+  // must learn.
+  try {
+    await deps.freezeSettingsForm();
+  } catch (e) {
+    await unfreezeQuietly(deps);
+    return {
+      ok: false,
+      error: {
+        code: 'unsaved-settings-changes',
+        message: `The settings form could not be frozen for the save: ${e instanceof Error ? e.message : String(e)}. `
+          + 'Reload the plugin settings and retry; nothing was written.',
+      },
+    };
+  }
   try {
     return await composeAndPersistFrozen(deps, args);
   } finally {
+    await unfreezeQuietly(deps);
+  }
+}
+
+/**
+ * Restore the settings form without ever throwing: the save outcome
+ * is authoritative, and a cleanup failure must not replace it (a
+ * completed save reported as a transport error is worse than a
+ * momentarily locked form, which a reload also fixes).
+ */
+async function unfreezeQuietly(deps: OrchestratorDeps): Promise<void> {
+  try {
     await deps.unfreezeSettingsForm();
+  } catch {
+    // Swallowed deliberately; see above.
   }
 }
 
@@ -210,7 +241,7 @@ async function composeAndPersistFrozen(
     index = matchIndexes[0];
   }
 
-  const result = await deps.request('/compose-save', {
+  const payload = {
     base: digestSession ? undefined : base,
     baseDigest: digestSession ? args.baseDigest : undefined,
     // The in-memory block, so the server can refuse when the settings
@@ -221,17 +252,21 @@ async function composeAndPersistFrozen(
     cachedAccessoryUniqueIds,
     liveStations: args.liveStations,
     confirmDigest: args.confirmDigest,
-  }) as ComposeSaveResult;
+  };
 
-  if (!result || result.ok !== true) {
-    // Refusal or malformed response: NO update, NO save.
-    return result ?? { ok: false, error: { code: 'invalid-proposal', message: 'Empty response from /compose-save.' } };
+  // ---- Phase 1 (VALIDATE): every gate and the full composition, with
+  //      NOTHING durably recorded. A refusal here — or at the re-check
+  //      below — therefore consumes neither the immutable snapshot nor
+  //      a journal entry (review #47 round 4).
+  const validated = await deps.request('/compose-save', payload) as ComposeSaveResult;
+  if (!validated || validated.ok !== true) {
+    return validated ?? { ok: false, error: { code: 'invalid-proposal', message: 'Empty response from /compose-save.' } };
   }
 
-  // Defense-in-depth behind the client-cooperative freeze: re-read the
-  // in-memory config and refuse if ANYTHING changed while the compose
-  // ran — an edit that raced the save would otherwise be erased by the
-  // clear-then-set below, with a clean-looking receipt.
+  // ---- Re-check, behind the client-cooperative freeze: re-read the
+  //      in-memory config and refuse if ANYTHING changed while the
+  //      validation ran — an edit that raced the save would otherwise
+  //      be erased by the clear-then-set below.
   const recheck = await deps.getPluginConfig();
   if (deepJson(recheck) !== deepJson(cfgArray)) {
     return {
@@ -240,6 +275,27 @@ async function composeAndPersistFrozen(
         code: 'unsaved-settings-changes',
         message: 'The plugin settings changed while the save was running. Review the settings form and retry; '
           + 'nothing was written.',
+      },
+    };
+  }
+
+  // ---- Phase 2 (COMMIT): the same pipeline re-run from disk, with
+  //      the snapshot/journal written durably immediately before the
+  //      persistable config is returned.
+  const result = await deps.request('/commit-save', payload) as ComposeSaveResult;
+  if (!result || result.ok !== true) {
+    return result ?? { ok: false, error: { code: 'invalid-proposal', message: 'Empty response from /commit-save.' } };
+  }
+  // Both phases composed from the same disk state (the digest pins
+  // it), so their outputs must agree; a mismatch means the world
+  // moved between them in a way the gates did not classify.
+  if (result.nextConfigDigest !== validated.nextConfigDigest) {
+    return {
+      ok: false,
+      error: {
+        code: 'stale-confirmation',
+        message: 'The configuration changed between validating and committing the save. Preview again and '
+          + 'retry; the composed configuration was NOT applied to Homebridge.',
       },
     };
   }

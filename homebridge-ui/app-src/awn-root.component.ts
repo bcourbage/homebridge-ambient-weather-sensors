@@ -399,7 +399,10 @@ export class AwnRootComponent {
    */
   protected readonly postSaveDrift = signal(false);
   protected readonly saveResult = signal<
-    | { ok: true; snapshot: 'written' | 'exists' | 'journaled' | 'not-applicable' }
+    // The pending-* values belong to the validate phase and never
+    // reach here (a successful save reports the COMMIT outcome), but
+    // the wire type includes them.
+    | { ok: true; snapshot: 'written' | 'exists' | 'journaled' | 'not-applicable' | 'pending-write' | 'pending-journal' }
     | { ok: false; code: string; message: string }
     | null
   >(null);

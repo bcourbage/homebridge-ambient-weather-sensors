@@ -18,7 +18,7 @@ import { buildEffectiveSensorMap, partitionOverrideLayers } from '../dist/sensor
 import { canonicalizeSensorMap } from '../dist/sensorMap/canonicalizeSensorMap.js';
 import { compatToOverrides } from '../dist/sensorMap/compat.js';
 import { detectConfigMode } from '../dist/sensorMap/configMode.js';
-import { composeV2ConfigSave, journalConversionBaseline, recognizeMirror, verifyLegacySnapshot, writeLegacySnapshot, } from '../dist/sensorMap/legacyMirror.js';
+import { composeV2ConfigSave, journalConversionBaseline, verifyConversionJournalReadable, recognizeMirror, verifyLegacySnapshot, writeLegacySnapshot, } from '../dist/sensorMap/legacyMirror.js';
 import { sensorMapShapeError } from '../dist/sensorMap/platformEffectiveMap.js';
 import { STATION_MAC_REGEX } from '../dist/sensorMap/validation.js';
 import { shadowModeEnabled } from '../dist/sensorMap/shadowMode.js';
@@ -318,7 +318,31 @@ async function runSavePipeline(deps, p) {
         ctx: { block, modeResult, proposal, stations, discovery, uiState, effectiveMap, canonical },
     };
 }
+/**
+ * VALIDATE phase of the two-phase save (review #47 round 4, P1-2):
+ * every gate and the full composition run, but NOTHING is durably
+ * recorded — no snapshot, no journal entry. The client re-checks its
+ * frozen settings form after this succeeds, then calls /commit-save;
+ * an attempt abandoned at the re-check therefore consumes nothing,
+ * and the permanent snapshot always describes the configuration
+ * immediately preceding an ACTUAL conversion. The `snapshot` result
+ * reports the prospective outcome ('pending-write' /
+ * 'pending-journal') so refusable record problems (corrupt snapshot,
+ * corrupt journal) surface here, before anything is written.
+ */
 export async function handleComposeSave(deps, payload) {
+    return composeSaveInternal(deps, payload, false);
+}
+/**
+ * COMMIT phase: identical pipeline and gates, re-run from the current
+ * disk state (nothing is trusted from the validate phase), with the
+ * snapshot/journal written durably immediately before the persistable
+ * config is returned. The client persists the RESULT of this call.
+ */
+export async function handleCommitSave(deps, payload) {
+    return composeSaveInternal(deps, payload, true);
+}
+async function composeSaveInternal(deps, payload, persist) {
     const p = (payload ?? {});
     const r = await runSavePipeline(deps, p);
     if (!r.ok) {
@@ -429,18 +453,54 @@ export async function handleComposeSave(deps, payload) {
     // ---- 8. Compose. detectConfigMode's verdict is passed explicitly
     //         (it is the single authority on "legacy").
     const composed = composeV2ConfigSave(block, canonical, effectiveMap, modeResult.mode);
-    // ---- 9. Snapshot-first, race-safe: attempt the exclusive-create
-    //         write; on 'exists', verify the surviving content against
-    //         the authoritative pre-conversion fields (review P1-6) —
-    //         never overwrite. A verified MISMATCH is the reconversion
-    //         path (the documented current-state rollback leaves the
-    //         projected mirror form, which never equals the original):
-    //         the differing baseline is recorded durably in the
-    //         append-only conversion journal BEFORE config.json can be
-    //         mutated, so the rollback remains a two-way door without
-    //         ever touching the original snapshot.
+    // ---- 9. The pre-conversion record. VALIDATE phase (persist=false):
+    //         read-only verification only — the prospective outcome is
+    //         reported and every refusable record problem (corrupt
+    //         snapshot, unreadable journal) surfaces here, but nothing
+    //         is written, so an attempt abandoned at the client's form
+    //         re-check consumes neither the immutable snapshot nor a
+    //         journal entry (review #47 round 4). COMMIT phase: durable
+    //         and race-safe — exclusive-create snapshot write; on
+    //         'exists', verify against the authoritative pre-conversion
+    //         fields (review P1-6), never overwrite; a verified MISMATCH
+    //         is the reconversion path and appends the baseline to the
+    //         journal BEFORE config.json can be mutated.
     let snapshot = 'not-applicable';
-    if (composed.snapshot !== undefined) {
+    if (composed.snapshot !== undefined && !persist) {
+        const verdict = await verifyLegacySnapshot(deps.persistDir, composed.snapshot);
+        if (verdict === 'absent') {
+            snapshot = 'pending-write';
+        }
+        else if (verdict === 'match') {
+            snapshot = 'exists';
+        }
+        else if (verdict === 'mismatch') {
+            try {
+                await verifyConversionJournalReadable(deps.persistDir);
+            }
+            catch (e) {
+                return {
+                    ok: false,
+                    error: {
+                        code: 'conversion-journal-error',
+                        message: `The conversion journal could not be read: ${e.message} `
+                            + 'The save was refused; nothing was written.',
+                    },
+                };
+            }
+            snapshot = 'pending-journal';
+        }
+        else {
+            return {
+                ok: false,
+                error: {
+                    code: 'legacy-snapshot-corrupt',
+                    message: 'The existing legacy snapshot could not be read for verification. Refusing to convert.',
+                },
+            };
+        }
+    }
+    if (composed.snapshot !== undefined && persist) {
         let outcome;
         try {
             outcome = await writeLegacySnapshot(deps.persistDir, composed.snapshot, deps.log);

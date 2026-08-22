@@ -20,6 +20,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { AwnRootComponent } from '../../../../homebridge-ui/app-src/awn-root.component';
 import {
   HOMEBRIDGE_IPC,
+  HomebridgeService,
   observeParentTheme,
   syncThemeClasses,
   type HomebridgeIpc,
@@ -134,7 +135,7 @@ function makeIpc(
       if (path === '/preview-save' && previewResult !== undefined) {
         return previewResult;
       }
-      if (path === '/compose-save' && composeResult !== undefined) {
+      if ((path === '/compose-save' || path === '/commit-save') && composeResult !== undefined) {
         return composeResult;
       }
       throw new Error(`unexpected path ${path}`);
@@ -777,6 +778,10 @@ describe('save flow (PR C / finding 5 — the ONE route is composeAndPersist)', 
       savePluginConfig: async () => {
         persisted.push('save');
       },
+      disableSaveButton: () => {},
+      enableSaveButton: () => {},
+      hideSchemaForm: () => {},
+      showSchemaForm: () => {},
       request: async (path: string, body?: unknown) => {
         requests.push({ path, body });
         if (path === '/editor-state') {
@@ -787,6 +792,9 @@ describe('save flow (PR C / finding 5 — the ONE route is composeAndPersist)', 
         }
         if (path === '/preview-save') {
           return NON_STRUCTURAL_PREVIEW;
+        }
+        if (path === '/commit-save') {
+          return COMPOSE_OK; // the commit phase resolves immediately
         }
         return new Promise((r) => {
           resolveCompose = r; // /compose-save: resolves when the test says
@@ -827,6 +835,10 @@ describe('save flow (PR C / finding 5 — the ONE route is composeAndPersist)', 
         throw new Error('ipc channel dropped');
       },
       savePluginConfig: async () => undefined,
+      disableSaveButton: () => {},
+      enableSaveButton: () => {},
+      hideSchemaForm: () => {},
+      showSchemaForm: () => {},
       request: async (path: string, body?: unknown) => {
         requests.push({ path, body });
         if (path === '/editor-state') {
@@ -919,5 +931,58 @@ describe('parent theme synchronization', () => {
     } finally {
       observer.disconnect();
     }
+  });
+});
+
+
+describe('settings-form freeze contract (review #47 round 4, P1)', () => {
+  function serviceWith(ipc: HomebridgeIpc): HomebridgeService {
+    TestBed.configureTestingModule({
+      providers: [
+        provideZonelessChangeDetection(),
+        { provide: HOMEBRIDGE_IPC, useValue: ipc },
+      ],
+    });
+    return TestBed.inject(HomebridgeService);
+  }
+
+  function fullIpc(overrides: Partial<HomebridgeIpc> = {}): HomebridgeIpc {
+    return {
+      request: async () => ({}),
+      getPluginConfig: async () => [],
+      updatePluginConfig: async () => undefined,
+      savePluginConfig: async () => undefined,
+      disableSaveButton: () => {},
+      enableSaveButton: () => {},
+      hideSchemaForm: () => {},
+      showSchemaForm: () => {},
+      ...overrides,
+    };
+  }
+
+  it('a bridge missing ANY of the four form controls cannot save (fail closed)', () => {
+    for (const missing of ['disableSaveButton', 'enableSaveButton', 'hideSchemaForm', 'showSchemaForm'] as const) {
+      TestBed.resetTestingModule();
+      const ipc = fullIpc();
+      delete (ipc as Record<string, unknown>)[missing];
+      const service = serviceWith(ipc);
+      expect(() => service.orchestratorDeps(), missing).toThrow(/settings-form controls/);
+    }
+  });
+
+  it('the restore steps run INDEPENDENTLY: a throwing showSchemaForm never leaves the Save button dead', () => {
+    const calls: string[] = [];
+    const service = serviceWith(fullIpc({
+      showSchemaForm: () => {
+        calls.push('showSchemaForm');
+        throw new Error('modal already closing');
+      },
+      enableSaveButton: () => {
+        calls.push('enableSaveButton');
+      },
+    }));
+    const deps = service.orchestratorDeps();
+    expect(() => deps.unfreezeSettingsForm()).toThrow(/modal already closing/);
+    expect(calls).toEqual(['showSchemaForm', 'enableSaveButton']);
   });
 });

@@ -135,6 +135,7 @@ const ROUTES = {
   '/vocabulary': () => handlers.handleGetVocabulary(),
   '/preview-save': p => handlers.handlePreviewSave(deps, p),
   '/compose-save': p => handlers.handleComposeSave(deps, p),
+  '/commit-save': p => handlers.handleCommitSave(deps, p),
 };
 
 const MIME = {

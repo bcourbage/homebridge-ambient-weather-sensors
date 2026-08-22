@@ -181,6 +181,14 @@ export class HomebridgeService {
     if (!ipc || !ipc.updatePluginConfig || !ipc.savePluginConfig) {
       throw new Error('This Homebridge UI does not expose the config persistence API; saving is unavailable.');
     }
+    // The settings-form freeze is part of the save's correctness (a
+    // missing control would reopen the form-edit race after the
+    // re-check), so a bridge without ALL FOUR controls cannot save —
+    // fail closed exactly like the missing persistence API above
+    // (review #47 round 4, P1).
+    if (!ipc.disableSaveButton || !ipc.enableSaveButton || !ipc.hideSchemaForm || !ipc.showSchemaForm) {
+      throw new Error('This Homebridge UI does not expose the settings-form controls; saving is unavailable.');
+    }
     return {
       request: (path, payload) => ipc.request(path, payload),
       getPluginConfig: () => ipc.getPluginConfig() as Promise<Array<Record<string, unknown>>>,
@@ -189,12 +197,28 @@ export class HomebridgeService {
       // The form state itself survives: HB UI X re-renders the schema
       // form from its in-memory config on showSchemaForm.
       freezeSettingsForm: () => {
-        ipc.disableSaveButton?.();
-        ipc.hideSchemaForm?.();
+        ipc.disableSaveButton!();
+        ipc.hideSchemaForm!();
       },
+      // Each restore step runs INDEPENDENTLY: a throwing showSchemaForm
+      // must not leave the Save button dead, and vice versa (review
+      // #47 round 4, P1 — the orchestrator additionally guarantees a
+      // restore failure never masks the save outcome).
       unfreezeSettingsForm: () => {
-        ipc.showSchemaForm?.();
-        ipc.enableSaveButton?.();
+        let firstFailure: unknown;
+        try {
+          ipc.showSchemaForm!();
+        } catch (e) {
+          firstFailure = e;
+        }
+        try {
+          ipc.enableSaveButton!();
+        } catch (e) {
+          firstFailure = firstFailure ?? e;
+        }
+        if (firstFailure !== undefined) {
+          throw firstFailure;
+        }
       },
       ...(ipc.getCachedAccessories
         ? { getCachedAccessories: () => ipc.getCachedAccessories!() }
