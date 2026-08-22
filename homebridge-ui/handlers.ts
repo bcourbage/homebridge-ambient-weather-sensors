@@ -214,7 +214,8 @@ export type ComposeSaveError =
   | { code: 'stale-confirmation'; message: string }
   | { code: 'legacy-snapshot-corrupt'; message: string }
   | { code: 'snapshot-write-failed'; message: string }
-  | { code: 'conversion-journal-error'; message: string };
+  | { code: 'conversion-journal-error'; message: string }
+  | { code: 'unsaved-settings-changes'; message: string };
 
 export type ComposeSaveResult =
   | {
@@ -287,6 +288,18 @@ export interface ComposeSavePayload {
    * is /preview-save, which is what forces the confirmation UX.
    */
   confirmDigest?: unknown;
+  /**
+   * The settings page's in-memory copy of the block being edited
+   * (from getPluginConfig()), sent by the SAVE flow so the server can
+   * detect UNSAVED settings-form changes (review #47 P1-1): editor
+   * persistence replaces the in-memory config with the disk-derived
+   * composed block, so a form edit the user has not saved would be
+   * silently discarded. The server compares this against the on-disk
+   * block, tolerating only the schema form's measured automatic
+   * materialization (empty arrays for absent keys); any other
+   * difference refuses with `unsaved-settings-changes`.
+   */
+  formBlock?: unknown;
 }
 
 /**
@@ -360,6 +373,23 @@ async function runSavePipeline(
   if (blocks.length === 0) {
     return { ok: false, error: { code: 'no-platform-block', message: 'No AmbientWeatherSensors platform block found in config.json.' } };
   }
+  // ---- 1b. Exactly-one-block invariant (review #47 P1-2). The
+  //          session token identifies a block by CONTENT, while the
+  //          client replaces a block by POSITION — with multiple
+  //          blocks those can disagree, composing one Home's block and
+  //          overwriting another's. Until a multi-Home editor exists,
+  //          previews and saves refuse outright; /editor-state keeps
+  //          `editorAvailable: false` for the same configs.
+  if (blocks.length > 1) {
+    return {
+      ok: false,
+      error: {
+        code: 'ambiguous-platform-block',
+        message: `${blocks.length} AmbientWeatherSensors platform blocks exist; the editor supports exactly one. `
+          + 'Remove the duplicates or edit config.json directly.',
+      },
+    };
+  }
 
   // ---- 2. Locate the block being edited — which doubles as the
   //         stale-session check: if the on-disk block no longer equals
@@ -387,15 +417,6 @@ async function runSavePipeline(
         code: 'stale-base',
         message: 'The configuration changed since this editor session loaded (or the submitted base does not match any '
           + 'AmbientWeatherSensors block). Reload the plugin config and retry.',
-      },
-    };
-  }
-  if (matches.length > 1) {
-    return {
-      ok: false,
-      error: {
-        code: 'ambiguous-platform-block',
-        message: `${matches.length} identical AmbientWeatherSensors blocks match the submitted base; cannot determine which to edit.`,
       },
     };
   }
@@ -585,6 +606,41 @@ export async function handleComposeSave(
           + 'Enable sensor-map v2 live path" in the settings form, restart Homebridge, and retry. Nothing was written.',
       },
     };
+  }
+
+  // ---- 7b3. UNSAVED-SETTINGS GATE (review #47 P1-1): editor
+  //           persistence replaces HB UI X's in-memory config with the
+  //           disk-derived composed block, so a settings-form edit the
+  //           user has not saved (a credential, a toggle, a filter)
+  //           would be silently discarded — and the post-save receipt
+  //           would still read clean, because disk matches what was
+  //           composed. When the client supplies its in-memory copy,
+  //           refuse any difference from disk beyond the schema form's
+  //           measured automatic materialization (empty arrays for
+  //           absent keys). Fail-safe by design: unmeasured form
+  //           normalization refuses too, and saving or discarding the
+  //           form changes clears it.
+  if (p.formBlock !== undefined) {
+    if (!p.formBlock || typeof p.formBlock !== 'object' || Array.isArray(p.formBlock)) {
+      return {
+        ok: false,
+        error: {
+          code: 'unsaved-settings-changes',
+          message: 'The settings form state could not be verified. Reload the plugin settings and retry; nothing was written.',
+        },
+      };
+    }
+    const drifted = settingsFormDrift(p.formBlock as Record<string, unknown>, block);
+    if (drifted !== undefined) {
+      return {
+        ok: false,
+        error: {
+          code: 'unsaved-settings-changes',
+          message: `The settings form has unsaved changes ('${drifted}'). Save or discard those changes in the `
+            + 'settings form first; nothing was written.',
+        },
+      };
+    }
   }
 
   // ---- 7c. STRUCTURAL CONFIRMATION GATE (PR C / finding 5): the
@@ -1046,7 +1102,10 @@ export async function handleGetEditorState(
   return {
     configMode: modeResult.mode,
     v2FlagEnabled,
-    editorAvailable: v2FlagEnabled, // PR C: save path live, gated on the v2 opt-in (review #45 P1-1)
+    // PR C: save path live, gated on the v2 opt-in (review #45 P1-1).
+    // Multi-block configs stay read-only until a multi-Home editor
+    // exists (review #47 P1-2) — the save pipeline refuses them too.
+    editorAvailable: v2FlagEnabled && blocks.length === 1,
     baseDigest: blockDigest(block),
     blockIndex: 0,
     version: deps.version,
@@ -1419,4 +1478,39 @@ function canonicalJsonLocal(v: unknown): string {
  */
 export function blockDigest(block: unknown): string {
   return createHash('sha256').update(canonicalJsonLocal(block)).digest('hex');
+}
+
+/**
+ * First key on which the settings page's in-memory block meaningfully
+ * differs from the on-disk block, or undefined when they agree
+ * (review #47 P1-1). Tolerated: keys ABSENT on disk whose in-memory
+ * value is an empty array — the schema form's measured automatic
+ * materialization (`includeOnly: []`, `stationFilter: []`), which is
+ * semantically empty (every consumer gates on a non-empty set).
+ * Everything else — a changed value, a dropped key, an added key with
+ * content — is an unsaved user edit the editor save would destroy.
+ */
+function settingsFormDrift(
+  formBlock: Record<string, unknown>,
+  diskBlock: Record<string, unknown>,
+): string | undefined {
+  const keys = new Set([...Object.keys(formBlock), ...Object.keys(diskBlock)]);
+  for (const key of keys) {
+    const inForm = key in formBlock;
+    const onDisk = key in diskBlock;
+    if (inForm && !onDisk) {
+      const v = formBlock[key];
+      if (Array.isArray(v) && v.length === 0) {
+        continue;
+      }
+      return key;
+    }
+    if (!inForm && onDisk) {
+      return key;
+    }
+    if (canonicalJsonLocal(formBlock[key]) !== canonicalJsonLocal(diskBlock[key])) {
+      return key;
+    }
+  }
+  return undefined;
 }

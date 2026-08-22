@@ -1485,6 +1485,25 @@ Tests: for every non-motion kind, submit an override with each of these fields; 
   HB UI X's contamination, merge semantics, frozen injected body
   style, and iframe height loop.
 
+  Review round 2 hardened two safety gaps the digest design opened:
+  (a) UNSAVED-SETTINGS GATE — editor persistence replaces the
+  in-memory config with the disk-derived composed block, so an unsaved
+  settings-form edit (a credential, a toggle) would be silently
+  discarded while the receipt read clean. The save flow sends the
+  in-memory block as `formBlock`; the server refuses any difference
+  from disk beyond the schema form's measured automatic
+  materialization (empty arrays for absent keys) with
+  `unsaved-settings-changes`. Fail-safe: unmeasured form normalization
+  refuses too, and saving/discarding the form clears it.
+  (b) EXACTLY-ONE-BLOCK INVARIANT — the digest identifies a block by
+  content while the client replaces by position; with multiple plugin
+  blocks those can disagree and corrupt another Home's block. Until a
+  multi-Home editor exists: `/editor-state` keeps
+  `editorAvailable: false`, the pipeline refuses previews and saves
+  outright, and composeAndPersist derives the write-back position from
+  the single plugin block itself — a supplied `blockIndex` is only
+  cross-checked and refused on disagreement, never trusted.
+
 - **2026-08-20 (c)**: Conversion journal is a directory of immutable
   entry files (PR #46 review round 3). The round-2 single-file journal
   guarded by an in-process promise mutex was proven unsafe across

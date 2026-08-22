@@ -987,3 +987,98 @@ describe('session-digest staleness (beta.13 smoke F1: getPluginConfig is schema-
     expect(client.events).toEqual([]);
   });
 });
+
+describe('unsaved settings-form changes (review #47 P1-1)', () => {
+  it('a REAL form edit refuses the save with zero writes; saving the form first clears it', async () => {
+    const rig = makeRig(LEGACY_BLOCK);
+    discoveryStore(rig);
+    const client = makeClient(rig);
+    // The user changed a credential in the settings form (unsaved):
+    // the in-memory copy differs from disk beyond materialization.
+    const realGet = client.deps.getPluginConfig.bind(client.deps);
+    client.deps.getPluginConfig = async () =>
+      (await realGet()).map(b => ({ ...b, includeOnly: [], apiKey: 'edited-but-not-saved' }));
+
+    const result = await composeAndPersist(client.deps, {
+      baseDigest: blockDigest(LEGACY_BLOCK),
+      blockIndex: 0,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('unsaved-settings-changes');
+      expect(result.error.message).toContain("'apiKey'");
+    }
+    // Zero persistence AND zero snapshot: the refusal precedes the
+    // snapshot write.
+    expect(client.events).toEqual(['compose']);
+    expect(existsSync(path.join(rig.persistDir, LEGACY_SNAPSHOT_FILE))).toBe(false);
+  });
+
+  it('a dropped key and a changed nested value are unsaved edits too; a malformed formBlock refuses', async () => {
+    const rig = makeRig(LEGACY_BLOCK);
+    discoveryStore(rig);
+    const digest = blockDigest(LEGACY_BLOCK);
+
+    const dropped: Record<string, unknown> = { ...LEGACY_BLOCK };
+    delete dropped.temperatureSensors;
+    const r1 = await handleComposeSave(rig.deps, { baseDigest: digest, formBlock: dropped });
+    expect(!r1.ok && r1.error.code).toBe('unsaved-settings-changes');
+
+    const r2 = await handleComposeSave(rig.deps, {
+      baseDigest: digest,
+      formBlock: { ...LEGACY_BLOCK, humiditySensors: true }, // true vs false on disk
+    });
+    expect(!r2.ok && r2.error.code).toBe('unsaved-settings-changes');
+
+    const r3 = await handleComposeSave(rig.deps, { baseDigest: digest, formBlock: 'not-an-object' });
+    expect(!r3.ok && r3.error.code).toBe('unsaved-settings-changes');
+
+    // The exact disk state (with or without tolerated materialization)
+    // composes fine.
+    const r4 = await handleComposeSave(rig.deps, {
+      baseDigest: digest,
+      formBlock: { ...LEGACY_BLOCK, includeOnly: [], stationFilter: [] },
+    });
+    expect(r4.ok).toBe(true);
+  });
+});
+
+describe('multi-block hard refusal (review #47 P1-2)', () => {
+  const SECOND_BLOCK = { ...LEGACY_BLOCK, name: 'Second Home', apiKey: 'k2' };
+
+  it('two DISTINCT plugin blocks: preview and compose refuse even with a uniquely matching digest', async () => {
+    const rig = makeRig(LEGACY_BLOCK, [SECOND_BLOCK]);
+    discoveryStore(rig);
+    const digest = blockDigest(LEGACY_BLOCK); // uniquely matches block 0
+    const pv = await handlePreviewSave(rig.deps, { baseDigest: digest });
+    expect(!pv.ok && pv.error.code).toBe('ambiguous-platform-block');
+    const cs = await handleComposeSave(rig.deps, { baseDigest: digest });
+    expect(!cs.ok && cs.error.code).toBe('ambiguous-platform-block');
+    expect(existsSync(path.join(rig.persistDir, LEGACY_SNAPSHOT_FILE))).toBe(false);
+  });
+
+  it('the orchestrator refuses two blocks client-side with zero requests, and a forged blockIndex with zero requests', async () => {
+    const rig = makeRig(LEGACY_BLOCK, [SECOND_BLOCK]);
+    discoveryStore(rig);
+    const twoBlocks = makeClient(rig);
+    const r1 = await composeAndPersist(twoBlocks.deps, {
+      baseDigest: blockDigest(LEGACY_BLOCK),
+      blockIndex: 0,
+    });
+    expect(!r1.ok && r1.error.code).toBe('ambiguous-platform-block');
+    expect(twoBlocks.events).toEqual([]);
+
+    // Single block, forged index: the orchestrator derives the
+    // position itself and refuses the disagreement before composing.
+    const rigOne = makeRig(LEGACY_BLOCK);
+    discoveryStore(rigOne);
+    const one = makeClient(rigOne);
+    const r2 = await composeAndPersist(one.deps, {
+      baseDigest: blockDigest(LEGACY_BLOCK),
+      blockIndex: 3,
+    });
+    expect(!r2.ok && r2.error.code).toBe('stale-base');
+    expect(one.events).toEqual([]);
+    expect(existsSync(path.join(rigOne.persistDir, LEGACY_SNAPSHOT_FILE))).toBe(false);
+  });
+});

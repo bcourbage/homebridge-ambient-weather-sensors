@@ -160,8 +160,11 @@ export interface EditorStateDto {
   baseDigest: string;
   /**
    * Index of that block among the plugin's platform blocks, in
-   * config.json order — where composeAndPersist writes the composed
-   * block back within the getPluginConfig() array.
+   * config.json order. A CROSS-CHECK only: composeAndPersist derives
+   * the write-back position itself from the single plugin block and
+   * refuses when this value disagrees (review #47 P1-2 — a supplied
+   * index is never trusted to pick the replacement target). Always 0
+   * while the editor requires exactly one block.
    */
   blockIndex: number;
   version: string;

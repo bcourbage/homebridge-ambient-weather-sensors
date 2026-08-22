@@ -70,6 +70,23 @@ describe('custom-UI theme palette', () => {
     expect(html).toMatch(/body:not\(\.dark-mode\)\s*\{[^}]*background-color:\s*#FFFFFF\s*!important[^}]*color:\s*#000000\s*!important/);
   });
 
+  it('every CSS variable the Angular component styles reference is defined in the page palette (review #47 P2-3)', () => {
+    // A var() referencing an undefined variable is silently invalid —
+    // the sticky action column shipped transparent this way. The
+    // component styles may only use variables the #awn palette (or
+    // the body theme rules) actually define.
+    const componentSource = readFileSync(
+      path.resolve(__dirname, '../../../homebridge-ui/app-src/awn-root.component.ts'), 'utf8');
+    const stylesMatch = componentSource.match(/styles:\s*`([\s\S]*?)`/);
+    expect(stylesMatch).not.toBeNull();
+    const referenced = new Set([...stylesMatch![1].matchAll(/var\((--[a-z-]+)\)/g)].map(m => m[1]));
+    expect(referenced.size).toBeGreaterThan(0);
+    const defined = new Set([...css.matchAll(/(--[a-z-]+)\s*:/g)].map(m => m[1]));
+    for (const v of referenced) {
+      expect(defined.has(v), `component styles reference undefined variable ${v}`).toBe(true);
+    }
+  });
+
   it('the static markup carries no inline color styles', () => {
     const markup = html.replace(/<style>[\s\S]*?<\/style>/, '').replace(/<script>[\s\S]*?<\/script>/, '');
     for (const m of markup.matchAll(/style\s*=\s*"([^"]*)"/g)) {

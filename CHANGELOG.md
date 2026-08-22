@@ -18,6 +18,8 @@ entries short and user-facing.
 - **The Edit button is always visible.** The sensor-map table scrolls horizontally in its own container and the action column stays pinned to the right edge, instead of rendering past the clipped edge of the panel.
 - **Less layout jumping while editing.** The draft bar (with the Preview and Discard controls) is now always visible above the table instead of appearing on the first edit and pushing the page down mid-interaction; its wording and the row validation messages were also rewritten.
 - **Settings form console noise removed.** Three legacy form-layout entries declared an invalid widget type, producing "widget type string not found" errors in the browser console on every page open.
+- **Editor saves protect unsaved settings-form changes.** Saving a sensor-map draft while the settings form above holds unsaved edits (a credential, a toggle, a filter) would have silently discarded them; the save is now refused with a message to save or discard the form changes first.
+- **Configurations with more than one AmbientWeatherSensors block stay read-only.** The editor supports exactly one platform block; with duplicates present it previews nothing and refuses saves instead of risking a write to the wrong block.
 
 ### Added
 

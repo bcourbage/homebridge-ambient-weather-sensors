@@ -664,6 +664,9 @@ describe('save flow (PR C / finding 5 — the ONE route is composeAndPersist)', 
     // does NOT (beta.13 smoke F1).
     expect((compose?.body as { baseDigest?: string }).baseDigest).toBe('digest-live');
     expect((compose?.body as { base?: unknown }).base).toBeUndefined();
+    // The in-memory block travels as formBlock so the server can refuse
+    // when the settings form holds unsaved changes (review #47 P1-1).
+    expect((compose?.body as { formBlock?: unknown }).formBlock).toEqual({ platform: 'AmbientWeatherSensors' });
     expect(ipc.persisted.map(p => p.event)).toEqual(['update', 'update', 'save']);
     // Verbatim replacement: the FIRST update clears HB UI X's
     // merge-prone in-memory copy; the second carries the composed block.

@@ -107,7 +107,7 @@ interface StationGroup {
     .table-scroll { overflow-x: auto; }
     th.actions, td.actions {
       position: sticky; right: 0;
-      background: var(--bg);
+      background: var(--page-bg);
       border-left: 1px solid var(--rule);
       text-align: right;
     }

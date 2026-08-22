@@ -485,12 +485,16 @@ describe('/editor-state — legacy and troubled configurations', () => {
     expect(dto.warnings.filter(w => /newer plugin version/.test(w.message))).toHaveLength(1);
   });
 
-  it('duplicate platform blocks render the first with a warning', async () => {
+  it('duplicate platform blocks render the first with a warning and DISABLE the editor (review #47 P1-2)', async () => {
     const rig = makeRig([V2_BLOCK, { ...V2_BLOCK, name: 'Second' }]);
     discoveryStore(rig, [{ mac: MAC, dataPoint: 'tempf' }]);
     const dto = await handleGetEditorState(rig.deps, {});
     expect(dto.warnings.some(w => /2 AmbientWeatherSensors platform blocks/.test(w.message))).toBe(true);
     expect(dto.rows.length).toBeGreaterThan(0);
+    // The session token identifies a block by content while the client
+    // replaces by position — with multiple blocks those can disagree,
+    // so saving stays off until a multi-Home editor exists.
+    expect(dto.editorAvailable).toBe(false);
   });
 
   it('throws when no config path is available or no block exists', async () => {

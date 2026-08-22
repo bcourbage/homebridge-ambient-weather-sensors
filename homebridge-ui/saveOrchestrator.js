@@ -23,16 +23,32 @@ export async function composeAndPersist(deps, args) {
     const cfgArray = await deps.getPluginConfig();
     const blocks = cfgArray.filter(b => b && b.platform === 'AmbientWeatherSensors');
     const digestSession = args.baseDigest !== undefined;
-    if (digestSession && (typeof args.baseDigest !== 'string' || args.baseDigest.length === 0
-        || !Number.isInteger(args.blockIndex) || args.blockIndex < 0
-        || args.blockIndex >= cfgArray.length)) {
-        return {
-            ok: false,
-            error: {
-                code: 'stale-base',
-                message: 'The editor session token no longer matches the plugin config layout; reload and retry.',
-            },
-        };
+    if (digestSession) {
+        if (typeof args.baseDigest !== 'string' || args.baseDigest.length === 0) {
+            return {
+                ok: false,
+                error: {
+                    code: 'stale-base',
+                    message: 'The editor session token is missing or malformed; reload and retry.',
+                },
+            };
+        }
+        // Exactly-one-block invariant (review #47 P1-2): the token
+        // identifies a block by CONTENT while this array is replaced by
+        // POSITION — with more than one block those can disagree, and a
+        // wrong position would overwrite another Home's configuration.
+        // The server refuses multi-block configs too; this is the
+        // client-side half, checked before any request is made.
+        if (blocks.length !== 1) {
+            return {
+                ok: false,
+                error: {
+                    code: 'ambiguous-platform-block',
+                    message: `${blocks.length} AmbientWeatherSensors blocks exist; the editor supports exactly one. `
+                        + 'Remove the duplicates or edit config.json directly.',
+                },
+            };
+        }
     }
     let base = args.base;
     if (!digestSession && base === undefined) {
@@ -60,17 +76,29 @@ export async function composeAndPersist(deps, args) {
         }
     }
     // Locate where the composed block will be WRITTEN BACK in the
-    // getPluginConfig() array. In a digest session the position is the
-    // /editor-state blockIndex (the array only serves as the write
-    // vehicle — its CONTENT is form-mutated and untrustworthy, which is
-    // exactly why the digest exists; the server does the real staleness
-    // check against disk). In the legacy base flow the block is located
-    // by deep equality (review #67 P1-3): a separately deserialized
-    // base is never reference-equal, and indexOf would silently APPEND
-    // the composed block as a duplicate.
+    // getPluginConfig() array. In a digest session the position is
+    // DERIVED here — the single plugin block's index — never taken from
+    // the client-supplied blockIndex (review #47 P1-2: a forged or
+    // drifted index would compose one block and replace another); the
+    // supplied value is only cross-checked and refused on disagreement.
+    // The array's CONTENT is form-mutated and untrustworthy — the
+    // server does the real staleness check against disk via the digest.
+    // In the legacy base flow the block is located by deep equality
+    // (review #67 P1-3): a separately deserialized base is never
+    // reference-equal, and indexOf would silently APPEND the composed
+    // block as a duplicate.
     let index;
     if (digestSession) {
-        index = args.blockIndex;
+        index = cfgArray.findIndex(b => b && b.platform === 'AmbientWeatherSensors');
+        if (args.blockIndex !== undefined && args.blockIndex !== index) {
+            return {
+                ok: false,
+                error: {
+                    code: 'stale-base',
+                    message: 'The editor session token no longer matches the plugin config layout; reload and retry.',
+                },
+            };
+        }
     }
     else {
         const matchIndexes = cfgArray
@@ -92,6 +120,10 @@ export async function composeAndPersist(deps, args) {
     const result = await deps.request('/compose-save', {
         base: digestSession ? undefined : base,
         baseDigest: digestSession ? args.baseDigest : undefined,
+        // The in-memory block, so the server can refuse when the settings
+        // form holds UNSAVED user changes this save would discard
+        // (review #47 P1-1).
+        formBlock: digestSession ? cfgArray[index] : undefined,
         proposal: args.proposal,
         cachedAccessoryUniqueIds,
         liveStations: args.liveStations,
