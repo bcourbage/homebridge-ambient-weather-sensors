@@ -809,8 +809,11 @@ async function composeSaveInternal(
   //          refuses before anything is written, and any drift between
   //          the phases refuses the same way. An integrity token, not
   //          an auth token: the bridge already trusts its session —
-  //          the token exists so the re-check-then-commit ordering
-  //          cannot be skipped by accident.
+  //          the token guarantees VALIDATE-BEFORE-COMMIT on matching
+  //          state; it cannot prove the browser performed the
+  //          intervening settings-form re-read, which remains
+  //          client-enforced in composeAndPersist (pinned by the
+  //          hostile-mutation test).
   const nextConfigDigest = blockDigest(composed.nextConfig);
   const validationToken = createHash('sha256').update(canonicalJsonLocal({
     v: 1,
