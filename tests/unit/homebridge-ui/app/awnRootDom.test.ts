@@ -191,7 +191,20 @@ describe('AwnRootComponent (TestBed, jsdom)', () => {
     const converted = el.querySelector('.unit-converted') as HTMLElement;
     expect(converted).not.toBeNull();
     expect(converted.getAttribute('title')).toBe('converted from mph');
-    expect(text).toContain('battout');
+    // Battery + layer left the table (Bruno's beta.14 column trim):
+    // battery lives in the data-point tooltip and the row editor; the
+    // layer is a provenance dot for non-default rows.
+    expect(text).not.toContain('battout');
+    const tempfCode = [...el.querySelectorAll('td code')].find(c => c.textContent === 'tempf')!;
+    expect(tempfCode.getAttribute('title')).toBe('battery: battout');
+    expect(el.querySelectorAll('.layer-dot.global')).toHaveLength(1);   // tempf
+    expect(el.querySelectorAll('.layer-dot.station')).toHaveLength(1);  // windspeedmph
+    // Opening a row's editor shows the demoted facts.
+    const openBtn = [...el.querySelectorAll('tr')].find(tr => tr.textContent!.includes('tempf'))!.querySelector('button') as HTMLButtonElement;
+    openBtn.click();
+    fixture.detectChanges();
+    expect(el.querySelector('.row-facts')!.textContent).toContain('battery battout');
+    expect(el.querySelector('.row-facts')!.textContent).toContain('global layer');
     expect(ipc.requests.map(r => r.path).sort()).toEqual(['/editor-state', '/vocabulary']);
   });
 

@@ -45,14 +45,18 @@ interface StationGroup {
   imports: [ReactiveFormsModule],
   styles: `
     h3 { font-size: 0.95rem; margin: 16px 0 4px 0; }
-    .origin {
-      display: inline-block; padding: 1px 7px; border-radius: 999px;
-      font-size: 0.72rem; font-weight: 600; letter-spacing: 0.02em;
-      background: var(--code-bg); color: var(--fg-sub);
+    /* Provenance dot (Bruno's beta.14 table feedback): the Layer
+       column earned its space only for the few non-default rows, so
+       layer provenance is a small dot on the data point instead —
+       green = a global setting, blue = a station-scoped exception;
+       the tooltip names it. Battery moved to the row editor and the
+       data-point tooltip the same round. */
+    .layer-dot {
+      display: inline-block; width: 7px; height: 7px; border-radius: 999px;
+      margin-left: 5px; vertical-align: 1px;
     }
-    .origin.station { background: var(--info-bg); color: var(--info-fg); }
-    .origin.global  { background: var(--on-bg);   color: var(--on-fg); }
-    .origin.unrecognized { background: var(--warn-bg); color: var(--warn-fg); }
+    .layer-dot.global  { background: var(--on-fg); }
+    .layer-dot.station { background: var(--info-fg); }
     .station-meta { color: var(--fg-sub); font-size: 0.85rem; font-weight: 400; margin-left: 8px; }
     .muted { color: var(--fg-empty); }
     .field-error { color: var(--error-fg); background: var(--error-bg); padding: 2px 8px; border-radius: 4px; font-size: 0.82rem; margin-right: 12px; }
@@ -71,6 +75,7 @@ interface StationGroup {
       padding: 10px 14px;
     }
     .editor-form label { display: inline-flex; align-items: center; gap: 6px; margin: 4px 16px 4px 0; font-size: 0.88rem; }
+    .row-facts { display: inline-block; margin-left: 12px; font-size: 0.82rem; }
     .editor-form input[type="text"], .editor-form input[type="number"], .editor-form select {
       background: var(--btn-bg); color: var(--btn-fg);
       border: 1px solid var(--btn-edge); border-radius: 4px; padding: 4px 8px;
@@ -320,7 +325,7 @@ interface StationGroup {
             <tr>
               <th class="state"></th>
               <th>Data point</th><th>Name</th><th>Kind</th><th>Units</th>
-              <th>Layer</th><th>Battery</th><th class="actions"></th>
+              <th class="actions"></th>
             </tr>
           </thead>
           <tbody>
@@ -337,7 +342,10 @@ interface StationGroup {
                 </td>
                 <td>
                   @if (isDirty(row)) { <span class="dirty-dot" title="draft edits"></span> }
-                  <code>{{ row.dataPoint }}</code>
+                  <code [title]="row.batteryField ? 'battery: ' + row.batteryField : ''">{{ row.dataPoint }}</code>
+                  @if (row.origin === 'global' || row.origin === 'station') {
+                    <span class="layer-dot {{ row.origin }}" [title]="row.origin + ' layer'"></span>
+                  }
                 </td>
                 <td>{{ row.name ?? '' }}</td>
                 <td class="kind" [title]="kindTitle(row)">
@@ -369,14 +377,6 @@ interface StationGroup {
                     {{ unitCell(row) }}
                   }
                 </td>
-                <td><span class="origin {{ row.origin }}">{{ row.origin }}</span></td>
-                <td>
-                  @if (row.batteryField) {
-                    <code>{{ row.batteryField }}</code>
-                  } @else {
-                    <span class="muted">—</span>
-                  }
-                </td>
                 <td class="actions">
                   @if (row.kind !== 'unrecognized') {
                     <button type="button" (click)="toggleEdit(row)" [disabled]="saving() || confirmOpen() || reloadRequired()">{{ isExpanded(row) ? 'Close' : 'Edit' }}</button>
@@ -385,7 +385,7 @@ interface StationGroup {
               </tr>
               @if (isExpanded(row)) {
                 <tr>
-                  <td colspan="8" class="editor-form" (mousedown)="formPointerDown($event)">
+                  <td colspan="6" class="editor-form" (mousedown)="formPointerDown($event)">
                     <form [formGroup]="editForm!">
                       <label><input type="checkbox" formControlName="enabled" /> Enabled</label>
                       <label>Name <input type="text" formControlName="name" /></label>
@@ -419,6 +419,13 @@ interface StationGroup {
                       @if (isDirty(row)) {
                         <button type="button" (click)="resetRow(row)">Reset row</button>
                       }
+                      <!-- Read-only row facts that left the table
+                           (Bruno's beta.14 column trim). -->
+                      <span class="muted row-facts">
+                        {{ kindTitle(row) }}
+                        @if (row.batteryField) { · battery <code>{{ row.batteryField }}</code> }
+                        · {{ row.origin }} layer
+                      </span>
                     </form>
                   </td>
                 </tr>
