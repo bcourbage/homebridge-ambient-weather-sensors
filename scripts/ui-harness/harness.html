@@ -1,0 +1,64 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>AWN plugin UI harness</title>
+<style>
+  /* Twin of HB UI X's shell around the custom-UI iframe: light/dark
+     themes keyed on the body classes the real app sets, and an
+     auto-resizing borderless iframe. */
+  body { margin: 0; font-family: system-ui, sans-serif; background: #fff; color: #222; }
+  body.dark-mode { background: #242424; color: #ddd; }
+  .bar { position: sticky; top: 0; z-index: 10; padding: 10px 16px; display: flex; gap: 10px; align-items: center;
+         background: #f0f0f0; border-bottom: 1px solid #ccc; }
+  body.dark-mode .bar { background: #2d2f33; border-color: #4a4d51; }
+  .shell { max-width: 960px; margin: 0 auto; padding: 16px; }
+  iframe { display: block; width: 100%; border: 0; }
+</style>
+</head>
+<body class="config-ui-x-light">
+  <div class="bar">
+    <strong>AWN UI harness</strong>
+    <button id="light">Light</button>
+    <button id="dark">Dark</button>
+    <span id="mode">light</span>
+  </div>
+  <div class="shell">
+    <iframe id="plugin" src="/plugin/index.html"></iframe>
+  </div>
+  <script>
+    const frame = document.getElementById('plugin');
+    function setTheme(dark) {
+      // Exactly what HB UI X toggles on ITS body; the plugin page
+      // mirrors these classes live (beta.11 theme fix).
+      document.body.classList.toggle('dark-mode', dark);
+      document.body.classList.toggle('config-ui-x-dark', dark);
+      document.body.classList.toggle('config-ui-x-light', !dark);
+      document.getElementById('mode').textContent = dark ? 'dark' : 'light';
+    }
+    document.getElementById('light').onclick = () => setTheme(false);
+    document.getElementById('dark').onclick = () => setTheme(true);
+    // HB UI X's iframe height loop: the parent resizes the iframe to
+    // the content's scrollHeight, so the IFRAME never scrolls and the
+    // PARENT page does — the dynamics behind the beta.13 smoke's
+    // scroll-jump reports. `?fixed=1` opts out (viewport-sized iframe
+    // with internal scrolling) for driving with automation tools that
+    // cannot composite a 4000px-tall iframe.
+    // Automation environments report innerHeight 0 and cannot
+    // composite a content-height iframe; fall back to a fixed,
+    // internally-scrolling frame there (or with ?fixed=1).
+    if (new URLSearchParams(location.search).has('fixed') || !window.innerHeight) {
+      frame.style.height = ((window.innerHeight || 720) - 80) + 'px';
+    } else {
+      setInterval(() => {
+        try {
+          const doc = frame.contentDocument;
+          if (doc && doc.body) {
+            frame.style.height = doc.body.scrollHeight + 'px';
+          }
+        } catch (e) { /* not ready yet */ }
+      }, 250);
+    }
+  </script>
+</body>
+</html>

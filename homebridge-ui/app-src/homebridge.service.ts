@@ -147,14 +147,6 @@ export class HomebridgeService {
    * duplicate-block configs are already flagged by /editor-state and
    * refused at the boundary.
    */
-  async pluginConfigBlock(): Promise<unknown> {
-    if (!this.ipc) {
-      throw new Error('homebridge bridge is not available outside HB UI X');
-    }
-    const blocks = await this.ipc.getPluginConfig();
-    return Array.isArray(blocks) ? blocks[0] : undefined;
-  }
-
   /** Reload the iframe (seam so tests can observe without navigating). */
   reloadWindow(): void {
     this.document.defaultView?.location.reload();

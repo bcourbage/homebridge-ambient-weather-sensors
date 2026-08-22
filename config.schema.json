@@ -443,7 +443,6 @@
       "items": [
         {
           "key": "stationFilter[]",
-          "type": "string",
           "placeholder": "e.g. Backyard WS-2000"
         }
       ]
@@ -458,7 +457,6 @@
       "items": [
         {
           "key": "excludeSensors[]",
-          "type": "string",
           "placeholder": "e.g. Indoor Temperature"
         }
       ]
@@ -469,7 +467,6 @@
       "items": [
         {
           "key": "includeOnly[]",
-          "type": "string",
           "placeholder": "e.g. Backyard Station"
         }
       ]

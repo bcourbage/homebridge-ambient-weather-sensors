@@ -9,6 +9,20 @@ entries short and user-facing.
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/
 
+## [Unreleased]
+
+### Fixed
+
+- **The sensor-map editor works in the real Homebridge UI again.** In beta.13, every preview and save was refused with `stale-base`: Homebridge UI X hands custom pages its settings form's in-memory copy of the plugin config, which never byte-matches `config.json` once the form materializes its defaults. The editor session now carries a digest issued by the server for the exact on-disk block it loaded, and saves are written back as a verbatim replacement, immune to the UI's merge-style config update (which could silently resurrect fields a save had removed and invalidate the freshly written rollback mirror). After every save, the editor re-reads the configuration from disk and warns if it differs from what was composed.
+- **Live theme switching keeps the whole page on the new theme.** Homebridge UI X freezes the page background and text color at the theme active when the page opened; switching themes with the page open left the page ground on the old theme while the panels followed. The page now keeps its ground on the live theme in both directions.
+- **The Edit button is always visible.** The sensor-map table scrolls horizontally in its own container and the action column stays pinned to the right edge, instead of rendering past the clipped edge of the panel.
+- **Less layout jumping while editing.** The draft bar (with the Preview and Discard controls) is now always visible above the table instead of appearing on the first edit and pushing the page down mid-interaction; its wording and the row validation messages were also rewritten.
+- **Settings form console noise removed.** Three legacy form-layout entries declared an invalid widget type, producing "widget type string not found" errors in the browser console on every page open.
+
+### Added
+
+- **Sponsor link.** The plugin is now sponsorable at [github.com/sponsors/bcourbage](https://github.com/sponsors/bcourbage) (`funding` in package.json and the repository Sponsor button).
+
 ## [2.0.0-beta.13] — 2026-08-20
 
 ### Added

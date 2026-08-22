@@ -47,6 +47,8 @@ function editorState(overrides: Partial<EditorStateDto> = {}): EditorStateDto {
     configMode: 'v2',
     v2FlagEnabled: true,
     editorAvailable: true,
+    baseDigest: 'digest-live',
+    blockIndex: 0,
     version: 'test',
     stations: [
       { mac: MAC, name: 'Roof', source: 'discovery' },
@@ -291,14 +293,17 @@ describe('draft editing + preview (PR B — no persistence)', () => {
 
     typeInto(el.querySelector('.editor-form input[type="text"]') as HTMLInputElement, 'Patio Temp');
     await settle(fixture);
-    expect(el.textContent).toContain('1 draft change(s)');
+    expect(el.textContent).toContain('1 draft change.');
 
     ([...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement).click();
     await settle(fixture);
 
     const req = ipc.requests.find(r => r.path === '/preview-save');
     expect(req?.body).toEqual({
-      base: { platform: 'AmbientWeatherSensors' }, // getPluginConfig()[0]
+      // The session token from /editor-state — NEVER a block copy from
+      // getPluginConfig() (beta.13 smoke F1: HB UI X returns the
+      // schema form's mutated config, which cannot byte-match disk).
+      baseDigest: 'digest-live',
       proposal: [{ dataPoint: 'tempinf', stationMac: OTHER_MAC, name: 'Patio Temp' }],
       cachedAccessoryUniqueIds: [],
     });
@@ -353,7 +358,7 @@ describe('draft editing + preview (PR B — no persistence)', () => {
 
     ([...el.querySelectorAll('button')].find(b => b.textContent === 'Discard drafts') as HTMLButtonElement).click();
     await settle(fixture);
-    expect(el.textContent).not.toContain('draft change(s)');
+    expect(el.textContent).toContain('No draft changes.');
     expect(el.querySelector('.change-kind')).toBeNull();
   });
 
@@ -361,7 +366,7 @@ describe('draft editing + preview (PR B — no persistence)', () => {
     const ipc = makeIpc(editorState(), [], PREVIEW_OK);
     const fixture = await render(ipc);
     const el = openEditor(fixture, 'windspeedmph'); // motion row: all controls
-    const dirty = (): boolean => el.textContent!.includes('draft change(s)');
+    const dirty = (): boolean => el.textContent!.includes('draft change.');
 
     // enabled: original false → toggle on → dirty → toggle off → clean
     const checkbox = el.querySelector('.editor-form input[type="checkbox"]') as HTMLInputElement;
@@ -500,11 +505,11 @@ describe('draft editing + preview (PR B — no persistence)', () => {
     const el = openEditor(fixture, 'tempinf');
     typeInto(el.querySelector('.editor-form input[type="text"]') as HTMLInputElement, 'Patio Temp');
     await settle(fixture);
-    expect(el.textContent).toContain('1 draft change(s)');
+    expect(el.textContent).toContain('1 draft change.');
 
     ([...el.querySelectorAll('button')].find(b => b.textContent === 'Reset row') as HTMLButtonElement).click();
     await settle(fixture);
-    expect(el.textContent).not.toContain('draft change(s)');
+    expect(el.textContent).toContain('No draft changes.');
     expect(el.querySelector('.editor-form')).toBeNull(); // form is closed
   });
 
@@ -630,6 +635,9 @@ describe('save flow (PR C / finding 5 — the ONE route is composeAndPersist)', 
   };
   const COMPOSE_OK = {
     ok: true, nextConfig: NEXT_CONFIG, snapshot: 'written',
+    // Matches the fixture editor-state's baseDigest: the post-save
+    // reload sees exactly what compose produced (no drift).
+    nextConfigDigest: 'digest-live',
     canonicalSensorMap: [], warnings: [], notes: [],
   };
 
@@ -652,12 +660,33 @@ describe('save flow (PR C / finding 5 — the ONE route is composeAndPersist)', 
 
     const compose = ipc.requests.find(r => r.path === '/compose-save');
     expect((compose?.body as { confirmDigest?: string }).confirmDigest).toBe('cd'.repeat(32));
-    expect(ipc.persisted.map(p => p.event)).toEqual(['update', 'save']);
-    // Verbatim: the composed block replaces the edited one, mirror included.
-    const updated = (ipc.persisted[0].arg as unknown[])[0];
+    // The session token travels; the mutable getPluginConfig block
+    // does NOT (beta.13 smoke F1).
+    expect((compose?.body as { baseDigest?: string }).baseDigest).toBe('digest-live');
+    expect((compose?.body as { base?: unknown }).base).toBeUndefined();
+    expect(ipc.persisted.map(p => p.event)).toEqual(['update', 'update', 'save']);
+    // Verbatim replacement: the FIRST update clears HB UI X's
+    // merge-prone in-memory copy; the second carries the composed block.
+    expect(ipc.persisted[0].arg).toEqual([]);
+    const updated = (ipc.persisted[1].arg as unknown[])[0];
     expect(updated).toEqual(NEXT_CONFIG);
     expect(el.textContent).toContain('Saved.');
     expect(el.textContent).toContain('legacy-config-snapshot.json');
+    // Receipt clean: reloaded digest equals what compose produced.
+    expect(el.textContent).not.toContain('does not exactly match');
+  });
+
+  it('a post-save digest mismatch surfaces the drift warning (receipt check)', async () => {
+    const ipc = makeIpc(editorState(), [], NON_STRUCTURAL_PREVIEW, {
+      ...COMPOSE_OK,
+      nextConfigDigest: 'digest-composed-elsewhere',
+    });
+    const fixture = await render(ipc);
+    const el = await draftAndPreview(fixture);
+    btn(el, 'Save changes')!.click();
+    await settle(fixture);
+    expect(el.textContent).toContain('Saved.');
+    expect(el.textContent).toContain('does not exactly match');
   });
 
   it('a structural save opens the confirmation modal; Cancel persists NOTHING', async () => {
@@ -688,7 +717,7 @@ describe('save flow (PR C / finding 5 — the ONE route is composeAndPersist)', 
 
     const compose = ipc.requests.find(r => r.path === '/compose-save');
     expect((compose?.body as { confirmDigest?: string }).confirmDigest).toBe('ef'.repeat(32));
-    expect(ipc.persisted.map(p => p.event)).toEqual(['update', 'save']);
+    expect(ipc.persisted.map(p => p.event)).toEqual(['update', 'update', 'save']);
     expect(el.querySelector('.modal')).toBeNull();
   });
 
@@ -758,7 +787,7 @@ describe('save flow (PR C / finding 5 — the ONE route is composeAndPersist)', 
     resolveCompose(COMPOSE_OK);
     await settle(fixture);
     expect(el.textContent).toContain('Saved.');
-    expect(persisted).toEqual(['update', 'save']);
+    expect(persisted).toEqual(['update', 'update', 'save']);
     for (const b of [...el.querySelectorAll('button')].filter(x => x.textContent === 'Edit')) {
       expect((b as HTMLButtonElement).disabled).toBe(false);
     }

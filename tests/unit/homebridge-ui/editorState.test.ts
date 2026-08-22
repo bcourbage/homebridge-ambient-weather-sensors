@@ -20,6 +20,7 @@ import * as path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
+  blockDigest,
   handleGetEditorState,
   handleGetVocabulary,
   type HandlerDeps,
@@ -108,6 +109,11 @@ describe('/editor-state — v2 configuration', () => {
     expect(dto.configMode).toBe('v2');
     expect(dto.editorAvailable).toBe(true); // PR C: save path live
     expect(dto.errors).toEqual([]);
+    // The session staleness token (beta.13 smoke F1): the canonical
+    // digest of the on-disk block this state renders, plus where it
+    // sits among the plugin's platform blocks.
+    expect(dto.baseDigest).toBe(blockDigest(V2_BLOCK));
+    expect(dto.blockIndex).toBe(0);
 
     const byDp = new Map(dto.rows.filter(r => r.stationMac === MAC).map(r => [r.dataPoint, r]));
     expect(byDp.get('tempf')).toMatchObject({ origin: 'global', name: 'Outdoor Temp', kind: 'temperature' });

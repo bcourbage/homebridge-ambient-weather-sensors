@@ -1457,6 +1457,34 @@ Tests: for every non-motion kind, submit an override with each of these fields; 
 
 ## 17. Decision log
 
+- **2026-08-21**: Session digest + verbatim persistence (beta.13
+  browser smoke, finding F1). The editor was unusable in the real HB
+  UI: every preview/save refused `stale-base`, because the client's
+  `base` came from `homebridge.getPluginConfig()`, which returns the
+  settings page's IN-MEMORY config — the object the standard schema
+  form mutates (it materializes defaults such as `includeOnly: []`),
+  so it never byte-matches disk. Reproduced against the installed
+  handlers: any added/removed key refuses. Two changes: (1)
+  `/editor-state` issues `baseDigest` (canonical digest of the on-disk
+  block it rendered) + `blockIndex`; preview and compose accept
+  `baseDigest` as the preferred staleness token (raw `base` remains
+  for callers holding a faithful copy), restoring the intended
+  semantics — "stale" now means the DISK changed since the session
+  loaded. (2) HB UI X applies `updatePluginConfig` by MERGE
+  (Object.assign), which silently resurrects keys a save removed —
+  a resurrected mirrored field stales the fresh mirror on arrival
+  (caught live by the new post-save receipt: compose returns
+  `nextConfigDigest`, and the editor compares it against the reloaded
+  state's `baseDigest`, warning on drift). Persistence is therefore an
+  empty `updatePluginConfig([])` (HB UI X truncates its copy) followed
+  by the real array (assigned verbatim into the now-empty slots) —
+  deterministic under every transport, unlike undefined-key tombstones
+  (which die in JSON transports; measured in the harness). Verified
+  end-to-end in `scripts/ui-harness/` — a dev-only rig that serves the
+  committed bundle against the real handlers with a faithful twin of
+  HB UI X's contamination, merge semantics, frozen injected body
+  style, and iframe height loop.
+
 - **2026-08-20 (c)**: Conversion journal is a directory of immutable
   entry files (PR #46 review round 3). The round-2 single-file journal
   guarded by an in-process promise mutex was proven unsafe across

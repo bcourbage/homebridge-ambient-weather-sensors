@@ -19,6 +19,7 @@
 ![npm downloads](https://img.shields.io/npm/dt/@bcourbage/homebridge-ambient-weather-sensors?style=for-the-badge)
 ![license](https://img.shields.io/npm/l/@bcourbage/homebridge-ambient-weather-sensors?style=for-the-badge)
 ![Discord](https://img.shields.io/discord/432663330281226270?style=for-the-badge&label=Discord)
+[![Sponsor](https://img.shields.io/badge/Sponsor-GitHub-db61a2?style=for-the-badge&logo=githubsponsors)](https://github.com/sponsors/bcourbage)
 
 </DIV>
 </SPAN>

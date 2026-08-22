@@ -17,7 +17,7 @@ import * as path from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { handleComposeSave, handlePreviewSave, syntheticProbeMac, type HandlerDeps } from '../../homebridge-ui/handlers';
+import { blockDigest, handleComposeSave, handlePreviewSave, syntheticProbeMac, type HandlerDeps } from '../../homebridge-ui/handlers';
 import { composeAndPersist, type OrchestratorDeps } from '../../homebridge-ui/saveOrchestrator';
 import { LEGACY_JOURNAL_DIR, LEGACY_SENSOR_FIELDS, LEGACY_SNAPSHOT_FILE, recognizeMirror } from '../../src/sensorMap/legacyMirror';
 
@@ -260,7 +260,7 @@ describe('post-compose persistence failures are INDETERMINATE (review #45 P1-2)'
       expect(result.error.message).toContain('MAY have been applied');
     }
     // update DID take effect before the failure — the effect-then-throw shape.
-    expect(client.events).toEqual(['compose', 'update']);
+    expect(client.events).toEqual(['compose', 'update', 'update']);
     expect(client.persistedArray).toBeDefined();
   });
 });
@@ -283,7 +283,7 @@ describe('no-bypass: preview → confirm → compose → update → save (PR C)'
     // 2-4. Confirmed save through the ONE route.
     const result = await composeAndPersist(client.deps, { ...payload, confirmDigest: preview.digest });
     expect(result.ok).toBe(true);
-    expect(client.events).toEqual(['compose', 'update', 'save']);
+    expect(client.events).toEqual(['compose', 'update', 'update', 'save']);
     expect(client.snapshotExistedAtUpdate).toBe(true); // durable BEFORE persistence
     // Verbatim persistence, synchronized mirror included.
     const persisted = client.persistedArray!.find(b => b.platform === 'AmbientWeatherSensors')!;
@@ -319,7 +319,7 @@ describe('ordering: snapshot is durable before the client persistence half runs'
 
     const result = await composeAndPersist(client.deps, {}); // pure migration
     expect(result.ok).toBe(true);
-    expect(client.events).toEqual(['compose', 'update', 'save']);
+    expect(client.events).toEqual(['compose', 'update', 'update', 'save']);
     expect(client.snapshotExistedAtUpdate).toBe(true);
     if (result.ok) {
       expect(result.snapshot).toBe('written');
@@ -742,7 +742,7 @@ describe('explicit-base orchestration (review #67 P1-3)', () => {
     const clonedBase = JSON.parse(JSON.stringify(LEGACY_BLOCK)) as Record<string, unknown>;
     const result = await composeAndPersist(client.deps, { base: clonedBase });
     expect(result.ok).toBe(true);
-    expect(client.events).toEqual(['compose', 'update', 'save']);
+    expect(client.events).toEqual(['compose', 'update', 'update', 'save']);
     const awsBlocks = (client.persistedArray ?? []).filter(b => b.platform === 'AmbientWeatherSensors');
     expect(awsBlocks).toHaveLength(1);
     expect(awsBlocks[0].configVersion).toBe(2);
@@ -897,5 +897,93 @@ describe('rollback is a two-way door (conversion journal)', () => {
     const entries = readJournalEntries(rig);
     expect(entries).toHaveLength(2);
     expect(entries[1].legacy.windSensors).toBe(false);
+  });
+});
+
+describe('session-digest staleness (beta.13 smoke F1: getPluginConfig is schema-form-mutated)', () => {
+  it('a contaminated base copy refuses stale-base while the SAME session succeeds via baseDigest', async () => {
+    const rig = makeRig(LEGACY_BLOCK);
+    discoveryStore(rig);
+    // The reproduced browser condition: HB UI X's settings form
+    // materializes schema defaults into the in-memory config that
+    // getPluginConfig() hands the client.
+    const contaminated = { ...LEGACY_BLOCK, includeOnly: [], stationFilter: [] };
+    const viaBase = await handlePreviewSave(rig.deps, { base: contaminated });
+    expect(viaBase.ok).toBe(false);
+    if (!viaBase.ok) {
+      expect(viaBase.error.code).toBe('stale-base');
+    }
+
+    const digest = blockDigest(LEGACY_BLOCK);
+    const viaDigest = await handlePreviewSave(rig.deps, { baseDigest: digest });
+    expect(viaDigest.ok).toBe(true);
+
+    const composed = await handleComposeSave(rig.deps, { baseDigest: digest });
+    expect(composed.ok).toBe(true);
+    if (composed.ok) {
+      expect(composed.nextConfigDigest).toBe(blockDigest(composed.nextConfig));
+    }
+  });
+
+  it('a digest that matches no on-disk block refuses stale-base; a matching digest wins over a stale base', async () => {
+    const rig = makeRig(LEGACY_BLOCK);
+    discoveryStore(rig);
+    const wrong = await handleComposeSave(rig.deps, { baseDigest: 'f'.repeat(64) });
+    expect(wrong.ok).toBe(false);
+    if (!wrong.ok) {
+      expect(wrong.error.code).toBe('stale-base');
+    }
+    // baseDigest takes precedence: a contaminated base alongside a
+    // valid digest must not re-introduce the refusal.
+    const both = await handlePreviewSave(rig.deps, {
+      base: { ...LEGACY_BLOCK, includeOnly: [] },
+      baseDigest: blockDigest(LEGACY_BLOCK),
+    });
+    expect(both.ok).toBe(true);
+  });
+
+  it('composeAndPersist via baseDigest+blockIndex succeeds against a contaminated array and persists the composed block verbatim', async () => {
+    const rig = makeRig(LEGACY_BLOCK);
+    discoveryStore(rig);
+    const client = makeClient(rig);
+    // Contaminate what getPluginConfig returns, exactly as the
+    // schema form does in the real page.
+    const realGet = client.deps.getPluginConfig.bind(client.deps);
+    client.deps.getPluginConfig = async () =>
+      (await realGet()).map(b => ({ ...b, includeOnly: [], stationFilter: [] }));
+
+    const result = await composeAndPersist(client.deps, {
+      baseDigest: blockDigest(LEGACY_BLOCK),
+      blockIndex: 0,
+    });
+    expect(result.ok).toBe(true);
+    expect(client.events).toEqual(['compose', 'update', 'update', 'save']);
+    if (!result.ok) {
+      return;
+    }
+
+    // The final update is the composed block VERBATIM: the preceding
+    // empty update truncated HB UI X's in-memory copy, so the merge
+    // cannot preserve the contamination or resurrect a key the
+    // compose deleted (which would stale the fresh mirror).
+    const persisted = (client.persistedArray ?? [])[0];
+    expect(persisted).toEqual(result.nextConfig);
+    expect('includeOnly' in persisted).toBe(false);
+    expect('stationFilter' in persisted).toBe(false);
+  });
+
+  it('an out-of-range blockIndex refuses before composing (zero writes)', async () => {
+    const rig = makeRig(LEGACY_BLOCK);
+    discoveryStore(rig);
+    const client = makeClient(rig);
+    const result = await composeAndPersist(client.deps, {
+      baseDigest: blockDigest(LEGACY_BLOCK),
+      blockIndex: 5,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('stale-base');
+    }
+    expect(client.events).toEqual([]);
   });
 });

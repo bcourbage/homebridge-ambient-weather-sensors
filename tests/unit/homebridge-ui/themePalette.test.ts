@@ -61,6 +61,15 @@ describe('custom-UI theme palette', () => {
     expect(script).not.toMatch(/style\s*=\s*\\?["'][^"']*(color|background)/i);
   });
 
+  it('the body follows a LIVE theme switch despite HB UI X\'s frozen injected body colors (beta.13 smoke F5)', () => {
+    // HB UI X injects the load-time theme's body colors as !important
+    // inline style and never re-sends them on a theme switch; these
+    // class-keyed higher-specificity rules must exist to out-rank it
+    // in BOTH directions.
+    expect(html).toMatch(/body\.dark-mode\s*\{[^}]*background-color:\s*#242424\s*!important[^}]*color:\s*#FFFFFF\s*!important/);
+    expect(html).toMatch(/body:not\(\.dark-mode\)\s*\{[^}]*background-color:\s*#FFFFFF\s*!important[^}]*color:\s*#000000\s*!important/);
+  });
+
   it('the static markup carries no inline color styles', () => {
     const markup = html.replace(/<style>[\s\S]*?<\/style>/, '').replace(/<script>[\s\S]*?<\/script>/, '');
     for (const m of markup.matchAll(/style\s*=\s*"([^"]*)"/g)) {

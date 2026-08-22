@@ -123,12 +123,25 @@ async function runSavePipeline(deps, p) {
     if (blocks.length === 0) {
         return { ok: false, error: { code: 'no-platform-block', message: 'No AmbientWeatherSensors platform block found in config.json.' } };
     }
-    // ---- 2. Locate the block being edited by matching the client's
-    //         base copy — which doubles as the stale-session check: if
-    //         the on-disk block no longer equals what the client is
-    //         editing, refuse rather than compose against a stale view.
-    const baseJson = canonicalJsonLocal(p.base);
-    const matches = blocks.filter(b => canonicalJsonLocal(b) === baseJson);
+    // ---- 2. Locate the block being edited — which doubles as the
+    //         stale-session check: if the on-disk block no longer equals
+    //         what the client loaded, refuse rather than compose against
+    //         a stale view. The PREFERRED token is `baseDigest`, the
+    //         canonical digest /editor-state issued for the block it
+    //         rendered: HB UI X's getPluginConfig() hands the client the
+    //         settings page's IN-MEMORY config, which the standard
+    //         schema form mutates (it materializes schema defaults such
+    //         as `includeOnly: []`), so a client-side block copy can
+    //         NEVER be trusted to byte-match disk (beta.13 smoke:
+    //         preview refused stale-base on an untouched config). The
+    //         digest ties the session to what the EDITOR loaded from
+    //         disk instead. A raw `base` block is still accepted for
+    //         callers that hold a faithful copy.
+    const wantDigest = typeof p.baseDigest === 'string' && p.baseDigest.length > 0;
+    const baseJson = wantDigest ? undefined : canonicalJsonLocal(p.base);
+    const matches = blocks.filter(b => (wantDigest
+        ? blockDigest(b) === p.baseDigest
+        : canonicalJsonLocal(b) === baseJson));
     if (matches.length === 0) {
         return {
             ok: false,
@@ -410,6 +423,7 @@ export async function handleComposeSave(deps, payload) {
     return {
         ok: true,
         nextConfig: composed.nextConfig,
+        nextConfigDigest: blockDigest(composed.nextConfig),
         snapshot,
         canonicalSensorMap: canonical,
         warnings: effectiveMap.warnings,
@@ -630,6 +644,8 @@ export async function handleGetEditorState(deps, payload) {
             configMode: 'safe-mode',
             v2FlagEnabled,
             editorAvailable: false,
+            baseDigest: blockDigest(block),
+            blockIndex: 0,
             version: deps.version,
             stations: [],
             authored: [],
@@ -654,6 +670,8 @@ export async function handleGetEditorState(deps, payload) {
             configMode: modeResult.mode,
             v2FlagEnabled,
             editorAvailable: false,
+            baseDigest: blockDigest(block),
+            blockIndex: 0,
             version: deps.version,
             stations: [],
             authored: [],
@@ -716,6 +734,8 @@ export async function handleGetEditorState(deps, payload) {
         configMode: modeResult.mode,
         v2FlagEnabled,
         editorAvailable: v2FlagEnabled, // PR C: save path live, gated on the v2 opt-in (review #45 P1-1)
+        baseDigest: blockDigest(block),
+        blockIndex: 0,
         version: deps.version,
         stations: stations.map(st => {
             const mac = st.macAddress.toUpperCase();
@@ -1019,4 +1039,12 @@ function canonicalJsonLocal(v) {
         return `{${entries.map(([k, val]) => `${JSON.stringify(k)}:${canonicalJsonLocal(val)}`).join(',')}}`;
     }
     return JSON.stringify(v);
+}
+/**
+ * Canonical digest of one platform block — the session staleness token
+ * issued by /editor-state (`baseDigest`) and verified by the save
+ * pipeline. Key order and absent-vs-undefined never change it.
+ */
+export function blockDigest(block) {
+    return createHash('sha256').update(canonicalJsonLocal(block)).digest('hex');
 }

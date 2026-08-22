@@ -17,6 +17,13 @@
      *   2. Every rule pairs background AND text color from the same
      *      palette (CSS variables below), so no element ever renders
      *      half ours / half theirs.
+     *   3. HB UI X additionally injects the LOAD-TIME theme's body
+     *      colors as an !important inline style it never re-sends, so
+     *      a live theme switch left the page ground frozen at the old
+     *      theme while our panels followed. The two body rules after
+     *      the palette definitions out-rank it (class > element
+     *      specificity, both !important) and key on the live-mirrored
+     *      theme classes; the color values are HB UI X's own.
      */
     #awn {
       --fg: #1a1a1a; --fg-sub: #666; --fg-empty: #6e6e6e;
@@ -43,6 +50,9 @@
       --btn-bg: #2d2f33; --btn-fg: #e8eaed; --btn-edge: #5f6368; --btn-hover: #3c4043;
     }
     body { margin: 0; padding: 16px; }
+    /* Header point 3: keep the page ground on the LIVE theme. */
+    body.dark-mode { background-color: #242424 !important; color: #FFFFFF !important; }
+    body:not(.dark-mode) { background-color: #FFFFFF !important; color: #000000 !important; }
     #awn h1   { font-size: 1.25rem; margin: 24px 0 4px 0; color: var(--fg); }
     #awn h2   { font-size: 1.05rem; margin: 20px 0 6px 0; border-bottom: 1px solid var(--rule); padding-bottom: 4px; color: var(--fg); }
     /* Subordinate headings inside a section (Bruno's beta.11 feedback:
@@ -123,7 +133,7 @@
     <awn-root></awn-root>
   </div>
   <!-- awn-app:assets:begin -->
-  <script type="module" src="app/main-MHFQ33HJ.js"></script>
+  <script type="module" src="app/main-O6TDDVXL.js"></script>
   <!-- awn-app:assets:end -->
 
   <script>

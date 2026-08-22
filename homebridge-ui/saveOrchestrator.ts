@@ -45,11 +45,27 @@ export interface ComposeAndPersistArgs {
   /** Optional fresh AWN station list, when one is genuinely available. */
   liveStations?: Array<{ macAddress: string; name?: string }>;
   /**
-   * The config block being edited. Omit when exactly one
-   * AmbientWeatherSensors block exists (the common case) — multi-block
-   * (multi-Home) setups must pass the block their editor loaded.
+   * The config block being edited. Only valid for callers holding a
+   * FAITHFUL copy of the on-disk block (tests, scripts). A browser
+   * client must pass `baseDigest` + `blockIndex` from /editor-state
+   * instead: getPluginConfig() returns HB UI X's schema-form-mutated
+   * in-memory copy, which never byte-matches disk. Omit both when
+   * exactly one AmbientWeatherSensors block exists and no session
+   * token is available.
    */
   base?: Record<string, unknown>;
+  /**
+   * PREFERRED session token (beta.13 smoke F1): the `baseDigest` the
+   * editor's /editor-state load returned. The server verifies it
+   * against the current on-disk block; pass `blockIndex` with it.
+   */
+  baseDigest?: string;
+  /**
+   * Position of the edited block among the plugin's platform blocks
+   * (from /editor-state) — where the composed block is written back
+   * within the getPluginConfig() array. Required with `baseDigest`.
+   */
+  blockIndex?: number;
   /**
    * The /preview-save confirmation digest (PR C / finding 5). The
    * server REQUIRES it for saves with structural consequences and
@@ -66,8 +82,22 @@ export async function composeAndPersist(
   const cfgArray = await deps.getPluginConfig();
   const blocks = cfgArray.filter(b => b && b.platform === 'AmbientWeatherSensors');
 
+  const digestSession = args.baseDigest !== undefined;
+  if (digestSession && (
+    typeof args.baseDigest !== 'string' || args.baseDigest.length === 0
+    || !Number.isInteger(args.blockIndex) || (args.blockIndex as number) < 0
+    || (args.blockIndex as number) >= cfgArray.length)) {
+    return {
+      ok: false,
+      error: {
+        code: 'stale-base',
+        message: 'The editor session token no longer matches the plugin config layout; reload and retry.',
+      },
+    };
+  }
+
   let base = args.base;
-  if (base === undefined) {
+  if (!digestSession && base === undefined) {
     if (blocks.length !== 1) {
       return {
         ok: false,
@@ -92,29 +122,39 @@ export async function composeAndPersist(
     }
   }
 
-  // Locate the edited block in the FRESH config array by deep equality
-  // (review #67 P1-3): a separately deserialized base is never
-  // reference-equal, and indexOf would silently APPEND the composed
-  // block as a duplicate. The server enforces the same exactly-one
-  // deep-match contract against disk.
-  const matchIndexes = cfgArray
-    .map((b, i) => (deepJson(b) === deepJson(base) ? i : -1))
-    .filter(i => i >= 0);
-  if (matchIndexes.length !== 1) {
-    return {
-      ok: false,
-      error: {
-        code: matchIndexes.length === 0 ? 'stale-base' : 'ambiguous-platform-block',
-        message: matchIndexes.length === 0
-          ? 'The block being edited no longer matches the current plugin config; reload and retry.'
-          : `${matchIndexes.length} identical blocks match the base; cannot determine which to replace.`,
-      },
-    };
+  // Locate where the composed block will be WRITTEN BACK in the
+  // getPluginConfig() array. In a digest session the position is the
+  // /editor-state blockIndex (the array only serves as the write
+  // vehicle — its CONTENT is form-mutated and untrustworthy, which is
+  // exactly why the digest exists; the server does the real staleness
+  // check against disk). In the legacy base flow the block is located
+  // by deep equality (review #67 P1-3): a separately deserialized
+  // base is never reference-equal, and indexOf would silently APPEND
+  // the composed block as a duplicate.
+  let index: number;
+  if (digestSession) {
+    index = args.blockIndex as number;
+  } else {
+    const matchIndexes = cfgArray
+      .map((b, i) => (deepJson(b) === deepJson(base) ? i : -1))
+      .filter(i => i >= 0);
+    if (matchIndexes.length !== 1) {
+      return {
+        ok: false,
+        error: {
+          code: matchIndexes.length === 0 ? 'stale-base' : 'ambiguous-platform-block',
+          message: matchIndexes.length === 0
+            ? 'The block being edited no longer matches the current plugin config; reload and retry.'
+            : `${matchIndexes.length} identical blocks match the base; cannot determine which to replace.`,
+        },
+      };
+    }
+    index = matchIndexes[0];
   }
-  const index = matchIndexes[0];
 
   const result = await deps.request('/compose-save', {
-    base,
+    base: digestSession ? undefined : base,
+    baseDigest: digestSession ? args.baseDigest : undefined,
     proposal: args.proposal,
     cachedAccessoryUniqueIds,
     liveStations: args.liveStations,
@@ -134,6 +174,19 @@ export async function composeAndPersist(
   // before retrying. (The legacy snapshot is already durable either
   // way; a retry re-verifies it.)
   try {
+    // HB UI X applies updatePluginConfig by MERGING each submitted
+    // block into its in-memory copy (Object.assign), so a key the
+    // composed config REMOVED — a legacy field the mirror omits, or a
+    // schema default the settings form materialized — would silently
+    // survive into the persisted file, and a resurrected mirrored
+    // field makes the freshly written mirror hash STALE on arrival
+    // (caught by the harness receipt check). The same code path
+    // TRUNCATES its copy to the submitted array length and assigns
+    // submitted blocks directly into empty slots, so an empty update
+    // followed by the real one is a verbatim replacement under every
+    // transport. The clear is in-memory only; nothing reaches disk
+    // before savePluginConfig.
+    await deps.updatePluginConfig([]);
     await deps.updatePluginConfig(nextArray);
   } catch (e) {
     return {
