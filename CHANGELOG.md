@@ -9,7 +9,7 @@ entries short and user-facing.
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/
 
-## [Unreleased]
+## [2.0.0-beta.14] — 2026-08-21
 
 ### Fixed
 
