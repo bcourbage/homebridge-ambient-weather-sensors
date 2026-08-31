@@ -18,7 +18,7 @@
  * and theme variables (light + dark) apply to it as-is. Component
  * styles below add only what the page doesn't define.
  */
-import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, inject, signal, viewChild, type ElementRef } from '@angular/core';
 import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
 
 import { DraftStore } from './draft-store';
@@ -45,14 +45,18 @@ interface StationGroup {
   imports: [ReactiveFormsModule],
   styles: `
     h3 { font-size: 0.95rem; margin: 16px 0 4px 0; }
-    .origin {
-      display: inline-block; padding: 1px 7px; border-radius: 999px;
-      font-size: 0.72rem; font-weight: 600; letter-spacing: 0.02em;
-      background: var(--code-bg); color: var(--fg-sub);
+    /* Provenance dot (Bruno's beta.14 table feedback): the Layer
+       column earned its space only for the few non-default rows, so
+       layer provenance is a small dot on the data point instead —
+       green = a global setting, blue = a station-scoped exception;
+       the tooltip names it. Battery moved to the row editor and the
+       data-point tooltip the same round. */
+    .layer-dot {
+      display: inline-block; width: 7px; height: 7px; border-radius: 999px;
+      margin-left: 5px; vertical-align: 1px;
     }
-    .origin.station { background: var(--info-bg); color: var(--info-fg); }
-    .origin.global  { background: var(--on-bg);   color: var(--on-fg); }
-    .origin.unrecognized { background: var(--warn-bg); color: var(--warn-fg); }
+    .layer-dot.global  { background: var(--on-fg); }
+    .layer-dot.station { background: var(--info-fg); }
     .station-meta { color: var(--fg-sub); font-size: 0.85rem; font-weight: 400; margin-left: 8px; }
     .muted { color: var(--fg-empty); }
     .field-error { color: var(--error-fg); background: var(--error-bg); padding: 2px 8px; border-radius: 4px; font-size: 0.82rem; margin-right: 12px; }
@@ -71,10 +75,15 @@ interface StationGroup {
       padding: 10px 14px;
     }
     .editor-form label { display: inline-flex; align-items: center; gap: 6px; margin: 4px 16px 4px 0; font-size: 0.88rem; }
+    .row-facts { display: inline-block; margin-left: 12px; font-size: 0.82rem; }
     .editor-form input[type="text"], .editor-form input[type="number"], .editor-form select {
       background: var(--btn-bg); color: var(--btn-fg);
       border: 1px solid var(--btn-edge); border-radius: 4px; padding: 4px 8px;
     }
+    /* Dialog-shaped footer: Use defaults on the left (the one action
+       that changes saved configuration), OK / Cancel on the right. */
+    .editor-footer { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+    .editor-footer .grow { flex: 1; }
     .change-kind {
       display: inline-block; min-width: 64px; text-align: center;
       padding: 1px 7px; border-radius: 999px; font-size: 0.72rem; font-weight: 600;
@@ -88,15 +97,18 @@ interface StationGroup {
       background: var(--warn-bg); color: var(--warn-fg);
     }
     .change-row { padding: 4px 0; border-bottom: 1px solid var(--row-rule); font-size: 0.88rem; }
-    .modal-backdrop {
-      position: fixed; inset: 0; background: rgba(0, 0, 0, 0.45);
-      display: flex; align-items: center; justify-content: center; z-index: 1000;
-    }
-    .modal {
+    /* In-flow confirmation card (beta.14 smoke #4): a fixed overlay
+       is unusable inside HB UI X's content-height iframe. The class
+       name must stay OUT of Bootstrap's namespace: HB UI X mirrors
+       its stylesheets into this iframe, and Bootstrap's ".modal"
+       rule (display:none; position:fixed) hid this card entirely
+       while confirmOpen disabled every control (beta.14 smoke #6).
+       display:block is set explicitly as a second line of defense. */
+    .confirm-card {
+      display: block;
       background: var(--panel-bg); color: var(--fg);
-      border: 1px solid var(--rule); border-radius: 8px;
-      padding: 16px 20px; max-width: 560px; width: 90%;
-      max-height: 70vh; overflow-y: auto;
+      border: 2px solid var(--warn-edge); border-radius: 8px;
+      padding: 16px 20px; max-width: 640px; margin: 12px 0;
     }
     /* The row table is wider than the panel on most screens. It
        scrolls horizontally in its own container, and the action
@@ -104,14 +116,46 @@ interface StationGroup {
        visible (beta.13 smoke F2 - it rendered past the clipped
        right edge and looked absent). The pinned cells need a solid
        background or scrolled content bleeds through them. */
+    /* Density: the page's default 6px/10px cell padding made the
+       table wider than the panel; tighter cells remove the horizontal
+       scrollbar on typical widths (the scroll container stays as the
+       fallback for narrow windows). */
     .table-scroll { overflow-x: auto; }
+    /* Fixed layout: column widths come from the header row, so an
+       opened editor row cannot reflow them (Bruno's beta.14 feedback:
+       the table visibly changed width on Edit). */
+    .table-scroll table { table-layout: fixed; }
+    th.dp { width: 22%; }
+    th.name { width: auto; }
+    th.kind-col { width: 52px; }
+    th.units { width: 14%; }
+    .table-scroll th, .table-scroll td { padding: 5px 7px; }
+    .table-scroll td { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .table-scroll td.editor-form { overflow: visible; white-space: normal; }
+    .unit-converted {
+      color: var(--info-fg); background: var(--info-bg);
+      padding: 0 5px; border-radius: 4px;
+    }
+    th.state, td.state { width: 22px; padding-right: 2px; }
+    .state-icon { width: 14px; height: 14px; vertical-align: -2px; }
+    .state-icon.on  { color: var(--on-fg); }
+    .state-icon.off { color: var(--fg-empty); }
+    td.kind { white-space: nowrap; }
+    .kind-icon { width: 15px; height: 15px; vertical-align: -3px; color: var(--fg-sub); }
+    .kind-badge {
+      display: inline-block; padding: 0 5px; border-radius: 4px;
+      font-size: 0.72rem; font-weight: 600; letter-spacing: 0.02em;
+      background: var(--code-bg); color: var(--fg-sub);
+    }
     th.actions, td.actions {
       position: sticky; right: 0;
       background: var(--page-bg);
       border-left: 1px solid var(--rule);
       text-align: right;
+      width: 84px;
     }
     th.actions { background: var(--panel-bg); }
+    td.actions button { padding: 3px 0; width: 62px; text-align: center; }
   `,
   template: `
     <h2>Sensor map <span class="station-meta">draft editor preview</span></h2>
@@ -155,12 +199,12 @@ interface StationGroup {
       @if (state()!.rows.length > 0) {
         <div class="draft-bar">
           @if (draftCount() > 0) {
-            <span class="grow"><strong>{{ draftCount() }}</strong> draft {{ draftCount() === 1 ? 'change' : 'changes' }}. Nothing is saved yet. Preview shows what saving would do without writing anything.</span>
+            <span class="grow"><strong>{{ draftCount() }}</strong> draft {{ draftCount() === 1 ? 'change' : 'changes' }}, not saved yet.</span>
           } @else {
-            <span class="grow">No draft changes. Edit a row below to start.</span>
+            <span class="grow">No draft changes yet.</span>
           }
-          <button type="button" (click)="preview()" [disabled]="draftCount() === 0 || previewPending() || editFormInvalid() || saving() || reloadRequired()">Preview changes</button>
-          <button type="button" (click)="discardAll()" [disabled]="draftCount() === 0 || saving() || reloadRequired()">Discard drafts</button>
+          <button type="button" (click)="preview()" [disabled]="draftCount() === 0 || previewPending() || editFormInvalid() || saving() || confirmOpen() || reloadRequired()">Preview changes</button>
+          <button type="button" (click)="discardAll()" [disabled]="draftCount() === 0 || saving() || confirmOpen() || reloadRequired()">Discard drafts</button>
         </div>
       }
 
@@ -209,18 +253,19 @@ interface StationGroup {
             <div class="draft-bar">
               <span class="grow">
                 @if (pr.structuralChangeCount > 0) {
-                  Saving will ask for confirmation of the {{ pr.structuralChangeCount }} registration change(s) above.
+                  Saving will ask for confirmation of the {{ pr.structuralChangeCount }} registration {{ pr.structuralChangeCount === 1 ? 'change' : 'changes' }} above.
                 } @else {
                   Saving applies these changes without registering or deregistering any accessory.
                 }
               </span>
-              <button type="button" (click)="saveClicked(pr)" [disabled]="saving() || reloadRequired()">Save changes</button>
+              <button type="button" (click)="saveClicked(pr)" [disabled]="saving() || confirmOpen() || reloadRequired()">Save changes</button>
             </div>
           }
         } @else {
           <div class="banner safe-mode">Preview refused ({{ pr.error.code }}): {{ pr.error.message }}</div>
         }
       }
+      <div #saveOutcome>
       @if (saving()) {
         <p class="empty">Saving…</p>
       }
@@ -253,15 +298,22 @@ interface StationGroup {
           <button type="button" (click)="reloadPage()">Reload now</button>
         </div>
       }
+      </div>
       @if (reloadRequired()) {
         <div class="banner">
           <span>Editing is locked until this page is reloaded: the saved state is uncertain, so drafts and previews here may no longer match the configuration on disk. Reload, inspect the configuration, and only then retry.</span>
           <button type="button" (click)="reloadPage()">Reload now</button>
         </div>
       }
+      <!-- Rendered IN FLOW, not as a fixed overlay: inside HB UI X's
+           content-height iframe, position:fixed centers on the FULL
+           iframe box, which put the panel far outside the visible
+           window (beta.14 smoke #4 - the user saw only the grey
+           backdrop). The panel appears where the user just clicked
+           Save and scrolls itself into view; every other control
+           disables while it is open. -->
       @if (confirmOpen() && previewResult()?.ok) {
-        <div class="modal-backdrop">
-          <div class="modal">
+          <div class="confirm-card" #confirmPanel>
             <h3>Confirm registration changes</h3>
             <p>These accessories will register, deregister, or re-register when saved. A re-registered accessory may need its HomeKit room assignment redone; a deregistered one leaves HomeKit.</p>
             @for (c of structuralChanges(); track $index) {
@@ -274,11 +326,10 @@ interface StationGroup {
             }
             <div class="draft-bar">
               <span class="grow"></span>
-              <button type="button" (click)="confirmSave()" [disabled]="saving()">Confirm save</button>
+              <button type="button" (click)="confirmSave()" [disabled]="saving()">{{ saving() ? 'Saving…' : 'Confirm save' }}</button>
               <button type="button" (click)="confirmOpen.set(false)">Cancel</button>
             </div>
           </div>
-        </div>
       }
 
       @if (groups().length === 0) {
@@ -287,55 +338,83 @@ interface StationGroup {
       @for (group of groups(); track group.mac) {
         <h3>
           {{ group.title }}
-          <span class="station-meta"><code>{{ group.mac }}</code> · {{ group.source }}</span>
+          <span class="station-meta"><code [title]="'station learned from: ' + group.source">{{ group.mac }}</code></span>
         </h3>
         <div class="table-scroll">
         <table>
           <thead>
             <tr>
-              <th>Data point</th><th>Name</th><th>Kind</th><th>Units</th>
-              <th>Enabled</th><th>Layer</th><th>Battery</th><th class="actions"></th>
+              <th class="state"></th>
+              <th class="dp">Data point</th><th class="name">Name</th><th class="kind-col">Kind</th><th class="units">Units</th>
+              <th class="actions"></th>
             </tr>
           </thead>
           <tbody>
             @for (row of group.rows; track row.dataPoint) {
               <tr>
-                <td>
-                  @if (isDirty(row)) { <span class="dirty-dot" title="draft edits"></span> }
-                  <code>{{ row.dataPoint }}</code>
-                </td>
-                <td>{{ row.name ?? '' }}</td>
-                <td>
-                  @if (row.kind === 'unrecognized') {
-                    <span class="muted">unrecognized</span>
-                  } @else {
-                    {{ row.kind }}<span class="muted"> · {{ row.measurement }}</span>
+                <td class="state" [title]="stateTitle(row)">
+                  @if (row.kind !== 'unrecognized') {
+                    @if (row.enabled) {
+                      <svg class="state-icon on" viewBox="0 0 16 16" role="img" aria-label="enabled"><circle cx="8" cy="8" r="7" fill="currentColor"/><path d="M4.8 8.3l2.1 2.1 4.3-4.6" stroke="var(--page-bg)" stroke-width="1.8" fill="none" stroke-linecap="round"/></svg>
+                    } @else {
+                      <svg class="state-icon off" viewBox="0 0 16 16" role="img" aria-label="disabled"><circle cx="8" cy="8" r="6.2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M5.2 8h5.6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+                    }
                   }
                 </td>
-                <td>{{ unitCell(row) }}</td>
-                <td>{{ row.kind === 'unrecognized' ? '—' : (row.enabled ? 'on' : 'off') }}</td>
-                <td><span class="origin {{ row.origin }}">{{ row.origin }}</span></td>
                 <td>
-                  @if (row.batteryField) {
-                    <code>{{ row.batteryField }}</code>
+                  @if (isDirty(row)) { <span class="dirty-dot" title="draft edits"></span> }
+                  <code [title]="row.batteryField ? 'battery: ' + row.batteryField : ''">{{ row.dataPoint }}</code>
+                  @if (row.origin === 'global' || row.origin === 'station') {
+                    <span class="layer-dot {{ row.origin }}" [title]="row.origin + ' layer'"></span>
+                  }
+                </td>
+                <td>{{ row.name ?? '' }}</td>
+                <td class="kind" [title]="kindTitle(row)">
+                  @switch (row.kind) {
+                    @case ('temperature') {
+                      <svg class="kind-icon" viewBox="0 0 16 16" role="img" [attr.aria-label]="kindTitle(row)"><path d="M6.8 2.5a1.7 1.7 0 013.4 0v6a3.4 3.4 0 11-3.4 0z" fill="none" stroke="currentColor" stroke-width="1.4"/><circle cx="8.5" cy="11.4" r="1.5" fill="currentColor"/></svg>
+                    }
+                    @case ('humidity') {
+                      <svg class="kind-icon" viewBox="0 0 16 16" role="img" [attr.aria-label]="kindTitle(row)"><path d="M8 2.2S3.8 7 3.8 10a4.2 4.2 0 108.4 0C12.2 7 8 2.2 8 2.2z" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>
+                    }
+                    @case ('light') {
+                      <svg class="kind-icon" viewBox="0 0 16 16" role="img" [attr.aria-label]="kindTitle(row)"><circle cx="8" cy="8" r="3" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M8 1.4v2M8 12.6v2M1.4 8h2M12.6 8h2M3.3 3.3l1.4 1.4M11.3 11.3l1.4 1.4M12.7 3.3l-1.4 1.4M4.7 11.3l-1.4 1.4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+                    }
+                    @case ('motion') {
+                      <svg class="kind-icon" viewBox="0 0 16 16" role="img" [attr.aria-label]="kindTitle(row)"><path d="M1.5 8h3l2-4.5 3 9 2-4.5h3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round"/></svg>
+                    }
+                    @case ('unrecognized') {
+                      <span class="kind-badge muted">?</span>
+                    }
+                    @default {
+                      <span class="kind-badge">{{ kindBadge(row.kind) }}</span>
+                    }
+                  }
+                </td>
+                <td>
+                  @if (isConverted(row)) {
+                    <span class="unit-converted" [title]="'converted from ' + unitLabel(row.sourceUnit)">{{ unitLabel(row.displayUnit) }}</span>
                   } @else {
-                    <span class="muted">—</span>
+                    {{ unitCell(row) }}
                   }
                 </td>
                 <td class="actions">
-                  @if (row.kind !== 'unrecognized') {
-                    <button type="button" (click)="toggleEdit(row)" [disabled]="saving() || reloadRequired()">{{ isExpanded(row) ? 'Close' : 'Edit' }}</button>
+                  <!-- The editor's own footer owns closing (OK /
+                       Cancel), so the column shows nothing while the
+                       row is open. -->
+                  @if (row.kind !== 'unrecognized' && !isExpanded(row)) {
+                    <button type="button" (click)="toggleEdit(row)" [disabled]="saving() || confirmOpen() || reloadRequired()">Edit</button>
                   }
                 </td>
               </tr>
               @if (isExpanded(row)) {
                 <tr>
-                  <td colspan="8" class="editor-form">
+                  <td colspan="6" class="editor-form" (mousedown)="formPointerDown($event)">
                     <form [formGroup]="editForm!">
                       <label><input type="checkbox" formControlName="enabled" /> Enabled</label>
                       <label>Name <input type="text" formControlName="name" /></label>
                       @if (editForm!.get('name')?.invalid) {
-                        <span class="field-error">Name is required. Restore a value or use Reset row.</span>
+                        <span class="field-error">Name is required. Restore a value or choose Cancel.</span>
                       }
                       @if (displayUnitOptions(row).length > 0) {
                         <label>Display unit
@@ -349,7 +428,7 @@ interface StationGroup {
                       @if (row.kind === 'motion') {
                         <label>Threshold <input type="number" step="any" formControlName="threshold" /></label>
                         @if (editForm!.get('threshold')?.invalid) {
-                          <span class="field-error">Threshold is required for this row. Restore a value or use Reset row.</span>
+                          <span class="field-error">Threshold is required for this row. Restore a value or choose Cancel.</span>
                         }
                         <label>Trigger
                           <select formControlName="triggerDirection">
@@ -358,12 +437,25 @@ interface StationGroup {
                           </select>
                         </label>
                       }
-                      @if (row.origin === 'global' || row.origin === 'station') {
-                        <button type="button" (click)="removeOverride(row)">Remove override</button>
-                      }
-                      @if (isDirty(row)) {
-                        <button type="button" (click)="resetRow(row)">Reset row</button>
-                      }
+                      <!-- Read-only row facts that left the table
+                           (Bruno's beta.14 column trim). -->
+                      <span class="muted row-facts">
+                        {{ kindTitle(row) }}@if (row.batteryField) {, battery <code>{{ row.batteryField }}</code>}, {{ row.origin }} layer
+                      </span>
+                      <!-- Dialog-shaped footer (Bruno's row-editor
+                           feedback): OK keeps this row's drafts and
+                           collapses; Cancel discards them and
+                           collapses; Use defaults drafts removal of
+                           the row's authored settings (previewable
+                           and savable like any edit). -->
+                      <div class="editor-footer">
+                        @if (row.origin === 'global' || row.origin === 'station') {
+                          <button type="button" (click)="useDefaults(row)" [disabled]="saving() || confirmOpen() || reloadRequired()">Use defaults</button>
+                        }
+                        <span class="grow"></span>
+                        <button type="button" (click)="toggleEdit(row)" [disabled]="saving() || confirmOpen() || reloadRequired()">OK</button>
+                        <button type="button" (click)="cancelRow(row)" [disabled]="saving() || confirmOpen() || reloadRequired()">Cancel</button>
+                      </div>
                     </form>
                   </td>
                 </tr>
@@ -534,7 +626,7 @@ export class AwnRootComponent {
     // never a silent no-draft. `name` is always required; `threshold`
     // is required exactly when the row currently displays one (a
     // threshold-less row may stay blank; removing an authored value
-    // is Remove override's job, and a default-sourced value cannot be
+    // is Use defaults' job, and a default-sourced value cannot be
     // removed by an override at all).
     this.editForm = this.fb.group({
       enabled: [current('enabled') === true],
@@ -586,7 +678,7 @@ export class AwnRootComponent {
     this.bump();
   }
 
-  protected removeOverride(row: EditorRowDto): void {
+  protected useDefaults(row: EditorRowDto): void {
     this.store.removeOverride(row);
     // Close the form: its controls show pre-removal values, and a
     // later form event would resurrect the override as patches.
@@ -596,7 +688,7 @@ export class AwnRootComponent {
     this.bump();
   }
 
-  protected resetRow(row: EditorRowDto): void {
+  protected cancelRow(row: EditorRowDto): void {
     this.store.resetRow(row);
     // Close the form (review #43 P1-3): the controls still hold the
     // edited values, and the next form event would re-draft them.
@@ -665,9 +757,18 @@ export class AwnRootComponent {
    * of the preview the user is looking at — the server re-derives and
    * verifies it before anything is written.
    */
+  /** The in-flow confirmation card, for scroll-into-view on open. */
+  private readonly confirmPanel = viewChild<ElementRef<HTMLElement>>('confirmPanel');
+  /** The save-outcome banner area, brought into view after a save. */
+  private readonly saveOutcome = viewChild<ElementRef<HTMLElement>>('saveOutcome');
+
   protected saveClicked(pr: Extract<PreviewResultDto, { ok: true }>): void {
     if (pr.structuralChangeCount > 0) {
       this.confirmOpen.set(true);
+      // Bring the just-rendered card into the visible window: the
+      // scroll propagates through the same-origin iframe to HB UI X's
+      // scroll container (beta.14 smoke #4).
+      setTimeout(() => this.confirmPanel()?.nativeElement?.scrollIntoView?.({ block: 'center' }), 0);
       return;
     }
     void this.doSave(pr.digest);
@@ -685,6 +786,10 @@ export class AwnRootComponent {
     this.saveResult.set(null);
     this.postSaveDrift.set(false);
     this.settingsRestoreFailed.set(false);
+    // Immediate feedback where it will stay: the outcome area shows
+    // "Saving…" now and the result later (beta.14 smoke: a save whose
+    // only signs lived off-screen read as "did nothing").
+    setTimeout(() => this.saveOutcome()?.nativeElement?.scrollIntoView?.({ block: 'center' }), 0);
     // Lock editing for the duration (review #45 P2-4): the open form
     // closes (no form events can draft mid-save) and Edit/Preview/
     // Discard disable via saving() — a slow save can never race a
@@ -735,6 +840,11 @@ export class AwnRootComponent {
     } finally {
       this.saving.set(false);
       this.confirmOpen.set(false);
+      // The outcome banners render near the top of the editor while
+      // the user is usually scrolled at the table (beta.14 smoke:
+      // "save does nothing" was a refusal banner far off-screen).
+      // Bring the outcome into the visible window, whatever it says.
+      setTimeout(() => this.saveOutcome()?.nativeElement?.scrollIntoView?.({ block: 'center' }), 0);
     }
   }
 
@@ -745,6 +855,48 @@ export class AwnRootComponent {
   /** What a structural change DOES to the accessory (review #43 P1-1). */
   protected structuralVerb(change: 'added' | 'removed' | 'modified'): string {
     return change === 'added' ? 'registers' : change === 'removed' ? 'deregisters' : 're-registers';
+  }
+
+  /**
+   * Focus-scroll mitigation (beta.14 smoke): when a dropdown or input
+   * in the row editor is clicked, Safari scrolls the newly focused
+   * control toward the center of the scrollable ancestor — HB UI X's
+   * settings modal — yanking the page up or down. Focusing the
+   * control WITHOUT scrolling before the native focus-on-click runs
+   * makes the browser's own focus pass a no-op.
+   */
+  protected formPointerDown(ev: Event): void {
+    const t = ev.target as (HTMLElement & { focus(o?: { preventScroll?: boolean }): void }) | null;
+    if (t && (t.tagName === 'SELECT' || t.tagName === 'INPUT')) {
+      t.focus({ preventScroll: true });
+    }
+  }
+
+  /** Tooltip + accessible label for the leading state icon. */
+  protected stateTitle(row: EditorRowDto): string {
+    return row.kind === 'unrecognized' ? 'unrecognized field' : (row.enabled ? 'enabled' : 'disabled');
+  }
+
+  /** Tooltip + accessible label for the Kind icon or badge. */
+  protected kindTitle(row: EditorRowDto): string {
+    if (row.kind === 'unrecognized') {
+      return 'unrecognized field';
+    }
+    // Kind and measurement often coincide (temperature, humidity);
+    // repeating them read as noise, and bullet separators are out
+    // (Bruno's beta.14 feedback).
+    return row.kind === row.measurement ? row.kind : `${row.kind} (${row.measurement})`;
+  }
+
+  /** Compact badge text for initialism kinds with no natural glyph. */
+  protected kindBadge(kind: string): string {
+    const badges: Record<string, string> = {
+      'co2': 'CO₂',
+      'co': 'CO',
+      'air-quality-pm25': 'PM2.5',
+      'air-quality-pm10': 'PM10',
+    };
+    return badges[kind] ?? kind;
   }
 
   protected changeSummary(before: EditorRowDto, after: EditorRowDto): string {
@@ -770,7 +922,7 @@ export class AwnRootComponent {
     return parts.join(', ');
   }
 
-  private unitLabel(u: string | undefined): string {
+  protected unitLabel(u: string | undefined): string {
     return u === undefined ? '—' : (this.unitLabels().get(u) ?? u);
   }
 
@@ -778,9 +930,11 @@ export class AwnRootComponent {
     if (!row.sourceUnit) {
       return '—';
     }
-    const label = (u: string): string => this.unitLabels().get(u) ?? u;
-    return row.displayUnit && row.displayUnit !== row.sourceUnit
-      ? `${label(row.sourceUnit)} → ${label(row.displayUnit)}`
-      : label(row.sourceUnit);
+    return this.unitLabel(row.sourceUnit);
+  }
+
+  /** A row whose HomeKit display unit differs from the AWN source unit. */
+  protected isConverted(row: EditorRowDto): boolean {
+    return !!row.sourceUnit && !!row.displayUnit && row.displayUnit !== row.sourceUnit;
   }
 }

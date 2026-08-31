@@ -185,8 +185,26 @@ describe('AwnRootComponent (TestBed, jsdom)', () => {
     expect(el.querySelectorAll('table')).toHaveLength(2);
     const text = el.textContent!;
     expect(text).toContain('°F');               // vocabulary label, not the unit code
-    expect(text).toContain('mph → ft/sec');     // source → display conversion
-    expect(text).toContain('battout');
+    // Converted rows show the unit HomeKit DISPLAYS, highlighted,
+    // with the source unit in the tooltip (Bruno's beta.14 feedback).
+    expect(text).toContain('ft/sec');     // display unit of the conversion
+    const converted = el.querySelector('.unit-converted') as HTMLElement;
+    expect(converted).not.toBeNull();
+    expect(converted.getAttribute('title')).toBe('converted from mph');
+    // Battery + layer left the table (Bruno's beta.14 column trim):
+    // battery lives in the data-point tooltip and the row editor; the
+    // layer is a provenance dot for non-default rows.
+    expect(text).not.toContain('battout');
+    const tempfCode = [...el.querySelectorAll('td code')].find(c => c.textContent === 'tempf')!;
+    expect(tempfCode.getAttribute('title')).toBe('battery: battout');
+    expect(el.querySelectorAll('.layer-dot.global')).toHaveLength(1);   // tempf
+    expect(el.querySelectorAll('.layer-dot.station')).toHaveLength(1);  // windspeedmph
+    // Opening a row's editor shows the demoted facts.
+    const openBtn = [...el.querySelectorAll('tr')].find(tr => tr.textContent!.includes('tempf'))!.querySelector('button') as HTMLButtonElement;
+    openBtn.click();
+    fixture.detectChanges();
+    expect(el.querySelector('.row-facts')!.textContent).toContain('battery battout');
+    expect(el.querySelector('.row-facts')!.textContent).toContain('global layer');
     expect(ipc.requests.map(r => r.path).sort()).toEqual(['/editor-state', '/vocabulary']);
   });
 
@@ -307,7 +325,7 @@ describe('draft editing + preview (PR B — no persistence)', () => {
 
     typeInto(el.querySelector('.editor-form input[type="text"]') as HTMLInputElement, 'Patio Temp');
     await settle(fixture);
-    expect(el.textContent).toContain('1 draft change.');
+    expect(el.textContent).toContain('1 draft change, not saved yet.');
 
     ([...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement).click();
     await settle(fixture);
@@ -372,7 +390,7 @@ describe('draft editing + preview (PR B — no persistence)', () => {
 
     ([...el.querySelectorAll('button')].find(b => b.textContent === 'Discard drafts') as HTMLButtonElement).click();
     await settle(fixture);
-    expect(el.textContent).toContain('No draft changes.');
+    expect(el.textContent).toContain('No draft changes yet.');
     expect(el.querySelector('.change-kind')).toBeNull();
   });
 
@@ -380,7 +398,7 @@ describe('draft editing + preview (PR B — no persistence)', () => {
     const ipc = makeIpc(editorState(), [], PREVIEW_OK);
     const fixture = await render(ipc);
     const el = openEditor(fixture, 'windspeedmph'); // motion row: all controls
-    const dirty = (): boolean => el.textContent!.includes('draft change.');
+    const dirty = (): boolean => el.textContent!.includes('draft change, not saved yet');
 
     // enabled: original false → toggle on → dirty → toggle off → clean
     const checkbox = el.querySelector('.editor-form input[type="checkbox"]') as HTMLInputElement;
@@ -498,10 +516,10 @@ describe('draft editing + preview (PR B — no persistence)', () => {
     typeInto(el.querySelector('.editor-form input[type="text"]') as HTMLInputElement, '');
     await settle(fixture);
 
-    // Close the form while invalid: the blanked control disappears,
-    // its draft was already cleared, and Preview reflects the
-    // remaining (valid) drafts only.
-    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Close') as HTMLButtonElement).click();
+    // OK the form away while invalid: the blanked control
+    // disappears, its draft was already cleared, and Preview reflects
+    // the remaining (valid) drafts only.
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'OK') as HTMLButtonElement).click();
     await settle(fixture);
     const previewBtn = [...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement;
     expect(previewBtn.disabled).toBe(false);
@@ -513,18 +531,60 @@ describe('draft editing + preview (PR B — no persistence)', () => {
     });
   });
 
-  it('Reset row closes the form so a later event cannot resurrect the edits', async () => {
+  it('Cancel discards the row draft and closes the form so a later event cannot resurrect the edits', async () => {
     const ipc = makeIpc(editorState(), [], PREVIEW_OK);
     const fixture = await render(ipc);
     const el = openEditor(fixture, 'tempinf');
     typeInto(el.querySelector('.editor-form input[type="text"]') as HTMLInputElement, 'Patio Temp');
     await settle(fixture);
-    expect(el.textContent).toContain('1 draft change.');
+    expect(el.textContent).toContain('1 draft change, not saved yet.');
 
-    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Reset row') as HTMLButtonElement).click();
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Cancel') as HTMLButtonElement).click();
     await settle(fixture);
-    expect(el.textContent).toContain('No draft changes.');
+    expect(el.textContent).toContain('No draft changes yet.');
     expect(el.querySelector('.editor-form')).toBeNull(); // form is closed
+  });
+
+  it('OK collapses the row KEEPING its drafts, and the actions column shows nothing while open', async () => {
+    const ipc = makeIpc(editorState(), [], PREVIEW_OK);
+    const fixture = await render(ipc);
+    const el = openEditor(fixture, 'tempinf');
+
+    // While the editor is open, its footer owns closing: the row's
+    // actions cell holds no button.
+    const openTr = [...el.querySelectorAll('tbody tr')]
+      .find(r => r.querySelector('td code')?.textContent === 'tempinf')!;
+    expect(openTr.querySelector('td.actions button')).toBeNull();
+
+    typeInto(el.querySelector('.editor-form input[type="text"]') as HTMLInputElement, 'Patio Temp');
+    await settle(fixture);
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'OK') as HTMLButtonElement).click();
+    await settle(fixture);
+
+    expect(el.querySelector('.editor-form')).toBeNull(); // collapsed
+    expect(el.textContent).toContain('1 draft change, not saved yet.'); // draft survived
+    expect(openTr.querySelector('td.actions button')?.textContent).toBe('Edit');
+  });
+
+  it('Use defaults drafts removal of the authored settings and closes the form; default-origin rows do not offer it', async () => {
+    const ipc = makeIpc(editorState(), [], PREVIEW_OK);
+    const fixture = await render(ipc);
+    // origin 'station' → authored settings exist → button offered
+    const el = openEditor(fixture, 'windspeedmph');
+    const useDefaults = [...el.querySelectorAll('button')].find(b => b.textContent === 'Use defaults') as HTMLButtonElement;
+    expect(useDefaults).toBeDefined();
+    useDefaults.click();
+    await settle(fixture);
+    expect(el.querySelector('.editor-form')).toBeNull(); // closed
+    expect(el.textContent).toContain('1 draft change, not saved yet.'); // the removal is a draft
+
+    // Cancel-equivalent cleanup for the next assertion set.
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Discard drafts') as HTMLButtonElement).click();
+    await settle(fixture);
+
+    // origin 'default' → nothing authored → no Use defaults button
+    openEditor(fixture, 'tempinf');
+    expect([...el.querySelectorAll('button')].some(b => b.textContent === 'Use defaults')).toBe(false);
   });
 
   it('a stale in-flight preview never overwrites a newer draft (review #43 P2-4)', async () => {
@@ -685,16 +745,16 @@ describe('save flow (PR C / finding 5 — the ONE route is composeAndPersist)', 
     // round 3, P1): Save button off + form hidden before anything is
     // read, both restored after persistence completes.
     expect(ipc.persisted.map(p => p.event)).toEqual([
-      'disableSaveButton', 'hideSchemaForm',
-      'update', 'update', 'save',
-      'showSchemaForm', 'enableSaveButton',
+      'disableSaveButton',
+      'update', 'save',
+      'enableSaveButton',
     ]);
-    // Verbatim replacement: the FIRST update clears HB UI X's
-    // merge-prone in-memory copy; the second carries the composed block.
+    // The single update carries the composed block; undefined
+    // tombstones for removed keys serialize away at persistence.
     const updates = ipc.persisted.filter(p => p.event === 'update');
-    expect(updates[0].arg).toEqual([]);
-    const updated = (updates[1].arg as unknown[])[0];
-    expect(updated).toEqual(NEXT_CONFIG);
+    expect(updates).toHaveLength(1);
+    const updated = (updates[0].arg as unknown[])[0];
+    expect(JSON.parse(JSON.stringify(updated))).toEqual(NEXT_CONFIG);
     expect(el.textContent).toContain('Saved.');
     expect(el.textContent).toContain('legacy-config-snapshot.json');
     // Receipt clean: reloaded digest equals what compose produced.
@@ -703,7 +763,7 @@ describe('save flow (PR C / finding 5 — the ONE route is composeAndPersist)', 
 
   it('a settings-form restore failure after a successful save is surfaced, never silent (review #47 round 5, P2)', async () => {
     const ipc = makeIpc(editorState(), [], NON_STRUCTURAL_PREVIEW, COMPOSE_OK);
-    (ipc as unknown as Record<string, unknown>).showSchemaForm = () => {
+    (ipc as unknown as Record<string, unknown>).enableSaveButton = () => {
       throw new Error('modal already tearing down');
     };
     const fixture = await render(ipc);
@@ -730,19 +790,28 @@ describe('save flow (PR C / finding 5 — the ONE route is composeAndPersist)', 
     expect(el.textContent).toContain('does not exactly match');
   });
 
-  it('a structural save opens the confirmation modal; Cancel persists NOTHING', async () => {
+  it('a structural save opens the confirmation card; Cancel persists NOTHING', async () => {
     const ipc = makeIpc(editorState(), [], STRUCTURAL_PREVIEW, COMPOSE_OK);
     const fixture = await render(ipc);
     const el = await draftAndPreview(fixture);
 
     btn(el, 'Save changes')!.click();
     await settle(fixture);
-    expect(el.querySelector('.modal')).not.toBeNull();
+    expect(el.querySelector('.confirm-card')).not.toBeNull();
+    // In flow, not a fixed overlay (beta.14 smoke #4), and the other
+    // controls lock while the confirmation is open. The class name
+    // must stay out of Bootstrap's namespace: HB UI X mirrors its
+    // stylesheets into the iframe and Bootstrap's .modal rule is
+    // display:none (beta.14 smoke #6) - bootstrapNamespace.test.ts
+    // pins every class this app uses against that inventory.
+    expect(el.querySelector('.modal')).toBeNull();
+    expect(el.querySelector('.modal-backdrop')).toBeNull();
+    expect((btn(el, 'Preview changes') as HTMLButtonElement).disabled).toBe(true);
     expect(el.textContent).toContain('Confirm registration changes');
 
     btn(el, 'Cancel')!.click();
     await settle(fixture);
-    expect(el.querySelector('.modal')).toBeNull();
+    expect(el.querySelector('.confirm-card')).toBeNull();
     expect(ipc.requests.some(r => r.path === '/compose-save')).toBe(false);
     expect(ipc.persisted.filter(p => p.event === 'update' || p.event === 'save')).toEqual([]);
   });
@@ -758,8 +827,8 @@ describe('save flow (PR C / finding 5 — the ONE route is composeAndPersist)', 
 
     const compose = ipc.requests.find(r => r.path === '/compose-save');
     expect((compose?.body as { confirmDigest?: string }).confirmDigest).toBe('ef'.repeat(32));
-    expect(ipc.persisted.map(p => p.event).filter(e => e === 'update' || e === 'save')).toEqual(['update', 'update', 'save']);
-    expect(el.querySelector('.modal')).toBeNull();
+    expect(ipc.persisted.map(p => p.event).filter(e => e === 'update' || e === 'save')).toEqual(['update', 'save']);
+    expect(el.querySelector('.confirm-card')).toBeNull();
   });
 
   it('a compose refusal persists NOTHING and renders the structured refusal', async () => {
@@ -835,7 +904,7 @@ describe('save flow (PR C / finding 5 — the ONE route is composeAndPersist)', 
     resolveCompose(COMPOSE_OK);
     await settle(fixture);
     expect(el.textContent).toContain('Saved.');
-    expect(persisted.filter(e => e === 'update' || e === 'save')).toEqual(['update', 'update', 'save']);
+    expect(persisted.filter(e => e === 'update' || e === 'save')).toEqual(['update', 'save']);
     for (const b of [...el.querySelectorAll('button')].filter(x => x.textContent === 'Edit')) {
       expect((b as HTMLButtonElement).disabled).toBe(false);
     }
@@ -976,29 +1045,35 @@ describe('settings-form freeze contract (review #47 round 4, P1)', () => {
     };
   }
 
-  it('a bridge missing ANY of the four form controls cannot save (fail closed)', () => {
-    for (const missing of ['disableSaveButton', 'enableSaveButton', 'hideSchemaForm', 'showSchemaForm'] as const) {
+  it('a bridge missing either Save button control cannot save (fail closed)', () => {
+    for (const missing of ['disableSaveButton', 'enableSaveButton'] as const) {
       TestBed.resetTestingModule();
       const ipc = fullIpc();
       delete (ipc as Record<string, unknown>)[missing];
       const service = serviceWith(ipc);
-      expect(() => service.orchestratorDeps(), missing).toThrow(/settings-form controls/);
+      expect(() => service.orchestratorDeps(), missing).toThrow(/Save button controls/);
     }
   });
 
-  it('the restore steps run INDEPENDENTLY: a throwing showSchemaForm never leaves the Save button dead', () => {
+  it('the freeze never touches the schema form (its two-way binding zeroes pluginConfig on destroy)', () => {
     const calls: string[] = [];
     const service = serviceWith(fullIpc({
-      showSchemaForm: () => {
-        calls.push('showSchemaForm');
-        throw new Error('modal already closing');
+      disableSaveButton: () => {
+        calls.push('disableSaveButton');
       },
       enableSaveButton: () => {
         calls.push('enableSaveButton');
       },
+      hideSchemaForm: () => {
+        calls.push('hideSchemaForm');
+      },
+      showSchemaForm: () => {
+        calls.push('showSchemaForm');
+      },
     }));
     const deps = service.orchestratorDeps();
-    expect(() => deps.unfreezeSettingsForm()).toThrow(/modal already closing/);
-    expect(calls).toEqual(['showSchemaForm', 'enableSaveButton']);
+    deps.freezeSettingsForm();
+    deps.unfreezeSettingsForm();
+    expect(calls).toEqual(['disableSaveButton', 'enableSaveButton']);
   });
 });

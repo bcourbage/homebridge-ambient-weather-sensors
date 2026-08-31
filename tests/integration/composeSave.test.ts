@@ -283,7 +283,7 @@ describe('post-compose persistence failures are INDETERMINATE (review #45 P1-2)'
       expect(result.error.message).toContain('MAY have been applied');
     }
     // update DID take effect before the failure — the effect-then-throw shape.
-    expect(client.events).toEqual(['freeze', 'compose', 'commit', 'update', 'update', 'unfreeze']);
+    expect(client.events).toEqual(['freeze', 'compose', 'commit', 'update', 'unfreeze']);
     expect(client.persistedArray).toBeDefined();
   });
 });
@@ -306,7 +306,7 @@ describe('no-bypass: preview → confirm → compose → update → save (PR C)'
     // 2-4. Confirmed save through the ONE route.
     const result = await composeAndPersist(client.deps, { ...payload, confirmDigest: preview.digest });
     expect(result.ok).toBe(true);
-    expect(client.events).toEqual(['freeze', 'compose', 'commit', 'update', 'update', 'save', 'unfreeze']);
+    expect(client.events).toEqual(['freeze', 'compose', 'commit', 'update', 'save', 'unfreeze']);
     expect(client.snapshotExistedAtUpdate).toBe(true); // durable BEFORE persistence
     // Verbatim persistence, synchronized mirror included.
     const persisted = client.persistedArray!.find(b => b.platform === 'AmbientWeatherSensors')!;
@@ -342,7 +342,7 @@ describe('ordering: snapshot is durable before the client persistence half runs'
 
     const result = await composeAndPersist(client.deps, {}); // pure migration
     expect(result.ok).toBe(true);
-    expect(client.events).toEqual(['freeze', 'compose', 'commit', 'update', 'update', 'save', 'unfreeze']);
+    expect(client.events).toEqual(['freeze', 'compose', 'commit', 'update', 'save', 'unfreeze']);
     expect(client.snapshotExistedAtUpdate).toBe(true);
     if (result.ok) {
       expect(result.snapshot).toBe('written');
@@ -775,7 +775,7 @@ describe('explicit-base orchestration (review #67 P1-3)', () => {
     const clonedBase = JSON.parse(JSON.stringify(LEGACY_BLOCK)) as Record<string, unknown>;
     const result = await composeAndPersist(client.deps, { base: clonedBase });
     expect(result.ok).toBe(true);
-    expect(client.events).toEqual(['freeze', 'compose', 'commit', 'update', 'update', 'save', 'unfreeze']);
+    expect(client.events).toEqual(['freeze', 'compose', 'commit', 'update', 'save', 'unfreeze']);
     const awsBlocks = (client.persistedArray ?? []).filter(b => b.platform === 'AmbientWeatherSensors');
     expect(awsBlocks).toHaveLength(1);
     expect(awsBlocks[0].configVersion).toBe(2);
@@ -990,19 +990,21 @@ describe('session-digest staleness (beta.13 smoke F1: getPluginConfig is schema-
       blockIndex: 0,
     });
     expect(result.ok).toBe(true);
-    expect(client.events).toEqual(['freeze', 'compose', 'commit', 'update', 'update', 'save', 'unfreeze']);
+    expect(client.events).toEqual(['freeze', 'compose', 'commit', 'update', 'save', 'unfreeze']);
     if (!result.ok) {
       return;
     }
 
-    // The final update is the composed block VERBATIM: the preceding
-    // empty update truncated HB UI X's in-memory copy, so the merge
-    // cannot preserve the contamination or resurrect a key the
-    // compose deleted (which would stale the fresh mirror).
+    // The submitted block carries explicit undefined TOMBSTONES for
+    // every key the composed config removed (the contamination and any
+    // deleted legacy field), so HB UI X's Object.assign merge produces
+    // EXACTLY the composed block and its JSON persistence drops the
+    // keys. (An earlier clear-then-set design left HB UI X's session
+    // empty when a save died mid-sequence — measured on production.)
     const persisted = (client.persistedArray ?? [])[0];
-    expect(persisted).toEqual(result.nextConfig);
-    expect('includeOnly' in persisted).toBe(false);
-    expect('stationFilter' in persisted).toBe(false);
+    expect('includeOnly' in persisted).toBe(true);
+    expect(persisted.includeOnly).toBeUndefined();
+    expect(JSON.parse(JSON.stringify(persisted))).toEqual(JSON.parse(JSON.stringify(result.nextConfig)));
   });
 
   it('an out-of-range blockIndex refuses before composing (zero writes)', async () => {
@@ -1272,7 +1274,7 @@ describe('freeze failure safety (review #47 round 4)', () => {
     // The save completed and persisted; the cleanup failure is
     // swallowed rather than replacing the authoritative outcome.
     expect(result.ok).toBe(true);
-    expect(client.events).toEqual(['freeze', 'compose', 'commit', 'update', 'update', 'save', 'unfreeze-throw']);
+    expect(client.events).toEqual(['freeze', 'compose', 'commit', 'update', 'save', 'unfreeze-throw']);
   });
 });
 
@@ -1371,5 +1373,174 @@ describe('settings-form restore failures are surfaced (review #47 round 5, P2)',
     });
     expect(result.ok).toBe(true);
     expect(result.settingsRestoreFailed).toBeUndefined();
+  });
+});
+
+
+describe('lost responses become visible outcomes (beta.14 smoke: the frozen save)', () => {
+  it('a never-resolving updatePluginConfig times out as persistence-indeterminate', async () => {
+    const rig = makeRig(LEGACY_BLOCK);
+    discoveryStore(rig);
+    const client = makeClient(rig);
+    client.deps.timeouts = { request: 2_000, persist: 120 };
+    client.deps.updatePluginConfig = () => new Promise(() => { /* response lost */ });
+    const result = await composeAndPersist(client.deps, {
+      baseDigest: blockDigest(LEGACY_BLOCK),
+      blockIndex: 0,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('persistence-indeterminate');
+      expect(result.error.message).toContain('no response from the Homebridge UI (updatePluginConfig)');
+    }
+  });
+
+  it('a never-resolving bridge request times out as a thrown transport error with zero writes', async () => {
+    const rig = makeRig(LEGACY_BLOCK);
+    discoveryStore(rig);
+    const client = makeClient(rig);
+    client.deps.timeouts = { request: 120, persist: 2_000 };
+    client.deps.request = () => new Promise(() => { /* response lost */ });
+    await expect(composeAndPersist(client.deps, {
+      baseDigest: blockDigest(LEGACY_BLOCK),
+      blockIndex: 0,
+    })).rejects.toThrow(/no response from the plugin service/);
+    expect(existsSync(path.join(rig.persistDir, LEGACY_SNAPSHOT_FILE))).toBe(false);
+    // The settings form was restored on the way out.
+    expect(client.events[client.events.length - 1]).toBe('unfreeze');
+  });
+
+  it('an EMPTY in-memory config refuses with reload guidance, not multi-Home advice', async () => {
+    const rig = makeRig(LEGACY_BLOCK);
+    discoveryStore(rig);
+    const client = makeClient(rig);
+    client.deps.getPluginConfig = async () => [];
+    const result = await composeAndPersist(client.deps, {
+      baseDigest: blockDigest(LEGACY_BLOCK),
+      blockIndex: 0,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('stale-base');
+      expect(result.error.message).toContain('Reload the plugin settings page');
+      expect(result.error.message).not.toContain('MultiHome');
+    }
+    expect(client.events).toEqual(['freeze', 'unfreeze']);
+  });
+});
+
+describe('HB UI X form-value replacement (beta.14 smoke #6, measured on 5.28)', () => {
+  // HB UI X's settings modal binds its schema form two-way into
+  // pluginConfig[0] and REPLACES the block with the form VALUE: only
+  // schema-declared properties survive (`platform` does not), and
+  // every declared default is materialized — top-level and nested.
+  // This helper reproduces that measured shape from the real
+  // config.schema.json, so these tests exercise exactly what a
+  // production session hands the orchestrator.
+  const SCHEMA_PROPS = (JSON.parse(readFileSync(
+    path.resolve(__dirname, '../../config.schema.json'), 'utf8',
+  )) as { schema: { properties: Record<string, { default?: unknown; properties?: Record<string, { default?: unknown }> }> } })
+    .schema.properties;
+
+  function formValueOf(block: Record<string, unknown>): Record<string, unknown> {
+    const out: Record<string, unknown> = {};
+    for (const [key, prop] of Object.entries(SCHEMA_PROPS)) {
+      const nestedDefaults = prop.properties
+        ? Object.fromEntries(Object.entries(prop.properties)
+          .filter(([, np]) => np.default !== undefined)
+          .map(([nk, np]) => [nk, np.default]))
+        : undefined;
+      if (key in block) {
+        out[key] = nestedDefaults && block[key] && typeof block[key] === 'object'
+          ? { ...nestedDefaults, ...(block[key] as Record<string, unknown>) }
+          : block[key];
+      } else if (prop.default !== undefined) {
+        out[key] = prop.default;
+      } else if (nestedDefaults && Object.keys(nestedDefaults).length > 0) {
+        out[key] = nestedDefaults;
+      }
+    }
+    return out;
+  }
+
+  function sessionClient(rig: Rig, sessionBlocks: Array<Record<string, unknown>>): ReturnType<typeof makeClient> {
+    const client = makeClient(rig);
+    client.deps.getPluginConfig = async () => JSON.parse(JSON.stringify(sessionBlocks)) as Array<Record<string, unknown>>;
+    return client;
+  }
+
+  it('a pristine form-replaced session (platform dropped, defaults materialized) SAVES', async () => {
+    const rig = makeRig(LEGACY_BLOCK);
+    discoveryStore(rig);
+    const client = sessionClient(rig, [formValueOf(LEGACY_BLOCK)]);
+    const result = await composeAndPersist(client.deps, {
+      baseDigest: blockDigest(LEGACY_BLOCK),
+      blockIndex: 0,
+    });
+    expect(result.ok).toBe(true);
+    expect(client.events).toEqual(['freeze', 'compose', 'commit', 'update', 'save', 'unfreeze']);
+    // The write carries the canonical platform key even though the
+    // session copy lost it (HB UI X re-injects it too; belt and
+    // braces so a merge-through never persists a platformless block).
+    expect(client.persistedArray![0].platform).toBe('AmbientWeatherSensors');
+  });
+
+  it('a REAL edit hiding inside the replacement noise still refuses: changed value, and non-default form-only value', async () => {
+    const rig = makeRig(LEGACY_BLOCK);
+    discoveryStore(rig);
+
+    const changed = formValueOf({ ...LEGACY_BLOCK, humiditySensors: true }); // disk: false
+    const r1 = await composeAndPersist(sessionClient(rig, [changed]).deps, {
+      baseDigest: blockDigest(LEGACY_BLOCK), blockIndex: 0,
+    });
+    expect(!r1.ok && r1.error.code).toBe('unsaved-settings-changes');
+    expect(!r1.ok && r1.error.message).toContain("'humiditySensors'");
+
+    const formOnly = { ...formValueOf(LEGACY_BLOCK), co2Sensors: true }; // absent on disk, default false
+    const r2 = await composeAndPersist(sessionClient(rig, [formOnly]).deps, {
+      baseDigest: blockDigest(LEGACY_BLOCK), blockIndex: 0,
+    });
+    expect(!r2.ok && r2.error.code).toBe('unsaved-settings-changes');
+    expect(!r2.ok && r2.error.message).toContain("'co2Sensors'");
+    expect(existsSync(path.join(rig.persistDir, LEGACY_SNAPSHOT_FILE))).toBe(false);
+  });
+
+  it('nested defaults materialized into a sparse thresholds object pass; a nested EDIT refuses with its path', async () => {
+    const sparse = { ...LEGACY_BLOCK, thresholds: { windSpeedMph: 18 } };
+    const rig = makeRig(sparse);
+    discoveryStore(rig);
+
+    const pristine = formValueOf(sparse);
+    expect((pristine.thresholds as Record<string, unknown>).windSpeedMph).toBe(18);
+    expect((pristine.thresholds as Record<string, unknown>).uvEnabled).toBe(true); // materialized
+    const ok = await composeAndPersist(sessionClient(rig, [pristine]).deps, {
+      baseDigest: blockDigest(sparse), blockIndex: 0,
+    });
+    expect(ok.ok).toBe(true);
+
+    const rig2 = makeRig(sparse);
+    discoveryStore(rig2);
+    const edited = formValueOf(sparse);
+    (edited.thresholds as Record<string, unknown>).windSpeedMph = 30;
+    const r = await composeAndPersist(sessionClient(rig2, [edited]).deps, {
+      baseDigest: blockDigest(sparse), blockIndex: 0,
+    });
+    expect(!r.ok && r.error.code).toBe('unsaved-settings-changes');
+    expect(!r.ok && r.error.message).toContain("'thresholds.windSpeedMph'");
+  });
+
+  it('non-schema keys the form cannot express (_bridge) neither refuse the save nor get lost', async () => {
+    const bridged = { ...LEGACY_BLOCK, _bridge: { username: '0E:22:33:44:55:66', port: 51900 } };
+    const rig = makeRig(bridged);
+    discoveryStore(rig);
+    const client = sessionClient(rig, [formValueOf(bridged)]); // form value drops _bridge
+    const result = await composeAndPersist(client.deps, {
+      baseDigest: blockDigest(bridged),
+      blockIndex: 0,
+    });
+    expect(result.ok).toBe(true);
+    // Composed from DISK, so the child-bridge settings survive the
+    // save even though the session copy never carried them.
+    expect(client.persistedArray![0]._bridge).toEqual({ username: '0E:22:33:44:55:66', port: 51900 });
   });
 });
