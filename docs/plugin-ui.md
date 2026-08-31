@@ -39,24 +39,26 @@ grouped by station:
 
 | Column | Meaning |
 | --- | --- |
-| Data point | The AWN field name (`tempf`, `windspeedmph`, ...) |
+| (state icon) | Green check = the row registers an accessory; muted dash = disabled; blank = an unrecognized field |
+| Data point | The AWN field name (`tempf`, `windspeedmph`, ...); its tooltip names the backing battery field when one exists, and a colored dot marks rows your configuration authors (see layers below) |
 | Name | The accessory name this row produces |
-| Kind | Sensor kind and measurement (`temperature · temperature`, `motion · wind-speed`) |
-| Units | Source unit, and `source → display` when a conversion applies |
-| Enabled | Whether the row registers an accessory |
-| Layer | Which configuration layer authored the row (below) |
-| Battery | The AWN battery field backing the row, when one exists |
+| Kind | Sensor kind as an icon (thermometer, droplet, sun, motion wave) or a badge (CO₂, PM2.5, PM10, `?` for unrecognized); the tooltip carries the full kind and measurement |
+| Units | The unit HomeKit displays; highlighted when it differs from what the station reports (the tooltip names the source unit) |
 
-The **Layer** badge tells you where a row's configuration comes from:
+The provenance dot on the data point tells you where a row's
+configuration comes from:
 
-- **default**: the built-in default map; nothing in your config
-  touches this row.
-- **global**: a setting that applies to every station (for example a
-  display-unit choice).
-- **station**: an exception scoped to one station's MAC address.
-- **unrecognized**: a field the station reports that the plugin has
-  no built-in definition for. Shown for visibility; it registers
-  nothing.
+- **no dot (default)**: the built-in default map; nothing in your
+  config touches this row.
+- **green dot (global)**: a setting that applies to every station
+  (for example a display-unit choice).
+- **blue dot (station)**: an exception scoped to one station's MAC
+  address.
+- Unrecognized fields (a `?` in the Kind column) are shown for
+  visibility; they register nothing.
+
+Opening a row's editor shows the demoted facts in full: kind,
+measurement, battery field, and layer.
 
 On a **legacy** configuration the table is a *migration preview*: it
 shows the exact sensor map a conversion to the v2 format would

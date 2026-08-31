@@ -40,7 +40,12 @@
   window.homebridge = {
     request: (path, payload) => post('/hb' + path, payload),
     getPluginConfig: () => post('/hb-config/get'),
-    updatePluginConfig: (arr) => post('/hb-config/update', arr),
+    // JSON drops undefined-valued keys, but the REAL transport
+    // (postMessage structured clone) preserves them — and the save's
+    // deletion tombstones depend on that. Encode undefined as a
+    // sentinel; the server decodes it back before its merge twin.
+    updatePluginConfig: (arr) => post('/hb-config/update',
+      JSON.parse(JSON.stringify(arr, (k, v) => (v === undefined ? '__awn_undefined__' : v)))),
     savePluginConfig: () => post('/hb-config/save'),
     getCachedAccessories: async () => [],
     enableSaveButton: () => {},
