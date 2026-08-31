@@ -9,10 +9,11 @@ entries short and user-facing.
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/
 
-## [2.0.0-beta.14] — 2026-08-21
+## [2.0.0-beta.14] — 2026-08-31
 
 ### Fixed
 
+- **The save confirmation is actually visible.** The server-verified save confirmation was centered against the iframe's full content height, which in Homebridge UI X placed it far below the visible page; all you saw was a dimmed backdrop. It is now an in-flow card that appears where Save was clicked and scrolls into view, with the other controls disabled until it is answered.
 - **The sensor-map editor works in the real Homebridge UI again.** In beta.13, every preview and save was refused with `stale-base`: Homebridge UI X hands custom pages its settings form's in-memory copy of the plugin config, which never byte-matches `config.json` once the form materializes its defaults. The editor session now carries a digest issued by the server for the exact on-disk block it loaded, and saves are written back as a verbatim replacement, immune to the UI's merge-style config update (which could silently resurrect fields a save had removed and invalidate the freshly written rollback mirror). After every save, the editor re-reads the configuration from disk and warns if it differs from what was composed.
 - **Live theme switching keeps the whole page on the new theme.** Homebridge UI X freezes the page background and text color at the theme active when the page opened; switching themes with the page open left the page ground on the old theme while the panels followed. The page now keeps its ground on the live theme in both directions.
 - **The Edit button is always visible.** The sensor-map table scrolls horizontally in its own container and the action column stays pinned to the right edge, instead of rendering past the clipped edge of the panel.
@@ -20,6 +21,12 @@ entries short and user-facing.
 - **Settings form console noise removed.** Three legacy form-layout entries declared an invalid widget type, producing "widget type string not found" errors in the browser console on every page open.
 - **Editor saves protect unsaved settings-form changes.** Saving a sensor-map draft while the settings form above holds unsaved edits (a credential, a toggle, a filter) would have silently discarded them; the save is now refused with a message to save or discard the form changes first. The settings form and its Save button are also frozen for the duration of an editor save (and restored after), so an edit cannot race the save either.
 - **Multi-Home configurations stay read-only in the editor.** The sensor-map editor supports exactly one AmbientWeatherSensors platform block; with more than one present (a supported multi-Home setup, see MultiHome.md) it previews nothing and refuses saves instead of risking a write to the wrong block, and directs edits to the JSON config editor.
+
+### Changed
+
+- **Slimmer sensor-map table.** The Enabled and Kind columns are now icons: a check or dash state icon at the far left, and a per-kind icon (thermometer, water drop, sun, motion wave) with compact badges for CO₂, CO, PM2.5 and PM10. The full wording remains available as tooltips and screen-reader text.
+- **The row editor closes like a dialog.** OK collapses the row and keeps its draft edits; Cancel discards them; Use defaults (offered when the row has authored settings) drafts their removal so the row falls back to the built-in defaults. These replace the former Close, Reset row and Remove override buttons.
+- **Messages use real grammar.** The remaining "(s)" pluralizations in editor and server messages are rewritten as properly pluralized sentences.
 
 ### Added
 
