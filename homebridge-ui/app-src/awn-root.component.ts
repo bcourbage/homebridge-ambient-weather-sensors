@@ -82,6 +82,15 @@ interface StationGroup {
       display: inline-flex; gap: 6px; align-items: center;
       font-size: 0.85rem; color: var(--fg-sub);
     }
+    /* Same themed control chrome as the row editor's selects: the UA
+       default select ignored the page theme entirely (white in dark
+       mode) and sat below the label baseline, reading as a vertical
+       jump against the label text (Bruno's beta.15 RC feedback). */
+    .unit-families select {
+      background: var(--btn-bg); color: var(--btn-fg);
+      border: 1px solid var(--btn-edge); border-radius: 4px;
+      padding: 3px 6px; font-size: 0.85rem; vertical-align: middle;
+    }
     .unit-families-note { margin-bottom: 10px; }
     .editor-form {
       background: var(--panel-bg); border-top: 2px solid var(--rule);
@@ -140,26 +149,17 @@ interface StationGroup {
     .table-scroll table { table-layout: fixed; }
     th.dp { width: 22%; }
     th.name { width: auto; }
-    th.kind-col { width: 76px; }
-    /* Header info affordance for the Kind column: the button toggles
-       an IN-FLOW help card above the table, outside .table-scroll,
-       so the card can never be clipped by the container's overflow
-       (a positioned tooltip inside it could be, e.g. on a one-row
-       table). Click-toggled, so keyboard and touch need nothing
-       hover-specific. */
+    th.kind-col { width: 64px; }
+    /* Header info affordance for the Kind column: a small circled ?
+       whose native title tooltip the browser draws outside the page
+       layout (never clipped, no layout shift). */
     .th-help { white-space: nowrap; }
-    .info-btn {
-      background: none; border: none; padding: 0; margin-left: 1px;
-      width: 24px; height: 24px; border-radius: 4px;
-      display: inline-flex; align-items: center; justify-content: center;
-      color: var(--fg-sub); cursor: pointer; vertical-align: middle;
-    }
-    .info-btn[aria-expanded="true"] { color: var(--fg); background: var(--code-bg); }
-    .info-icon { width: 13px; height: 13px; display: block; }
-    .kind-help {
-      margin: 0 0 8px; padding: 7px 9px; max-width: 640px;
-      background: var(--code-bg); color: var(--fg);
-      border-radius: 6px; font-size: 0.8rem; line-height: 1.35;
+    .info-q {
+      display: inline-block; width: 15px; height: 15px; line-height: 15px;
+      border-radius: 999px; text-align: center;
+      font-size: 0.72rem; font-weight: 600;
+      background: var(--code-bg); color: var(--fg-sub);
+      cursor: help; margin-left: 4px; vertical-align: 1px;
     }
     /* Visually hidden, still exposed to assistive technology. */
     .sr-only {
@@ -259,9 +259,11 @@ interface StationGroup {
           @for (f of unitFamilies(); track f.key) {
             <label>{{ f.label }}
               <select #familySel (change)="applyFamilyChoice(f.key, familySel.value)" [disabled]="saving() || confirmOpen() || reloadRequired()">
-                @if (f.current === '') {
-                  <option value="" disabled selected>Mixed</option>
-                }
+                <!-- Always in the DOM so the select's width never
+                     changes when Mixed resolves (a width change
+                     re-wraps the panel row - Bruno's beta.15 RC
+                     feedback); hidden keeps it out of the dropdown. -->
+                <option value="" disabled [hidden]="f.current !== ''" [selected]="f.current === ''">Mixed</option>
                 @for (c of f.choices; track c.id) {
                   <option [value]="c.id" [selected]="c.id === f.current">{{ c.label }}</option>
                 }
@@ -404,9 +406,6 @@ interface StationGroup {
           {{ group.title }}
           <span class="station-meta"><code [title]="'station learned from: ' + group.source">{{ group.mac }}</code></span>
         </h3>
-        @if (kindHelpFor() === group.mac) {
-          <p class="kind-help" role="note" [id]="kindHelpId(group.mac, 'card')">{{ KIND_HELP }}</p>
-        }
         <div class="table-scroll">
         <table>
           <thead>
@@ -415,16 +414,16 @@ interface StationGroup {
               <th class="dp">Data point</th><th class="name">Name</th>
               <th class="kind-col">
                 <span class="th-help">Kind
-                  <button type="button" class="info-btn" aria-label="About the Kind column"
-                          [attr.aria-describedby]="kindHelpId(group.mac, 'desc')"
-                          [attr.aria-expanded]="kindHelpFor() === group.mac"
-                          [attr.aria-controls]="kindHelpFor() === group.mac ? kindHelpId(group.mac, 'card') : null"
-                          (click)="toggleKindHelp(group.mac)">
-                    <svg class="info-icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.4" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M8 7.3v3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><circle cx="8" cy="4.9" r="0.9" fill="currentColor"/></svg>
-                  </button>
-                  <!-- Persistent description: screen readers get the
-                       full help from the button itself, open or not
-                       (PR #51 review round 2). -->
+                  <!-- A small circled ? with a native title tooltip
+                       (Bruno's beta.15 RC feedback replaced the
+                       toggled help card). The browser renders title
+                       outside the layout, so it can never clip; the
+                       persistent aria-describedby keeps the full help
+                       on the element for screen readers (PR #51
+                       review round 2). -->
+                  <span class="info-q" tabindex="0" role="img" aria-label="About the Kind column"
+                        [attr.aria-describedby]="kindHelpId(group.mac, 'desc')"
+                        [title]="KIND_HELP">?</span>
                   <span class="sr-only" [id]="kindHelpId(group.mac, 'desc')">{{ KIND_HELP }}</span>
                 </span>
               </th>
@@ -1185,19 +1184,12 @@ export class AwnRootComponent {
   /** Kind column header help (issue #50), see kind-support.ts. */
   protected readonly KIND_HELP = KIND_HELP;
 
-  /** Station mac whose Kind help card is open, or null for none. */
-  protected readonly kindHelpFor = signal<string | null>(null);
-
-  protected toggleKindHelp(mac: string): void {
-    this.kindHelpFor.set(this.kindHelpFor() === mac ? null : mac);
-  }
-
   /**
    * Stable per-station element ids for the Kind help ARIA wiring
    * (macs repeat per group but never within one, and colons are
    * stripped so the ids stay selector-friendly).
    */
-  protected kindHelpId(mac: string, part: 'desc' | 'card'): string {
+  protected kindHelpId(mac: string, part: 'desc'): string {
     return `kind-help-${part}-${mac.replace(/[^A-Za-z0-9]/g, '')}`;
   }
 

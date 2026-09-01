@@ -245,62 +245,36 @@ describe('AwnRootComponent (TestBed, jsdom)', () => {
     expect(ipc.requests.map(r => r.path).sort()).toEqual(['/editor-state', '/vocabulary']);
   });
 
-  it('the Kind header info button toggles an in-flow help card (issue #50)', async () => {
+  it('the Kind header shows a ? glyph with a native title tooltip and screen-reader description (issue #50)', async () => {
     const ipc = makeIpc(editorState());
     const fixture = await render(ipc);
     const el = fixture.nativeElement as HTMLElement;
 
-    // One info button per station table, keyboard-reachable (a real
-    // button), collapsed by default. The FULL help text is exposed
-    // through a persistent aria-describedby relationship (review
-    // round 2): a screen reader gets it from the button itself,
-    // open or closed.
-    const infoBtns = [...el.querySelectorAll('th.kind-col .info-btn')] as HTMLButtonElement[];
-    expect(infoBtns).toHaveLength(el.querySelectorAll('table').length);
-    expect(el.querySelector('.kind-help')).toBeNull();
+    // One ? per station table, keyboard-reachable, whose native title
+    // IS the full explanation (the browser draws it outside the page
+    // layout, so it can never clip). The same text stays exposed to
+    // screen readers through a persistent aria-describedby.
+    const glyphs = [...el.querySelectorAll('th.kind-col .info-q')] as HTMLElement[];
+    expect(glyphs).toHaveLength(el.querySelectorAll('table').length);
     const descIds = new Set<string>();
-    for (const btn of infoBtns) {
-      expect(btn.tagName).toBe('BUTTON');
-      expect(btn.getAttribute('aria-label')).toBe('About the Kind column');
-      expect(btn.getAttribute('aria-expanded')).toBe('false');
-      expect(btn.getAttribute('aria-controls')).toBeNull(); // nothing to control while closed
-      const descId = btn.getAttribute('aria-describedby')!;
+    for (const q of glyphs) {
+      expect(q.textContent).toBe('?');
+      expect(q.getAttribute('tabindex')).toBe('0');
+      expect(q.getAttribute('aria-label')).toBe('About the Kind column');
+      expect(q.getAttribute('title')).toBe(KIND_HELP);
+      const descId = q.getAttribute('aria-describedby')!;
       expect(descId).toBeTruthy();
       descIds.add(descId);
       const desc = el.querySelector(`#${descId}`)!;
       expect(desc).not.toBeNull();
       expect(desc.textContent!.trim()).toBe(KIND_HELP);
     }
-    expect(descIds.size).toBe(infoBtns.length); // ids are per-station, no duplicates
+    expect(descIds.size).toBe(glyphs.length); // ids are per-station, no duplicates
 
-    // Click opens the card in THAT station's section only, as an
-    // in-flow note OUTSIDE the scroll container (so the container's
-    // overflow can never clip it), and the button points at it via
-    // aria-controls.
-    infoBtns[0].click();
-    fixture.detectChanges();
-    const cards = [...el.querySelectorAll('.kind-help')];
-    expect(cards).toHaveLength(1);
-    expect(cards[0].closest('.table-scroll')).toBeNull();
-    expect(infoBtns[0].getAttribute('aria-expanded')).toBe('true');
-    expect(infoBtns[0].getAttribute('aria-controls')).toBe(cards[0].id);
-    expect(infoBtns[1].getAttribute('aria-expanded')).toBe('false');
-
-    // The copy states the capability truth: what Kind means, which
-    // kinds currently work, which are reserved, and that ? rows
-    // create nothing. kindSupport.test.ts pins the vocabulary to the
-    // runtime wrapper table; here we pin the load-bearing claims.
-    const text = cards[0].textContent!;
-    expect(text).toContain('Apple Home accessory type');
-    expect(text).toContain('Currently supported kinds are temperature, humidity, light, motion, CO₂, PM2.5 and PM10');
-    expect(text).toContain('CO, leak, contact and occupancy are reserved for future support');
-    expect(text).toContain('unrecognized and do not create an accessory');
-
-    // Click again closes it.
-    infoBtns[0].click();
-    fixture.detectChanges();
-    expect(el.querySelector('.kind-help')).toBeNull();
-    expect(infoBtns[0].getAttribute('aria-expanded')).toBe('false');
+    // The tooltip claims stay capability-truthful (pinned in full by
+    // kindSupport.test.ts).
+    expect(KIND_HELP).toContain('Currently supported kinds are temperature, humidity, light, motion, CO₂, PM2.5 and PM10');
+    expect(KIND_HELP).toContain('CO, leak, contact and occupancy are reserved for future support');
   });
 
   it('passes cached-accessory uniqueIds to /editor-state (§8.7 source 3)', async () => {
@@ -724,7 +698,9 @@ describe('draft editing + preview (PR B — no persistence)', () => {
     expect(el.textContent).toContain('1 draft change, not saved yet.');
     const after = el.querySelector('.unit-families select') as HTMLSelectElement;
     expect(after.value).toBe('fps');
-    expect([...after.options].map(o => o.textContent)).not.toContain('Mixed');
+    // Mixed stays in the DOM for width stability, hidden from the
+    // dropdown once the family resolves.
+    expect(([...after.options].find(o => o.textContent === 'Mixed') as HTMLOptionElement).hidden).toBe(true);
   });
 
   it('a station-only custom row receives a station-scoped unit patch, never a bare global fragment (round 2 F1)', async () => {
@@ -946,7 +922,9 @@ describe('draft editing + preview (PR B — no persistence)', () => {
     // selector shows fps, not Mixed.
     const after = el.querySelector('.unit-families select') as HTMLSelectElement;
     expect(after.value).toBe('fps');
-    expect([...after.options].map(o => o.textContent)).not.toContain('Mixed');
+    // Mixed stays in the DOM for width stability, hidden from the
+    // dropdown once the family resolves.
+    expect(([...after.options].find(o => o.textContent === 'Mixed') as HTMLOptionElement).hidden).toBe(true);
   });
 
   it('a family choice supersedes an open row editor: the editor closes and the global draft stands', async () => {
