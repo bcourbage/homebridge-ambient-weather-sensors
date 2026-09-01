@@ -711,7 +711,9 @@ export class AwnRootComponent {
     }
     const out: Array<{ key: string; label: string; choices: DisplayFamilyChoiceDto[]; current: string }> = [];
     for (const family of vocab.families ?? []) {
-      const eligible = state.rows.filter(r => this.rowInFamily(r, family));
+      // Rows drafted out of existence neither render in the family's
+      // state nor hold it on Mixed (round 5).
+      const eligible = state.rows.filter(r => this.rowInFamily(r, family) && this.rowSurvivesDrafts(r));
       if (eligible.length === 0) {
         continue;
       }
@@ -725,6 +727,34 @@ export class AwnRootComponent {
   private rowInFamily(row: EditorRowDto, family: DisplayFamilyDto): boolean {
     return row.kind !== 'unrecognized' && row.measurement !== undefined
       && family.measurements.includes(row.measurement);
+  }
+
+  /**
+   * Does this row survive the CURRENT drafts (round 5)? The one
+   * predicate behind both the family action and the family selector's
+   * displayed state, so a row drafted out of existence can neither
+   * take a unit patch nor hold a selector on Mixed.
+   *
+   * Survival uses `origin` — the resolver's ACCEPTED layers — rather
+   * than re-reading raw authored kind/measurement (raw fragments
+   * deliberately include rejected entries): a custom row with
+   * origin 'station' has an accepted station fragment, which for a
+   * custom dataPoint always carries its own full identity (the save
+   * boundary refuses partial custom exceptions).
+   */
+  private rowSurvivesDrafts(row: EditorRowDto): boolean {
+    if (row.identityScope === 'custom-station') {
+      return !this.store.keyRemovedFor(row.stationMac, row.dataPoint);
+    }
+    if (row.identityScope === 'custom-global' && this.store.keyRemovedFor(undefined, row.dataPoint)) {
+      // The global identity is going away: only an independently
+      // accepted station exception survives, while its own key stands.
+      return row.origin === 'station' && !this.store.keyRemovedFor(row.stationMac, row.dataPoint);
+    }
+    // Known rows always survive an override removal (they fall back
+    // to the built-in defaults); a custom-global row survives while
+    // its global key remains.
+    return true;
   }
 
   /**
@@ -806,7 +836,7 @@ export class AwnRootComponent {
       // unit patch would resurrect the row as a minimal replacement
       // WITHOUT its identity (custom-missing-kind). Skip it — the row
       // is on its way out.
-      if (this.store.keyRemovedFor(row.stationMac, row.dataPoint)) {
+      if (!this.rowSurvivesDrafts(row)) {
         continue;
       }
       if (unit === row.displayUnit) {
@@ -849,12 +879,7 @@ export class AwnRootComponent {
       // and the normal path below handles them.
       if (rows[0].identityScope === 'custom-global' && this.store.keyRemovedFor(undefined, dataPoint)) {
         for (const row of rows) {
-          if (this.store.keyRemovedFor(row.stationMac, dataPoint)) {
-            continue; // this station fragment is being removed too
-          }
-          const survives = this.store.authoredValueFor(row.stationMac, dataPoint, 'kind') !== undefined
-            && this.store.authoredValueFor(row.stationMac, dataPoint, 'measurement') !== undefined;
-          if (!survives) {
+          if (!this.rowSurvivesDrafts(row)) {
             continue;
           }
           // Always an explicit patch: the row's resolved displayUnit

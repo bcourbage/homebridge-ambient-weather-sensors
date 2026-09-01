@@ -285,11 +285,11 @@ export class DraftStore {
 
   /**
    * The authored value of a field at an explicit key, or undefined.
-   * Accepts any authored field name (not just draftable ones): the
-   * family action reads identity fields (kind, measurement) to decide
-   * whether a station fragment survives a global-template removal.
+   * Raw authored fragments deliberately include rejected entries, so
+   * this must not be used to infer row VALIDITY — survival decisions
+   * belong to the resolver's accepted layers (a row's `origin`).
    */
-  authoredValueFor(stationMac: string | undefined, dataPoint: string, field: string): unknown {
+  authoredValueFor(stationMac: string | undefined, dataPoint: string, field: DraftableField): unknown {
     return this.authoredBaseline(keyFor(stationMac, dataPoint))[field];
   }
 

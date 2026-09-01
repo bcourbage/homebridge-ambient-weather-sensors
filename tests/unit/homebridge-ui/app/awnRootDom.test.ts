@@ -859,6 +859,10 @@ describe('draft editing + preview (PR B — no persistence)', () => {
     const fixture = await render(ipc);
     const el = fixture.nativeElement as HTMLElement;
 
+    // Both custom rows resolve kph, the known row fps: the selector
+    // starts Mixed.
+    expect((el.querySelector('.unit-families select') as HTMLSelectElement).value).toBe('');
+
     // Use defaults on both custom rows (their identity fragments are
     // drafted for removal).
     for (const dp of ['barn_wind', 'custom_y']) {
@@ -866,6 +870,11 @@ describe('draft editing + preview (PR B — no persistence)', () => {
       ([...el.querySelectorAll('button')].find(b => b.textContent === 'Use defaults') as HTMLButtonElement).click();
       await settle(fixture);
     }
+
+    // Round 5: removal-drafted custom rows no longer influence the
+    // family's displayed state — only the surviving known row (fps)
+    // counts, so Mixed clears before any family choice.
+    expect((el.querySelector('.unit-families select') as HTMLSelectElement).value).toBe('fps');
 
     // A family choice afterward drafts the KNOWN dataPoint only.
     const sel = el.querySelector('.unit-families select') as HTMLSelectElement;
@@ -931,6 +940,13 @@ describe('draft editing + preview (PR B — no persistence)', () => {
     // The known wind row already resolves fps with nothing authored,
     // so the choice correctly authors nothing for it.
     expect(proposal.some(f => f.dataPoint === 'windspeedmph')).toBe(false);
+
+    // Round 5: the disappearing global-origin row no longer holds the
+    // selector's state — every SURVIVING wind row is fps, so the
+    // selector shows fps, not Mixed.
+    const after = el.querySelector('.unit-families select') as HTMLSelectElement;
+    expect(after.value).toBe('fps');
+    expect([...after.options].map(o => o.textContent)).not.toContain('Mixed');
   });
 
   it('a family choice supersedes an open row editor: the editor closes and the global draft stands', async () => {
