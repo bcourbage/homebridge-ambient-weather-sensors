@@ -41,7 +41,31 @@ const VOCAB: VocabularyDto = {
       customSource: [{ unit: 'mph', label: 'mph' }, { unit: 'fps', label: 'ft/sec' }],
       extendedDisplay: [{ unit: 'mph', label: 'mph' }, { unit: 'fps', label: 'ft/sec' }],
     },
+    'rain-rate': {
+      customSource: [],
+      extendedDisplay: [{ unit: 'in_per_hr', label: 'in/hr' }, { unit: 'mm_per_hr', label: 'mm/hr' }],
+    },
+    'rain-accumulation': {
+      customSource: [],
+      extendedDisplay: [{ unit: 'in', label: 'in' }, { unit: 'mm', label: 'mm' }],
+    },
   },
+  families: [
+    {
+      key: 'wind-speed', label: 'Wind speed', measurements: ['wind-speed'],
+      choices: [
+        { id: 'mph', label: 'mph', units: { 'wind-speed': 'mph' } },
+        { id: 'fps', label: 'ft/sec', units: { 'wind-speed': 'fps' } },
+      ],
+    },
+    {
+      key: 'rainfall', label: 'Rainfall', measurements: ['rain-rate', 'rain-accumulation'],
+      choices: [
+        { id: 'imperial', label: 'in/hr', units: { 'rain-rate': 'in_per_hr', 'rain-accumulation': 'in' } },
+        { id: 'metric', label: 'mm/hr', units: { 'rain-rate': 'mm_per_hr', 'rain-accumulation': 'mm' } },
+      ],
+    },
+  ],
 };
 
 function editorState(overrides: Partial<EditorStateDto> = {}): EditorStateDto {
@@ -590,31 +614,38 @@ describe('draft editing + preview (PR B — no persistence)', () => {
     });
   });
 
-  it('family unit selector drafts the display unit onto every row of the measurement (GA #70 editor layer)', async () => {
+  it('family selector authors a GLOBAL unit template for the whole family (GA #70 editor layer)', async () => {
     const ipc = makeIpc(editorState());
     const fixture = await render(ipc);
     const el = fixture.nativeElement as HTMLElement;
 
-    // Only wind-speed offers display units in the fixture vocabulary
-    // (temperature has an empty extendedDisplay), so exactly one
-    // family renders, labeled from the measurement code, showing the
-    // single wind row's resolved unit.
+    // Only the wind family has rows in the fixture: the rainfall
+    // family is offered by the vocabulary but renders no selector
+    // (and temperature has no display choices at all).
     const panel = el.querySelector('.unit-families') as HTMLElement;
     expect(panel).not.toBeNull();
     const selects = [...panel.querySelectorAll('select')] as HTMLSelectElement[];
     expect(selects).toHaveLength(1);
-    expect(panel.textContent).toContain('wind speed');
+    expect(panel.textContent).toContain('Wind speed');
     expect(selects[0].value).toBe('fps');
 
-    // Choosing another unit drafts it (the wind row resolves to fps,
-    // so mph is a real change)...
+    // Choosing another unit drafts ONE global template fragment (the
+    // wind row resolves to fps, so mph is a real change).
     selects[0].value = 'mph';
     selects[0].dispatchEvent(new Event('change'));
     await settle(fixture);
     expect(el.textContent).toContain('1 draft change, not saved yet.');
 
-    // ...and choosing the resolved unit again clears the draft
-    // (applyEdit semantics: equal-to-resolved un-drafts).
+    // The proposal carries the GLOBAL fragment - no stationMac - so
+    // stations not seen yet inherit the choice (review F1).
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement).click();
+    await settle(fixture);
+    const previewReq = ipc.requests.filter(r => r.path === '/preview-save').at(-1)!;
+    const proposal = (previewReq.body as { proposal: Array<Record<string, unknown>> }).proposal;
+    expect(proposal).toContainEqual({ dataPoint: 'windspeedmph', displayUnit: 'mph' });
+
+    // ...and choosing a unit that already resolves everywhere with
+    // nothing authored clears the draft instead of authoring a no-op.
     const sel = el.querySelector('.unit-families select') as HTMLSelectElement;
     sel.value = 'fps';
     sel.dispatchEvent(new Event('change'));
@@ -622,7 +653,44 @@ describe('draft editing + preview (PR B — no persistence)', () => {
     expect(el.textContent).toContain('No draft changes yet.');
   });
 
-  it('a family whose rows disagree shows Mixed, and one selection unifies them', async () => {
+  it("AWN's one Rainfall choice drives BOTH rain measurements together (review F2)", async () => {
+    const base = editorState();
+    const rateRow = {
+      stationMac: MAC, dataPoint: 'hourlyrainin', kind: 'motion', measurement: 'rain-rate',
+      sourceUnit: 'in_per_hr', displayUnit: 'in_per_hr', name: 'Rain Rate', enabled: true,
+      batteryField: null, origin: 'default' as const,
+    };
+    const accumRow = {
+      stationMac: MAC, dataPoint: 'dailyrainin', kind: 'motion', measurement: 'rain-accumulation',
+      sourceUnit: 'in', displayUnit: 'in', name: 'Rain Day', enabled: true,
+      batteryField: null, origin: 'default' as const,
+    };
+    const ipc = makeIpc(editorState({ rows: [...base.rows, rateRow, accumRow] }), [], PREVIEW_OK);
+    const fixture = await render(ipc);
+    const el = fixture.nativeElement as HTMLElement;
+
+    // ONE Rainfall selector governs both measurements; both rows
+    // resolve imperial, so that choice is current.
+    const selects = [...el.querySelectorAll('.unit-families select')] as HTMLSelectElement[];
+    expect(selects).toHaveLength(2); // Wind speed + Rainfall
+    const rain = selects.find(s => (s.closest('label') as HTMLElement).textContent!.includes('Rainfall'))!;
+    expect(rain.value).toBe('imperial');
+
+    // Metric drafts BOTH global templates in one gesture: rate to
+    // mm/hr AND accumulation to mm - never one without the other.
+    rain.value = 'metric';
+    rain.dispatchEvent(new Event('change'));
+    await settle(fixture);
+    expect(el.textContent).toContain('2 draft changes, not saved yet.');
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement).click();
+    await settle(fixture);
+    const proposal = (ipc.requests.filter(r => r.path === '/preview-save').at(-1)!
+      .body as { proposal: Array<Record<string, unknown>> }).proposal;
+    expect(proposal).toContainEqual({ dataPoint: 'hourlyrainin', displayUnit: 'mm_per_hr' });
+    expect(proposal).toContainEqual({ dataPoint: 'dailyrainin', displayUnit: 'mm' });
+  });
+
+  it('a family whose rows disagree shows Mixed, and one selection unifies them globally', async () => {
     const base = editorState();
     const secondWind = {
       ...base.rows[1], stationMac: OTHER_MAC, displayUnit: 'mph', origin: 'default' as const,
@@ -636,7 +704,8 @@ describe('draft editing + preview (PR B — no persistence)', () => {
     expect(sel.value).toBe('');
     expect([...sel.options].map(o => o.textContent)).toContain('Mixed');
 
-    // Selecting fps drafts only the row that differs (the mph one).
+    // One selection unifies every station through a single global
+    // template draft.
     sel.value = 'fps';
     sel.dispatchEvent(new Event('change'));
     await settle(fixture);
@@ -646,21 +715,21 @@ describe('draft editing + preview (PR B — no persistence)', () => {
     expect([...after.options].map(o => o.textContent)).not.toContain('Mixed');
   });
 
-  it('a family unit change routes through an open row editor form instead of bypassing it', async () => {
+  it('a family choice supersedes an open row editor: the editor closes and the global draft stands', async () => {
     const ipc = makeIpc(editorState());
     const fixture = await render(ipc);
     const el = openEditor(fixture, 'windspeedmph');
+    expect(el.querySelector('.editor-form')).not.toBeNull();
 
     const sel = el.querySelector('.unit-families select') as HTMLSelectElement;
     sel.value = 'mph';
     sel.dispatchEvent(new Event('change'));
     await settle(fixture);
 
-    // The open form's unit control shows the family choice (no silent
-    // divergence between the visible control and the draft), and the
-    // change is drafted.
-    const formUnit = el.querySelector('.editor-form select') as HTMLSelectElement;
-    expect(formUnit.value).toBe('mph');
+    // The open editor closed (its form would re-draft a stale
+    // station-level unit on its next sync) and the family draft is
+    // the one draft standing.
+    expect(el.querySelector('.editor-form')).toBeNull();
     expect(el.textContent).toContain('1 draft change, not saved yet.');
   });
 

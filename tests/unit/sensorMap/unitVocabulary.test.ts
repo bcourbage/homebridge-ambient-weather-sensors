@@ -19,6 +19,7 @@ import { describe, expect, it } from 'vitest';
 import { LEGAL_UNITS_FOR_MEASUREMENT } from '../../../src/sensorMap/units';
 import {
   AWN_UNITS_PAGE,
+  DISPLAY_FAMILIES,
   LEGACY_SCHEMA_UNIT_EXPOSURE,
   UNIT_VOCABULARY,
   V17_LEGAL_LEGACY_UNITS,
@@ -152,5 +153,70 @@ describe('legacy schema parity (exact: keys, ids, titles, order, defaults)', () 
           .toContain(o.unit);
       }
     }
+  });
+});
+
+describe('display families (GA #70 editor layer, PR #53)', () => {
+  const allMeasurements = Object.keys(UNIT_VOCABULARY) as Measurement[];
+
+  it('every family choice unit is extended-display-selectable for its measurement', () => {
+    for (const family of DISPLAY_FAMILIES) {
+      for (const choice of family.choices) {
+        for (const [m, unit] of Object.entries(choice.units)) {
+          const options = unitOptionsFor(m as Measurement, 'extended-display').map(o => o.unit);
+          expect(options, `${family.key}/${choice.id}/${m}`).toContain(unit);
+        }
+      }
+    }
+  });
+
+  it('each choice covers its family measurements exhaustively, with unique ids', () => {
+    for (const family of DISPLAY_FAMILIES) {
+      expect(family.choices.length, family.key).toBeGreaterThanOrEqual(2);
+      const ids = family.choices.map(c => c.id);
+      expect(new Set(ids).size, family.key).toBe(ids.length);
+      for (const choice of family.choices) {
+        expect(Object.keys(choice.units).sort(), `${family.key}/${choice.id}`)
+          .toEqual([...family.measurements].sort());
+      }
+    }
+  });
+
+  it('every measurement with two or more display options is governed by exactly one family', () => {
+    const governed = new Map<string, string>();
+    for (const family of DISPLAY_FAMILIES) {
+      for (const m of family.measurements) {
+        expect(governed.has(m), `measurement ${m} in two families`).toBe(false);
+        governed.set(m, family.key);
+      }
+    }
+    for (const m of allMeasurements) {
+      const displayOptions = unitOptionsFor(m, 'extended-display');
+      if (displayOptions.length >= 2) {
+        expect(governed.has(m), `measurement ${m} has ${displayOptions.length} display options but no family`).toBe(true);
+      } else {
+        expect(governed.has(m), `measurement ${m} has <2 display options yet sits in family ${governed.get(m)}`).toBe(false);
+      }
+    }
+  });
+
+  it('a family choice exists for every extended-display unit of its measurements (no unreachable unit)', () => {
+    for (const family of DISPLAY_FAMILIES) {
+      for (const m of family.measurements) {
+        const options = unitOptionsFor(m, 'extended-display').map(o => o.unit);
+        const reachable = new Set(family.choices.map(c => c.units[m]));
+        for (const unit of options) {
+          expect(reachable.has(unit), `${family.key}: unit ${unit} of ${m} unreachable from any choice`).toBe(true);
+        }
+      }
+    }
+  });
+
+  it('family order follows the AWN units page for categories AWN has', () => {
+    const awnSupportedOrder = AWN_UNITS_PAGE.categories
+      .filter(c => c.classification === 'supported')
+      .map(c => c.awnCategory);
+    const familyLabels = DISPLAY_FAMILIES.map(f => f.label);
+    expect(familyLabels.map(l => l.toLowerCase())).toEqual(awnSupportedOrder.map(l => l.toLowerCase()));
   });
 });

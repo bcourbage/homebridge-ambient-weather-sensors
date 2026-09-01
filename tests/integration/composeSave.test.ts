@@ -17,8 +17,10 @@ import * as path from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { blockDigest, handleCommitSave, handleComposeSave, handlePreviewSave, syntheticProbeMac, type HandlerDeps } from '../../homebridge-ui/handlers';
+import { blockDigest, handleCommitSave, handleComposeSave, handleGetEditorState, handlePreviewSave, syntheticProbeMac, type HandlerDeps } from '../../homebridge-ui/handlers';
 import { composeAndPersist, type OrchestratorDeps } from '../../homebridge-ui/saveOrchestrator';
+import { DraftStore } from '../../homebridge-ui/app-src/draft-store';
+import { buildEffectiveSensorMap } from '../../src/sensorMap/buildEffectiveMap';
 import { LEGACY_JOURNAL_DIR, LEGACY_SENSOR_FIELDS, LEGACY_SNAPSHOT_FILE, recognizeMirror } from '../../src/sensorMap/legacyMirror';
 
 const MAC = 'AA:BB:CC:DD:EE:01';
@@ -1542,5 +1544,73 @@ describe('HB UI X form-value replacement (beta.14 smoke #6, measured on 5.28)', 
     // Composed from DISK, so the child-bridge settings survive the
     // save even though the session copy never carried them.
     expect(client.persistedArray![0]._bridge).toEqual({ username: '0E:22:33:44:55:66', port: 51900 });
+  });
+});
+
+describe('family unit choice becomes a GLOBAL template future stations inherit (PR #53 review F1)', () => {
+  it('editor-state → DraftStore family action → compose → canonical map → a never-seen station resolves the chosen unit', async () => {
+    const MAC_B = 'AA:BB:CC:DD:EE:02';
+    const NEVER_SEEN = 'AA:BB:CC:DD:EE:99';
+    const V2_BLOCK = {
+      platform: 'AmbientWeatherSensors',
+      name: 'Test Station',
+      apiKey: 'k', applicationKey: 'a',
+      _sensorMapV2: true,
+      configVersion: 2,
+      // A station exception that authors displayUnit AND an unrelated
+      // field: the family action must strip ONLY displayUnit.
+      sensorMap: [{ dataPoint: 'windspeedmph', stationMac: MAC, displayUnit: 'kph', name: 'Roof Wind' }],
+    };
+    const rig = makeRig(V2_BLOCK);
+    discoveryStore(rig, [MAC, MAC_B]);
+
+    // The exact browser flow: authored fragments from /editor-state
+    // feed the DraftStore; the family action strips displayUnit from
+    // station exceptions and authors the global template.
+    const state = await handleGetEditorState(rig.deps, {});
+    const store = new DraftStore();
+    store.reset(state.authored);
+    for (const mac of store.stationsAuthoringField('windspeedmph', 'displayUnit')) {
+      store.removeFieldFor(mac, 'windspeedmph', 'displayUnit');
+    }
+    store.setFieldFor(undefined, 'windspeedmph', 'displayUnit', 'fps');
+
+    const payload = { base: V2_BLOCK, proposal: store.proposal() };
+    const result = await handleComposeSave(rig.deps, { ...payload, confirmDigest: await digestFor(rig, payload) });
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+
+    // Canonical form: a global displayUnit template exists; the
+    // station exception keeps its name but no longer pins a unit.
+    const globalEntry = result.canonicalSensorMap.find(e => e.dataPoint === 'windspeedmph' && e.stationMac === undefined);
+    expect(globalEntry).toHaveProperty('displayUnit', 'fps');
+    const exception = result.canonicalSensorMap.find(e => e.dataPoint === 'windspeedmph' && e.stationMac === MAC);
+    expect(exception).toHaveProperty('name', 'Roof Wind');
+    expect(exception).not.toHaveProperty('displayUnit');
+
+    // A station that has NEVER been seen resolves the chosen unit
+    // from the global template — the set-once model, canonicalized
+    // and reloaded.
+    const resolved = buildEffectiveSensorMap({
+      userOverrides: result.canonicalSensorMap,
+      discovery: { schemaVersion: 1, entries: [] },
+      uiState: { schemaVersion: 1, dismissedNoticeIds: [], forgottenFields: [] },
+      stations: [
+        { macAddress: MAC, name: 'Roof' },
+        { macAddress: MAC_B, name: 'Cabin' },
+        { macAddress: NEVER_SEEN, name: 'Future' },
+      ],
+      configMode: 'v2',
+    });
+    for (const mac of [MAC, MAC_B, NEVER_SEEN]) {
+      const row = resolved.rows.find(r => r.dataPoint === 'windspeedmph' && r.stationMac === mac);
+      expect(row, `windspeedmph on ${mac}`).toBeDefined();
+      expect(row).toHaveProperty('displayUnit', 'fps');
+    }
+    // The unrelated exception field still applies to its station only.
+    expect(resolved.rows.find(r => r.dataPoint === 'windspeedmph' && r.stationMac === MAC))
+      .toHaveProperty('name', 'Roof Wind');
   });
 });

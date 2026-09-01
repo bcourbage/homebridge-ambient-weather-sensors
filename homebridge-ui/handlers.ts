@@ -41,7 +41,7 @@ import {
 import {
   loadUiStateStore,
 } from '../dist/sensorMap/persistence/uiStateStore.js';
-import { UNIT_VOCABULARY, unitOptionsFor } from '../dist/sensorMap/unitVocabulary.js';
+import { DISPLAY_FAMILIES, UNIT_VOCABULARY, unitOptionsFor } from '../dist/sensorMap/unitVocabulary.js';
 import type { Logger, ReadStoreOptions } from '../dist/sensorMap/persistence/atomicWrite.js';
 import type {
   DiscoveryStore,
@@ -1316,7 +1316,15 @@ export function handleGetVocabulary(): VocabularyDto {
       extendedDisplay: unitOptionsFor(m, 'extended-display').map(o => ({ unit: o.unit, label: o.label })),
     };
   }
-  return { measurements };
+  // Display families: pure projection of DISPLAY_FAMILIES (the Units
+  // panel's canonical metadata - PR #53 review F2/F4).
+  const families: VocabularyDto['families'] = DISPLAY_FAMILIES.map(f => ({
+    key: f.key,
+    label: f.label,
+    measurements: [...f.measurements],
+    choices: f.choices.map(c => ({ id: c.id, label: c.label, units: { ...c.units } })),
+  }));
+  return { measurements, families };
 }
 
 type OverrideLayers = ReturnType<typeof partitionOverrideLayers>;

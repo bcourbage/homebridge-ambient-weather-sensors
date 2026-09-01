@@ -26,6 +26,8 @@ import { HomebridgeService } from './homebridge.service';
 import { KIND_HELP } from './kind-support';
 import { composeAndPersist } from '../saveOrchestrator';
 import type {
+  DisplayFamilyChoiceDto,
+  DisplayFamilyDto,
   EditorRowDto,
   EditorStateDto,
   PreviewResultDto,
@@ -245,27 +247,29 @@ interface StationGroup {
       }
 
       <!-- Family display units (GA task #70's editor layer): one
-           selector per measurement that offers display units, drafting
-           the choice onto every row of that measurement across all
-           stations. Rows stay individually editable afterward; a
-           family whose rows currently disagree shows Mixed. -->
+           selector per display family from the server's canonical
+           metadata, drafting a GLOBAL template per dataPoint (so
+           stations not seen yet inherit it) and stripping station
+           exceptions. AWN's one Rainfall choice spans rain rate and
+           accumulation together. Rows stay individually editable
+           afterward; a family whose rows disagree shows Mixed. -->
       @if (unitFamilies().length > 0) {
         <div class="unit-families">
           <span class="unit-families-title">Units</span>
-          @for (f of unitFamilies(); track f.measurement) {
-            <label>{{ familyLabel(f.measurement) }}
-              <select #familySel (change)="applyFamilyUnit(f.measurement, familySel.value)" [disabled]="saving() || confirmOpen() || reloadRequired()">
+          @for (f of unitFamilies(); track f.key) {
+            <label>{{ f.label }}
+              <select #familySel (change)="applyFamilyChoice(f.key, familySel.value)" [disabled]="saving() || confirmOpen() || reloadRequired()">
                 @if (f.current === '') {
                   <option value="" disabled selected>Mixed</option>
                 }
-                @for (u of f.options; track u.unit) {
-                  <option [value]="u.unit" [selected]="u.unit === f.current">{{ u.label }}</option>
+                @for (c of f.choices; track c.id) {
+                  <option [value]="c.id" [selected]="c.id === f.current">{{ c.label }}</option>
                 }
               </select>
             </label>
           }
         </div>
-        <p class="sub unit-families-note">Sets the display unit on every row of a measurement, as a draft. Single rows can still be changed in their row editor.</p>
+        <p class="sub unit-families-note">Sets the display unit for a whole category, on every station, including stations added later. Single rows can still be changed in their row editor.</p>
       }
 
       @if (previewPending()) {
@@ -692,76 +696,126 @@ export class AwnRootComponent {
   }
 
   /**
-   * One entry per measurement that (a) offers display units and (b)
-   * has at least one editable row on the page. `current` is the unit
-   * every eligible row currently shows (drafts included), or '' when
-   * they disagree (rendered as Mixed).
+   * The display families the Units panel renders: the server's
+   * canonical family metadata (AWN units-page order), filtered to
+   * families with at least one editable row on the page. `current`
+   * is the CHOICE id every eligible row currently reflects (drafts
+   * included), or '' when rows disagree (rendered as Mixed).
    */
-  protected readonly unitFamilies = computed<Array<{ measurement: string; options: UnitOptionDto[]; current: string }>>(() => {
+  protected readonly unitFamilies = computed<Array<{ key: string; label: string; choices: DisplayFamilyChoiceDto[]; current: string }>>(() => {
     this.draftVersion();
     const vocab = this.vocab();
     const state = this.state();
     if (!vocab || !state) {
       return [];
     }
-    const byMeasurement = new Map<string, { options: UnitOptionDto[]; units: Set<string> }>();
-    for (const row of state.rows) {
-      if (row.kind === 'unrecognized' || !row.measurement) {
+    const out: Array<{ key: string; label: string; choices: DisplayFamilyChoiceDto[]; current: string }> = [];
+    for (const family of vocab.families ?? []) {
+      const eligible = state.rows.filter(r => this.rowInFamily(r, family));
+      if (eligible.length === 0) {
         continue;
       }
-      const options = vocab.measurements[row.measurement]?.extendedDisplay ?? [];
-      if (options.length === 0) {
-        continue;
-      }
-      let f = byMeasurement.get(row.measurement);
-      if (!f) {
-        f = { options, units: new Set() };
-        byMeasurement.set(row.measurement, f);
-      }
-      const effective = this.store.draftedValue(row, 'displayUnit') ?? row.displayUnit;
-      f.units.add(typeof effective === 'string' ? effective : '');
+      const match = family.choices.find(c =>
+        eligible.every(r => this.effectiveDisplayUnit(r) === c.units[r.measurement!]));
+      out.push({ key: family.key, label: family.label, choices: family.choices, current: match?.id ?? '' });
     }
-    return [...byMeasurement.entries()]
-      .map(([measurement, f]) => ({
-        measurement,
-        options: f.options,
-        current: f.units.size === 1 ? [...f.units][0] : '',
-      }))
-      .sort((a, b) => a.measurement.localeCompare(b.measurement));
+    return out;
   });
 
-  /** Measurement code → label for the family-unit selector. */
-  protected familyLabel(measurement: string): string {
-    return measurement.replace(/-/g, ' ');
+  private rowInFamily(row: EditorRowDto, family: DisplayFamilyDto): boolean {
+    return row.kind !== 'unrecognized' && row.measurement !== undefined
+      && family.measurements.includes(row.measurement);
   }
 
   /**
-   * Draft `unit` as the display unit of every eligible row of the
-   * measurement, with per-row applyEdit semantics: a row already
-   * resolving to that unit gets its patch cleared instead. A row
-   * whose editor is open routes through its form so the visible
-   * control and the draft cannot disagree.
+   * The display unit a row would resolve to with pending drafts
+   * applied — field-level layering for this ONE field (station patch
+   * over surviving station-authored value over global patch over the
+   * server-resolved unit), so the Units panel reflects drafts the
+   * family action itself creates. Preview and save remain
+   * server-authoritative; this never feeds a proposal.
    */
-  protected applyFamilyUnit(measurement: string, unit: string): void {
+  private effectiveDisplayUnit(row: EditorRowDto): string | undefined {
+    const own = this.store.draftedValue(row, 'displayUnit');
+    if (typeof own === 'string') {
+      return own;
+    }
+    if (row.origin !== 'global') {
+      const stationAuthored = this.store.authoredValueFor(row.stationMac, row.dataPoint, 'displayUnit');
+      const stationGone = this.store.fieldRemovedFor(row.stationMac, row.dataPoint, 'displayUnit')
+        || this.store.keyRemovedFor(row.stationMac, row.dataPoint);
+      if (typeof stationAuthored === 'string' && !stationGone) {
+        return row.displayUnit; // the station exception stands; the server already resolved it
+      }
+      const globalPatch = this.store.draftedValueFor(undefined, row.dataPoint, 'displayUnit');
+      if (typeof globalPatch === 'string') {
+        return globalPatch;
+      }
+      if (typeof stationAuthored === 'string' && stationGone) {
+        // The exception is being stripped with no global draft: the
+        // authored global template (or the default) takes over.
+        const globalAuthored = this.store.authoredValueFor(undefined, row.dataPoint, 'displayUnit');
+        return typeof globalAuthored === 'string' ? globalAuthored : row.displayUnit;
+      }
+    }
+    return row.displayUnit;
+  }
+
+  /**
+   * Apply one family choice (review F1: global, set-once semantics):
+   * per dataPoint of the family, author a GLOBAL displayUnit template
+   * (so stations not yet seen inherit it) and strip the displayUnit
+   * field from station exceptions. A global fragment is skipped only
+   * when nothing is authored anywhere and every row already resolves
+   * to the choice (authoring it would be a pure no-op config change).
+   * Pending row-level unit drafts are superseded, and an open
+   * family-member row editor is closed first (its form would re-draft
+   * a stale station-level unit on its next sync).
+   */
+  protected applyFamilyChoice(familyKey: string, choiceId: string): void {
+    const vocab = this.vocab();
     const state = this.state();
-    if (!unit || !state) {
+    const family = vocab?.families.find(f => f.key === familyKey);
+    const choice = family?.choices.find(c => c.id === choiceId);
+    if (!vocab || !state || !family || !choice) {
       return;
     }
-    for (const row of state.rows) {
-      if (row.kind === 'unrecognized' || row.measurement !== measurement) {
+
+    const familyRows = state.rows.filter(r => this.rowInFamily(r, family));
+    if (familyRows.some(r => this.isExpanded(r))) {
+      this.expandedKey.set(null);
+      this.editForm = null;
+      this.editFormInvalid.set(false);
+    }
+
+    const byDataPoint = new Map<string, EditorRowDto[]>();
+    for (const row of familyRows) {
+      const list = byDataPoint.get(row.dataPoint) ?? [];
+      list.push(row);
+      byDataPoint.set(row.dataPoint, list);
+    }
+
+    for (const [dataPoint, rows] of byDataPoint) {
+      const unit = choice.units[rows[0].measurement!];
+      if (unit === undefined) {
         continue;
       }
-      if (this.displayUnitOptions(row).length === 0) {
-        continue;
-      }
-      if (this.isExpanded(row) && this.editForm) {
-        this.editForm.patchValue({ displayUnit: unit });
-        continue;
-      }
-      if (unit === row.displayUnit) {
+      // The family choice supersedes pending row-level unit drafts.
+      for (const row of rows) {
         this.store.clearField(row, 'displayUnit');
+      }
+      // Strip station exceptions so the global template governs.
+      const exceptions = this.store.stationsAuthoringField(dataPoint, 'displayUnit');
+      for (const mac of exceptions) {
+        this.store.removeFieldFor(mac, dataPoint, 'displayUnit');
+      }
+      const globalAuthored = this.store.authoredValueFor(undefined, dataPoint, 'displayUnit');
+      const alreadyDefault = globalAuthored === undefined && exceptions.length === 0
+        && rows.every(r => r.displayUnit === unit);
+      if (alreadyDefault) {
+        this.store.clearFieldFor(undefined, dataPoint, 'displayUnit');
       } else {
-        this.store.setField(row, 'displayUnit', unit);
+        this.store.setFieldFor(undefined, dataPoint, 'displayUnit', unit);
       }
     }
     this.bump();

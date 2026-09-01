@@ -117,6 +117,45 @@ export declare const AWN_UNITS_PAGE: {
     readonly notes: readonly [string, string];
 };
 /**
+ * One selectable option of a display family: a single user choice
+ * that sets the display unit of EVERY measurement the family spans
+ * (AWN's Rainfall toggle sets in/hr for rain-rate AND in for
+ * rain-accumulation in one gesture).
+ */
+export interface DisplayFamilyChoice {
+    /** Stable choice id (unique within the family). */
+    id: string;
+    /** Presentation label, matching AWN's wording where AWN offers it. */
+    label: string;
+    /** displayUnit this choice sets, per measurement of the family. */
+    units: Readonly<Partial<Record<Measurement, SensorUnit>>>;
+}
+export interface DisplayFamily {
+    /** Stable family key. */
+    key: string;
+    /** Presentation label (AWN units-page category name where one exists). */
+    label: string;
+    /** Every measurement this family governs. */
+    measurements: ReadonlyArray<Measurement>;
+    choices: ReadonlyArray<DisplayFamilyChoice>;
+}
+/**
+ * The display families the editor's Units panel offers (GA task #70
+ * editor layer). CANONICAL: this list owns which families exist,
+ * their labels, their ordering (AWN units-page order for categories
+ * AWN has; the nm plugin extra appended within Distance), and which
+ * measurements each choice spans. Only families with at least two
+ * choices belong here — a one-option dropdown is not a preference
+ * (PR #53 review F4). unitVocabulary.test.ts pins:
+ *   - every choice unit is extended-display-selectable for its
+ *     measurement in UNIT_VOCABULARY;
+ *   - every measurement with two or more extended-display options is
+ *     governed by exactly one family (completeness — a new unit
+ *     cannot silently bypass the panel);
+ *   - each family's choices cover its measurements exhaustively.
+ */
+export declare const DISPLAY_FAMILIES: ReadonlyArray<DisplayFamily>;
+/**
  * Exact projection of the config-schema `units` fieldset as it ships
  * TODAY (legacy extended-sensor controls; v1.7-compatible option sets).
  * The schema cannot import this module, so unitVocabulary.test.ts pins

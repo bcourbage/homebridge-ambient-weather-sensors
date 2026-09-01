@@ -253,8 +253,29 @@ export interface UnitOptionDto {
 }
 
 /**
+ * One choice of a display family (GA #70 editor layer): a single
+ * user selection that sets the display unit of every measurement the
+ * family spans (AWN's Rainfall toggle covers rain-rate AND
+ * rain-accumulation).
+ */
+export interface DisplayFamilyChoiceDto {
+  id: string;
+  label: string;
+  /** displayUnit per measurement this choice sets. */
+  units: { [measurement: string]: string };
+}
+
+export interface DisplayFamilyDto {
+  key: string;
+  label: string;
+  measurements: string[];
+  choices: DisplayFamilyChoiceDto[];
+}
+
+/**
  * Response of request '/vocabulary': per-measurement unit options for
- * each selection context, in vocabulary display order.
+ * each selection context, in vocabulary display order, plus the
+ * display families the Units panel offers, in AWN units-page order.
  */
 export interface VocabularyDto {
   measurements: {
@@ -263,4 +284,5 @@ export interface VocabularyDto {
       extendedDisplay: UnitOptionDto[];
     };
   };
+  families: DisplayFamilyDto[];
 }

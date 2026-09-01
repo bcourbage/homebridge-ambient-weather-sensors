@@ -26,7 +26,7 @@ import { shadowModeEnabled } from '../dist/sensorMap/shadowMode.js';
 import { loadDiscoveryStore, } from '../dist/sensorMap/persistence/discoveryStore.js';
 import { loadNoticeStore, } from '../dist/sensorMap/persistence/noticesStore.js';
 import { loadUiStateStore, } from '../dist/sensorMap/persistence/uiStateStore.js';
-import { UNIT_VOCABULARY, unitOptionsFor } from '../dist/sensorMap/unitVocabulary.js';
+import { DISPLAY_FAMILIES, UNIT_VOCABULARY, unitOptionsFor } from '../dist/sensorMap/unitVocabulary.js';
 /**
  * The UI bridge is a READ-ONLY consumer of the platform's persistence
  * stores (§8 single-writer): it must never quarantine-rename a corrupt
@@ -950,7 +950,15 @@ export function handleGetVocabulary() {
             extendedDisplay: unitOptionsFor(m, 'extended-display').map(o => ({ unit: o.unit, label: o.label })),
         };
     }
-    return { measurements };
+    // Display families: pure projection of DISPLAY_FAMILIES (the Units
+    // panel's canonical metadata - PR #53 review F2/F4).
+    const families = DISPLAY_FAMILIES.map(f => ({
+        key: f.key,
+        label: f.label,
+        measurements: [...f.measurements],
+        choices: f.choices.map(c => ({ id: c.id, label: c.label, units: { ...c.units } })),
+    }));
+    return { measurements, families };
 }
 /**
  * Layer/origin metadata must reflect what the resolver ACCEPTED

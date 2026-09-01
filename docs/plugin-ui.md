@@ -94,10 +94,14 @@ problems surface as banners), but the editor is the recommended path.
   display units (matching AmbientWeather.net's unit choices), and set
   motion-trigger thresholds and direction.
 - **Family units**: the Units selectors above the tables set the
-  display unit for every row of a measurement (for example wind speed
-  or pressure) across all stations, as ordinary drafts. Single rows
-  can still be changed in their row editor afterward; a family whose
-  rows currently disagree shows Mixed.
+  display unit for a whole category the way AmbientWeather.net does,
+  including the single Rainfall choice that keeps rain rate and
+  accumulation totals consistent. A selection drafts a global
+  template per data point (so it also applies to stations added
+  later) and clears per-station unit exceptions; everything else
+  those exceptions set is untouched. Single rows can still be changed
+  in their row editor afterward; a family whose rows currently
+  disagree shows Mixed.
 - **Per-station exceptions**: override a setting for one station
   while a global choice keeps applying to the others, matching the
   layer model shown in the table today.
