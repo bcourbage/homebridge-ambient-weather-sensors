@@ -79,6 +79,14 @@ exactly which accessories would register, deregister, or re-register.
 The page follows Homebridge UI X's light/dark theme, including live
 theme switches.
 
+With `configVersion: 2` and the v2 flag on, the settings form hides
+the legacy controls the runtime no longer reads (sensor category
+toggles, extended-sensor thresholds, display units): the plugin
+maintains a dynamic form schema reflecting the configuration mode,
+applied on the next full Homebridge restart after a mode change.
+Those legacy config fields still exist in config.json - the rollback
+mirror maintains them for 1.7.x downgrades.
+
 The v2 opt-in switch lives in the form below the panels: **Advanced
 (v2.0 preview) → Enable sensor-map v2 live path**, which selects the
 live v2 pipeline and populates the discovery and sensor-map panels.
@@ -121,6 +129,11 @@ problems surface as banners), but the editor is the recommended path.
   procedure as the snapshot, sourcing the fields from the chosen
   entry file's `legacy` object — see the README's rollback section
   for the exact steps.
+- **Opting single rows out of a preview**: every modified row in the
+  preview carries a Skip action. It pins that row's changed fields to
+  their current values as an ordinary station-scoped draft (the
+  preview re-runs by itself), so a broad change - a family unit, for
+  example - can go ahead while one or two rows stay as they are.
 - **Guarded saves**: every save is validated server-side against
   the same rules the runtime uses. Changes that would register,
   deregister, or re-register an accessory require explicit

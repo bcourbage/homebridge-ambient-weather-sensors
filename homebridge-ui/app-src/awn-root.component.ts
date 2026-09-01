@@ -21,7 +21,7 @@
 import { ChangeDetectionStrategy, Component, computed, inject, signal, viewChild, type ElementRef } from '@angular/core';
 import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
 
-import { DraftStore } from './draft-store';
+import { DraftStore, type DraftableField } from './draft-store';
 import { HomebridgeService } from './homebridge.service';
 import { KIND_HELP } from './kind-support';
 import { composeAndPersist } from '../saveOrchestrator';
@@ -30,6 +30,7 @@ import type {
   DisplayFamilyDto,
   EditorRowDto,
   EditorStateDto,
+  PreviewChangeDto,
   PreviewResultDto,
   UnitOptionDto,
   VocabularyDto,
@@ -81,13 +82,18 @@ interface StationGroup {
       background: var(--panel-bg); border: 1px solid var(--rule);
     }
     .draft-bar .grow { flex: 1; }
-    .unit-families {
-      display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center;
-      margin: 0 0 4px;
+    /* Two-up grid of label/select rows under a Units title (Bruno's
+       beta.15 RC feedback: the single wrapped line read poorly).
+       Fixed label column keeps every select left-aligned; the grid
+       collapses to one per row on narrow panels. */
+    .unit-families { margin: 0 0 4px; }
+    .unit-families-title { font-weight: 600; display: block; margin-bottom: 6px; }
+    .unit-family-grid {
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+      gap: 6px 28px; max-width: 620px;
     }
-    .unit-families-title { font-weight: 600; }
-    .unit-families label {
-      display: inline-flex; gap: 6px; align-items: center;
+    .unit-family-grid label {
+      display: grid; grid-template-columns: 96px 1fr; align-items: center; gap: 8px;
       font-size: 0.85rem; color: var(--fg-sub);
     }
     /* Same themed control chrome as the row editor's selects: the UA
@@ -127,6 +133,7 @@ interface StationGroup {
       background: var(--warn-bg); color: var(--warn-fg);
     }
     .change-row { padding: 4px 0; border-bottom: 1px solid var(--row-rule); font-size: 0.88rem; }
+    .exclude-change { margin-left: 10px; padding: 1px 8px; font-size: 0.78rem; }
     /* In-flow confirmation card (beta.14 smoke #4): a fixed overlay
        is unusable inside HB UI X's content-height iframe. The class
        name must stay OUT of Bootstrap's namespace: HB UI X mirrors
@@ -264,20 +271,22 @@ interface StationGroup {
       @if (unitFamilies().length > 0) {
         <div class="unit-families">
           <span class="unit-families-title">Units</span>
-          @for (f of unitFamilies(); track f.key) {
-            <label>{{ f.label }}
-              <select #familySel (change)="applyFamilyChoice(f.key, familySel.value)" [disabled]="saving() || confirmOpen() || reloadRequired()">
-                <!-- Always in the DOM so the select's width never
-                     changes when Mixed resolves (a width change
-                     re-wraps the panel row - Bruno's beta.15 RC
-                     feedback); hidden keeps it out of the dropdown. -->
-                <option value="" disabled [hidden]="f.current !== ''" [selected]="f.current === ''">Mixed</option>
-                @for (c of f.choices; track c.id) {
-                  <option [value]="c.id" [selected]="c.id === f.current">{{ c.label }}</option>
-                }
-              </select>
-            </label>
-          }
+          <div class="unit-family-grid">
+            @for (f of unitFamilies(); track f.key) {
+              <label>
+                <span class="unit-family-name">{{ f.label }}</span>
+                <select #familySel (change)="applyFamilyChoice(f.key, familySel.value)" [disabled]="saving() || confirmOpen() || reloadRequired()">
+                  <!-- Always in the DOM so the select's width never
+                       changes when Mixed resolves; hidden keeps it out
+                       of the dropdown. -->
+                  <option value="" disabled [hidden]="f.current !== ''" [selected]="f.current === ''">Mixed</option>
+                  @for (c of f.choices; track c.id) {
+                    <option [value]="c.id" [selected]="c.id === f.current">{{ c.label }}</option>
+                  }
+                </select>
+              </label>
+            }
+          </div>
         </div>
         <p class="sub unit-families-note">Sets the display unit for a whole category, on every station, including stations added later. Single rows can still be changed in their row editor.</p>
       }
@@ -301,6 +310,13 @@ interface StationGroup {
                 <span class="station-meta">{{ c.stationMac }}</span>
                 @if (c.change === 'modified') {
                   <span class="muted"> {{ changeSummary(c.before!, c.after!) }}</span>
+                  <!-- Opt one row OUT of a broader change (Bruno's
+                       beta.15 RC request): pins this row's changed
+                       fields to their current values as a
+                       station-scoped draft, then re-previews. -->
+                  <button type="button" class="exclude-change" title="This row keeps its current settings; everything else still changes."
+                          [disabled]="previewPending() || saving() || confirmOpen() || reloadRequired()"
+                          (click)="excludeChange(c)">Skip</button>
                 }
               </div>
             }
@@ -1031,6 +1047,33 @@ export class AwnRootComponent {
     this.editForm = null;
     this.editFormInvalid.set(false);
     this.bump();
+  }
+
+  /**
+   * Opt one previewed row OUT of a broader change (beta.15 RC
+   * request): every field the proposal would change on this row is
+   * pinned to its CURRENT value as a station-scoped draft — a normal
+   * exception, previewable and savable like any edit — and the
+   * preview re-runs. A field the row does not currently carry cannot
+   * be pinned by an override and is left to the row editor.
+   */
+  protected async excludeChange(c: PreviewChangeDto): Promise<void> {
+    const before = c.before;
+    const after = c.after;
+    if (!before || !after) {
+      return;
+    }
+    const fields: DraftableField[] = ['enabled', 'name', 'displayUnit', 'threshold', 'triggerEnabled', 'triggerDirection'];
+    const b = before as unknown as Record<string, unknown>;
+    const a = after as unknown as Record<string, unknown>;
+    for (const field of fields) {
+      if (b[field] === a[field] || b[field] === undefined) {
+        continue;
+      }
+      this.store.setFieldFor(before.stationMac, c.dataPoint, field, b[field]);
+    }
+    this.bump();
+    await this.preview();
   }
 
   protected async preview(): Promise<void> {

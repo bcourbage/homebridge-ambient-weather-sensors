@@ -949,6 +949,37 @@ describe('draft editing + preview (PR B — no persistence)', () => {
     expect(editorEl.ownerDocument.activeElement).toBe((unitLabel as HTMLLabelElement).control);
   });
 
+  it('Skip on a previewed change pins the row to its current settings and re-previews (beta.15 RC request)', async () => {
+    const ipc = makeIpc(editorState(), [], PREVIEW_OK);
+    const fixture = await render(ipc);
+    const el = fixture.nativeElement as HTMLElement;
+
+    // Create any draft and preview (the canned result carries one
+    // modified change - a tempinf rename - and one added change).
+    const sel = el.querySelector('.unit-families select') as HTMLSelectElement;
+    sel.value = 'mph';
+    sel.dispatchEvent(new Event('change'));
+    await settle(fixture);
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement).click();
+    await settle(fixture);
+
+    // Skip renders on the modified change only - an added row has no
+    // current settings to keep.
+    const skips = [...el.querySelectorAll('.change-row .exclude-change')] as HTMLButtonElement[];
+    expect(skips).toHaveLength(1);
+    expect(skips[0].closest('.change-row')!.textContent).toContain('tempinf');
+
+    // Clicking it pins the changed field to its CURRENT value as a
+    // station-scoped draft and re-runs the preview automatically.
+    const previewCallsBefore = ipc.requests.filter(r => r.path === '/preview-save').length;
+    skips[0].click();
+    await settle(fixture);
+    const previewCalls = ipc.requests.filter(r => r.path === '/preview-save');
+    expect(previewCalls.length).toBe(previewCallsBefore + 1);
+    const proposal = (previewCalls.at(-1)!.body as { proposal: Array<Record<string, unknown>> }).proposal;
+    expect(proposal).toContainEqual({ dataPoint: 'tempinf', stationMac: OTHER_MAC, name: 'Indoor' });
+  });
+
   it('a family choice supersedes an open row editor: the editor closes and the global draft stands', async () => {
     const ipc = makeIpc(editorState());
     const fixture = await render(ipc);
