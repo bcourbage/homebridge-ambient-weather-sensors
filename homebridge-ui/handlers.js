@@ -644,6 +644,7 @@ export async function handlePreviewSave(deps, payload) {
         canonicalSensorMap: canonical,
         rows: consequences.proposedRows,
         changes: consequences.changes,
+        configOnly: consequences.configOnly,
         structuralChangeCount: consequences.structuralChangeCount,
         digest: consequences.digest,
         warnings: effectiveMap.warnings.map(w => toDiagnosticDto('warning', w)),
@@ -735,6 +736,40 @@ export function computeSaveConsequences(ctx) {
     changes.sort((x, y) => x.stationMac === y.stationMac
         ? (x.dataPoint < y.dataPoint ? -1 : x.dataPoint > y.dataPoint ? 1 : 0)
         : (x.stationMac < y.stationMac ? -1 : 1));
+    // Saved-configuration changes with NO accessory effect right now:
+    // recognized rows DISABLED on both sides whose settings differ
+    // (e.g. a family unit landing on a disabled weekly-rain total).
+    // Listed so the draft count and the preview visibly add up
+    // (Bruno's beta.15 RC feedback); enabled/disabled transitions are
+    // already 'added'/'removed' above.
+    const disabledSet = (rows) => {
+        const out = new Map();
+        for (const row of rows) {
+            if (row.kind !== 'unrecognized' && !row.enabled) {
+                out.set(`${row.stationMac}|${row.dataPoint}`, row);
+            }
+        }
+        return out;
+    };
+    const beforeDisabled = disabledSet(currentMap.rows);
+    const configOnly = [];
+    for (const [key, a] of disabledSet(effectiveMap.rows)) {
+        const b = beforeDisabled.get(key);
+        if (!b) {
+            continue;
+        }
+        const differs = ROW_FIELDS.some(f => b[f] !== a[f]);
+        if (differs) {
+            configOnly.push({
+                stationMac: a.stationMac, dataPoint: a.dataPoint,
+                before: toEditorRowDto(b, currentLayers),
+                after: toEditorRowDto(a, proposedLayers),
+            });
+        }
+    }
+    configOnly.sort((x, y) => x.stationMac === y.stationMac
+        ? (x.dataPoint < y.dataPoint ? -1 : x.dataPoint > y.dataPoint ? 1 : 0)
+        : (x.stationMac < y.stationMac ? -1 : 1));
     const proposedRows = effectiveMap.rows
         .map(row => toEditorRowDto(row, proposedLayers))
         .sort((a, b) => a.stationMac === b.stationMac
@@ -757,6 +792,7 @@ export function computeSaveConsequences(ctx) {
         .digest('hex');
     return {
         changes,
+        configOnly,
         structuralChangeCount: changes.filter(c => c.structural).length,
         digest,
         proposedRows,

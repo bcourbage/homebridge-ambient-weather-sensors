@@ -227,6 +227,20 @@ export interface PreviewChangeDto {
 }
 
 /**
+ * A saved-configuration change with NO accessory effect right now:
+ * the row is disabled on both sides, so nothing registers or
+ * updates, but the settings still save and take effect when the row
+ * is enabled. Listed so the draft count and the preview visibly add
+ * up (beta.15 RC feedback).
+ */
+export interface ConfigOnlyChangeDto {
+  stationMac: string;
+  dataPoint: string;
+  before: EditorRowDto;
+  after: EditorRowDto;
+}
+
+/**
  * Response of request '/preview-save' — a server-authoritative dry
  * run of the save. NO writes happen; the browser never computes
  * signatures or diffs itself. `digest` is the stateless confirmation
@@ -242,6 +256,7 @@ export type PreviewResultDto =
     /** Proposed effective rows, resolved by the server. */
     rows: EditorRowDto[];
     changes: PreviewChangeDto[];
+    configOnly: ConfigOnlyChangeDto[];
     structuralChangeCount: number;
     /**
      * sha256 over canonical JSON of (on-disk block, canonical map,

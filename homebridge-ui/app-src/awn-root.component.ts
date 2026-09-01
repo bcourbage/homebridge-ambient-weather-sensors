@@ -30,6 +30,7 @@ import type {
   DisplayFamilyDto,
   EditorRowDto,
   EditorStateDto,
+  ConfigOnlyChangeDto,
   PreviewChangeDto,
   PreviewResultDto,
   UnitOptionDto,
@@ -133,6 +134,7 @@ interface StationGroup {
     .change-kind.added    { background: var(--on-bg);    color: var(--on-fg); }
     .change-kind.removed  { background: var(--off-bg);   color: var(--off-fg); }
     .change-kind.modified { background: var(--info-bg);  color: var(--info-fg); }
+    .change-kind.chip-disabled { background: var(--code-bg);  color: var(--fg-sub); }
     .structural-chip {
       display: inline-block; margin-left: 8px; padding: 1px 7px; border-radius: 999px;
       font-size: 0.72rem; font-weight: 600;
@@ -341,9 +343,6 @@ interface StationGroup {
                 }
               </div>
             }
-            @if (draftCount() > pr.changes.length) {
-              <p class="sub">Some drafts touch rows that register no accessory right now (for example disabled rows). They save too and take effect when the row is enabled.</p>
-            }
             @if (pr.structuralChangeCount > 0) {
               <div class="banner">
                 {{ pr.structuralChangeCount }} accessor{{ pr.structuralChangeCount === 1 ? 'y' : 'ies' }} would register, deregister, or re-register on save
@@ -352,6 +351,22 @@ interface StationGroup {
               </div>
             } @else {
               <div class="banner info">All changes apply in place; no accessory registers, deregisters, or re-registers. This preview wrote nothing.</div>
+            }
+          }
+          @if (pr.configOnly.length > 0) {
+            <!-- Saved-configuration changes with no accessory effect
+                 right now, listed so the draft count and the preview
+                 visibly add up (Bruno's beta.15 RC feedback). -->
+            @for (c of pr.configOnly; track c.stationMac + '|' + c.dataPoint) {
+              <div class="change-row">
+                <span class="change-kind chip-disabled" data-tip="This row is disabled, so no accessory changes now. The setting still saves and takes effect when the row is enabled.">disabled</span>
+                <code>{{ c.dataPoint }}</code>
+                <span class="station-meta">{{ c.stationMac }}</span>
+                <span class="muted"> {{ changeSummary(c.before, c.after) }}</span>
+                <button type="button" class="exclude-change" data-tip="This row keeps its current settings; everything else still changes."
+                        [disabled]="previewPending() || saving() || confirmOpen() || reloadRequired()"
+                        (click)="excludeChange(c)">Skip</button>
+              </div>
             }
           }
           @for (w of pr.warnings; track $index) {
@@ -537,7 +552,7 @@ interface StationGroup {
                 </td>
                 <td>
                   @if (isConverted(row)) {
-                    <span class="unit-converted" [attr.data-tip]="'Converted from ' + unitLabel(row.sourceUnit) + '.'">{{ unitLabel(row.displayUnit) }}</span>
+                    <span class="unit-converted" [attr.data-tip]="convertedTip(row)">{{ unitLabel(row.displayUnit) }}</span>
                   } @else {
                     <span [attr.data-tip]="unitCellTitle(row) || null">{{ unitCell(row) }}</span>
                   }
@@ -1121,7 +1136,7 @@ export class AwnRootComponent {
    * preview re-runs. A field the row does not currently carry cannot
    * be pinned by an override and is left to the row editor.
    */
-  protected async excludeChange(c: PreviewChangeDto): Promise<void> {
+  protected async excludeChange(c: PreviewChangeDto | ConfigOnlyChangeDto): Promise<void> {
     const before = c.before;
     const after = c.after;
     if (!before || !after) {
@@ -1384,6 +1399,21 @@ export class AwnRootComponent {
       return '—';
     }
     return this.unitLabel(row.sourceUnit);
+  }
+
+  /**
+   * Tooltip for the converted (blue) units cell. Illuminance-class
+   * conversions are FIXED by HomeKit (CurrentAmbientLightLevel is
+   * always lux), so the tooltip must not imply a unit choice exists
+   * (Bruno's beta.15 RC feedback on solar radiation).
+   */
+  protected convertedTip(row: EditorRowDto): string {
+    const base = `Converted from ${this.unitLabel(row.sourceUnit)}.`;
+    const nativeDisplay = row.measurement !== undefined
+      && (this.vocab()?.measurements[row.measurement]?.extendedDisplay ?? []).length === 0;
+    return nativeDisplay
+      ? `${base} Apple Home always displays this kind in ${this.unitLabel(row.displayUnit)}; there is no unit choice.`
+      : base;
   }
 
   /**

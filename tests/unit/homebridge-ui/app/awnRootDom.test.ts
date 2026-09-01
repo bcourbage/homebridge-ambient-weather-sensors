@@ -393,6 +393,13 @@ describe('draft editing + preview (PR B — no persistence)', () => {
         after: { ...editorState().rows[0], dataPoint: 'customx' },
       },
     ],
+    configOnly: [
+      {
+        stationMac: MAC, dataPoint: 'weeklyrainin',
+        before: { ...editorState().rows[1], dataPoint: 'weeklyrainin', enabled: false, displayUnit: 'in' },
+        after: { ...editorState().rows[1], dataPoint: 'weeklyrainin', enabled: false, displayUnit: 'mm' },
+      },
+    ],
     structuralChangeCount: 1,
     digest: 'ab'.repeat(32),
     warnings: [],
@@ -975,10 +982,11 @@ describe('draft editing + preview (PR B — no persistence)', () => {
     ([...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement).click();
     await settle(fixture);
 
-    // Skip renders on the modified change only - an added row has no
-    // current settings to keep.
+    // Skip renders on the modified change and the config-only row,
+    // never on the added row (it has no current settings to keep).
     const skips = [...el.querySelectorAll('.change-row .exclude-change')] as HTMLButtonElement[];
-    expect(skips).toHaveLength(1);
+    expect(skips).toHaveLength(2);
+    expect(skips.map(b => b.closest('.change-row')!.textContent!.includes('customx'))).toEqual([false, false]);
     expect(skips[0].closest('.change-row')!.textContent).toContain('tempinf');
 
     // Clicking it pins the changed field to its CURRENT value as a
@@ -990,6 +998,37 @@ describe('draft editing + preview (PR B — no persistence)', () => {
     expect(previewCalls.length).toBe(previewCallsBefore + 1);
     const proposal = (previewCalls.at(-1)!.body as { proposal: Array<Record<string, unknown>> }).proposal;
     expect(proposal).toContainEqual({ dataPoint: 'tempinf', stationMac: OTHER_MAC, name: 'Indoor' });
+  });
+
+  it('config-only changes list with a disabled chip and a working Skip (beta.15 RC feedback)', async () => {
+    const ipc = makeIpc(editorState(), [], PREVIEW_OK);
+    const fixture = await render(ipc);
+    const el = fixture.nativeElement as HTMLElement;
+
+    const sel = el.querySelector('.unit-families select') as HTMLSelectElement;
+    sel.value = 'mph';
+    sel.dispatchEvent(new Event('change'));
+    await settle(fixture);
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement).click();
+    await settle(fixture);
+
+    // The disabled row's saved-only change renders with its own chip
+    // and summary, so the draft count and the preview add up.
+    const disabledRow = [...el.querySelectorAll('.change-row')]
+      .find(r => r.querySelector('.change-kind.chip-disabled'))!;
+    expect(disabledRow).toBeDefined();
+    expect(disabledRow.textContent).toContain('weeklyrainin');
+    expect(disabledRow.textContent).toContain('in → mm');
+
+    // Its Skip pins the current value as a station-scoped draft and
+    // re-previews, exactly like an accessory change's Skip.
+    const previewCallsBefore = ipc.requests.filter(r => r.path === '/preview-save').length;
+    (disabledRow.querySelector('.exclude-change') as HTMLButtonElement).click();
+    await settle(fixture);
+    const previewCalls = ipc.requests.filter(r => r.path === '/preview-save');
+    expect(previewCalls.length).toBe(previewCallsBefore + 1);
+    const proposal = (previewCalls.at(-1)!.body as { proposal: Array<Record<string, unknown>> }).proposal;
+    expect(proposal).toContainEqual({ dataPoint: 'weeklyrainin', stationMac: MAC, displayUnit: 'in' });
   });
 
   it('a family choice supersedes an open row editor: the editor closes and the global draft stands', async () => {
@@ -1171,7 +1210,7 @@ describe('save flow (PR C / finding 5 — the ONE route is composeAndPersist)', 
       stationMac: OTHER_MAC, dataPoint: 'tempinf', change: 'modified', structural: false,
       before: editorState().rows[2], after: { ...editorState().rows[2], name: 'Patio Temp' },
     }],
-    structuralChangeCount: 0, digest: 'cd'.repeat(32), warnings: [], notes: [],
+    configOnly: [], structuralChangeCount: 0, digest: 'cd'.repeat(32), warnings: [], notes: [],
   };
   const STRUCTURAL_PREVIEW: PreviewResultDto = {
     ...NON_STRUCTURAL_PREVIEW,

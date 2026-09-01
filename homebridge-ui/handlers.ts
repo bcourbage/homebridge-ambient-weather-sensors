@@ -62,6 +62,7 @@ import type {
   EditorRowDto,
   EditorStateDto,
   EditorStationDto,
+  ConfigOnlyChangeDto,
   PreviewChangeDto,
   PreviewResultDto,
   VocabularyDto,
@@ -954,6 +955,7 @@ export async function handlePreviewSave(
     canonicalSensorMap: canonical,
     rows: consequences.proposedRows,
     changes: consequences.changes,
+    configOnly: consequences.configOnly,
     structuralChangeCount: consequences.structuralChangeCount,
     digest: consequences.digest,
     warnings: effectiveMap.warnings.map(w => toDiagnosticDto('warning', w)),
@@ -964,6 +966,7 @@ export async function handlePreviewSave(
 /** Everything a save DOES to the HomeKit accessory set, plus the digest binding it. */
 export interface SaveConsequences {
   changes: PreviewChangeDto[];
+  configOnly: ConfigOnlyChangeDto[];
   structuralChangeCount: number;
   /**
    * The confirmation token (review #43 P1-2): sha256 over canonical
@@ -1072,6 +1075,42 @@ export function computeSaveConsequences(ctx: SavePipelineContext): SaveConsequen
     ? (x.dataPoint < y.dataPoint ? -1 : x.dataPoint > y.dataPoint ? 1 : 0)
     : (x.stationMac < y.stationMac ? -1 : 1));
 
+  // Saved-configuration changes with NO accessory effect right now:
+  // recognized rows DISABLED on both sides whose settings differ
+  // (e.g. a family unit landing on a disabled weekly-rain total).
+  // Listed so the draft count and the preview visibly add up
+  // (Bruno's beta.15 RC feedback); enabled/disabled transitions are
+  // already 'added'/'removed' above.
+  const disabledSet = (rows: EffectiveSensorRow[]): Map<string, ConfiguredRow> => {
+    const out = new Map<string, ConfiguredRow>();
+    for (const row of rows) {
+      if (row.kind !== 'unrecognized' && !row.enabled) {
+        out.set(`${row.stationMac}|${row.dataPoint}`, row as ConfiguredRow);
+      }
+    }
+    return out;
+  };
+  const beforeDisabled = disabledSet(currentMap.rows);
+  const configOnly: ConfigOnlyChangeDto[] = [];
+  for (const [key, a] of disabledSet(effectiveMap.rows)) {
+    const b = beforeDisabled.get(key);
+    if (!b) {
+      continue;
+    }
+    const differs = ROW_FIELDS.some(f =>
+      (b as unknown as Record<string, unknown>)[f] !== (a as unknown as Record<string, unknown>)[f]);
+    if (differs) {
+      configOnly.push({
+        stationMac: a.stationMac, dataPoint: a.dataPoint,
+        before: toEditorRowDto(b, currentLayers),
+        after: toEditorRowDto(a, proposedLayers),
+      });
+    }
+  }
+  configOnly.sort((x, y) => x.stationMac === y.stationMac
+    ? (x.dataPoint < y.dataPoint ? -1 : x.dataPoint > y.dataPoint ? 1 : 0)
+    : (x.stationMac < y.stationMac ? -1 : 1));
+
   const proposedRows = effectiveMap.rows
     .map(row => toEditorRowDto(row, proposedLayers))
     .sort((a, b) => a.stationMac === b.stationMac
@@ -1097,6 +1136,7 @@ export function computeSaveConsequences(ctx: SavePipelineContext): SaveConsequen
 
   return {
     changes,
+    configOnly,
     structuralChangeCount: changes.filter(c => c.structural).length,
     digest,
     proposedRows,

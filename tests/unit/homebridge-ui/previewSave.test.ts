@@ -345,3 +345,64 @@ describe('/preview-save — pipeline parity with /compose-save', () => {
     expect(existsSync(path.join(rig.persistDir, LEGACY_SNAPSHOT_FILE))).toBe(false);
   });
 });
+
+describe('config-only changes: disabled rows whose settings change (beta.15 RC feedback)', () => {
+  it('a unit change on a disabled row lists under configOnly, not changes', async () => {
+    const BLOCK = {
+      platform: 'AmbientWeatherSensors',
+      name: 'Test Station',
+      apiKey: 'k', applicationKey: 'a',
+      _sensorMapV2: true,
+      configVersion: 2,
+      sensorMap: [{ dataPoint: 'weeklyrainin', enabled: false, displayUnit: 'in' }],
+    };
+    const rig = makeRig(BLOCK);
+    discoveryStore(rig, ['weeklyrainin', 'windspeedmph']);
+    const result = await handlePreviewSave(rig.deps, {
+      base: BLOCK,
+      proposal: [{ dataPoint: 'weeklyrainin', enabled: false, displayUnit: 'mm' }],
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    // No accessory registers or updates...
+    expect(result.changes).toEqual([]);
+    expect(result.structuralChangeCount).toBe(0);
+    // ...but the saved-configuration change is visible, disabled on
+    // both sides, with the unit diff carried in before/after.
+    expect(result.configOnly).toHaveLength(1);
+    const entry = result.configOnly[0];
+    expect(entry.dataPoint).toBe('weeklyrainin');
+    expect(entry.before.enabled).toBe(false);
+    expect(entry.after.enabled).toBe(false);
+    expect(entry.before.displayUnit).toBe('in');
+    expect(entry.after.displayUnit).toBe('mm');
+  });
+
+  it('an unchanged disabled row and an enabled-row change produce no configOnly entries', async () => {
+    const BLOCK = {
+      platform: 'AmbientWeatherSensors',
+      name: 'Test Station',
+      apiKey: 'k', applicationKey: 'a',
+      _sensorMapV2: true,
+      configVersion: 2,
+      sensorMap: [{ dataPoint: 'weeklyrainin', enabled: false, displayUnit: 'in' }],
+    };
+    const rig = makeRig(BLOCK);
+    discoveryStore(rig, ['weeklyrainin', 'windspeedmph']);
+    const result = await handlePreviewSave(rig.deps, {
+      base: BLOCK,
+      proposal: [
+        { dataPoint: 'weeklyrainin', enabled: false, displayUnit: 'in' },
+        { dataPoint: 'windspeedmph', displayUnit: 'kph' },
+      ],
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    expect(result.configOnly).toEqual([]);
+    expect(result.changes.map(c => c.dataPoint)).toEqual(['windspeedmph']);
+  });
+});
