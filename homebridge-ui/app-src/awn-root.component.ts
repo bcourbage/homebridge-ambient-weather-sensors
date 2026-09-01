@@ -149,6 +149,11 @@ interface StationGroup {
       background: var(--code-bg); color: var(--fg);
       border-radius: 6px; font-size: 0.8rem; line-height: 1.35;
     }
+    /* Visually hidden, still exposed to assistive technology. */
+    .sr-only {
+      position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+      overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+    }
     th.units { width: 14%; }
     .table-scroll th, .table-scroll td { padding: 5px 7px; }
     .table-scroll td { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -362,7 +367,7 @@ interface StationGroup {
           <span class="station-meta"><code [title]="'station learned from: ' + group.source">{{ group.mac }}</code></span>
         </h3>
         @if (kindHelpFor() === group.mac) {
-          <p class="kind-help" role="note">{{ KIND_HELP }}</p>
+          <p class="kind-help" role="note" [id]="kindHelpId(group.mac, 'card')">{{ KIND_HELP }}</p>
         }
         <div class="table-scroll">
         <table>
@@ -372,9 +377,17 @@ interface StationGroup {
               <th class="dp">Data point</th><th class="name">Name</th>
               <th class="kind-col">
                 <span class="th-help">Kind
-                  <button type="button" class="info-btn" aria-label="About the Kind column" [attr.aria-expanded]="kindHelpFor() === group.mac" (click)="toggleKindHelp(group.mac)">
+                  <button type="button" class="info-btn" aria-label="About the Kind column"
+                          [attr.aria-describedby]="kindHelpId(group.mac, 'desc')"
+                          [attr.aria-expanded]="kindHelpFor() === group.mac"
+                          [attr.aria-controls]="kindHelpFor() === group.mac ? kindHelpId(group.mac, 'card') : null"
+                          (click)="toggleKindHelp(group.mac)">
                     <svg class="info-icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.4" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M8 7.3v3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><circle cx="8" cy="4.9" r="0.9" fill="currentColor"/></svg>
                   </button>
+                  <!-- Persistent description: screen readers get the
+                       full help from the button itself, open or not
+                       (PR #51 review round 2). -->
+                  <span class="sr-only" [id]="kindHelpId(group.mac, 'desc')">{{ KIND_HELP }}</span>
                 </span>
               </th>
               <th class="units">Units</th>
@@ -917,6 +930,15 @@ export class AwnRootComponent {
 
   protected toggleKindHelp(mac: string): void {
     this.kindHelpFor.set(this.kindHelpFor() === mac ? null : mac);
+  }
+
+  /**
+   * Stable per-station element ids for the Kind help ARIA wiring
+   * (macs repeat per group but never within one, and colons are
+   * stripped so the ids stay selector-friendly).
+   */
+  protected kindHelpId(mac: string, part: 'desc' | 'card'): string {
+    return `kind-help-${part}-${mac.replace(/[^A-Za-z0-9]/g, '')}`;
   }
 
   /** Tooltip + accessible label for the Kind icon or badge. */

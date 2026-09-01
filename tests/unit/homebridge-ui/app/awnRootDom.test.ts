@@ -26,6 +26,7 @@ import {
   type HomebridgeIpc,
 } from '../../../../homebridge-ui/app-src/homebridge.service';
 import type { EditorStateDto, PreviewResultDto, VocabularyDto } from '../../../../homebridge-ui/app-src/dto/editor-state';
+import { KIND_HELP } from '../../../../homebridge-ui/app-src/kind-support';
 
 const MAC = 'AA:BB:CC:DD:EE:01';
 const OTHER_MAC = 'AA:BB:CC:DD:EE:02';
@@ -214,25 +215,39 @@ describe('AwnRootComponent (TestBed, jsdom)', () => {
     const el = fixture.nativeElement as HTMLElement;
 
     // One info button per station table, keyboard-reachable (a real
-    // button), collapsed by default.
+    // button), collapsed by default. The FULL help text is exposed
+    // through a persistent aria-describedby relationship (review
+    // round 2): a screen reader gets it from the button itself,
+    // open or closed.
     const infoBtns = [...el.querySelectorAll('th.kind-col .info-btn')] as HTMLButtonElement[];
     expect(infoBtns).toHaveLength(el.querySelectorAll('table').length);
     expect(el.querySelector('.kind-help')).toBeNull();
+    const descIds = new Set<string>();
     for (const btn of infoBtns) {
       expect(btn.tagName).toBe('BUTTON');
       expect(btn.getAttribute('aria-label')).toBe('About the Kind column');
       expect(btn.getAttribute('aria-expanded')).toBe('false');
+      expect(btn.getAttribute('aria-controls')).toBeNull(); // nothing to control while closed
+      const descId = btn.getAttribute('aria-describedby')!;
+      expect(descId).toBeTruthy();
+      descIds.add(descId);
+      const desc = el.querySelector(`#${descId}`)!;
+      expect(desc).not.toBeNull();
+      expect(desc.textContent!.trim()).toBe(KIND_HELP);
     }
+    expect(descIds.size).toBe(infoBtns.length); // ids are per-station, no duplicates
 
     // Click opens the card in THAT station's section only, as an
     // in-flow note OUTSIDE the scroll container (so the container's
-    // overflow can never clip it).
+    // overflow can never clip it), and the button points at it via
+    // aria-controls.
     infoBtns[0].click();
     fixture.detectChanges();
     const cards = [...el.querySelectorAll('.kind-help')];
     expect(cards).toHaveLength(1);
     expect(cards[0].closest('.table-scroll')).toBeNull();
     expect(infoBtns[0].getAttribute('aria-expanded')).toBe('true');
+    expect(infoBtns[0].getAttribute('aria-controls')).toBe(cards[0].id);
     expect(infoBtns[1].getAttribute('aria-expanded')).toBe('false');
 
     // The copy states the capability truth: what Kind means, which
