@@ -21,13 +21,17 @@
 import { ChangeDetectionStrategy, Component, computed, inject, signal, viewChild, type ElementRef } from '@angular/core';
 import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
 
-import { DraftStore } from './draft-store';
+import { DraftStore, type DraftableField } from './draft-store';
 import { HomebridgeService } from './homebridge.service';
 import { KIND_HELP } from './kind-support';
 import { composeAndPersist } from '../saveOrchestrator';
 import type {
+  DisplayFamilyChoiceDto,
+  DisplayFamilyDto,
   EditorRowDto,
   EditorStateDto,
+  ConfigOnlyChangeDto,
+  PreviewChangeDto,
   PreviewResultDto,
   UnitOptionDto,
   VocabularyDto,
@@ -43,6 +47,20 @@ interface StationGroup {
 @Component({
   selector: 'awn-root',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  // Pre-focus form controls on mousedown WITHOUT scrolling: this page
+  // runs in HB UI X's content-height iframe, and the browser's
+  // click-focus scroll-into-view step scrolled the OUTER settings
+  // page while a select's native popup opened at the pre-scroll
+  // mouse position, detaching the menu from its control (Bruno's
+  // beta.15 RC feedback). An already-focused control skips that
+  // scroll step entirely.
+  host: {
+    '(mousedown)': 'preFocus($event)',
+    '(mouseover)': 'tipShow($event)',
+    '(mouseout)': 'tipHide($event)',
+    '(focusin)': 'tipShow($event)',
+    '(focusout)': 'tipHide()',
+  },
   imports: [ReactiveFormsModule],
   styles: `
     h3 { font-size: 0.95rem; margin: 16px 0 4px 0; }
@@ -71,6 +89,30 @@ interface StationGroup {
       background: var(--panel-bg); border: 1px solid var(--rule);
     }
     .draft-bar .grow { flex: 1; }
+    /* Two-up grid of label/select rows under a Units title (Bruno's
+       beta.15 RC feedback: the single wrapped line read poorly).
+       Fixed label column keeps every select left-aligned; the grid
+       collapses to one per row on narrow panels. */
+    .unit-families { margin: 0 0 4px; }
+    .unit-families-title { font-weight: 600; display: block; margin-bottom: 6px; }
+    .unit-family-grid {
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+      gap: 6px 28px; max-width: 620px;
+    }
+    .unit-family-grid label {
+      display: grid; grid-template-columns: 96px 1fr; align-items: center; gap: 8px;
+      font-size: 0.85rem; color: var(--fg-sub);
+    }
+    /* Same themed control chrome as the row editor's selects: the UA
+       default select ignored the page theme entirely (white in dark
+       mode) and sat below the label baseline, reading as a vertical
+       jump against the label text (Bruno's beta.15 RC feedback). */
+    .unit-families select {
+      background: var(--btn-bg); color: var(--btn-fg);
+      border: 1px solid var(--btn-edge); border-radius: 4px;
+      padding: 3px 6px; font-size: 0.85rem; vertical-align: middle;
+    }
+    .unit-families-note { margin-bottom: 10px; }
     .editor-form {
       background: var(--panel-bg); border-top: 2px solid var(--rule);
       padding: 10px 14px;
@@ -92,12 +134,25 @@ interface StationGroup {
     .change-kind.added    { background: var(--on-bg);    color: var(--on-fg); }
     .change-kind.removed  { background: var(--off-bg);   color: var(--off-fg); }
     .change-kind.modified { background: var(--info-bg);  color: var(--info-fg); }
+    .change-kind.chip-disabled { background: var(--code-bg);  color: var(--fg-sub); }
     .structural-chip {
       display: inline-block; margin-left: 8px; padding: 1px 7px; border-radius: 999px;
       font-size: 0.72rem; font-weight: 600;
       background: var(--warn-bg); color: var(--warn-fg);
     }
     .change-row { padding: 4px 0; border-bottom: 1px solid var(--row-rule); font-size: 0.88rem; }
+    .app-tip {
+      position: fixed; z-index: 60; max-width: 340px;
+      background: var(--panel-bg); color: var(--fg);
+      border: 1px solid var(--rule); border-radius: 6px;
+      padding: 6px 9px; font-size: 0.8rem; line-height: 1.4;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+      pointer-events: none; white-space: normal;
+    }
+    /* While a re-preview runs, the previous result stays visible but
+       dimmed instead of being torn down (flicker on Skip). */
+    .preview-block.previewing { opacity: 0.55; }
+    .exclude-change { margin-left: 10px; padding: 1px 8px; font-size: 0.78rem; }
     /* In-flow confirmation card (beta.14 smoke #4): a fixed overlay
        is unusable inside HB UI X's content-height iframe. The class
        name must stay OUT of Bootstrap's namespace: HB UI X mirrors
@@ -128,26 +183,20 @@ interface StationGroup {
     .table-scroll table { table-layout: fixed; }
     th.dp { width: 22%; }
     th.name { width: auto; }
-    th.kind-col { width: 76px; }
-    /* Header info affordance for the Kind column: the button toggles
-       an IN-FLOW help card above the table, outside .table-scroll,
-       so the card can never be clipped by the container's overflow
-       (a positioned tooltip inside it could be, e.g. on a one-row
-       table). Click-toggled, so keyboard and touch need nothing
-       hover-specific. */
+    th.kind-col { width: 64px; }
+    /* Header info affordance for the Kind column: a small circled ?
+       whose native title tooltip the browser draws outside the page
+       layout (never clipped, no layout shift). */
     .th-help { white-space: nowrap; }
-    .info-btn {
-      background: none; border: none; padding: 0; margin-left: 1px;
-      width: 24px; height: 24px; border-radius: 4px;
-      display: inline-flex; align-items: center; justify-content: center;
-      color: var(--fg-sub); cursor: pointer; vertical-align: middle;
-    }
-    .info-btn[aria-expanded="true"] { color: var(--fg); background: var(--code-bg); }
-    .info-icon { width: 13px; height: 13px; display: block; }
-    .kind-help {
-      margin: 0 0 8px; padding: 7px 9px; max-width: 640px;
-      background: var(--code-bg); color: var(--fg);
-      border-radius: 6px; font-size: 0.8rem; line-height: 1.35;
+    /* Hugs the "Kind" text (2px) so it reads as Kind's affordance,
+       not a stray element between the Kind and Units headers
+       (Bruno's beta.15 RC feedback). */
+    .info-q {
+      display: inline-block; width: 14px; height: 14px; line-height: 14px;
+      border-radius: 999px; text-align: center;
+      font-size: 0.7rem; font-weight: 600;
+      background: var(--code-bg); color: var(--fg-sub);
+      cursor: help; margin-left: 2px; vertical-align: 1px;
     }
     /* Visually hidden, still exposed to assistive technology. */
     .sr-only {
@@ -234,16 +283,47 @@ interface StationGroup {
         </div>
       }
 
-      @if (previewPending()) {
+      <!-- Family display units (GA task #70's editor layer): one
+           selector per display family from the server's canonical
+           metadata, drafting a GLOBAL template per dataPoint (so
+           stations not seen yet inherit it) and stripping station
+           exceptions. AWN's one Rainfall choice spans rain rate and
+           accumulation together. Rows stay individually editable
+           afterward; a family whose rows disagree shows Mixed. -->
+      @if (unitFamilies().length > 0) {
+        <div class="unit-families">
+          <span class="unit-families-title">Units</span>
+          <div class="unit-family-grid">
+            @for (f of unitFamilies(); track f.key) {
+              <label>
+                <span class="unit-family-name">{{ f.label }}</span>
+                <select #familySel (change)="applyFamilyChoice(f.key, familySel.value)" [disabled]="saving() || confirmOpen() || reloadRequired()">
+                  <!-- Always in the DOM so the select's width never
+                       changes when Mixed resolves; hidden keeps it out
+                       of the dropdown. -->
+                  <option value="" disabled [hidden]="f.current !== ''" [selected]="f.current === ''">Mixed</option>
+                  @for (c of f.choices; track c.id) {
+                    <option [value]="c.id" [selected]="c.id === f.current">{{ c.label }}</option>
+                  }
+                </select>
+              </label>
+            }
+          </div>
+        </div>
+        <p class="sub unit-families-note">Sets the display unit for a whole category, on every station, including stations added later. Single rows can still be changed in their row editor. Temperature has no unit choice here: Apple Home renders it in each device's own region format.</p>
+      }
+
+      @if (previewPending() && !previewResult()) {
         <p class="empty">Previewing…</p>
       }
       @if (previewResult(); as pr) {
+        <div class="preview-block" [class.previewing]="previewPending()">
         @if (pr.ok) {
           <h3>Preview</h3>
           @if (pr.changes.length === 0) {
             <div class="banner info">No accessory changes: nothing registers, deregisters, or updates. (Edits to disabled rows still save and take effect when the row is enabled.)</div>
           } @else {
-            @for (c of pr.changes; track $index) {
+            @for (c of pr.changes; track c.stationMac + '|' + c.dataPoint + '|' + c.change) {
               <div class="change-row">
                 <span class="change-kind {{ c.change }}">{{ c.change }}</span>
                 @if (c.structural) {
@@ -253,6 +333,13 @@ interface StationGroup {
                 <span class="station-meta">{{ c.stationMac }}</span>
                 @if (c.change === 'modified') {
                   <span class="muted"> {{ changeSummary(c.before!, c.after!) }}</span>
+                  <!-- Opt one row OUT of a broader change (Bruno's
+                       beta.15 RC request): pins this row's changed
+                       fields to their current values as a
+                       station-scoped draft, then re-previews. -->
+                  <button type="button" class="exclude-change" data-tip="This row keeps its current settings; everything else still changes."
+                          [disabled]="previewPending() || saving() || confirmOpen() || reloadRequired()"
+                          (click)="excludeChange(c)">Skip</button>
                 }
               </div>
             }
@@ -264,6 +351,22 @@ interface StationGroup {
               </div>
             } @else {
               <div class="banner info">All changes apply in place; no accessory registers, deregisters, or re-registers. This preview wrote nothing.</div>
+            }
+          }
+          @if (pr.configOnly.length > 0) {
+            <!-- Saved-configuration changes with no accessory effect
+                 right now, listed so the draft count and the preview
+                 visibly add up (Bruno's beta.15 RC feedback). -->
+            @for (c of pr.configOnly; track c.stationMac + '|' + c.dataPoint) {
+              <div class="change-row">
+                <span class="change-kind chip-disabled" data-tip="This row is disabled, so no accessory changes now. The setting still saves and takes effect when the row is enabled.">disabled</span>
+                <code>{{ c.dataPoint }}</code>
+                <span class="station-meta">{{ c.stationMac }}</span>
+                <span class="muted"> {{ changeSummary(c.before, c.after) }}</span>
+                <button type="button" class="exclude-change" data-tip="This row keeps its current settings; everything else still changes."
+                        [disabled]="previewPending() || saving() || confirmOpen() || reloadRequired()"
+                        (click)="excludeChange(c)">Skip</button>
+              </div>
             }
           }
           @for (w of pr.warnings; track $index) {
@@ -290,6 +393,20 @@ interface StationGroup {
         } @else {
           <div class="banner safe-mode">Preview refused ({{ pr.error.code }}): {{ pr.error.message }}</div>
         }
+        </div>
+      }
+      <!-- The app's own tooltip (beta.15 RC feedback): native title
+           tooltips are unusable inside HB UI X's settings modal - the
+           modal's own title attribute competes and replaces them, they
+           appear late, and their box cannot be styled. Any element
+           with data-tip shows this instead, instantly, on hover or
+           keyboard focus. position:fixed shares the viewport
+           coordinate space with getBoundingClientRect, so anchoring
+           is exact and no scroll container can clip it. aria-hidden:
+           assistive tech already gets these texts from aria
+           attributes on the anchors. -->
+      @if (tip(); as t) {
+        <div class="app-tip" aria-hidden="true" [style.left.px]="t.x" [style.top.px]="t.y">{{ t.text }}</div>
       }
       <div #saveOutcome>
       @if (saving()) {
@@ -364,11 +481,8 @@ interface StationGroup {
       @for (group of groups(); track group.mac) {
         <h3>
           {{ group.title }}
-          <span class="station-meta"><code [title]="'station learned from: ' + group.source">{{ group.mac }}</code></span>
+          <span class="station-meta"><code [attr.data-tip]="'station learned from: ' + group.source">{{ group.mac }}</code></span>
         </h3>
-        @if (kindHelpFor() === group.mac) {
-          <p class="kind-help" role="note" [id]="kindHelpId(group.mac, 'card')">{{ KIND_HELP }}</p>
-        }
         <div class="table-scroll">
         <table>
           <thead>
@@ -377,16 +491,16 @@ interface StationGroup {
               <th class="dp">Data point</th><th class="name">Name</th>
               <th class="kind-col">
                 <span class="th-help">Kind
-                  <button type="button" class="info-btn" aria-label="About the Kind column"
-                          [attr.aria-describedby]="kindHelpId(group.mac, 'desc')"
-                          [attr.aria-expanded]="kindHelpFor() === group.mac"
-                          [attr.aria-controls]="kindHelpFor() === group.mac ? kindHelpId(group.mac, 'card') : null"
-                          (click)="toggleKindHelp(group.mac)">
-                    <svg class="info-icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.4" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M8 7.3v3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><circle cx="8" cy="4.9" r="0.9" fill="currentColor"/></svg>
-                  </button>
-                  <!-- Persistent description: screen readers get the
-                       full help from the button itself, open or not
-                       (PR #51 review round 2). -->
+                  <!-- A small circled ? with a native title tooltip
+                       (Bruno's beta.15 RC feedback replaced the
+                       toggled help card). The browser renders title
+                       outside the layout, so it can never clip; the
+                       persistent aria-describedby keeps the full help
+                       on the element for screen readers (PR #51
+                       review round 2). -->
+                  <span class="info-q" tabindex="0" role="img" aria-label="About the Kind column"
+                        [attr.aria-describedby]="kindHelpId(group.mac, 'desc')"
+                        [attr.data-tip]="KIND_HELP">?</span>
                   <span class="sr-only" [id]="kindHelpId(group.mac, 'desc')">{{ KIND_HELP }}</span>
                 </span>
               </th>
@@ -397,7 +511,7 @@ interface StationGroup {
           <tbody>
             @for (row of group.rows; track row.dataPoint) {
               <tr>
-                <td class="state" [title]="stateTitle(row)">
+                <td class="state" [attr.data-tip]="stateTitle(row)">
                   @if (row.kind !== 'unrecognized') {
                     @if (row.enabled) {
                       <svg class="state-icon on" viewBox="0 0 16 16" role="img" aria-label="enabled"><circle cx="8" cy="8" r="7" fill="currentColor"/><path d="M4.8 8.3l2.1 2.1 4.3-4.6" stroke="var(--page-bg)" stroke-width="1.8" fill="none" stroke-linecap="round"/></svg>
@@ -407,14 +521,14 @@ interface StationGroup {
                   }
                 </td>
                 <td>
-                  @if (isDirty(row)) { <span class="dirty-dot" title="draft edits"></span> }
-                  <code [title]="row.batteryField ? 'battery: ' + row.batteryField : ''">{{ row.dataPoint }}</code>
+                  @if (isDirty(row)) { <span class="dirty-dot" data-tip="draft edits"></span> }
+                  <code [attr.data-tip]="row.batteryField ? 'battery: ' + row.batteryField : null">{{ row.dataPoint }}</code>
                   @if (row.origin === 'global' || row.origin === 'station') {
-                    <span class="layer-dot {{ row.origin }}" [title]="row.origin + ' layer'"></span>
+                    <span class="layer-dot {{ row.origin }}" [attr.data-tip]="row.origin + ' layer'"></span>
                   }
                 </td>
                 <td>{{ row.name ?? '' }}</td>
-                <td class="kind" [title]="kindTitle(row)">
+                <td class="kind" [attr.data-tip]="kindTitle(row)">
                   @switch (row.kind) {
                     @case ('temperature') {
                       <svg class="kind-icon" viewBox="0 0 16 16" role="img" [attr.aria-label]="kindTitle(row)"><path d="M6.8 2.5a1.7 1.7 0 013.4 0v6a3.4 3.4 0 11-3.4 0z" fill="none" stroke="currentColor" stroke-width="1.4"/><circle cx="8.5" cy="11.4" r="1.5" fill="currentColor"/></svg>
@@ -438,9 +552,9 @@ interface StationGroup {
                 </td>
                 <td>
                   @if (isConverted(row)) {
-                    <span class="unit-converted" [title]="'converted from ' + unitLabel(row.sourceUnit)">{{ unitLabel(row.displayUnit) }}</span>
+                    <span class="unit-converted" [attr.data-tip]="convertedTip(row)">{{ unitLabel(row.displayUnit) }}</span>
                   } @else {
-                    {{ unitCell(row) }}
+                    <span [attr.data-tip]="unitCellTitle(row) || null">{{ unitCell(row) }}</span>
                   }
                 </td>
                 <td class="actions">
@@ -637,6 +751,47 @@ export class AwnRootComponent {
     this.saveResult.set(null);
   }
 
+  /**
+   * See the host mousedown binding: focus the pressed form control
+   * (or a pressed label's control) with preventScroll so the
+   * browser's own click-focus never scrolls the outer settings page.
+   */
+  protected preFocus(ev: Event): void {
+    const target = ev.target as HTMLElement;
+    const label = target instanceof HTMLLabelElement ? target : target.closest?.('label');
+    const control = (label instanceof HTMLLabelElement ? label.control : null) ?? target;
+    if (control instanceof HTMLSelectElement || control instanceof HTMLInputElement
+      || control instanceof HTMLTextAreaElement) {
+      control.focus({ preventScroll: true });
+    }
+  }
+
+  /** The in-page tooltip's state: text plus a viewport anchor. */
+  protected readonly tip = signal<{ text: string; x: number; y: number } | null>(null);
+
+  protected tipShow(ev: Event): void {
+    const anchor = (ev.target as HTMLElement).closest?.('[data-tip]') as HTMLElement | null;
+    const text = anchor?.getAttribute('data-tip');
+    if (!anchor || !text) {
+      return;
+    }
+    const r = anchor.getBoundingClientRect();
+    const maxWidth = 340;
+    const x = Math.max(8, Math.min(r.left, document.documentElement.clientWidth - maxWidth - 12));
+    this.tip.set({ text, x, y: r.bottom + 6 });
+  }
+
+  protected tipHide(ev?: Event): void {
+    if (ev) {
+      const from = (ev.target as HTMLElement).closest?.('[data-tip]');
+      const to = ((ev as MouseEvent).relatedTarget as HTMLElement | null)?.closest?.('[data-tip]');
+      if (!from || from === to) {
+        return; // not leaving an anchor, or moving within the same one
+      }
+    }
+    this.tip.set(null);
+  }
+
   protected rowKey(row: EditorRowDto): string {
     return `${row.stationMac}|${row.dataPoint}`;
   }
@@ -655,6 +810,228 @@ export class AwnRootComponent {
       return [];
     }
     return this.vocab()?.measurements[row.measurement]?.extendedDisplay ?? [];
+  }
+
+  /**
+   * The display families the Units panel renders: the server's
+   * canonical family metadata (AWN units-page order), filtered to
+   * families with at least one editable row on the page. `current`
+   * is the CHOICE id every eligible row currently reflects (drafts
+   * included), or '' when rows disagree (rendered as Mixed).
+   */
+  protected readonly unitFamilies = computed<Array<{ key: string; label: string; choices: DisplayFamilyChoiceDto[]; current: string }>>(() => {
+    this.draftVersion();
+    const vocab = this.vocab();
+    const state = this.state();
+    if (!vocab || !state) {
+      return [];
+    }
+    const out: Array<{ key: string; label: string; choices: DisplayFamilyChoiceDto[]; current: string }> = [];
+    for (const family of vocab.families ?? []) {
+      // Rows drafted out of existence neither render in the family's
+      // state nor hold it on Mixed (round 5).
+      const eligible = state.rows.filter(r => this.rowInFamily(r, family) && this.rowSurvivesDrafts(r));
+      if (eligible.length === 0) {
+        continue;
+      }
+      const match = family.choices.find(c =>
+        eligible.every(r => this.effectiveDisplayUnit(r) === c.units[r.measurement!]));
+      out.push({ key: family.key, label: family.label, choices: family.choices, current: match?.id ?? '' });
+    }
+    return out;
+  });
+
+  private rowInFamily(row: EditorRowDto, family: DisplayFamilyDto): boolean {
+    return row.kind !== 'unrecognized' && row.measurement !== undefined
+      && family.measurements.includes(row.measurement);
+  }
+
+  /**
+   * Does this row survive the CURRENT drafts (round 5)? The one
+   * predicate behind both the family action and the family selector's
+   * displayed state, so a row drafted out of existence can neither
+   * take a unit patch nor hold a selector on Mixed.
+   *
+   * Survival uses `origin` — the resolver's ACCEPTED layers — rather
+   * than re-reading raw authored kind/measurement (raw fragments
+   * deliberately include rejected entries): a custom row with
+   * origin 'station' has an accepted station fragment, which for a
+   * custom dataPoint always carries its own full identity (the save
+   * boundary refuses partial custom exceptions).
+   */
+  private rowSurvivesDrafts(row: EditorRowDto): boolean {
+    if (row.identityScope === 'custom-station') {
+      return !this.store.keyRemovedFor(row.stationMac, row.dataPoint);
+    }
+    if (row.identityScope === 'custom-global' && this.store.keyRemovedFor(undefined, row.dataPoint)) {
+      // The global identity is going away: only an independently
+      // accepted station exception survives, while its own key stands.
+      return row.origin === 'station' && !this.store.keyRemovedFor(row.stationMac, row.dataPoint);
+    }
+    // Known rows always survive an override removal (they fall back
+    // to the built-in defaults); a custom-global row survives while
+    // its global key remains.
+    return true;
+  }
+
+  /**
+   * The display unit a row would resolve to with pending drafts
+   * applied — field-level layering for this ONE field (station patch
+   * over surviving station-authored value over global patch over the
+   * server-resolved unit), so the Units panel reflects drafts the
+   * family action itself creates. Preview and save remain
+   * server-authoritative; this never feeds a proposal.
+   */
+  private effectiveDisplayUnit(row: EditorRowDto): string | undefined {
+    const own = this.store.draftedValue(row, 'displayUnit');
+    if (typeof own === 'string') {
+      return own;
+    }
+    if (row.origin !== 'global') {
+      const stationAuthored = this.store.authoredValueFor(row.stationMac, row.dataPoint, 'displayUnit');
+      const stationGone = this.store.fieldRemovedFor(row.stationMac, row.dataPoint, 'displayUnit')
+        || this.store.keyRemovedFor(row.stationMac, row.dataPoint);
+      if (typeof stationAuthored === 'string' && !stationGone) {
+        return row.displayUnit; // the station exception stands; the server already resolved it
+      }
+      const globalPatch = this.store.draftedValueFor(undefined, row.dataPoint, 'displayUnit');
+      if (typeof globalPatch === 'string') {
+        return globalPatch;
+      }
+      if (typeof stationAuthored === 'string' && stationGone) {
+        // The exception is being stripped with no global draft: the
+        // authored global template (or the default) takes over.
+        const globalAuthored = this.store.authoredValueFor(undefined, row.dataPoint, 'displayUnit');
+        return typeof globalAuthored === 'string' ? globalAuthored : row.displayUnit;
+      }
+    }
+    return row.displayUnit;
+  }
+
+  /**
+   * Apply one family choice (review F1: global, set-once semantics):
+   * per dataPoint of the family, author a GLOBAL displayUnit template
+   * (so stations not yet seen inherit it) and strip the displayUnit
+   * field from station exceptions. A global fragment is skipped only
+   * when nothing is authored anywhere and every row already resolves
+   * to the choice (authoring it would be a pure no-op config change).
+   * Pending row-level unit drafts are superseded, and an open
+   * family-member row editor is closed first (its form would re-draft
+   * a stale station-level unit on its next sync).
+   */
+  protected applyFamilyChoice(familyKey: string, choiceId: string): void {
+    const vocab = this.vocab();
+    const state = this.state();
+    const family = vocab?.families.find(f => f.key === familyKey);
+    const choice = family?.choices.find(c => c.id === choiceId);
+    if (!vocab || !state || !family || !choice) {
+      return;
+    }
+
+    const familyRows = state.rows.filter(r => this.rowInFamily(r, family));
+    if (familyRows.some(r => this.isExpanded(r))) {
+      this.expandedKey.set(null);
+      this.editForm = null;
+      this.editFormInvalid.set(false);
+    }
+
+    // Identity scope splits the action (review round 2 F1): a
+    // station-only custom identity cannot take a global template — a
+    // bare global fragment for a custom dataPoint is refused as
+    // custom-missing-kind, and copying the identity would create the
+    // accessory on every station. Those rows get station-scoped unit
+    // patches instead (grouping by dataPoint is also wrong for them:
+    // custom identities for one dataPoint can differ per station).
+    const stationScoped = familyRows.filter(r => r.identityScope === 'custom-station');
+    for (const row of stationScoped) {
+      const unit = choice.units[row.measurement!];
+      if (unit === undefined) {
+        continue;
+      }
+      // Round 3 F2: the row's identity lives in its station fragment;
+      // with that key drafted for whole-key removal (Use defaults), a
+      // unit patch would resurrect the row as a minimal replacement
+      // WITHOUT its identity (custom-missing-kind). Skip it — the row
+      // is on its way out.
+      if (!this.rowSurvivesDrafts(row)) {
+        continue;
+      }
+      if (unit === row.displayUnit) {
+        this.store.clearField(row, 'displayUnit');
+      } else {
+        this.store.setField(row, 'displayUnit', unit);
+      }
+    }
+
+    const byDataPoint = new Map<string, EditorRowDto[]>();
+    for (const row of familyRows) {
+      if (row.identityScope === 'custom-station') {
+        continue;
+      }
+      const list = byDataPoint.get(row.dataPoint) ?? [];
+      list.push(row);
+      byDataPoint.set(row.dataPoint, list);
+    }
+
+    for (const [dataPoint, rows] of byDataPoint) {
+      // known and custom-global rows share one measurement per
+      // dataPoint (the default map or the matched global identity
+      // fixes it; a station identity with a DIFFERENT measurement is
+      // classified custom-station and never reaches this group).
+      const unit = choice.units[rows[0].measurement!];
+      if (unit === undefined) {
+        continue;
+      }
+      // Rounds 3-4 F2: a custom dataPoint whose global identity
+      // fragment is drafted for removal must not get a global unit
+      // patch — the minimal replacement would lack the identity
+      // (custom-missing-kind). But the family choice still covers
+      // every row that SURVIVES the removal (round 4): a station
+      // fragment for a custom dataPoint always carries its own full
+      // identity (the save boundary refuses partial custom
+      // exceptions), so such rows keep producing accessories and take
+      // station-scoped unit patches; purely global-origin rows
+      // disappear with the template and are skipped. Known dataPoints
+      // need no identity, so their replacement fragment stays legal
+      // and the normal path below handles them.
+      if (rows[0].identityScope === 'custom-global' && this.store.keyRemovedFor(undefined, dataPoint)) {
+        for (const row of rows) {
+          if (!this.rowSurvivesDrafts(row)) {
+            continue;
+          }
+          // Always an explicit patch: the row's resolved displayUnit
+          // may come from the global fragment being removed, so an
+          // equal-looking value can still need re-authoring on the
+          // surviving station fragment (prune drops it if that
+          // fragment already says so).
+          this.store.setFieldFor(row.stationMac, dataPoint, 'displayUnit', unit);
+        }
+        continue;
+      }
+      // The family choice supersedes pending row-level unit drafts.
+      for (const row of rows) {
+        this.store.clearField(row, 'displayUnit');
+      }
+      // Strip station displayUnit exceptions — but ONLY for stations
+      // whose row actually inherits this global unit (round 3 F1): a
+      // station identity override with a different measurement keeps
+      // its own displayUnit untouched.
+      const inheritingMacs = new Set(rows.map(r => r.stationMac.toUpperCase()));
+      const exceptions = this.store.stationsAuthoringField(dataPoint, 'displayUnit')
+        .filter(mac => inheritingMacs.has(mac.toUpperCase()));
+      for (const mac of exceptions) {
+        this.store.removeFieldFor(mac, dataPoint, 'displayUnit');
+      }
+      const globalAuthored = this.store.authoredValueFor(undefined, dataPoint, 'displayUnit');
+      const alreadyDefault = globalAuthored === undefined && exceptions.length === 0
+        && rows.every(r => r.displayUnit === unit);
+      if (alreadyDefault) {
+        this.store.clearFieldFor(undefined, dataPoint, 'displayUnit');
+      } else {
+        this.store.setFieldFor(undefined, dataPoint, 'displayUnit', unit);
+      }
+    }
+    this.bump();
   }
 
   protected toggleEdit(row: EditorRowDto): void {
@@ -751,6 +1128,33 @@ export class AwnRootComponent {
     this.bump();
   }
 
+  /**
+   * Opt one previewed row OUT of a broader change (beta.15 RC
+   * request): every field the proposal would change on this row is
+   * pinned to its CURRENT value as a station-scoped draft — a normal
+   * exception, previewable and savable like any edit — and the
+   * preview re-runs. A field the row does not currently carry cannot
+   * be pinned by an override and is left to the row editor.
+   */
+  protected async excludeChange(c: PreviewChangeDto | ConfigOnlyChangeDto): Promise<void> {
+    const before = c.before;
+    const after = c.after;
+    if (!before || !after) {
+      return;
+    }
+    const fields: DraftableField[] = ['enabled', 'name', 'displayUnit', 'threshold', 'triggerEnabled', 'triggerDirection'];
+    const b = before as unknown as Record<string, unknown>;
+    const a = after as unknown as Record<string, unknown>;
+    for (const field of fields) {
+      if (b[field] === a[field] || b[field] === undefined) {
+        continue;
+      }
+      this.store.setFieldFor(before.stationMac, c.dataPoint, field, b[field]);
+    }
+    this.bump();
+    await this.preview();
+  }
+
   protected async preview(): Promise<void> {
     if (this.editFormInvalid()) {
       return; // an invalid (blanked) control blocks previewing
@@ -761,7 +1165,10 @@ export class AwnRootComponent {
     // its digest) over the newer state.
     const draftVersionAtStart = this.draftVersion();
     this.previewPending.set(true);
-    this.previewResult.set(null);
+    // The PREVIOUS result stays visible (dimmed) while the request
+    // runs - clearing it here rebuilt the whole list on every Skip
+    // and read as flicker (Bruno's beta.15 RC feedback). A response
+    // for an older draft version clears it instead of installing.
     try {
       // The staleness token is the digest /editor-state issued for the
       // block this session loaded — NEVER a block copy from
@@ -776,6 +1183,8 @@ export class AwnRootComponent {
       });
       if (this.draftVersion() === draftVersionAtStart) {
         this.previewResult.set(result);
+      } else {
+        this.previewResult.set(null); // drafts moved on; never show a stale preview
       }
     } catch (e) {
       if (this.draftVersion() === draftVersionAtStart) {
@@ -783,6 +1192,8 @@ export class AwnRootComponent {
           ok: false,
           error: { code: 'transport', message: e instanceof Error ? e.message : String(e) },
         });
+      } else {
+        this.previewResult.set(null);
       }
     } finally {
       this.previewPending.set(false);
@@ -925,19 +1336,12 @@ export class AwnRootComponent {
   /** Kind column header help (issue #50), see kind-support.ts. */
   protected readonly KIND_HELP = KIND_HELP;
 
-  /** Station mac whose Kind help card is open, or null for none. */
-  protected readonly kindHelpFor = signal<string | null>(null);
-
-  protected toggleKindHelp(mac: string): void {
-    this.kindHelpFor.set(this.kindHelpFor() === mac ? null : mac);
-  }
-
   /**
    * Stable per-station element ids for the Kind help ARIA wiring
    * (macs repeat per group but never within one, and colons are
    * stripped so the ids stay selector-friendly).
    */
-  protected kindHelpId(mac: string, part: 'desc' | 'card'): string {
+  protected kindHelpId(mac: string, part: 'desc'): string {
     return `kind-help-${part}-${mac.replace(/[^A-Za-z0-9]/g, '')}`;
   }
 
@@ -995,6 +1399,37 @@ export class AwnRootComponent {
       return '—';
     }
     return this.unitLabel(row.sourceUnit);
+  }
+
+  /**
+   * Tooltip for the converted (blue) units cell. Illuminance-class
+   * conversions are FIXED by HomeKit (CurrentAmbientLightLevel is
+   * always lux), so the tooltip must not imply a unit choice exists
+   * (Bruno's beta.15 RC feedback on solar radiation).
+   */
+  protected convertedTip(row: EditorRowDto): string {
+    const base = `Converted from ${this.unitLabel(row.sourceUnit)}.`;
+    const nativeDisplay = row.measurement !== undefined
+      && (this.vocab()?.measurements[row.measurement]?.extendedDisplay ?? []).length === 0;
+    return nativeDisplay
+      ? `${base} Apple Home always displays this kind in ${this.unitLabel(row.displayUnit)}; there is no unit choice.`
+      : base;
+  }
+
+  /**
+   * Tooltip for the plain (unconverted) units cell. For natively
+   * displayed kinds the shown unit is what the STATION reports; the
+   * display format belongs to each Apple device (Bruno's beta.15 RC
+   * question: "why does temperature show a unit").
+   */
+  protected unitCellTitle(row: EditorRowDto): string {
+    if (!row.sourceUnit || !row.measurement) {
+      return '';
+    }
+    const nativeDisplay = (this.vocab()?.measurements[row.measurement]?.extendedDisplay ?? []).length === 0;
+    return nativeDisplay
+      ? 'The unit the station reports. Apple Home chooses the display format on each device.'
+      : 'The default display: the unit the station reports. A blue value means the row converts to a different display unit.';
   }
 
   /** A row whose HomeKit display unit differs from the AWN source unit. */

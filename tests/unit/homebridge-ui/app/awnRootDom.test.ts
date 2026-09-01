@@ -41,7 +41,43 @@ const VOCAB: VocabularyDto = {
       customSource: [{ unit: 'mph', label: 'mph' }, { unit: 'fps', label: 'ft/sec' }],
       extendedDisplay: [{ unit: 'mph', label: 'mph' }, { unit: 'fps', label: 'ft/sec' }],
     },
+    pressure: {
+      customSource: [],
+      extendedDisplay: [{ unit: 'inHg', label: 'inHg' }, { unit: 'mmHg', label: 'mmHg' }, { unit: 'hPa', label: 'hPa' }],
+    },
+    'rain-rate': {
+      customSource: [],
+      extendedDisplay: [{ unit: 'in_per_hr', label: 'in/hr' }, { unit: 'mm_per_hr', label: 'mm/hr' }],
+    },
+    'rain-accumulation': {
+      customSource: [],
+      extendedDisplay: [{ unit: 'in', label: 'in' }, { unit: 'mm', label: 'mm' }],
+    },
   },
+  families: [
+    {
+      key: 'barometer', label: 'Barometer', measurements: ['pressure'],
+      choices: [
+        { id: 'inHg', label: 'inHg', units: { pressure: 'inHg' } },
+        { id: 'mmHg', label: 'mmHg', units: { pressure: 'mmHg' } },
+        { id: 'hPa', label: 'hPa', units: { pressure: 'hPa' } },
+      ],
+    },
+    {
+      key: 'wind-speed', label: 'Wind Speed', measurements: ['wind-speed'],
+      choices: [
+        { id: 'mph', label: 'mph', units: { 'wind-speed': 'mph' } },
+        { id: 'fps', label: 'ft/sec', units: { 'wind-speed': 'fps' } },
+      ],
+    },
+    {
+      key: 'rainfall', label: 'Rainfall', measurements: ['rain-rate', 'rain-accumulation'],
+      choices: [
+        { id: 'imperial', label: 'in/hr', units: { 'rain-rate': 'in_per_hr', 'rain-accumulation': 'in' } },
+        { id: 'metric', label: 'mm/hr', units: { 'rain-rate': 'mm_per_hr', 'rain-accumulation': 'mm' } },
+      ],
+    },
+  ],
 };
 
 function editorState(overrides: Partial<EditorStateDto> = {}): EditorStateDto {
@@ -191,13 +227,13 @@ describe('AwnRootComponent (TestBed, jsdom)', () => {
     expect(text).toContain('ft/sec');     // display unit of the conversion
     const converted = el.querySelector('.unit-converted') as HTMLElement;
     expect(converted).not.toBeNull();
-    expect(converted.getAttribute('title')).toBe('converted from mph');
+    expect(converted.getAttribute('data-tip')).toBe('Converted from mph.');
     // Battery + layer left the table (Bruno's beta.14 column trim):
     // battery lives in the data-point tooltip and the row editor; the
     // layer is a provenance dot for non-default rows.
     expect(text).not.toContain('battout');
     const tempfCode = [...el.querySelectorAll('td code')].find(c => c.textContent === 'tempf')!;
-    expect(tempfCode.getAttribute('title')).toBe('battery: battout');
+    expect(tempfCode.getAttribute('data-tip')).toBe('battery: battout');
     expect(el.querySelectorAll('.layer-dot.global')).toHaveLength(1);   // tempf
     expect(el.querySelectorAll('.layer-dot.station')).toHaveLength(1);  // windspeedmph
     // Opening a row's editor shows the demoted facts.
@@ -209,62 +245,48 @@ describe('AwnRootComponent (TestBed, jsdom)', () => {
     expect(ipc.requests.map(r => r.path).sort()).toEqual(['/editor-state', '/vocabulary']);
   });
 
-  it('the Kind header info button toggles an in-flow help card (issue #50)', async () => {
+  it('the Kind header shows a ? glyph with a native title tooltip and screen-reader description (issue #50)', async () => {
     const ipc = makeIpc(editorState());
     const fixture = await render(ipc);
     const el = fixture.nativeElement as HTMLElement;
 
-    // One info button per station table, keyboard-reachable (a real
-    // button), collapsed by default. The FULL help text is exposed
-    // through a persistent aria-describedby relationship (review
-    // round 2): a screen reader gets it from the button itself,
-    // open or closed.
-    const infoBtns = [...el.querySelectorAll('th.kind-col .info-btn')] as HTMLButtonElement[];
-    expect(infoBtns).toHaveLength(el.querySelectorAll('table').length);
-    expect(el.querySelector('.kind-help')).toBeNull();
+    // One ? per station table, keyboard-reachable, whose native title
+    // IS the full explanation (the browser draws it outside the page
+    // layout, so it can never clip). The same text stays exposed to
+    // screen readers through a persistent aria-describedby.
+    const glyphs = [...el.querySelectorAll('th.kind-col .info-q')] as HTMLElement[];
+    expect(glyphs).toHaveLength(el.querySelectorAll('table').length);
     const descIds = new Set<string>();
-    for (const btn of infoBtns) {
-      expect(btn.tagName).toBe('BUTTON');
-      expect(btn.getAttribute('aria-label')).toBe('About the Kind column');
-      expect(btn.getAttribute('aria-expanded')).toBe('false');
-      expect(btn.getAttribute('aria-controls')).toBeNull(); // nothing to control while closed
-      const descId = btn.getAttribute('aria-describedby')!;
+    for (const q of glyphs) {
+      expect(q.textContent).toBe('?');
+      expect(q.getAttribute('tabindex')).toBe('0');
+      expect(q.getAttribute('aria-label')).toBe('About the Kind column');
+      expect(q.getAttribute('data-tip')).toBe(KIND_HELP);
+      const descId = q.getAttribute('aria-describedby')!;
       expect(descId).toBeTruthy();
       descIds.add(descId);
       const desc = el.querySelector(`#${descId}`)!;
       expect(desc).not.toBeNull();
       expect(desc.textContent!.trim()).toBe(KIND_HELP);
     }
-    expect(descIds.size).toBe(infoBtns.length); // ids are per-station, no duplicates
+    expect(descIds.size).toBe(glyphs.length); // ids are per-station, no duplicates
 
-    // Click opens the card in THAT station's section only, as an
-    // in-flow note OUTSIDE the scroll container (so the container's
-    // overflow can never clip it), and the button points at it via
-    // aria-controls.
-    infoBtns[0].click();
+    // The tooltip claims stay capability-truthful (pinned in full by
+    // kindSupport.test.ts).
+    expect(KIND_HELP).toContain('Currently supported kinds are temperature, humidity, light, motion, CO₂, PM2.5 and PM10');
+    expect(KIND_HELP).toContain('CO, leak, contact and occupancy are reserved for future support');
+
+    // Hover (or keyboard focus) shows the APP's own tooltip - native
+    // title tooltips are hijacked by the settings modal's own title
+    // attribute (beta.15 RC feedback) - and leaving hides it.
+    glyphs[0].dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
     fixture.detectChanges();
-    const cards = [...el.querySelectorAll('.kind-help')];
-    expect(cards).toHaveLength(1);
-    expect(cards[0].closest('.table-scroll')).toBeNull();
-    expect(infoBtns[0].getAttribute('aria-expanded')).toBe('true');
-    expect(infoBtns[0].getAttribute('aria-controls')).toBe(cards[0].id);
-    expect(infoBtns[1].getAttribute('aria-expanded')).toBe('false');
-
-    // The copy states the capability truth: what Kind means, which
-    // kinds currently work, which are reserved, and that ? rows
-    // create nothing. kindSupport.test.ts pins the vocabulary to the
-    // runtime wrapper table; here we pin the load-bearing claims.
-    const text = cards[0].textContent!;
-    expect(text).toContain('Apple Home accessory type');
-    expect(text).toContain('Currently supported kinds are temperature, humidity, light, motion, CO₂, PM2.5 and PM10');
-    expect(text).toContain('CO, leak, contact and occupancy are reserved for future support');
-    expect(text).toContain('unrecognized and do not create an accessory');
-
-    // Click again closes it.
-    infoBtns[0].click();
+    const tipEl = el.querySelector('.app-tip')!;
+    expect(tipEl).not.toBeNull();
+    expect(tipEl.textContent).toBe(KIND_HELP);
+    glyphs[0].dispatchEvent(new MouseEvent('mouseout', { bubbles: true }));
     fixture.detectChanges();
-    expect(el.querySelector('.kind-help')).toBeNull();
-    expect(infoBtns[0].getAttribute('aria-expanded')).toBe('false');
+    expect(el.querySelector('.app-tip')).toBeNull();
   });
 
   it('passes cached-accessory uniqueIds to /editor-state (§8.7 source 3)', async () => {
@@ -369,6 +391,13 @@ describe('draft editing + preview (PR B — no persistence)', () => {
       {
         stationMac: MAC, dataPoint: 'customx', change: 'added', structural: true,
         after: { ...editorState().rows[0], dataPoint: 'customx' },
+      },
+    ],
+    configOnly: [
+      {
+        stationMac: MAC, dataPoint: 'weeklyrainin',
+        before: { ...editorState().rows[1], dataPoint: 'weeklyrainin', enabled: false, displayUnit: 'in' },
+        after: { ...editorState().rows[1], dataPoint: 'weeklyrainin', enabled: false, displayUnit: 'mm' },
       },
     ],
     structuralChangeCount: 1,
@@ -590,6 +619,436 @@ describe('draft editing + preview (PR B — no persistence)', () => {
     });
   });
 
+  it('family selector authors a GLOBAL unit template for the whole family (GA #70 editor layer)', async () => {
+    const ipc = makeIpc(editorState());
+    const fixture = await render(ipc);
+    const el = fixture.nativeElement as HTMLElement;
+
+    // Only the wind family has rows in the fixture: the rainfall
+    // family is offered by the vocabulary but renders no selector
+    // (and temperature has no display choices at all).
+    const panel = el.querySelector('.unit-families') as HTMLElement;
+    expect(panel).not.toBeNull();
+    const selects = [...panel.querySelectorAll('select')] as HTMLSelectElement[];
+    expect(selects).toHaveLength(1);
+    expect(panel.textContent).toContain('Wind Speed');
+    expect(selects[0].value).toBe('fps');
+
+    // Choosing another unit drafts ONE global template fragment (the
+    // wind row resolves to fps, so mph is a real change).
+    selects[0].value = 'mph';
+    selects[0].dispatchEvent(new Event('change'));
+    await settle(fixture);
+    expect(el.textContent).toContain('1 draft change, not saved yet.');
+
+    // The proposal carries the GLOBAL fragment - no stationMac - so
+    // stations not seen yet inherit the choice (review F1).
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement).click();
+    await settle(fixture);
+    const previewReq = ipc.requests.filter(r => r.path === '/preview-save').at(-1)!;
+    const proposal = (previewReq.body as { proposal: Array<Record<string, unknown>> }).proposal;
+    expect(proposal).toContainEqual({ dataPoint: 'windspeedmph', displayUnit: 'mph' });
+
+    // ...and choosing a unit that already resolves everywhere with
+    // nothing authored clears the draft instead of authoring a no-op.
+    const sel = el.querySelector('.unit-families select') as HTMLSelectElement;
+    sel.value = 'fps';
+    sel.dispatchEvent(new Event('change'));
+    await settle(fixture);
+    expect(el.textContent).toContain('No draft changes yet.');
+  });
+
+  it("AWN's one Rainfall choice drives BOTH rain measurements together (review F2)", async () => {
+    const base = editorState();
+    const rateRow = {
+      stationMac: MAC, dataPoint: 'hourlyrainin', kind: 'motion', measurement: 'rain-rate',
+      sourceUnit: 'in_per_hr', displayUnit: 'in_per_hr', name: 'Rain Rate', enabled: true,
+      batteryField: null, origin: 'default' as const,
+    };
+    const accumRow = {
+      stationMac: MAC, dataPoint: 'dailyrainin', kind: 'motion', measurement: 'rain-accumulation',
+      sourceUnit: 'in', displayUnit: 'in', name: 'Rain Day', enabled: true,
+      batteryField: null, origin: 'default' as const,
+    };
+    const ipc = makeIpc(editorState({ rows: [...base.rows, rateRow, accumRow] }), [], PREVIEW_OK);
+    const fixture = await render(ipc);
+    const el = fixture.nativeElement as HTMLElement;
+
+    // ONE Rainfall selector governs both measurements; both rows
+    // resolve imperial, so that choice is current.
+    const selects = [...el.querySelectorAll('.unit-families select')] as HTMLSelectElement[];
+    expect(selects).toHaveLength(2); // Wind speed + Rainfall
+    const rain = selects.find(s => (s.closest('label') as HTMLElement).textContent!.includes('Rainfall'))!;
+    expect(rain.value).toBe('imperial');
+
+    // Metric drafts BOTH global templates in one gesture: rate to
+    // mm/hr AND accumulation to mm - never one without the other.
+    rain.value = 'metric';
+    rain.dispatchEvent(new Event('change'));
+    await settle(fixture);
+    expect(el.textContent).toContain('2 draft changes, not saved yet.');
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement).click();
+    await settle(fixture);
+    const proposal = (ipc.requests.filter(r => r.path === '/preview-save').at(-1)!
+      .body as { proposal: Array<Record<string, unknown>> }).proposal;
+    expect(proposal).toContainEqual({ dataPoint: 'hourlyrainin', displayUnit: 'mm_per_hr' });
+    expect(proposal).toContainEqual({ dataPoint: 'dailyrainin', displayUnit: 'mm' });
+  });
+
+  it('a family whose rows disagree shows Mixed, and one selection unifies them globally', async () => {
+    const base = editorState();
+    const secondWind = {
+      ...base.rows[1], stationMac: OTHER_MAC, displayUnit: 'mph', origin: 'default' as const,
+    };
+    const ipc = makeIpc(editorState({ rows: [...base.rows, secondWind] }));
+    const fixture = await render(ipc);
+    const el = fixture.nativeElement as HTMLElement;
+
+    // fps on one station, mph on the other: Mixed placeholder, no value.
+    const sel = el.querySelector('.unit-families select') as HTMLSelectElement;
+    expect(sel.value).toBe('');
+    expect([...sel.options].map(o => o.textContent)).toContain('Mixed');
+
+    // One selection unifies every station through a single global
+    // template draft.
+    sel.value = 'fps';
+    sel.dispatchEvent(new Event('change'));
+    await settle(fixture);
+    expect(el.textContent).toContain('1 draft change, not saved yet.');
+    const after = el.querySelector('.unit-families select') as HTMLSelectElement;
+    expect(after.value).toBe('fps');
+    // Mixed stays in the DOM for width stability, hidden from the
+    // dropdown once the family resolves.
+    expect(([...after.options].find(o => o.textContent === 'Mixed') as HTMLOptionElement).hidden).toBe(true);
+  });
+
+  it('a station-only custom row receives a station-scoped unit patch, never a bare global fragment (round 2 F1)', async () => {
+    const base = editorState();
+    const customBarn = {
+      stationMac: OTHER_MAC, dataPoint: 'barn_wind', kind: 'motion', measurement: 'wind-speed',
+      sourceUnit: 'kph', displayUnit: 'kph', name: 'Barn Wind', enabled: true,
+      batteryField: null, origin: 'station' as const, identityScope: 'custom-station' as const,
+    };
+    const ipc = makeIpc(editorState({ rows: [...base.rows, customBarn] }), [], PREVIEW_OK);
+    const fixture = await render(ipc);
+    const el = fixture.nativeElement as HTMLElement;
+
+    // mph is a real change for BOTH rows (known row resolves fps, the
+    // custom one kph).
+    const sel = el.querySelector('.unit-families select') as HTMLSelectElement;
+    sel.value = 'mph';
+    sel.dispatchEvent(new Event('change'));
+    await settle(fixture);
+    // Two drafts: the known dataPoint's GLOBAL template and the
+    // custom row's STATION patch.
+    expect(el.textContent).toContain('2 draft changes, not saved yet.');
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement).click();
+    await settle(fixture);
+    const proposal = (ipc.requests.filter(r => r.path === '/preview-save').at(-1)!
+      .body as { proposal: Array<Record<string, unknown>> }).proposal;
+    expect(proposal).toContainEqual({ dataPoint: 'windspeedmph', displayUnit: 'mph' });
+    expect(proposal).toContainEqual({ dataPoint: 'barn_wind', stationMac: OTHER_MAC, displayUnit: 'mph' });
+    expect(proposal.find(f => f.dataPoint === 'barn_wind' && f.stationMac === undefined)).toBeUndefined();
+  });
+
+  it('a pending rename draft survives a family choice; only the unit draft is superseded', async () => {
+    const ipc = makeIpc(editorState(), [], PREVIEW_OK);
+    const fixture = await render(ipc);
+    const el = openEditor(fixture, 'windspeedmph');
+    typeInto(el.querySelector('.editor-form input[type="text"]') as HTMLInputElement, 'Roof Wind');
+    await settle(fixture);
+    expect(el.textContent).toContain('1 draft change, not saved yet.');
+
+    const sel = el.querySelector('.unit-families select') as HTMLSelectElement;
+    sel.value = 'mph';
+    sel.dispatchEvent(new Event('change'));
+    await settle(fixture);
+
+    // The editor closed; the rename draft and the global unit draft
+    // both stand.
+    expect(el.querySelector('.editor-form')).toBeNull();
+    expect(el.textContent).toContain('2 draft changes, not saved yet.');
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement).click();
+    await settle(fixture);
+    const proposal = (ipc.requests.filter(r => r.path === '/preview-save').at(-1)!
+      .body as { proposal: Array<Record<string, unknown>> }).proposal;
+    expect(proposal).toContainEqual({ dataPoint: 'windspeedmph', stationMac: MAC, name: 'Roof Wind' });
+    expect(proposal).toContainEqual({ dataPoint: 'windspeedmph', displayUnit: 'mph' });
+  });
+
+  it('a station identity override with a DIFFERENT measurement keeps station scope (round 3 F1)', async () => {
+    const base = editorState();
+    // Global custom_x is a pressure sensor; station A overrides the
+    // identity to wind-speed. Both are valid; only measurement-matched
+    // rows may inherit the global unit.
+    const globalPressureRow = {
+      stationMac: OTHER_MAC, dataPoint: 'custom_x', kind: 'motion', measurement: 'pressure',
+      sourceUnit: 'hPa', displayUnit: 'hPa', name: 'Custom X', enabled: true,
+      batteryField: null, origin: 'global' as const, identityScope: 'custom-global' as const,
+    };
+    const stationWindRow = {
+      stationMac: MAC, dataPoint: 'custom_x', kind: 'motion', measurement: 'wind-speed',
+      sourceUnit: 'mph', displayUnit: 'mph', name: 'Custom X Wind', enabled: true,
+      batteryField: null, origin: 'station' as const, identityScope: 'custom-station' as const,
+    };
+    const authored = [
+      { index: 0, layer: 'global' as const, dataPoint: 'custom_x', fields: { kind: 'motion', measurement: 'pressure', sourceUnit: 'hPa', name: 'Custom X' } },
+      { index: 1, layer: 'station' as const, dataPoint: 'custom_x', stationMacKey: MAC, stationMac: MAC, fields: { kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph', displayUnit: 'mph', name: 'Custom X Wind' } },
+    ];
+    const ipc = makeIpc(editorState({ rows: [...base.rows, globalPressureRow, stationWindRow], authored }), [], PREVIEW_OK);
+    const fixture = await render(ipc);
+    const el = fixture.nativeElement as HTMLElement;
+    const selectFor = (label: string): HTMLSelectElement =>
+      ([...el.querySelectorAll('.unit-families label')] as HTMLElement[])
+        .find(l => l.textContent!.includes(label))!.querySelector('select')!;
+
+    // Wind Speed -> ft/sec changes ONLY the station wind row: the
+    // global pressure fragment must not receive a wind unit.
+    selectFor('Wind Speed').value = 'fps';
+    selectFor('Wind Speed').dispatchEvent(new Event('change'));
+    await settle(fixture);
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement).click();
+    await settle(fixture);
+    let proposal = (ipc.requests.filter(r => r.path === '/preview-save').at(-1)!
+      .body as { proposal: Array<Record<string, unknown>> }).proposal;
+    const globalFrag = proposal.find(f => f.dataPoint === 'custom_x' && f.stationMac === undefined)!;
+    expect(globalFrag.displayUnit).toBeUndefined();
+    expect(globalFrag.measurement).toBe('pressure');
+    const stationFrag = proposal.find(f => f.dataPoint === 'custom_x' && f.stationMac === MAC)!;
+    expect(stationFrag.displayUnit).toBe('fps');
+    expect(stationFrag.measurement).toBe('wind-speed');
+
+    // Barometer -> mmHg patches the GLOBAL pressure template and
+    // leaves the wind station override untouched (round 3 F1: strip
+    // only rows that inherit the selected global unit).
+    selectFor('Barometer').value = 'mmHg';
+    selectFor('Barometer').dispatchEvent(new Event('change'));
+    await settle(fixture);
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement).click();
+    await settle(fixture);
+    proposal = (ipc.requests.filter(r => r.path === '/preview-save').at(-1)!
+      .body as { proposal: Array<Record<string, unknown>> }).proposal;
+    expect(proposal.find(f => f.dataPoint === 'custom_x' && f.stationMac === undefined)!.displayUnit).toBe('mmHg');
+    const windAfter = proposal.find(f => f.dataPoint === 'custom_x' && f.stationMac === MAC)!;
+    expect(windAfter.displayUnit).toBe('fps');
+    expect(windAfter.measurement).toBe('wind-speed');
+  });
+
+  it('a family choice never resurrects a custom row whose identity is drafted for removal (round 3 F2)', async () => {
+    const base = editorState();
+    const stationCustom = {
+      stationMac: MAC, dataPoint: 'barn_wind', kind: 'motion', measurement: 'wind-speed',
+      sourceUnit: 'kph', displayUnit: 'kph', name: 'Barn Wind', enabled: true,
+      batteryField: null, origin: 'station' as const, identityScope: 'custom-station' as const,
+    };
+    const globalCustom = {
+      stationMac: OTHER_MAC, dataPoint: 'custom_y', kind: 'motion', measurement: 'wind-speed',
+      sourceUnit: 'kph', displayUnit: 'kph', name: 'Custom Y', enabled: true,
+      batteryField: null, origin: 'global' as const, identityScope: 'custom-global' as const,
+    };
+    const authored = [
+      { index: 0, layer: 'station' as const, dataPoint: 'barn_wind', stationMacKey: MAC, stationMac: MAC, fields: { kind: 'motion', measurement: 'wind-speed', sourceUnit: 'kph', name: 'Barn Wind' } },
+      { index: 1, layer: 'global' as const, dataPoint: 'custom_y', fields: { kind: 'motion', measurement: 'wind-speed', sourceUnit: 'kph', name: 'Custom Y' } },
+    ];
+    const ipc = makeIpc(editorState({ rows: [...base.rows, stationCustom, globalCustom], authored }), [], PREVIEW_OK);
+    const fixture = await render(ipc);
+    const el = fixture.nativeElement as HTMLElement;
+
+    // Both custom rows resolve kph, the known row fps: the selector
+    // starts Mixed.
+    expect((el.querySelector('.unit-families select') as HTMLSelectElement).value).toBe('');
+
+    // Use defaults on both custom rows (their identity fragments are
+    // drafted for removal).
+    for (const dp of ['barn_wind', 'custom_y']) {
+      openEditor(fixture, dp);
+      ([...el.querySelectorAll('button')].find(b => b.textContent === 'Use defaults') as HTMLButtonElement).click();
+      await settle(fixture);
+    }
+
+    // Round 5: removal-drafted custom rows no longer influence the
+    // family's displayed state — only the surviving known row (fps)
+    // counts, so Mixed clears before any family choice.
+    expect((el.querySelector('.unit-families select') as HTMLSelectElement).value).toBe('fps');
+
+    // A family choice afterward drafts the KNOWN dataPoint only.
+    const sel = el.querySelector('.unit-families select') as HTMLSelectElement;
+    sel.value = 'mph';
+    sel.dispatchEvent(new Event('change'));
+    await settle(fixture);
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement).click();
+    await settle(fixture);
+    const proposal = (ipc.requests.filter(r => r.path === '/preview-save').at(-1)!
+      .body as { proposal: Array<Record<string, unknown>> }).proposal;
+    // Neither custom row is resurrected in any form.
+    expect(proposal.some(f => f.dataPoint === 'barn_wind')).toBe(false);
+    expect(proposal.some(f => f.dataPoint === 'custom_y')).toBe(false);
+    // The known dataPoint still received its global template.
+    expect(proposal).toContainEqual({ dataPoint: 'windspeedmph', displayUnit: 'mph' });
+  });
+
+  it('removing a global custom template still lets its surviving station exception take the family unit (round 4)', async () => {
+    const base = editorState();
+    // Global custom_x wind identity; station OTHER_MAC carries an
+    // independently valid exception with the SAME identity; station
+    // MAC inherits the global (global-origin row).
+    const inheritingRow = {
+      stationMac: MAC, dataPoint: 'custom_x', kind: 'motion', measurement: 'wind-speed',
+      sourceUnit: 'mph', displayUnit: 'mph', name: 'Custom X', enabled: true,
+      batteryField: null, origin: 'global' as const, identityScope: 'custom-global' as const,
+    };
+    const exceptionRow = {
+      stationMac: OTHER_MAC, dataPoint: 'custom_x', kind: 'motion', measurement: 'wind-speed',
+      sourceUnit: 'mph', displayUnit: 'mph', name: 'Custom X (Cabin)', enabled: true,
+      batteryField: null, origin: 'station' as const, identityScope: 'custom-global' as const,
+    };
+    const authored = [
+      { index: 0, layer: 'global' as const, dataPoint: 'custom_x', fields: { kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph', name: 'Custom X' } },
+      { index: 1, layer: 'station' as const, dataPoint: 'custom_x', stationMacKey: OTHER_MAC, stationMac: OTHER_MAC, fields: { kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph', name: 'Custom X (Cabin)' } },
+    ];
+    const ipc = makeIpc(editorState({ rows: [...base.rows, inheritingRow, exceptionRow], authored }), [], PREVIEW_OK);
+    const fixture = await render(ipc);
+    const el = fixture.nativeElement as HTMLElement;
+
+    // Use defaults on the GLOBAL-origin row (station MAC renders
+    // first, so openEditor hits it).
+    openEditor(fixture, 'custom_x');
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Use defaults') as HTMLButtonElement).click();
+    await settle(fixture);
+
+    const sel = el.querySelector('.unit-families select') as HTMLSelectElement;
+    sel.value = 'fps';
+    sel.dispatchEvent(new Event('change'));
+    await settle(fixture);
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement).click();
+    await settle(fixture);
+    const proposal = (ipc.requests.filter(r => r.path === '/preview-save').at(-1)!
+      .body as { proposal: Array<Record<string, unknown>> }).proposal;
+
+    // The global template is gone and NOT replaced; the surviving
+    // station exception keeps its full identity and takes the unit.
+    expect(proposal.find(f => f.dataPoint === 'custom_x' && f.stationMac === undefined)).toBeUndefined();
+    const survivor = proposal.find(f => f.dataPoint === 'custom_x' && f.stationMac === OTHER_MAC)!;
+    expect(survivor.kind).toBe('motion');
+    expect(survivor.measurement).toBe('wind-speed');
+    expect(survivor.displayUnit).toBe('fps');
+    // The known wind row already resolves fps with nothing authored,
+    // so the choice correctly authors nothing for it.
+    expect(proposal.some(f => f.dataPoint === 'windspeedmph')).toBe(false);
+
+    // Round 5: the disappearing global-origin row no longer holds the
+    // selector's state — every SURVIVING wind row is fps, so the
+    // selector shows fps, not Mixed.
+    const after = el.querySelector('.unit-families select') as HTMLSelectElement;
+    expect(after.value).toBe('fps');
+    // Mixed stays in the DOM for width stability, hidden from the
+    // dropdown once the family resolves.
+    expect(([...after.options].find(o => o.textContent === 'Mixed') as HTMLOptionElement).hidden).toBe(true);
+  });
+
+  it('mousedown pre-focuses form controls without scrolling (beta.15 RC jump fix)', async () => {
+    const ipc = makeIpc(editorState());
+    const fixture = await render(ipc);
+    const el = fixture.nativeElement as HTMLElement;
+
+    // Pressing a select focuses it BEFORE the browser's click-focus
+    // runs (with preventScroll), so the click-focus scroll-into-view
+    // step - which scrolled HB UI X's outer settings page away from
+    // the opening popup - never executes.
+    const sel = el.querySelector('.unit-families select') as HTMLSelectElement;
+    sel.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    expect(sel.ownerDocument.activeElement).toBe(sel);
+
+    // Pressing a label pre-focuses ITS control the same way.
+    const editorEl = openEditor(fixture, 'windspeedmph');
+    const unitLabel = [...editorEl.querySelectorAll('.editor-form label')]
+      .find(l => l.textContent!.includes('Display unit'))!;
+    unitLabel.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    expect((unitLabel as HTMLLabelElement).control).not.toBeNull();
+    expect(editorEl.ownerDocument.activeElement).toBe((unitLabel as HTMLLabelElement).control);
+  });
+
+  it('Skip on a previewed change pins the row to its current settings and re-previews (beta.15 RC request)', async () => {
+    const ipc = makeIpc(editorState(), [], PREVIEW_OK);
+    const fixture = await render(ipc);
+    const el = fixture.nativeElement as HTMLElement;
+
+    // Create any draft and preview (the canned result carries one
+    // modified change - a tempinf rename - and one added change).
+    const sel = el.querySelector('.unit-families select') as HTMLSelectElement;
+    sel.value = 'mph';
+    sel.dispatchEvent(new Event('change'));
+    await settle(fixture);
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement).click();
+    await settle(fixture);
+
+    // Skip renders on the modified change and the config-only row,
+    // never on the added row (it has no current settings to keep).
+    const skips = [...el.querySelectorAll('.change-row .exclude-change')] as HTMLButtonElement[];
+    expect(skips).toHaveLength(2);
+    expect(skips.map(b => b.closest('.change-row')!.textContent!.includes('customx'))).toEqual([false, false]);
+    expect(skips[0].closest('.change-row')!.textContent).toContain('tempinf');
+
+    // Clicking it pins the changed field to its CURRENT value as a
+    // station-scoped draft and re-runs the preview automatically.
+    const previewCallsBefore = ipc.requests.filter(r => r.path === '/preview-save').length;
+    skips[0].click();
+    await settle(fixture);
+    const previewCalls = ipc.requests.filter(r => r.path === '/preview-save');
+    expect(previewCalls.length).toBe(previewCallsBefore + 1);
+    const proposal = (previewCalls.at(-1)!.body as { proposal: Array<Record<string, unknown>> }).proposal;
+    expect(proposal).toContainEqual({ dataPoint: 'tempinf', stationMac: OTHER_MAC, name: 'Indoor' });
+  });
+
+  it('config-only changes list with a disabled chip and a working Skip (beta.15 RC feedback)', async () => {
+    const ipc = makeIpc(editorState(), [], PREVIEW_OK);
+    const fixture = await render(ipc);
+    const el = fixture.nativeElement as HTMLElement;
+
+    const sel = el.querySelector('.unit-families select') as HTMLSelectElement;
+    sel.value = 'mph';
+    sel.dispatchEvent(new Event('change'));
+    await settle(fixture);
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement).click();
+    await settle(fixture);
+
+    // The disabled row's saved-only change renders with its own chip
+    // and summary, so the draft count and the preview add up.
+    const disabledRow = [...el.querySelectorAll('.change-row')]
+      .find(r => r.querySelector('.change-kind.chip-disabled'))!;
+    expect(disabledRow).toBeDefined();
+    expect(disabledRow.textContent).toContain('weeklyrainin');
+    expect(disabledRow.textContent).toContain('in → mm');
+
+    // Its Skip pins the current value as a station-scoped draft and
+    // re-previews, exactly like an accessory change's Skip.
+    const previewCallsBefore = ipc.requests.filter(r => r.path === '/preview-save').length;
+    (disabledRow.querySelector('.exclude-change') as HTMLButtonElement).click();
+    await settle(fixture);
+    const previewCalls = ipc.requests.filter(r => r.path === '/preview-save');
+    expect(previewCalls.length).toBe(previewCallsBefore + 1);
+    const proposal = (previewCalls.at(-1)!.body as { proposal: Array<Record<string, unknown>> }).proposal;
+    expect(proposal).toContainEqual({ dataPoint: 'weeklyrainin', stationMac: MAC, displayUnit: 'in' });
+  });
+
+  it('a family choice supersedes an open row editor: the editor closes and the global draft stands', async () => {
+    const ipc = makeIpc(editorState());
+    const fixture = await render(ipc);
+    const el = openEditor(fixture, 'windspeedmph');
+    expect(el.querySelector('.editor-form')).not.toBeNull();
+
+    const sel = el.querySelector('.unit-families select') as HTMLSelectElement;
+    sel.value = 'mph';
+    sel.dispatchEvent(new Event('change'));
+    await settle(fixture);
+
+    // The open editor closed (its form would re-draft a stale
+    // station-level unit on its next sync) and the family draft is
+    // the one draft standing.
+    expect(el.querySelector('.editor-form')).toBeNull();
+    expect(el.textContent).toContain('1 draft change, not saved yet.');
+  });
+
   it('Cancel discards the row draft and closes the form so a later event cannot resurrect the edits', async () => {
     const ipc = makeIpc(editorState(), [], PREVIEW_OK);
     const fixture = await render(ipc);
@@ -751,7 +1210,7 @@ describe('save flow (PR C / finding 5 — the ONE route is composeAndPersist)', 
       stationMac: OTHER_MAC, dataPoint: 'tempinf', change: 'modified', structural: false,
       before: editorState().rows[2], after: { ...editorState().rows[2], name: 'Patio Temp' },
     }],
-    structuralChangeCount: 0, digest: 'cd'.repeat(32), warnings: [], notes: [],
+    configOnly: [], structuralChangeCount: 0, digest: 'cd'.repeat(32), warnings: [], notes: [],
   };
   const STRUCTURAL_PREVIEW: PreviewResultDto = {
     ...NON_STRUCTURAL_PREVIEW,

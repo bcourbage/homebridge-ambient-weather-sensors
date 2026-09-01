@@ -108,6 +108,18 @@ export interface EditorRowDto {
    * built-in default, global template, or station exception.
    */
   origin: 'default' | 'global' | 'station' | 'unrecognized';
+  /**
+   * How the row's IDENTITY is established (recognized rows only):
+   * 'known' = a default-map dataPoint; 'custom-global' = a custom
+   * identity authored by a global fragment; 'custom-station' = a
+   * custom identity existing only in this station's fragment.
+   * Governs the family unit action (PR #53 review round 2 F1): only
+   * known and custom-global dataPoints may receive a global
+   * displayUnit template — a bare global fragment for a custom
+   * dataPoint is refused as custom-missing-kind, and copying the
+   * identity would create the accessory on every station.
+   */
+  identityScope?: 'known' | 'custom-global' | 'custom-station';
   /** ISO-8601 observation metadata, when the station has reported it. */
   firstSeen?: string;
   lastSeen?: string;
@@ -215,6 +227,20 @@ export interface PreviewChangeDto {
 }
 
 /**
+ * A saved-configuration change with NO accessory effect right now:
+ * the row is disabled on both sides, so nothing registers or
+ * updates, but the settings still save and take effect when the row
+ * is enabled. Listed so the draft count and the preview visibly add
+ * up (beta.15 RC feedback).
+ */
+export interface ConfigOnlyChangeDto {
+  stationMac: string;
+  dataPoint: string;
+  before: EditorRowDto;
+  after: EditorRowDto;
+}
+
+/**
  * Response of request '/preview-save' — a server-authoritative dry
  * run of the save. NO writes happen; the browser never computes
  * signatures or diffs itself. `digest` is the stateless confirmation
@@ -230,6 +256,7 @@ export type PreviewResultDto =
     /** Proposed effective rows, resolved by the server. */
     rows: EditorRowDto[];
     changes: PreviewChangeDto[];
+    configOnly: ConfigOnlyChangeDto[];
     structuralChangeCount: number;
     /**
      * sha256 over canonical JSON of (on-disk block, canonical map,
@@ -253,8 +280,29 @@ export interface UnitOptionDto {
 }
 
 /**
+ * One choice of a display family (GA #70 editor layer): a single
+ * user selection that sets the display unit of every measurement the
+ * family spans (AWN's Rainfall toggle covers rain-rate AND
+ * rain-accumulation).
+ */
+export interface DisplayFamilyChoiceDto {
+  id: string;
+  label: string;
+  /** displayUnit per measurement this choice sets. */
+  units: { [measurement: string]: string };
+}
+
+export interface DisplayFamilyDto {
+  key: string;
+  label: string;
+  measurements: string[];
+  choices: DisplayFamilyChoiceDto[];
+}
+
+/**
  * Response of request '/vocabulary': per-measurement unit options for
- * each selection context, in vocabulary display order.
+ * each selection context, in vocabulary display order, plus the
+ * display families the Units panel offers, in AWN units-page order.
  */
 export interface VocabularyDto {
   measurements: {
@@ -263,4 +311,5 @@ export interface VocabularyDto {
       extendedDisplay: UnitOptionDto[];
     };
   };
+  families: DisplayFamilyDto[];
 }

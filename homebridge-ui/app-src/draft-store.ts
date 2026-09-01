@@ -41,8 +41,21 @@ export function rowDraftKey(row: EditorRowDto): string {
 interface DraftEntry {
   /** Field patches to apply (undefined value = not drafted). */
   patches: Map<DraftableField, unknown>;
-  /** Remove every authored fragment for this key. */
+  /**
+   * Remove every authored fragment for this key. NOT mutually
+   * exclusive with `patches` (PR #53 review F3): patches drafted
+   * after a removal describe a MINIMAL REPLACEMENT fragment — the
+   * authored fragments stay dropped, and only the patched fields are
+   * re-authored. A patch must never resurrect the removed fragment's
+   * unrelated fields.
+   */
   remove: boolean;
+  /**
+   * Delete these fields from every authored fragment of this key
+   * (PR #53 review F1: a family unit choice strips displayUnit from
+   * station exceptions so the global template governs).
+   */
+  fieldRemovals: Set<DraftableField>;
 }
 
 export class DraftStore {
@@ -58,7 +71,7 @@ export class DraftStore {
   private entry(key: string): DraftEntry {
     let e = this.drafts.get(key);
     if (!e) {
-      e = { patches: new Map(), remove: false };
+      e = { patches: new Map(), remove: false, fieldRemovals: new Set() };
       this.drafts.set(key, e);
     }
     return e;
@@ -66,10 +79,48 @@ export class DraftStore {
 
   /** Draft a field value for the fragment a row's edits target. */
   setField(row: EditorRowDto, field: DraftableField, value: unknown): void {
-    const key = rowDraftKey(row);
+    this.setFieldAt(rowDraftKey(row), field, value);
+  }
+
+  /**
+   * Draft a field value at an explicit key: `stationMac` undefined
+   * targets the GLOBAL template for the dataPoint — the family unit
+   * action authors global fragments this way regardless of any row's
+   * resolved origin (PR #53 review F1).
+   *
+   * On a key drafted for removal, the removal STANDS and the patch
+   * describes the minimal replacement fragment (review F3) — setting
+   * a field never resurrects the removed fragment's other fields.
+   */
+  setFieldFor(stationMac: string | undefined, dataPoint: string, field: DraftableField, value: unknown): void {
+    this.setFieldAt(keyFor(stationMac, dataPoint), field, value);
+  }
+
+  private setFieldAt(key: string, field: DraftableField, value: unknown): void {
     const e = this.entry(key);
-    e.remove = false;
+    e.fieldRemovals.delete(field); // a patch and a removal are exclusive per field
     e.patches.set(field, value);
+    this.prune(key);
+  }
+
+  /**
+   * Draft the DELETION of one field from every authored fragment of
+   * a station-scoped key (review F1: a family choice strips
+   * displayUnit from station exceptions so the global template
+   * governs current and future stations alike). A removal of a field
+   * the authored fragments never set is a no-op.
+   */
+  removeFieldFor(stationMac: string, dataPoint: string, field: DraftableField): void {
+    const key = keyFor(stationMac, dataPoint);
+    if (!(field in this.authoredBaseline(key))) {
+      return;
+    }
+    const e = this.entry(key);
+    if (e.remove) {
+      return; // the whole fragment is already being removed
+    }
+    e.patches.delete(field);
+    e.fieldRemovals.add(field);
     this.prune(key);
   }
 
@@ -77,16 +128,22 @@ export class DraftStore {
    * Withdraw a drafted field (review #43 P1-3): the form syncs EVERY
    * field on every event — a value typed back to the original clears
    * its patch instead of leaving a stale draft behind the equal-
-   * looking control.
+   * looking control. On a removal draft this clears only the field's
+   * patch (shrinking the minimal replacement), never the removal.
    */
   clearField(row: EditorRowDto, field: DraftableField): void {
     const key = rowDraftKey(row);
     const e = this.drafts.get(key);
-    if (!e || e.remove) {
-      return; // never resurrect a remove-override draft
+    if (!e) {
+      return;
     }
     e.patches.delete(field);
-    if (e.patches.size === 0) {
+    this.dropIfEmpty(key);
+  }
+
+  private dropIfEmpty(key: string): void {
+    const e = this.drafts.get(key);
+    if (e && !e.remove && e.patches.size === 0 && e.fieldRemovals.size === 0) {
       this.drafts.delete(key);
     }
   }
@@ -116,6 +173,9 @@ export class DraftStore {
   private prune(key: string): void {
     const e = this.drafts.get(key);
     if (!e || e.remove) {
+      // No baseline pruning under a removal: the authored fragments
+      // are dropped, so a replacement field equal to what they said
+      // is still a REAL field of the minimal replacement.
       return;
     }
     const baseline = this.authoredBaseline(key);
@@ -124,9 +184,7 @@ export class DraftStore {
         e.patches.delete(field);
       }
     }
-    if (e.patches.size === 0 && !e.remove) {
-      this.drafts.delete(key);
-    }
+    this.dropIfEmpty(key);
   }
 
   /** Remove the override a row's configuration comes from (§9.4). */
@@ -139,6 +197,7 @@ export class DraftStore {
       : keyFor(row.stationMac, row.dataPoint);
     const e = this.entry(key);
     e.patches.clear();
+    e.fieldRemovals.clear();
     e.remove = true;
   }
 
@@ -165,7 +224,7 @@ export class DraftStore {
   get draftCount(): number {
     let n = 0;
     for (const e of this.drafts.values()) {
-      if (e.remove || e.patches.size > 0) {
+      if (e.remove || e.patches.size > 0 || e.fieldRemovals.size > 0) {
         n++;
       }
     }
@@ -175,12 +234,63 @@ export class DraftStore {
   /** Does this row have draft edits? */
   isRowDirty(row: EditorRowDto): boolean {
     const e = this.drafts.get(rowDraftKey(row));
-    return !!e && (e.remove || e.patches.size > 0);
+    return !!e && (e.remove || e.patches.size > 0 || e.fieldRemovals.size > 0);
   }
 
   /** The drafted value for a field, or undefined when not drafted. */
   draftedValue(row: EditorRowDto, field: DraftableField): unknown {
     return this.drafts.get(rowDraftKey(row))?.patches.get(field);
+  }
+
+  /** The drafted value at an explicit key, or undefined. */
+  draftedValueFor(stationMac: string | undefined, dataPoint: string, field: DraftableField): unknown {
+    return this.drafts.get(keyFor(stationMac, dataPoint))?.patches.get(field);
+  }
+
+  /** Withdraw a drafted field at an explicit key (removals stand). */
+  clearFieldFor(stationMac: string | undefined, dataPoint: string, field: DraftableField): void {
+    const key = keyFor(stationMac, dataPoint);
+    const e = this.drafts.get(key);
+    if (!e) {
+      return;
+    }
+    e.patches.delete(field);
+    this.dropIfEmpty(key);
+  }
+
+  /** Is this field drafted for deletion at the station-scoped key? */
+  fieldRemovedFor(stationMac: string, dataPoint: string, field: DraftableField): boolean {
+    return this.drafts.get(keyFor(stationMac, dataPoint))?.fieldRemovals.has(field) ?? false;
+  }
+
+  /** Is the whole key drafted for removal? */
+  keyRemovedFor(stationMac: string | undefined, dataPoint: string): boolean {
+    return this.drafts.get(keyFor(stationMac, dataPoint))?.remove ?? false;
+  }
+
+  /**
+   * The station macs whose authored fragments set `field` for this
+   * dataPoint — the exceptions a family choice must strip (review F1).
+   */
+  stationsAuthoringField(dataPoint: string, field: DraftableField): string[] {
+    const macs = new Set<string>();
+    for (const f of this.authored) {
+      if (f.dataPoint === dataPoint && f.layer === 'station'
+        && f.stationMacKey !== undefined && field in f.fields) {
+        macs.add(f.stationMacKey);
+      }
+    }
+    return [...macs];
+  }
+
+  /**
+   * The authored value of a field at an explicit key, or undefined.
+   * Raw authored fragments deliberately include rejected entries, so
+   * this must not be used to infer row VALIDITY — survival decisions
+   * belong to the resolver's accepted layers (a row's `origin`).
+   */
+  authoredValueFor(stationMac: string | undefined, dataPoint: string, field: DraftableField): unknown {
+    return this.authoredBaseline(keyFor(stationMac, dataPoint))[field];
   }
 
   private fragmentKey(f: EditorAuthoredFragmentDto): string | undefined {
@@ -240,17 +350,35 @@ export class DraftStore {
         return; // drop every fragment of a removed key
       }
       const frag = this.toProposalFragment(f);
-      if (draft && lastIndexForKey.get(key!) === i) {
-        for (const [field, value] of draft.patches) {
-          frag[field] = value;
+      if (draft) {
+        // Field removals strip EVERY fragment of the key: with
+        // later-field-wins, the field could take effect from any of
+        // them (review F1).
+        for (const field of draft.fieldRemovals) {
+          delete frag[field];
+        }
+        if (lastIndexForKey.get(key!) === i) {
+          for (const [field, value] of draft.patches) {
+            frag[field] = value;
+          }
+        }
+        // A fragment reduced to bare identity sets nothing — drop it
+        // rather than authoring noise.
+        if (Object.keys(frag).every(k => k === 'dataPoint' || k === 'stationMac')) {
+          return;
         }
       }
       out.push(frag);
     });
 
-    // New fragments: drafted keys with no authored fragment.
+    // New fragments: drafted keys whose patches have no authored
+    // fragment to land on — never authored, or authored but drafted
+    // for removal (the patches then form the MINIMAL REPLACEMENT of
+    // review F3: the removed fragment's other fields stay gone).
     for (const [key, draft] of this.drafts) {
-      if (draft.remove || draft.patches.size === 0 || lastIndexForKey.has(key)) {
+      const patchesNeedNewFragment = draft.patches.size > 0
+        && (!lastIndexForKey.has(key) || draft.remove);
+      if (!patchesNeedNewFragment) {
         continue;
       }
       const [scope, dataPoint] = [key.slice(0, key.indexOf('|')), key.slice(key.indexOf('|') + 1)];

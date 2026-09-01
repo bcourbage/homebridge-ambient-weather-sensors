@@ -89,15 +89,26 @@ describe('custom-UI theme palette', () => {
 
   it('the confirmation panel is never a fixed overlay (beta.14 smoke #4)', () => {
     // position:fixed inside HB UI X's content-height iframe anchors to
-    // the FULL iframe box, so a "centered" overlay lands far outside
-    // the visible window. The confirmation card renders in flow.
+    // the FULL iframe box, so a "CENTERED" overlay lands far outside
+    // the visible window. The confirmation card renders in flow. The
+    // ONE legitimate fixed element is the app tooltip: it is anchored
+    // to getBoundingClientRect coordinates, which live in the same
+    // viewport coordinate space as position:fixed, so it lands exactly
+    // at its anchor in every scroll state - never centered.
     const componentSource = readFileSync(
       path.resolve(__dirname, '../../../homebridge-ui/app-src/awn-root.component.ts'), 'utf8');
     const stylesMatch = componentSource.match(/styles:\s*`([\s\S]*?)`/);
     expect(stylesMatch).not.toBeNull();
     // Comments may DESCRIBE the hazard; only live declarations count.
     const declarationsOnly = stylesMatch![1].replace(/\/\*[\s\S]*?\*\//g, '');
-    expect(declarationsOnly).not.toMatch(/position:\s*fixed/);
+    const rules = [...declarationsOnly.matchAll(/([^{}]+)\{([^}]*)\}/g)];
+    const fixedSelectors = rules
+      .filter(r => /position:\s*fixed/.test(r[2]))
+      .map(r => r[1].trim());
+    expect(fixedSelectors).toEqual(['.app-tip']);
+    // The tooltip must be viewport-anchored, never centered.
+    const appTipRule = rules.find(r => r[1].trim() === '.app-tip')![2];
+    expect(appTipRule).not.toMatch(/transform|margin:\s*auto|inset/);
     expect(componentSource).not.toContain('modal-backdrop');
   });
 

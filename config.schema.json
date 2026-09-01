@@ -3,6 +3,7 @@
   "pluginType": "platform",
   "singular": true,
   "customUi": true,
+  "dynamicSchemaVersion": 1,
   "headerDisplay": "An independently maintained [Homebridge](https://homebridge.io) plugin for Ambient Weather, using Ambient Weather Network's REST and WebSocket APIs.",
   "footerDisplay": "[Ambient Weather Dashboard](https://ambientweather.net/dashboard) · [Sponsor this plugin](https://github.com/sponsors/bcourbage)",
   "schema": {

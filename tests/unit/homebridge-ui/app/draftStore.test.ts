@@ -145,3 +145,84 @@ describe('proposal reconstruction', () => {
     expect(store.proposal()).toEqual([]);
   });
 });
+
+describe('remove-then-patch = minimal replacement (PR #53 review F3)', () => {
+  it('a field drafted after Use defaults must NOT resurrect the removed fragment\'s other fields', () => {
+    const store = new DraftStore();
+    // The reviewer's pinned sequence, station-scoped: an authored row
+    // with several overridden fields...
+    store.reset([frag({
+      index: 0, dataPoint: 'windspeedmph', layer: 'station', stationMacKey: MAC, stationMac: MAC,
+      fields: { name: 'Barn Wind', enabled: false, threshold: 40, displayUnit: 'kph' },
+    })]);
+    const r = row({ dataPoint: 'windspeedmph', origin: 'station', kind: 'motion', measurement: 'wind-speed' });
+    // ...Use defaults...
+    store.removeOverride(r);
+    expect(store.proposal()).toEqual([]);
+    // ...then a display-unit draft (a family choice or a row edit).
+    store.setField(r, 'displayUnit', 'fps');
+    // The proposal carries ONLY the new field: name/enabled/threshold
+    // stay gone.
+    expect(store.proposal()).toEqual([{ dataPoint: 'windspeedmph', stationMac: MAC, displayUnit: 'fps' }]);
+  });
+
+  it('the same sequence on a GLOBAL fragment', () => {
+    const store = new DraftStore();
+    store.reset([frag({ index: 0, dataPoint: 'windspeedmph', fields: { name: 'Wind', displayUnit: 'kph' } })]);
+    const r = row({ dataPoint: 'windspeedmph', origin: 'global' });
+    store.removeOverride(r);
+    store.setFieldFor(undefined, 'windspeedmph', 'displayUnit', 'fps');
+    expect(store.proposal()).toEqual([{ dataPoint: 'windspeedmph', displayUnit: 'fps' }]);
+  });
+
+  it('re-drafting the authored value under a removal is a REAL replacement field, not pruned away', () => {
+    const store = new DraftStore();
+    store.reset([frag({ index: 0, dataPoint: 'windspeedmph', fields: { name: 'Wind', displayUnit: 'kph' } })]);
+    const r = row({ dataPoint: 'windspeedmph', origin: 'global' });
+    store.removeOverride(r);
+    store.setFieldFor(undefined, 'windspeedmph', 'displayUnit', 'kph');
+    expect(store.proposal()).toEqual([{ dataPoint: 'windspeedmph', displayUnit: 'kph' }]);
+  });
+});
+
+describe('field removal from authored fragments (PR #53 review F1)', () => {
+  it('removeFieldFor strips the field from EVERY fragment of the key, keeping other fields', () => {
+    const store = new DraftStore();
+    store.reset([
+      frag({ index: 0, dataPoint: 'windspeedmph', layer: 'station', stationMacKey: MAC, stationMac: MAC, fields: { displayUnit: 'kph' } }),
+      frag({ index: 1, dataPoint: 'windspeedmph', layer: 'station', stationMacKey: MAC, stationMac: MAC, fields: { name: 'Roof Wind', displayUnit: 'mph' } }),
+    ]);
+    store.removeFieldFor(MAC, 'windspeedmph', 'displayUnit');
+    // Fragment 0 reduces to bare identity and is dropped; fragment 1
+    // keeps its name.
+    expect(store.proposal()).toEqual([{ dataPoint: 'windspeedmph', stationMac: MAC, name: 'Roof Wind' }]);
+    expect(store.dirty).toBe(true);
+  });
+
+  it('removing a field no fragment authors is a no-op draft', () => {
+    const store = new DraftStore();
+    store.reset([frag({ index: 0, dataPoint: 'windspeedmph', layer: 'station', stationMacKey: MAC, stationMac: MAC, fields: { name: 'Roof Wind' } })]);
+    store.removeFieldFor(MAC, 'windspeedmph', 'displayUnit');
+    expect(store.dirty).toBe(false);
+  });
+
+  it('a later field patch on the same key coexists with another field\'s removal', () => {
+    const store = new DraftStore();
+    store.reset([frag({ index: 0, dataPoint: 'windspeedmph', layer: 'station', stationMacKey: MAC, stationMac: MAC, fields: { displayUnit: 'kph', threshold: 10 } })]);
+    store.removeFieldFor(MAC, 'windspeedmph', 'displayUnit');
+    const r = row({ dataPoint: 'windspeedmph', origin: 'station', kind: 'motion', measurement: 'wind-speed' });
+    store.setField(r, 'threshold', 25);
+    expect(store.proposal()).toEqual([{ dataPoint: 'windspeedmph', stationMac: MAC, threshold: 25 }]);
+  });
+
+  it('stationsAuthoringField reports exactly the station fragments carrying the field', () => {
+    const OTHER = 'AA:BB:CC:DD:EE:02';
+    const store = new DraftStore();
+    store.reset([
+      frag({ index: 0, dataPoint: 'windspeedmph', fields: { displayUnit: 'kph' } }), // global: not reported
+      frag({ index: 1, dataPoint: 'windspeedmph', layer: 'station', stationMacKey: MAC, stationMac: MAC, fields: { displayUnit: 'mph' } }),
+      frag({ index: 2, dataPoint: 'windspeedmph', layer: 'station', stationMacKey: OTHER, stationMac: OTHER, fields: { name: 'No unit here' } }),
+    ]);
+    expect(store.stationsAuthoringField('windspeedmph', 'displayUnit')).toEqual([MAC]);
+  });
+});

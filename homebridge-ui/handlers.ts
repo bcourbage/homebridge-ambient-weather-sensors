@@ -41,7 +41,8 @@ import {
 import {
   loadUiStateStore,
 } from '../dist/sensorMap/persistence/uiStateStore.js';
-import { UNIT_VOCABULARY, unitOptionsFor } from '../dist/sensorMap/unitVocabulary.js';
+import { DISPLAY_FAMILIES, UNIT_VOCABULARY, unitOptionsFor } from '../dist/sensorMap/unitVocabulary.js';
+import { defaultRowFor } from '../dist/sensorMap/defaultMap.js';
 import type { Logger, ReadStoreOptions } from '../dist/sensorMap/persistence/atomicWrite.js';
 import type {
   DiscoveryStore,
@@ -61,6 +62,7 @@ import type {
   EditorRowDto,
   EditorStateDto,
   EditorStationDto,
+  ConfigOnlyChangeDto,
   PreviewChangeDto,
   PreviewResultDto,
   VocabularyDto,
@@ -953,6 +955,7 @@ export async function handlePreviewSave(
     canonicalSensorMap: canonical,
     rows: consequences.proposedRows,
     changes: consequences.changes,
+    configOnly: consequences.configOnly,
     structuralChangeCount: consequences.structuralChangeCount,
     digest: consequences.digest,
     warnings: effectiveMap.warnings.map(w => toDiagnosticDto('warning', w)),
@@ -963,6 +966,7 @@ export async function handlePreviewSave(
 /** Everything a save DOES to the HomeKit accessory set, plus the digest binding it. */
 export interface SaveConsequences {
   changes: PreviewChangeDto[];
+  configOnly: ConfigOnlyChangeDto[];
   structuralChangeCount: number;
   /**
    * The confirmation token (review #43 P1-2): sha256 over canonical
@@ -1071,6 +1075,42 @@ export function computeSaveConsequences(ctx: SavePipelineContext): SaveConsequen
     ? (x.dataPoint < y.dataPoint ? -1 : x.dataPoint > y.dataPoint ? 1 : 0)
     : (x.stationMac < y.stationMac ? -1 : 1));
 
+  // Saved-configuration changes with NO accessory effect right now:
+  // recognized rows DISABLED on both sides whose settings differ
+  // (e.g. a family unit landing on a disabled weekly-rain total).
+  // Listed so the draft count and the preview visibly add up
+  // (Bruno's beta.15 RC feedback); enabled/disabled transitions are
+  // already 'added'/'removed' above.
+  const disabledSet = (rows: EffectiveSensorRow[]): Map<string, ConfiguredRow> => {
+    const out = new Map<string, ConfiguredRow>();
+    for (const row of rows) {
+      if (row.kind !== 'unrecognized' && !row.enabled) {
+        out.set(`${row.stationMac}|${row.dataPoint}`, row as ConfiguredRow);
+      }
+    }
+    return out;
+  };
+  const beforeDisabled = disabledSet(currentMap.rows);
+  const configOnly: ConfigOnlyChangeDto[] = [];
+  for (const [key, a] of disabledSet(effectiveMap.rows)) {
+    const b = beforeDisabled.get(key);
+    if (!b) {
+      continue;
+    }
+    const differs = ROW_FIELDS.some(f =>
+      (b as unknown as Record<string, unknown>)[f] !== (a as unknown as Record<string, unknown>)[f]);
+    if (differs) {
+      configOnly.push({
+        stationMac: a.stationMac, dataPoint: a.dataPoint,
+        before: toEditorRowDto(b, currentLayers),
+        after: toEditorRowDto(a, proposedLayers),
+      });
+    }
+  }
+  configOnly.sort((x, y) => x.stationMac === y.stationMac
+    ? (x.dataPoint < y.dataPoint ? -1 : x.dataPoint > y.dataPoint ? 1 : 0)
+    : (x.stationMac < y.stationMac ? -1 : 1));
+
   const proposedRows = effectiveMap.rows
     .map(row => toEditorRowDto(row, proposedLayers))
     .sort((a, b) => a.stationMac === b.stationMac
@@ -1096,6 +1136,7 @@ export function computeSaveConsequences(ctx: SavePipelineContext): SaveConsequen
 
   return {
     changes,
+    configOnly,
     structuralChangeCount: changes.filter(c => c.structural).length,
     digest,
     proposedRows,
@@ -1316,7 +1357,15 @@ export function handleGetVocabulary(): VocabularyDto {
       extendedDisplay: unitOptionsFor(m, 'extended-display').map(o => ({ unit: o.unit, label: o.label })),
     };
   }
-  return { measurements };
+  // Display families: pure projection of DISPLAY_FAMILIES (the Units
+  // panel's canonical metadata - PR #53 review F2/F4).
+  const families: VocabularyDto['families'] = DISPLAY_FAMILIES.map(f => ({
+    key: f.key,
+    label: f.label,
+    measurements: [...f.measurements],
+    choices: f.choices.map(c => ({ id: c.id, label: c.label, units: { ...c.units } })),
+  }));
+  return { measurements, families };
 }
 
 type OverrideLayers = ReturnType<typeof partitionOverrideLayers>;
@@ -1377,6 +1426,23 @@ function toEditorRowDto(row: EffectiveSensorRow, layers: OverrideLayers): Editor
   if (row.kind === 'unrecognized') {
     return dto;
   }
+  // Identity scope for the family unit action (PR #53 rounds 2-3 F1):
+  // only known rows and rows genuinely GOVERNED by a global custom
+  // identity may take a global displayUnit template. Classification
+  // is per RESOLVED row, not per dataPoint: a station identity
+  // override may carry a DIFFERENT measurement than the global custom
+  // template (global pressure, station wind-speed — both valid), and
+  // writing that station's family unit onto the global fragment would
+  // be illegal-displayunit-for-measurement. A row is 'custom-global'
+  // only when its resolved measurement matches the accepted global
+  // identity's measurement.
+  const globalOverride = layers.global.get(row.dataPoint);
+  dto.identityScope = defaultRowFor(row.dataPoint) !== undefined
+    ? 'known'
+    : globalOverride?.kind !== undefined && globalOverride.measurement !== undefined
+      && globalOverride.measurement === row.measurement
+      ? 'custom-global'
+      : 'custom-station';
   dto.measurement = row.measurement;
   dto.name = row.name;
   // Mirror the resolver exactly (review #32 F2): null means "no

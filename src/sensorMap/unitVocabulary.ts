@@ -219,6 +219,102 @@ export const AWN_UNITS_PAGE = {
 } as const;
 
 /**
+ * One selectable option of a display family: a single user choice
+ * that sets the display unit of EVERY measurement the family spans
+ * (AWN's Rainfall toggle sets in/hr for rain-rate AND in for
+ * rain-accumulation in one gesture).
+ */
+export interface DisplayFamilyChoice {
+  /** Stable choice id (unique within the family). */
+  id: string;
+  /** Presentation label, matching AWN's wording where AWN offers it. */
+  label: string;
+  /** displayUnit this choice sets, per measurement of the family. */
+  units: Readonly<Partial<Record<Measurement, SensorUnit>>>;
+  /**
+   * True when the choice mirrors an option on AWN's own units page
+   * (label and position must then match AWN_UNITS_PAGE exactly);
+   * false for plugin extras, which follow the AWN options and say so
+   * in their label. Pinned by unitVocabulary.test.ts.
+   */
+  awn: boolean;
+}
+
+export interface DisplayFamily {
+  /** Stable family key. */
+  key: string;
+  /** Presentation label (AWN units-page category name where one exists). */
+  label: string;
+  /** Every measurement this family governs. */
+  measurements: ReadonlyArray<Measurement>;
+  choices: ReadonlyArray<DisplayFamilyChoice>;
+}
+
+/**
+ * The display families the editor's Units panel offers (GA task #70
+ * editor layer). CANONICAL: this list owns which families exist,
+ * their labels, their ordering (AWN units-page order for categories
+ * AWN has; the nm plugin extra appended within Distance), and which
+ * measurements each choice spans. Only families with at least two
+ * choices belong here — a one-option dropdown is not a preference
+ * (PR #53 review F4). unitVocabulary.test.ts pins:
+ *   - every choice unit is extended-display-selectable for its
+ *     measurement in UNIT_VOCABULARY;
+ *   - every measurement with two or more extended-display options is
+ *     governed by exactly one family (completeness — a new unit
+ *     cannot silently bypass the panel);
+ *   - each family's choices cover its measurements exhaustively.
+ */
+export const DISPLAY_FAMILIES: ReadonlyArray<DisplayFamily> = [
+  {
+    key: 'barometer',
+    label: 'Barometer',
+    measurements: ['pressure'],
+    choices: [
+      { id: 'inHg', label: 'inHg', units: { pressure: 'inHg' }, awn: true },
+      { id: 'mmHg', label: 'mmHg', units: { pressure: 'mmHg' }, awn: true },
+      { id: 'hPa',  label: 'hPa',  units: { pressure: 'hPa' },  awn: true },
+    ],
+  },
+  {
+    key: 'wind-speed',
+    label: 'Wind Speed',
+    measurements: ['wind-speed'],
+    choices: [
+      { id: 'mph', label: 'mph',    units: { 'wind-speed': 'mph' }, awn: true },
+      { id: 'fps', label: 'ft/sec', units: { 'wind-speed': 'fps' }, awn: true },
+      { id: 'mps', label: 'm/sec',  units: { 'wind-speed': 'mps' }, awn: true },
+      { id: 'kph', label: 'km/hr',  units: { 'wind-speed': 'kph' }, awn: true },
+      { id: 'kts', label: 'knots',  units: { 'wind-speed': 'kts' }, awn: true },
+    ],
+  },
+  {
+    // AWN's ONE Rainfall toggle spans both rain measurements: a
+    // single choice here keeps rate and accumulation consistent
+    // (PR #53 review F2).
+    key: 'rainfall',
+    label: 'Rainfall',
+    measurements: ['rain-rate', 'rain-accumulation'],
+    choices: [
+      { id: 'imperial', label: 'in/hr', units: { 'rain-rate': 'in_per_hr', 'rain-accumulation': 'in' }, awn: true },
+      { id: 'metric',   label: 'mm/hr', units: { 'rain-rate': 'mm_per_hr', 'rain-accumulation': 'mm' }, awn: true },
+    ],
+  },
+  {
+    // AWN's Distance picker offers 'imperial'/'metric' (round 2 F2);
+    // nautical miles is a plugin extra and its label says so.
+    key: 'distance',
+    label: 'Distance',
+    measurements: ['distance'],
+    choices: [
+      { id: 'imperial', label: 'imperial', units: { distance: 'mi' }, awn: true },
+      { id: 'metric',   label: 'metric',   units: { distance: 'km' }, awn: true },
+      { id: 'nm', label: 'nautical miles (plugin only)', units: { distance: 'nm' }, awn: false },
+    ],
+  },
+] as const;
+
+/**
  * Exact projection of the config-schema `units` fieldset as it ships
  * TODAY (legacy extended-sensor controls; v1.7-compatible option sets).
  * The schema cannot import this module, so unitVocabulary.test.ts pins
