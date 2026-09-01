@@ -43,7 +43,7 @@ grouped by station:
 | Data point | The AWN field name (`tempf`, `windspeedmph`, ...); its tooltip names the backing battery field when one exists, and a colored dot marks rows your configuration authors (see layers below) |
 | Name | The accessory name this row produces |
 | Kind | Sensor kind as an icon (thermometer, droplet, sun, motion wave) or a badge (CO₂, PM2.5, PM10, `?` for unrecognized); the tooltip carries the full kind and measurement |
-| Units | The unit HomeKit displays; highlighted when it differs from what the station reports (the tooltip names the source unit) |
+| Units | For extended sensors, the unit HomeKit displays (highlighted when converted; the tooltip names the source unit). For natively displayed kinds (temperature, humidity, air quality), the unit the station reports; Apple Home chooses the display format on each device |
 
 The provenance dot on the data point tells you where a row's
 configuration comes from:

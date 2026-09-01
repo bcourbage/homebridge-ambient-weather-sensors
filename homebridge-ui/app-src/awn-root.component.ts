@@ -133,6 +133,9 @@ interface StationGroup {
       background: var(--warn-bg); color: var(--warn-fg);
     }
     .change-row { padding: 4px 0; border-bottom: 1px solid var(--row-rule); font-size: 0.88rem; }
+    /* While a re-preview runs, the previous result stays visible but
+       dimmed instead of being torn down (flicker on Skip). */
+    .preview-block.previewing { opacity: 0.55; }
     .exclude-change { margin-left: 10px; padding: 1px 8px; font-size: 0.78rem; }
     /* In-flow confirmation card (beta.14 smoke #4): a fixed overlay
        is unusable inside HB UI X's content-height iframe. The class
@@ -294,16 +297,17 @@ interface StationGroup {
         <p class="sub unit-families-note">Sets the display unit for a whole category, on every station, including stations added later. Single rows can still be changed in their row editor. Temperature has no unit choice here: Apple Home renders it in each device's own region format.</p>
       }
 
-      @if (previewPending()) {
+      @if (previewPending() && !previewResult()) {
         <p class="empty">Previewing…</p>
       }
       @if (previewResult(); as pr) {
+        <div class="preview-block" [class.previewing]="previewPending()">
         @if (pr.ok) {
           <h3>Preview</h3>
           @if (pr.changes.length === 0) {
             <div class="banner info">No accessory changes: nothing registers, deregisters, or updates. (Edits to disabled rows still save and take effect when the row is enabled.)</div>
           } @else {
-            @for (c of pr.changes; track $index) {
+            @for (c of pr.changes; track c.stationMac + '|' + c.dataPoint + '|' + c.change) {
               <div class="change-row">
                 <span class="change-kind {{ c.change }}">{{ c.change }}</span>
                 @if (c.structural) {
@@ -322,6 +326,9 @@ interface StationGroup {
                           (click)="excludeChange(c)">Skip</button>
                 }
               </div>
+            }
+            @if (draftCount() > pr.changes.length) {
+              <p class="sub">Some drafts touch rows that register no accessory right now (for example disabled rows). They save too and take effect when the row is enabled.</p>
             }
             @if (pr.structuralChangeCount > 0) {
               <div class="banner">
@@ -357,6 +364,7 @@ interface StationGroup {
         } @else {
           <div class="banner safe-mode">Preview refused ({{ pr.error.code }}): {{ pr.error.message }}</div>
         }
+        </div>
       }
       <div #saveOutcome>
       @if (saving()) {
@@ -504,7 +512,7 @@ interface StationGroup {
                   @if (isConverted(row)) {
                     <span class="unit-converted" [title]="'converted from ' + unitLabel(row.sourceUnit)">{{ unitLabel(row.displayUnit) }}</span>
                   } @else {
-                    {{ unitCell(row) }}
+                    <span [title]="unitCellTitle(row)">{{ unitCell(row) }}</span>
                   }
                 </td>
                 <td class="actions">
@@ -1089,7 +1097,10 @@ export class AwnRootComponent {
     // its digest) over the newer state.
     const draftVersionAtStart = this.draftVersion();
     this.previewPending.set(true);
-    this.previewResult.set(null);
+    // The PREVIOUS result stays visible (dimmed) while the request
+    // runs - clearing it here rebuilt the whole list on every Skip
+    // and read as flicker (Bruno's beta.15 RC feedback). A response
+    // for an older draft version clears it instead of installing.
     try {
       // The staleness token is the digest /editor-state issued for the
       // block this session loaded — NEVER a block copy from
@@ -1104,6 +1115,8 @@ export class AwnRootComponent {
       });
       if (this.draftVersion() === draftVersionAtStart) {
         this.previewResult.set(result);
+      } else {
+        this.previewResult.set(null); // drafts moved on; never show a stale preview
       }
     } catch (e) {
       if (this.draftVersion() === draftVersionAtStart) {
@@ -1111,6 +1124,8 @@ export class AwnRootComponent {
           ok: false,
           error: { code: 'transport', message: e instanceof Error ? e.message : String(e) },
         });
+      } else {
+        this.previewResult.set(null);
       }
     } finally {
       this.previewPending.set(false);
@@ -1316,6 +1331,22 @@ export class AwnRootComponent {
       return '—';
     }
     return this.unitLabel(row.sourceUnit);
+  }
+
+  /**
+   * Tooltip for the plain (unconverted) units cell. For natively
+   * displayed kinds the shown unit is what the STATION reports; the
+   * display format belongs to each Apple device (Bruno's beta.15 RC
+   * question: "why does temperature show a unit").
+   */
+  protected unitCellTitle(row: EditorRowDto): string {
+    if (!row.sourceUnit || !row.measurement) {
+      return '';
+    }
+    const nativeDisplay = (this.vocab()?.measurements[row.measurement]?.extendedDisplay ?? []).length === 0;
+    return nativeDisplay
+      ? 'The unit the station reports. Apple Home chooses the display format on each device.'
+      : 'Reported and displayed in this unit.';
   }
 
   /** A row whose HomeKit display unit differs from the AWN source unit. */
