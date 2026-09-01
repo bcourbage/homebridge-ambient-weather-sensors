@@ -3,8 +3,8 @@
   "pluginType": "platform",
   "singular": true,
   "customUi": true,
-  "headerDisplay": "Ambient Weather plug-in for [Homebridge](https://github.com/peledies/homebridge-ambient-weather-sensors) using the HTTP Rest API",
-  "footerDisplay": "[Ambient Weather Dashboard](https://ambientweather.net/dashboard)",
+  "headerDisplay": "Independently maintained Ambient Weather plugin for [Homebridge](https://homebridge.io), using the AWN REST and websocket APIs.",
+  "footerDisplay": "[Ambient Weather Dashboard](https://ambientweather.net/dashboard) · [Sponsor this plugin](https://github.com/sponsors/bcourbage)",
   "schema": {
     "type": "object",
     "required": ["apiKey", "applicationKey"],
