@@ -231,6 +231,13 @@ export interface DisplayFamilyChoice {
   label: string;
   /** displayUnit this choice sets, per measurement of the family. */
   units: Readonly<Partial<Record<Measurement, SensorUnit>>>;
+  /**
+   * True when the choice mirrors an option on AWN's own units page
+   * (label and position must then match AWN_UNITS_PAGE exactly);
+   * false for plugin extras, which follow the AWN options and say so
+   * in their label. Pinned by unitVocabulary.test.ts.
+   */
+  awn: boolean;
 }
 
 export interface DisplayFamily {
@@ -264,21 +271,21 @@ export const DISPLAY_FAMILIES: ReadonlyArray<DisplayFamily> = [
     label: 'Barometer',
     measurements: ['pressure'],
     choices: [
-      { id: 'inHg', label: 'inHg', units: { pressure: 'inHg' } },
-      { id: 'mmHg', label: 'mmHg', units: { pressure: 'mmHg' } },
-      { id: 'hPa',  label: 'hPa',  units: { pressure: 'hPa' } },
+      { id: 'inHg', label: 'inHg', units: { pressure: 'inHg' }, awn: true },
+      { id: 'mmHg', label: 'mmHg', units: { pressure: 'mmHg' }, awn: true },
+      { id: 'hPa',  label: 'hPa',  units: { pressure: 'hPa' },  awn: true },
     ],
   },
   {
     key: 'wind-speed',
-    label: 'Wind speed',
+    label: 'Wind Speed',
     measurements: ['wind-speed'],
     choices: [
-      { id: 'mph', label: 'mph',    units: { 'wind-speed': 'mph' } },
-      { id: 'fps', label: 'ft/sec', units: { 'wind-speed': 'fps' } },
-      { id: 'mps', label: 'm/sec',  units: { 'wind-speed': 'mps' } },
-      { id: 'kph', label: 'km/hr',  units: { 'wind-speed': 'kph' } },
-      { id: 'kts', label: 'knots',  units: { 'wind-speed': 'kts' } },
+      { id: 'mph', label: 'mph',    units: { 'wind-speed': 'mph' }, awn: true },
+      { id: 'fps', label: 'ft/sec', units: { 'wind-speed': 'fps' }, awn: true },
+      { id: 'mps', label: 'm/sec',  units: { 'wind-speed': 'mps' }, awn: true },
+      { id: 'kph', label: 'km/hr',  units: { 'wind-speed': 'kph' }, awn: true },
+      { id: 'kts', label: 'knots',  units: { 'wind-speed': 'kts' }, awn: true },
     ],
   },
   {
@@ -289,18 +296,20 @@ export const DISPLAY_FAMILIES: ReadonlyArray<DisplayFamily> = [
     label: 'Rainfall',
     measurements: ['rain-rate', 'rain-accumulation'],
     choices: [
-      { id: 'imperial', label: 'in/hr', units: { 'rain-rate': 'in_per_hr', 'rain-accumulation': 'in' } },
-      { id: 'metric',   label: 'mm/hr', units: { 'rain-rate': 'mm_per_hr', 'rain-accumulation': 'mm' } },
+      { id: 'imperial', label: 'in/hr', units: { 'rain-rate': 'in_per_hr', 'rain-accumulation': 'in' }, awn: true },
+      { id: 'metric',   label: 'mm/hr', units: { 'rain-rate': 'mm_per_hr', 'rain-accumulation': 'mm' }, awn: true },
     ],
   },
   {
+    // AWN's Distance picker offers 'imperial'/'metric' (round 2 F2);
+    // nautical miles is a plugin extra and its label says so.
     key: 'distance',
     label: 'Distance',
     measurements: ['distance'],
     choices: [
-      { id: 'mi', label: 'mi', units: { distance: 'mi' } },
-      { id: 'km', label: 'km', units: { distance: 'km' } },
-      { id: 'nm', label: 'nm', units: { distance: 'nm' } },
+      { id: 'imperial', label: 'imperial', units: { distance: 'mi' }, awn: true },
+      { id: 'metric',   label: 'metric',   units: { distance: 'km' }, awn: true },
+      { id: 'nm', label: 'nautical miles (plugin only)', units: { distance: 'nm' }, awn: false },
     ],
   },
 ] as const;

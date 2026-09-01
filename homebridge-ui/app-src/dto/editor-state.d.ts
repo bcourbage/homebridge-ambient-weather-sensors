@@ -108,6 +108,18 @@ export interface EditorRowDto {
    * built-in default, global template, or station exception.
    */
   origin: 'default' | 'global' | 'station' | 'unrecognized';
+  /**
+   * How the row's IDENTITY is established (recognized rows only):
+   * 'known' = a default-map dataPoint; 'custom-global' = a custom
+   * identity authored by a global fragment; 'custom-station' = a
+   * custom identity existing only in this station's fragment.
+   * Governs the family unit action (PR #53 review round 2 F1): only
+   * known and custom-global dataPoints may receive a global
+   * displayUnit template — a bare global fragment for a custom
+   * dataPoint is refused as custom-missing-kind, and copying the
+   * identity would create the accessory on every station.
+   */
+  identityScope?: 'known' | 'custom-global' | 'custom-station';
   /** ISO-8601 observation metadata, when the station has reported it. */
   firstSeen?: string;
   lastSeen?: string;

@@ -788,14 +788,39 @@ export class AwnRootComponent {
       this.editFormInvalid.set(false);
     }
 
+    // Identity scope splits the action (review round 2 F1): a
+    // station-only custom identity cannot take a global template — a
+    // bare global fragment for a custom dataPoint is refused as
+    // custom-missing-kind, and copying the identity would create the
+    // accessory on every station. Those rows get station-scoped unit
+    // patches instead (grouping by dataPoint is also wrong for them:
+    // custom identities for one dataPoint can differ per station).
+    const stationScoped = familyRows.filter(r => r.identityScope === 'custom-station');
+    for (const row of stationScoped) {
+      const unit = choice.units[row.measurement!];
+      if (unit === undefined) {
+        continue;
+      }
+      if (unit === row.displayUnit) {
+        this.store.clearField(row, 'displayUnit');
+      } else {
+        this.store.setField(row, 'displayUnit', unit);
+      }
+    }
+
     const byDataPoint = new Map<string, EditorRowDto[]>();
     for (const row of familyRows) {
+      if (row.identityScope === 'custom-station') {
+        continue;
+      }
       const list = byDataPoint.get(row.dataPoint) ?? [];
       list.push(row);
       byDataPoint.set(row.dataPoint, list);
     }
 
     for (const [dataPoint, rows] of byDataPoint) {
+      // known and custom-global identities share one measurement per
+      // dataPoint (the default map or the global fragment fixes it).
       const unit = choice.units[rows[0].measurement!];
       if (unit === undefined) {
         continue;

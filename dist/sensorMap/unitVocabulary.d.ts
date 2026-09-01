@@ -129,6 +129,13 @@ export interface DisplayFamilyChoice {
     label: string;
     /** displayUnit this choice sets, per measurement of the family. */
     units: Readonly<Partial<Record<Measurement, SensorUnit>>>;
+    /**
+     * True when the choice mirrors an option on AWN's own units page
+     * (label and position must then match AWN_UNITS_PAGE exactly);
+     * false for plugin extras, which follow the AWN options and say so
+     * in their label. Pinned by unitVocabulary.test.ts.
+     */
+    awn: boolean;
 }
 export interface DisplayFamily {
     /** Stable family key. */

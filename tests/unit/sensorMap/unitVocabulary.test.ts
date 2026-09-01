@@ -212,11 +212,24 @@ describe('display families (GA #70 editor layer, PR #53)', () => {
     }
   });
 
-  it('family order follows the AWN units page for categories AWN has', () => {
-    const awnSupportedOrder = AWN_UNITS_PAGE.categories
-      .filter(c => c.classification === 'supported')
-      .map(c => c.awnCategory);
-    const familyLabels = DISPLAY_FAMILIES.map(f => f.label);
-    expect(familyLabels.map(l => l.toLowerCase())).toEqual(awnSupportedOrder.map(l => l.toLowerCase()));
+  it('families mirror the AWN units page EXACTLY: category names, option labels, and order (round 2 F2)', () => {
+    const supported = AWN_UNITS_PAGE.categories.filter(c => c.classification === 'supported');
+    // Same categories, same order, same capitalization.
+    expect(DISPLAY_FAMILIES.map(f => f.label)).toEqual(supported.map(c => c.awnCategory));
+    for (const [i, family] of DISPLAY_FAMILIES.entries()) {
+      const awnChoices = family.choices.filter(c => c.awn);
+      const extras = family.choices.filter(c => !c.awn);
+      // AWN-mirroring choices reproduce AWN's visible option labels
+      // verbatim, in AWN's order...
+      expect(awnChoices.map(c => c.label), family.key).toEqual([...supported[i].awnOptions]);
+      // ...and precede every plugin extra, which must say it is one.
+      const firstExtra = family.choices.findIndex(c => !c.awn);
+      if (firstExtra !== -1) {
+        expect(family.choices.slice(firstExtra).every(c => !c.awn), family.key).toBe(true);
+      }
+      for (const extra of extras) {
+        expect(extra.label, `${family.key}/${extra.id}`).toContain('plugin');
+      }
+    }
   });
 });

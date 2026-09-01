@@ -1614,3 +1614,72 @@ describe('family unit choice becomes a GLOBAL template future stations inherit (
       .toHaveProperty('name', 'Roof Wind');
   });
 });
+
+describe('family unit choice keeps station-only custom rows station-scoped (PR #53 round 2 F1)', () => {
+  it('a station-only custom wind row gets a station unit patch, never a bare global custom fragment', async () => {
+    const MAC_B = 'AA:BB:CC:DD:EE:02';
+    const NEVER_SEEN = 'AA:BB:CC:DD:EE:99';
+    const V2_BLOCK = {
+      platform: 'AmbientWeatherSensors',
+      name: 'Test Station',
+      apiKey: 'k', applicationKey: 'a',
+      _sensorMapV2: true,
+      configVersion: 2,
+      // A custom identity that exists ONLY on one station.
+      sensorMap: [{
+        dataPoint: 'barn_wind', stationMac: MAC, kind: 'motion', measurement: 'wind-speed',
+        sourceUnit: 'mph', name: 'Barn Wind',
+      }],
+    };
+    const rig = makeRig(V2_BLOCK);
+    discoveryStore(rig, [MAC, MAC_B]);
+
+    const state = await handleGetEditorState(rig.deps, {});
+    const barn = state.rows.find(r => r.dataPoint === 'barn_wind' && r.stationMac === MAC)!;
+    expect(barn.identityScope).toBe('custom-station');
+    const known = state.rows.find(r => r.dataPoint === 'windspeedmph' && r.stationMac === MAC)!;
+    expect(known.identityScope).toBe('known');
+
+    // The family action, per identity scope (what applyFamilyChoice
+    // does): global template for the known dataPoint, a station-
+    // scoped patch for the custom row.
+    const store = new DraftStore();
+    store.reset(state.authored);
+    store.setFieldFor(undefined, 'windspeedmph', 'displayUnit', 'fps');
+    store.setField(barn, 'displayUnit', 'fps');
+
+    const proposal = store.proposal();
+    // No bare global fragment for the custom dataPoint.
+    expect(proposal.find(f => f.dataPoint === 'barn_wind' && f.stationMac === undefined)).toBeUndefined();
+
+    const payload = { base: V2_BLOCK, proposal };
+    const result = await handleComposeSave(rig.deps, { ...payload, confirmDigest: await digestFor(rig, payload) });
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    expect(result.canonicalSensorMap.find(e => e.dataPoint === 'barn_wind' && e.stationMac === undefined)).toBeUndefined();
+    const stationEntry = result.canonicalSensorMap.find(e => e.dataPoint === 'barn_wind' && e.stationMac === MAC);
+    expect(stationEntry).toHaveProperty('displayUnit', 'fps');
+    expect(stationEntry).toHaveProperty('kind', 'motion');
+
+    // The custom row's unit changed on ITS station; the accessory
+    // never appears on a station that has not been seen.
+    const resolved = buildEffectiveSensorMap({
+      userOverrides: result.canonicalSensorMap,
+      discovery: { schemaVersion: 1, entries: [] },
+      uiState: { schemaVersion: 1, dismissedNoticeIds: [], forgottenFields: [] },
+      stations: [
+        { macAddress: MAC, name: 'Roof' },
+        { macAddress: NEVER_SEEN, name: 'Future' },
+      ],
+      configMode: 'v2',
+    });
+    expect(resolved.rows.find(r => r.dataPoint === 'barn_wind' && r.stationMac === MAC))
+      .toHaveProperty('displayUnit', 'fps');
+    expect(resolved.rows.find(r => r.dataPoint === 'barn_wind' && r.stationMac === NEVER_SEEN)).toBeUndefined();
+    // The known dataPoint still follows the global template everywhere.
+    expect(resolved.rows.find(r => r.dataPoint === 'windspeedmph' && r.stationMac === NEVER_SEEN))
+      .toHaveProperty('displayUnit', 'fps');
+  });
+});

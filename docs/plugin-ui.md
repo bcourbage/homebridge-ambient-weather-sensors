@@ -99,9 +99,12 @@ problems surface as banners), but the editor is the recommended path.
   accumulation totals consistent. A selection drafts a global
   template per data point (so it also applies to stations added
   later) and clears per-station unit exceptions; everything else
-  those exceptions set is untouched. Single rows can still be changed
-  in their row editor afterward; a family whose rows currently
-  disagree shows Mixed.
+  those exceptions set is untouched. One exception to "stations added
+  later": a custom sensor defined for a single station changes its
+  unit on that station's own entry only, because its identity does
+  not exist globally. Single rows can still be changed in their row
+  editor afterward; a family whose rows currently disagree shows
+  Mixed.
 - **Per-station exceptions**: override a setting for one station
   while a global choice keeps applying to the others, matching the
   layer model shown in the table today.

@@ -27,6 +27,7 @@ import { loadDiscoveryStore, } from '../dist/sensorMap/persistence/discoveryStor
 import { loadNoticeStore, } from '../dist/sensorMap/persistence/noticesStore.js';
 import { loadUiStateStore, } from '../dist/sensorMap/persistence/uiStateStore.js';
 import { DISPLAY_FAMILIES, UNIT_VOCABULARY, unitOptionsFor } from '../dist/sensorMap/unitVocabulary.js';
+import { defaultRowFor } from '../dist/sensorMap/defaultMap.js';
 /**
  * The UI bridge is a READ-ONLY consumer of the platform's persistence
  * stores (§8 single-writer): it must never quarantine-rename a corrupt
@@ -1009,6 +1010,16 @@ function toEditorRowDto(row, layers) {
     if (row.kind === 'unrecognized') {
         return dto;
     }
+    // Identity scope for the family unit action (PR #53 round 2 F1):
+    // only known and custom-global dataPoints may take a global
+    // displayUnit template; a station-only custom identity must keep
+    // station scope.
+    const globalOverride = layers.global.get(row.dataPoint);
+    dto.identityScope = defaultRowFor(row.dataPoint) !== undefined
+        ? 'known'
+        : globalOverride?.kind !== undefined && globalOverride.measurement !== undefined
+            ? 'custom-global'
+            : 'custom-station';
     dto.measurement = row.measurement;
     dto.name = row.name;
     // Mirror the resolver exactly (review #32 F2): null means "no

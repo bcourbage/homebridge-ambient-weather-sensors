@@ -52,7 +52,7 @@ const VOCAB: VocabularyDto = {
   },
   families: [
     {
-      key: 'wind-speed', label: 'Wind speed', measurements: ['wind-speed'],
+      key: 'wind-speed', label: 'Wind Speed', measurements: ['wind-speed'],
       choices: [
         { id: 'mph', label: 'mph', units: { 'wind-speed': 'mph' } },
         { id: 'fps', label: 'ft/sec', units: { 'wind-speed': 'fps' } },
@@ -626,7 +626,7 @@ describe('draft editing + preview (PR B — no persistence)', () => {
     expect(panel).not.toBeNull();
     const selects = [...panel.querySelectorAll('select')] as HTMLSelectElement[];
     expect(selects).toHaveLength(1);
-    expect(panel.textContent).toContain('Wind speed');
+    expect(panel.textContent).toContain('Wind Speed');
     expect(selects[0].value).toBe('fps');
 
     // Choosing another unit drafts ONE global template fragment (the
@@ -713,6 +713,60 @@ describe('draft editing + preview (PR B — no persistence)', () => {
     const after = el.querySelector('.unit-families select') as HTMLSelectElement;
     expect(after.value).toBe('fps');
     expect([...after.options].map(o => o.textContent)).not.toContain('Mixed');
+  });
+
+  it('a station-only custom row receives a station-scoped unit patch, never a bare global fragment (round 2 F1)', async () => {
+    const base = editorState();
+    const customBarn = {
+      stationMac: OTHER_MAC, dataPoint: 'barn_wind', kind: 'motion', measurement: 'wind-speed',
+      sourceUnit: 'kph', displayUnit: 'kph', name: 'Barn Wind', enabled: true,
+      batteryField: null, origin: 'station' as const, identityScope: 'custom-station' as const,
+    };
+    const ipc = makeIpc(editorState({ rows: [...base.rows, customBarn] }), [], PREVIEW_OK);
+    const fixture = await render(ipc);
+    const el = fixture.nativeElement as HTMLElement;
+
+    // mph is a real change for BOTH rows (known row resolves fps, the
+    // custom one kph).
+    const sel = el.querySelector('.unit-families select') as HTMLSelectElement;
+    sel.value = 'mph';
+    sel.dispatchEvent(new Event('change'));
+    await settle(fixture);
+    // Two drafts: the known dataPoint's GLOBAL template and the
+    // custom row's STATION patch.
+    expect(el.textContent).toContain('2 draft changes, not saved yet.');
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement).click();
+    await settle(fixture);
+    const proposal = (ipc.requests.filter(r => r.path === '/preview-save').at(-1)!
+      .body as { proposal: Array<Record<string, unknown>> }).proposal;
+    expect(proposal).toContainEqual({ dataPoint: 'windspeedmph', displayUnit: 'mph' });
+    expect(proposal).toContainEqual({ dataPoint: 'barn_wind', stationMac: OTHER_MAC, displayUnit: 'mph' });
+    expect(proposal.find(f => f.dataPoint === 'barn_wind' && f.stationMac === undefined)).toBeUndefined();
+  });
+
+  it('a pending rename draft survives a family choice; only the unit draft is superseded', async () => {
+    const ipc = makeIpc(editorState(), [], PREVIEW_OK);
+    const fixture = await render(ipc);
+    const el = openEditor(fixture, 'windspeedmph');
+    typeInto(el.querySelector('.editor-form input[type="text"]') as HTMLInputElement, 'Roof Wind');
+    await settle(fixture);
+    expect(el.textContent).toContain('1 draft change, not saved yet.');
+
+    const sel = el.querySelector('.unit-families select') as HTMLSelectElement;
+    sel.value = 'mph';
+    sel.dispatchEvent(new Event('change'));
+    await settle(fixture);
+
+    // The editor closed; the rename draft and the global unit draft
+    // both stand.
+    expect(el.querySelector('.editor-form')).toBeNull();
+    expect(el.textContent).toContain('2 draft changes, not saved yet.');
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement).click();
+    await settle(fixture);
+    const proposal = (ipc.requests.filter(r => r.path === '/preview-save').at(-1)!
+      .body as { proposal: Array<Record<string, unknown>> }).proposal;
+    expect(proposal).toContainEqual({ dataPoint: 'windspeedmph', stationMac: MAC, name: 'Roof Wind' });
+    expect(proposal).toContainEqual({ dataPoint: 'windspeedmph', displayUnit: 'mph' });
   });
 
   it('a family choice supersedes an open row editor: the editor closes and the global draft stands', async () => {

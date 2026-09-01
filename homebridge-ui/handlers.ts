@@ -42,6 +42,7 @@ import {
   loadUiStateStore,
 } from '../dist/sensorMap/persistence/uiStateStore.js';
 import { DISPLAY_FAMILIES, UNIT_VOCABULARY, unitOptionsFor } from '../dist/sensorMap/unitVocabulary.js';
+import { defaultRowFor } from '../dist/sensorMap/defaultMap.js';
 import type { Logger, ReadStoreOptions } from '../dist/sensorMap/persistence/atomicWrite.js';
 import type {
   DiscoveryStore,
@@ -1385,6 +1386,16 @@ function toEditorRowDto(row: EffectiveSensorRow, layers: OverrideLayers): Editor
   if (row.kind === 'unrecognized') {
     return dto;
   }
+  // Identity scope for the family unit action (PR #53 round 2 F1):
+  // only known and custom-global dataPoints may take a global
+  // displayUnit template; a station-only custom identity must keep
+  // station scope.
+  const globalOverride = layers.global.get(row.dataPoint);
+  dto.identityScope = defaultRowFor(row.dataPoint) !== undefined
+    ? 'known'
+    : globalOverride?.kind !== undefined && globalOverride.measurement !== undefined
+      ? 'custom-global'
+      : 'custom-station';
   dto.measurement = row.measurement;
   dto.name = row.name;
   // Mirror the resolver exactly (review #32 F2): null means "no
