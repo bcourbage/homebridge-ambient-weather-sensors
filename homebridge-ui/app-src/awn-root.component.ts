@@ -45,6 +45,14 @@ interface StationGroup {
 @Component({
   selector: 'awn-root',
   changeDetection: ChangeDetectionStrategy.OnPush,
+  // Pre-focus form controls on mousedown WITHOUT scrolling: this page
+  // runs in HB UI X's content-height iframe, and the browser's
+  // click-focus scroll-into-view step scrolled the OUTER settings
+  // page while a select's native popup opened at the pre-scroll
+  // mouse position, detaching the menu from its control (Bruno's
+  // beta.15 RC feedback). An already-focused control skips that
+  // scroll step entirely.
+  host: { '(mousedown)': 'preFocus($event)' },
   imports: [ReactiveFormsModule],
   styles: `
     h3 { font-size: 0.95rem; margin: 16px 0 4px 0; }
@@ -672,6 +680,21 @@ export class AwnRootComponent {
     // describes the draft — and retires a previous save's banner.
     this.previewResult.set(null);
     this.saveResult.set(null);
+  }
+
+  /**
+   * See the host mousedown binding: focus the pressed form control
+   * (or a pressed label's control) with preventScroll so the
+   * browser's own click-focus never scrolls the outer settings page.
+   */
+  protected preFocus(ev: Event): void {
+    const target = ev.target as HTMLElement;
+    const label = target instanceof HTMLLabelElement ? target : target.closest?.('label');
+    const control = (label instanceof HTMLLabelElement ? label.control : null) ?? target;
+    if (control instanceof HTMLSelectElement || control instanceof HTMLInputElement
+      || control instanceof HTMLTextAreaElement) {
+      control.focus({ preventScroll: true });
+    }
   }
 
   protected rowKey(row: EditorRowDto): string {

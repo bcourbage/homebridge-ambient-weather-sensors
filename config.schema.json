@@ -33,39 +33,57 @@
       "temperatureSensors": {
         "title": "Temperature Sensors",
         "type": "boolean",
-        "default": false
+        "default": false,
+        "condition": {
+          "functionBody": "return !(model.configVersion === 2 && model._sensorMapV2 === true);"
+        }
       },
       "humiditySensors": {
         "title": "Humidity Sensors",
         "type": "boolean",
-        "default": false
+        "default": false,
+        "condition": {
+          "functionBody": "return !(model.configVersion === 2 && model._sensorMapV2 === true);"
+        }
       },
       "solarRadiationSensors": {
         "title": "Solar Radiation Sensors",
         "type": "boolean",
-        "default": false
+        "default": false,
+        "condition": {
+          "functionBody": "return !(model.configVersion === 2 && model._sensorMapV2 === true);"
+        }
       },
       "co2Sensors": {
         "title": "CO2 Sensors",
         "type": "boolean",
-        "default": false
+        "default": false,
+        "condition": {
+          "functionBody": "return !(model.configVersion === 2 && model._sensorMapV2 === true);"
+        }
       },
       "airQualitySensors": {
         "title": "Air Quality Sensors (PM2.5 / PM10)",
         "type": "boolean",
-        "default": false
+        "default": false,
+        "condition": {
+          "functionBody": "return !(model.configVersion === 2 && model._sensorMapV2 === true);"
+        }
       },
       "extendedSensors": {
         "title": "Enable Extended Sensors",
         "type": "boolean",
-        "default": false
+        "default": false,
+        "condition": {
+          "functionBody": "return !(model.configVersion === 2 && model._sensorMapV2 === true);"
+        }
       },
       "windSensors": {
         "title": "Wind sensors (speed, gust, direction)",
         "type": "boolean",
         "default": false,
         "condition": {
-          "functionBody": "return model.extendedSensors === true;"
+          "functionBody": "return model.extendedSensors === true && !(model.configVersion === 2 && model._sensorMapV2 === true);"
         }
       },
       "rainSensors": {
@@ -73,7 +91,7 @@
         "type": "boolean",
         "default": false,
         "condition": {
-          "functionBody": "return model.extendedSensors === true;"
+          "functionBody": "return model.extendedSensors === true && !(model.configVersion === 2 && model._sensorMapV2 === true);"
         }
       },
       "pressureSensors": {
@@ -81,7 +99,7 @@
         "type": "boolean",
         "default": false,
         "condition": {
-          "functionBody": "return model.extendedSensors === true;"
+          "functionBody": "return model.extendedSensors === true && !(model.configVersion === 2 && model._sensorMapV2 === true);"
         }
       },
       "uvSensors": {
@@ -89,7 +107,7 @@
         "type": "boolean",
         "default": false,
         "condition": {
-          "functionBody": "return model.extendedSensors === true;"
+          "functionBody": "return model.extendedSensors === true && !(model.configVersion === 2 && model._sensorMapV2 === true);"
         }
       },
       "lightningSensors": {
@@ -97,7 +115,7 @@
         "type": "boolean",
         "default": false,
         "condition": {
-          "functionBody": "return model.extendedSensors === true;"
+          "functionBody": "return model.extendedSensors === true && !(model.configVersion === 2 && model._sensorMapV2 === true);"
         }
       },
       "extendedDisplayMode": {
@@ -126,7 +144,7 @@
         "type": "object",
         "title": "Motion thresholds for extended sensors",
         "condition": {
-          "functionBody": "return model.extendedSensors === true;"
+          "functionBody": "return model.extendedSensors === true && !(model.configVersion === 2 && model._sensorMapV2 === true);"
         },
         "properties": {
           "windSpeedEnabled": {
@@ -195,7 +213,7 @@
         "type": "object",
         "title": "Display units for extended sensors",
         "condition": {
-          "functionBody": "return model.extendedSensors === true;"
+          "functionBody": "return model.extendedSensors === true && !(model.configVersion === 2 && model._sensorMapV2 === true);"
         },
         "properties": {
           "windSpeed": {

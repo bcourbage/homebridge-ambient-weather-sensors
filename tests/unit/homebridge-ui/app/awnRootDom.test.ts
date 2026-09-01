@@ -927,6 +927,28 @@ describe('draft editing + preview (PR B — no persistence)', () => {
     expect(([...after.options].find(o => o.textContent === 'Mixed') as HTMLOptionElement).hidden).toBe(true);
   });
 
+  it('mousedown pre-focuses form controls without scrolling (beta.15 RC jump fix)', async () => {
+    const ipc = makeIpc(editorState());
+    const fixture = await render(ipc);
+    const el = fixture.nativeElement as HTMLElement;
+
+    // Pressing a select focuses it BEFORE the browser's click-focus
+    // runs (with preventScroll), so the click-focus scroll-into-view
+    // step - which scrolled HB UI X's outer settings page away from
+    // the opening popup - never executes.
+    const sel = el.querySelector('.unit-families select') as HTMLSelectElement;
+    sel.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    expect(sel.ownerDocument.activeElement).toBe(sel);
+
+    // Pressing a label pre-focuses ITS control the same way.
+    const editorEl = openEditor(fixture, 'windspeedmph');
+    const unitLabel = [...editorEl.querySelectorAll('.editor-form label')]
+      .find(l => l.textContent!.includes('Display unit'))!;
+    unitLabel.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    expect((unitLabel as HTMLLabelElement).control).not.toBeNull();
+    expect(editorEl.ownerDocument.activeElement).toBe((unitLabel as HTMLLabelElement).control);
+  });
+
   it('a family choice supersedes an open row editor: the editor closes and the global draft stands', async () => {
     const ipc = makeIpc(editorState());
     const fixture = await render(ipc);
