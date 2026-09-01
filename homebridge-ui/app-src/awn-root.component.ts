@@ -71,6 +71,16 @@ interface StationGroup {
       background: var(--panel-bg); border: 1px solid var(--rule);
     }
     .draft-bar .grow { flex: 1; }
+    .unit-families {
+      display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center;
+      margin: 0 0 4px;
+    }
+    .unit-families-title { font-weight: 600; }
+    .unit-families label {
+      display: inline-flex; gap: 6px; align-items: center;
+      font-size: 0.85rem; color: var(--fg-sub);
+    }
+    .unit-families-note { margin-bottom: 10px; }
     .editor-form {
       background: var(--panel-bg); border-top: 2px solid var(--rule);
       padding: 10px 14px;
@@ -232,6 +242,30 @@ interface StationGroup {
           <button type="button" (click)="preview()" [disabled]="draftCount() === 0 || previewPending() || editFormInvalid() || saving() || confirmOpen() || reloadRequired()">Preview changes</button>
           <button type="button" (click)="discardAll()" [disabled]="draftCount() === 0 || saving() || confirmOpen() || reloadRequired()">Discard drafts</button>
         </div>
+      }
+
+      <!-- Family display units (GA task #70's editor layer): one
+           selector per measurement that offers display units, drafting
+           the choice onto every row of that measurement across all
+           stations. Rows stay individually editable afterward; a
+           family whose rows currently disagree shows Mixed. -->
+      @if (unitFamilies().length > 0) {
+        <div class="unit-families">
+          <span class="unit-families-title">Units</span>
+          @for (f of unitFamilies(); track f.measurement) {
+            <label>{{ familyLabel(f.measurement) }}
+              <select #familySel (change)="applyFamilyUnit(f.measurement, familySel.value)" [disabled]="saving() || confirmOpen() || reloadRequired()">
+                @if (f.current === '') {
+                  <option value="" disabled selected>Mixed</option>
+                }
+                @for (u of f.options; track u.unit) {
+                  <option [value]="u.unit" [selected]="u.unit === f.current">{{ u.label }}</option>
+                }
+              </select>
+            </label>
+          }
+        </div>
+        <p class="sub unit-families-note">Sets the display unit on every row of a measurement, as a draft. Single rows can still be changed in their row editor.</p>
       }
 
       @if (previewPending()) {
@@ -655,6 +689,82 @@ export class AwnRootComponent {
       return [];
     }
     return this.vocab()?.measurements[row.measurement]?.extendedDisplay ?? [];
+  }
+
+  /**
+   * One entry per measurement that (a) offers display units and (b)
+   * has at least one editable row on the page. `current` is the unit
+   * every eligible row currently shows (drafts included), or '' when
+   * they disagree (rendered as Mixed).
+   */
+  protected readonly unitFamilies = computed<Array<{ measurement: string; options: UnitOptionDto[]; current: string }>>(() => {
+    this.draftVersion();
+    const vocab = this.vocab();
+    const state = this.state();
+    if (!vocab || !state) {
+      return [];
+    }
+    const byMeasurement = new Map<string, { options: UnitOptionDto[]; units: Set<string> }>();
+    for (const row of state.rows) {
+      if (row.kind === 'unrecognized' || !row.measurement) {
+        continue;
+      }
+      const options = vocab.measurements[row.measurement]?.extendedDisplay ?? [];
+      if (options.length === 0) {
+        continue;
+      }
+      let f = byMeasurement.get(row.measurement);
+      if (!f) {
+        f = { options, units: new Set() };
+        byMeasurement.set(row.measurement, f);
+      }
+      const effective = this.store.draftedValue(row, 'displayUnit') ?? row.displayUnit;
+      f.units.add(typeof effective === 'string' ? effective : '');
+    }
+    return [...byMeasurement.entries()]
+      .map(([measurement, f]) => ({
+        measurement,
+        options: f.options,
+        current: f.units.size === 1 ? [...f.units][0] : '',
+      }))
+      .sort((a, b) => a.measurement.localeCompare(b.measurement));
+  });
+
+  /** Measurement code → label for the family-unit selector. */
+  protected familyLabel(measurement: string): string {
+    return measurement.replace(/-/g, ' ');
+  }
+
+  /**
+   * Draft `unit` as the display unit of every eligible row of the
+   * measurement, with per-row applyEdit semantics: a row already
+   * resolving to that unit gets its patch cleared instead. A row
+   * whose editor is open routes through its form so the visible
+   * control and the draft cannot disagree.
+   */
+  protected applyFamilyUnit(measurement: string, unit: string): void {
+    const state = this.state();
+    if (!unit || !state) {
+      return;
+    }
+    for (const row of state.rows) {
+      if (row.kind === 'unrecognized' || row.measurement !== measurement) {
+        continue;
+      }
+      if (this.displayUnitOptions(row).length === 0) {
+        continue;
+      }
+      if (this.isExpanded(row) && this.editForm) {
+        this.editForm.patchValue({ displayUnit: unit });
+        continue;
+      }
+      if (unit === row.displayUnit) {
+        this.store.clearField(row, 'displayUnit');
+      } else {
+        this.store.setField(row, 'displayUnit', unit);
+      }
+    }
+    this.bump();
   }
 
   protected toggleEdit(row: EditorRowDto): void {

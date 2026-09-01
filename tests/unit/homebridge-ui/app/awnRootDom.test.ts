@@ -590,6 +590,80 @@ describe('draft editing + preview (PR B — no persistence)', () => {
     });
   });
 
+  it('family unit selector drafts the display unit onto every row of the measurement (GA #70 editor layer)', async () => {
+    const ipc = makeIpc(editorState());
+    const fixture = await render(ipc);
+    const el = fixture.nativeElement as HTMLElement;
+
+    // Only wind-speed offers display units in the fixture vocabulary
+    // (temperature has an empty extendedDisplay), so exactly one
+    // family renders, labeled from the measurement code, showing the
+    // single wind row's resolved unit.
+    const panel = el.querySelector('.unit-families') as HTMLElement;
+    expect(panel).not.toBeNull();
+    const selects = [...panel.querySelectorAll('select')] as HTMLSelectElement[];
+    expect(selects).toHaveLength(1);
+    expect(panel.textContent).toContain('wind speed');
+    expect(selects[0].value).toBe('fps');
+
+    // Choosing another unit drafts it (the wind row resolves to fps,
+    // so mph is a real change)...
+    selects[0].value = 'mph';
+    selects[0].dispatchEvent(new Event('change'));
+    await settle(fixture);
+    expect(el.textContent).toContain('1 draft change, not saved yet.');
+
+    // ...and choosing the resolved unit again clears the draft
+    // (applyEdit semantics: equal-to-resolved un-drafts).
+    const sel = el.querySelector('.unit-families select') as HTMLSelectElement;
+    sel.value = 'fps';
+    sel.dispatchEvent(new Event('change'));
+    await settle(fixture);
+    expect(el.textContent).toContain('No draft changes yet.');
+  });
+
+  it('a family whose rows disagree shows Mixed, and one selection unifies them', async () => {
+    const base = editorState();
+    const secondWind = {
+      ...base.rows[1], stationMac: OTHER_MAC, displayUnit: 'mph', origin: 'default' as const,
+    };
+    const ipc = makeIpc(editorState({ rows: [...base.rows, secondWind] }));
+    const fixture = await render(ipc);
+    const el = fixture.nativeElement as HTMLElement;
+
+    // fps on one station, mph on the other: Mixed placeholder, no value.
+    const sel = el.querySelector('.unit-families select') as HTMLSelectElement;
+    expect(sel.value).toBe('');
+    expect([...sel.options].map(o => o.textContent)).toContain('Mixed');
+
+    // Selecting fps drafts only the row that differs (the mph one).
+    sel.value = 'fps';
+    sel.dispatchEvent(new Event('change'));
+    await settle(fixture);
+    expect(el.textContent).toContain('1 draft change, not saved yet.');
+    const after = el.querySelector('.unit-families select') as HTMLSelectElement;
+    expect(after.value).toBe('fps');
+    expect([...after.options].map(o => o.textContent)).not.toContain('Mixed');
+  });
+
+  it('a family unit change routes through an open row editor form instead of bypassing it', async () => {
+    const ipc = makeIpc(editorState());
+    const fixture = await render(ipc);
+    const el = openEditor(fixture, 'windspeedmph');
+
+    const sel = el.querySelector('.unit-families select') as HTMLSelectElement;
+    sel.value = 'mph';
+    sel.dispatchEvent(new Event('change'));
+    await settle(fixture);
+
+    // The open form's unit control shows the family choice (no silent
+    // divergence between the visible control and the draft), and the
+    // change is drafted.
+    const formUnit = el.querySelector('.editor-form select') as HTMLSelectElement;
+    expect(formUnit.value).toBe('mph');
+    expect(el.textContent).toContain('1 draft change, not saved yet.');
+  });
+
   it('Cancel discards the row draft and closes the form so a later event cannot resurrect the edits', async () => {
     const ipc = makeIpc(editorState(), [], PREVIEW_OK);
     const fixture = await render(ipc);
