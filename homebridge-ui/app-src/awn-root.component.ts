@@ -23,6 +23,7 @@ import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
 
 import { DraftStore } from './draft-store';
 import { HomebridgeService } from './homebridge.service';
+import { KIND_HELP } from './kind-support';
 import { composeAndPersist } from '../saveOrchestrator';
 import type {
   EditorRowDto,
@@ -127,28 +128,27 @@ interface StationGroup {
     .table-scroll table { table-layout: fixed; }
     th.dp { width: 22%; }
     th.name { width: auto; }
-    th.kind-col { width: 64px; }
-    /* Header info affordance for the Kind column: a focusable button
-       whose accessible name carries the full explanation (screen
-       readers need no tooltip), with a CSS card revealed on hover or
-       focus for sighted users. Revealing on :focus rather than
-       :focus-visible keeps a tap on touch devices working too. */
-    .th-help { position: relative; white-space: nowrap; }
+    th.kind-col { width: 76px; }
+    /* Header info affordance for the Kind column: the button toggles
+       an IN-FLOW help card above the table, outside .table-scroll,
+       so the card can never be clipped by the container's overflow
+       (a positioned tooltip inside it could be, e.g. on a one-row
+       table). Click-toggled, so keyboard and touch need nothing
+       hover-specific. */
+    .th-help { white-space: nowrap; }
     .info-btn {
-      background: none; border: none; padding: 0; margin-left: 3px;
-      color: var(--fg-sub); cursor: help; vertical-align: -2px;
+      background: none; border: none; padding: 0; margin-left: 1px;
+      width: 24px; height: 24px; border-radius: 4px;
+      display: inline-flex; align-items: center; justify-content: center;
+      color: var(--fg-sub); cursor: pointer; vertical-align: middle;
     }
+    .info-btn[aria-expanded="true"] { color: var(--fg); background: var(--code-bg); }
     .info-icon { width: 13px; height: 13px; display: block; }
-    .th-tip {
-      display: none; position: absolute; z-index: 30;
-      top: calc(100% + 6px); left: -80px; width: 250px;
-      background: var(--panel-bg); color: var(--fg);
-      border: 1px solid var(--rule); border-radius: 6px;
-      padding: 7px 9px; font-weight: normal; text-align: left;
-      white-space: normal; font-size: 0.8rem; line-height: 1.35;
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+    .kind-help {
+      margin: 0 0 8px; padding: 7px 9px; max-width: 640px;
+      background: var(--code-bg); color: var(--fg);
+      border-radius: 6px; font-size: 0.8rem; line-height: 1.35;
     }
-    .info-btn:hover + .th-tip, .info-btn:focus + .th-tip { display: block; }
     th.units { width: 14%; }
     .table-scroll th, .table-scroll td { padding: 5px 7px; }
     .table-scroll td { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -361,6 +361,9 @@ interface StationGroup {
           {{ group.title }}
           <span class="station-meta"><code [title]="'station learned from: ' + group.source">{{ group.mac }}</code></span>
         </h3>
+        @if (kindHelpFor() === group.mac) {
+          <p class="kind-help" role="note">{{ KIND_HELP }}</p>
+        }
         <div class="table-scroll">
         <table>
           <thead>
@@ -369,10 +372,9 @@ interface StationGroup {
               <th class="dp">Data point</th><th class="name">Name</th>
               <th class="kind-col">
                 <span class="th-help">Kind
-                  <button type="button" class="info-btn" [attr.aria-label]="KIND_HELP">
+                  <button type="button" class="info-btn" aria-label="About the Kind column" [attr.aria-expanded]="kindHelpFor() === group.mac" (click)="toggleKindHelp(group.mac)">
                     <svg class="info-icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.4" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M8 7.3v3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><circle cx="8" cy="4.9" r="0.9" fill="currentColor"/></svg>
                   </button>
-                  <span class="th-tip" role="tooltip" aria-hidden="true">{{ KIND_HELP }}</span>
                 </span>
               </th>
               <th class="units">Units</th>
@@ -907,15 +909,15 @@ export class AwnRootComponent {
     return row.kind === 'unrecognized' ? 'unrecognized field' : (row.enabled ? 'enabled' : 'disabled');
   }
 
-  /**
-   * Kind column header help (issue #50): what the column means and
-   * the full kind vocabulary. Doubles as the info button's accessible
-   * name and the visual tooltip text so the two cannot drift.
-   */
-  protected readonly KIND_HELP =
-    'The Apple Home accessory type for the row: temperature, humidity, light, '
-    + 'motion, leak, contact, occupancy, CO₂, CO, PM2.5, or PM10. Rows marked '
-    + '? are unrecognized and create no accessory until a kind is assigned.';
+  /** Kind column header help (issue #50), see kind-support.ts. */
+  protected readonly KIND_HELP = KIND_HELP;
+
+  /** Station mac whose Kind help card is open, or null for none. */
+  protected readonly kindHelpFor = signal<string | null>(null);
+
+  protected toggleKindHelp(mac: string): void {
+    this.kindHelpFor.set(this.kindHelpFor() === mac ? null : mac);
+  }
 
   /** Tooltip + accessible label for the Kind icon or badge. */
   protected kindTitle(row: EditorRowDto): string {

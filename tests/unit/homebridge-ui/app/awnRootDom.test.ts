@@ -208,33 +208,48 @@ describe('AwnRootComponent (TestBed, jsdom)', () => {
     expect(ipc.requests.map(r => r.path).sort()).toEqual(['/editor-state', '/vocabulary']);
   });
 
-  it('the Kind header explains the Apple Home accessory type (issue #50)', async () => {
+  it('the Kind header info button toggles an in-flow help card (issue #50)', async () => {
     const ipc = makeIpc(editorState());
     const fixture = await render(ipc);
     const el = fixture.nativeElement as HTMLElement;
 
-    // One info affordance per station table, keyboard-reachable (a
-    // real button), whose accessible name IS the full explanation —
-    // screen readers need no tooltip interaction.
-    const infoBtns = [...el.querySelectorAll('th.kind-col .info-btn')];
+    // One info button per station table, keyboard-reachable (a real
+    // button), collapsed by default.
+    const infoBtns = [...el.querySelectorAll('th.kind-col .info-btn')] as HTMLButtonElement[];
     expect(infoBtns).toHaveLength(el.querySelectorAll('table').length);
+    expect(el.querySelector('.kind-help')).toBeNull();
     for (const btn of infoBtns) {
       expect(btn.tagName).toBe('BUTTON');
-      const label = btn.getAttribute('aria-label')!;
-      expect(label).toContain('Apple Home accessory type');
-      // The short list of types, per the request.
-      for (const kind of ['temperature', 'humidity', 'light', 'motion', 'leak',
-        'contact', 'occupancy', 'CO₂', 'CO', 'PM2.5', 'PM10']) {
-        expect(label).toContain(kind);
-      }
-      // The visual tooltip carries the same text (hidden from the
-      // accessibility tree — the button's name already says it).
-      const tip = btn.nextElementSibling as HTMLElement;
-      expect(tip.classList.contains('th-tip')).toBe(true);
-      expect(tip.getAttribute('role')).toBe('tooltip');
-      expect(tip.getAttribute('aria-hidden')).toBe('true');
-      expect(tip.textContent!.trim()).toBe(label);
+      expect(btn.getAttribute('aria-label')).toBe('About the Kind column');
+      expect(btn.getAttribute('aria-expanded')).toBe('false');
     }
+
+    // Click opens the card in THAT station's section only, as an
+    // in-flow note OUTSIDE the scroll container (so the container's
+    // overflow can never clip it).
+    infoBtns[0].click();
+    fixture.detectChanges();
+    const cards = [...el.querySelectorAll('.kind-help')];
+    expect(cards).toHaveLength(1);
+    expect(cards[0].closest('.table-scroll')).toBeNull();
+    expect(infoBtns[0].getAttribute('aria-expanded')).toBe('true');
+    expect(infoBtns[1].getAttribute('aria-expanded')).toBe('false');
+
+    // The copy states the capability truth: what Kind means, which
+    // kinds currently work, which are reserved, and that ? rows
+    // create nothing. kindSupport.test.ts pins the vocabulary to the
+    // runtime wrapper table; here we pin the load-bearing claims.
+    const text = cards[0].textContent!;
+    expect(text).toContain('Apple Home accessory type');
+    expect(text).toContain('Currently supported kinds are temperature, humidity, light, motion, CO₂, PM2.5 and PM10');
+    expect(text).toContain('CO, leak, contact and occupancy are reserved for future support');
+    expect(text).toContain('unrecognized and do not create an accessory');
+
+    // Click again closes it.
+    infoBtns[0].click();
+    fixture.detectChanges();
+    expect(el.querySelector('.kind-help')).toBeNull();
+    expect(infoBtns[0].getAttribute('aria-expanded')).toBe('false');
   });
 
   it('passes cached-accessory uniqueIds to /editor-state (§8.7 source 3)', async () => {
