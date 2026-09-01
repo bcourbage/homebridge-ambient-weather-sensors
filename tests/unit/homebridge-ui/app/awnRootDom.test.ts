@@ -41,6 +41,10 @@ const VOCAB: VocabularyDto = {
       customSource: [{ unit: 'mph', label: 'mph' }, { unit: 'fps', label: 'ft/sec' }],
       extendedDisplay: [{ unit: 'mph', label: 'mph' }, { unit: 'fps', label: 'ft/sec' }],
     },
+    pressure: {
+      customSource: [],
+      extendedDisplay: [{ unit: 'inHg', label: 'inHg' }, { unit: 'mmHg', label: 'mmHg' }, { unit: 'hPa', label: 'hPa' }],
+    },
     'rain-rate': {
       customSource: [],
       extendedDisplay: [{ unit: 'in_per_hr', label: 'in/hr' }, { unit: 'mm_per_hr', label: 'mm/hr' }],
@@ -51,6 +55,14 @@ const VOCAB: VocabularyDto = {
     },
   },
   families: [
+    {
+      key: 'barometer', label: 'Barometer', measurements: ['pressure'],
+      choices: [
+        { id: 'inHg', label: 'inHg', units: { pressure: 'inHg' } },
+        { id: 'mmHg', label: 'mmHg', units: { pressure: 'mmHg' } },
+        { id: 'hPa', label: 'hPa', units: { pressure: 'hPa' } },
+      ],
+    },
     {
       key: 'wind-speed', label: 'Wind Speed', measurements: ['wind-speed'],
       choices: [
@@ -766,6 +778,108 @@ describe('draft editing + preview (PR B — no persistence)', () => {
     const proposal = (ipc.requests.filter(r => r.path === '/preview-save').at(-1)!
       .body as { proposal: Array<Record<string, unknown>> }).proposal;
     expect(proposal).toContainEqual({ dataPoint: 'windspeedmph', stationMac: MAC, name: 'Roof Wind' });
+    expect(proposal).toContainEqual({ dataPoint: 'windspeedmph', displayUnit: 'mph' });
+  });
+
+  it('a station identity override with a DIFFERENT measurement keeps station scope (round 3 F1)', async () => {
+    const base = editorState();
+    // Global custom_x is a pressure sensor; station A overrides the
+    // identity to wind-speed. Both are valid; only measurement-matched
+    // rows may inherit the global unit.
+    const globalPressureRow = {
+      stationMac: OTHER_MAC, dataPoint: 'custom_x', kind: 'motion', measurement: 'pressure',
+      sourceUnit: 'hPa', displayUnit: 'hPa', name: 'Custom X', enabled: true,
+      batteryField: null, origin: 'global' as const, identityScope: 'custom-global' as const,
+    };
+    const stationWindRow = {
+      stationMac: MAC, dataPoint: 'custom_x', kind: 'motion', measurement: 'wind-speed',
+      sourceUnit: 'mph', displayUnit: 'mph', name: 'Custom X Wind', enabled: true,
+      batteryField: null, origin: 'station' as const, identityScope: 'custom-station' as const,
+    };
+    const authored = [
+      { index: 0, layer: 'global' as const, dataPoint: 'custom_x', fields: { kind: 'motion', measurement: 'pressure', sourceUnit: 'hPa', name: 'Custom X' } },
+      { index: 1, layer: 'station' as const, dataPoint: 'custom_x', stationMacKey: MAC, stationMac: MAC, fields: { kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph', displayUnit: 'mph', name: 'Custom X Wind' } },
+    ];
+    const ipc = makeIpc(editorState({ rows: [...base.rows, globalPressureRow, stationWindRow], authored }), [], PREVIEW_OK);
+    const fixture = await render(ipc);
+    const el = fixture.nativeElement as HTMLElement;
+    const selectFor = (label: string): HTMLSelectElement =>
+      ([...el.querySelectorAll('.unit-families label')] as HTMLElement[])
+        .find(l => l.textContent!.includes(label))!.querySelector('select')!;
+
+    // Wind Speed -> ft/sec changes ONLY the station wind row: the
+    // global pressure fragment must not receive a wind unit.
+    selectFor('Wind Speed').value = 'fps';
+    selectFor('Wind Speed').dispatchEvent(new Event('change'));
+    await settle(fixture);
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement).click();
+    await settle(fixture);
+    let proposal = (ipc.requests.filter(r => r.path === '/preview-save').at(-1)!
+      .body as { proposal: Array<Record<string, unknown>> }).proposal;
+    const globalFrag = proposal.find(f => f.dataPoint === 'custom_x' && f.stationMac === undefined)!;
+    expect(globalFrag.displayUnit).toBeUndefined();
+    expect(globalFrag.measurement).toBe('pressure');
+    const stationFrag = proposal.find(f => f.dataPoint === 'custom_x' && f.stationMac === MAC)!;
+    expect(stationFrag.displayUnit).toBe('fps');
+    expect(stationFrag.measurement).toBe('wind-speed');
+
+    // Barometer -> mmHg patches the GLOBAL pressure template and
+    // leaves the wind station override untouched (round 3 F1: strip
+    // only rows that inherit the selected global unit).
+    selectFor('Barometer').value = 'mmHg';
+    selectFor('Barometer').dispatchEvent(new Event('change'));
+    await settle(fixture);
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement).click();
+    await settle(fixture);
+    proposal = (ipc.requests.filter(r => r.path === '/preview-save').at(-1)!
+      .body as { proposal: Array<Record<string, unknown>> }).proposal;
+    expect(proposal.find(f => f.dataPoint === 'custom_x' && f.stationMac === undefined)!.displayUnit).toBe('mmHg');
+    const windAfter = proposal.find(f => f.dataPoint === 'custom_x' && f.stationMac === MAC)!;
+    expect(windAfter.displayUnit).toBe('fps');
+    expect(windAfter.measurement).toBe('wind-speed');
+  });
+
+  it('a family choice never resurrects a custom row whose identity is drafted for removal (round 3 F2)', async () => {
+    const base = editorState();
+    const stationCustom = {
+      stationMac: MAC, dataPoint: 'barn_wind', kind: 'motion', measurement: 'wind-speed',
+      sourceUnit: 'kph', displayUnit: 'kph', name: 'Barn Wind', enabled: true,
+      batteryField: null, origin: 'station' as const, identityScope: 'custom-station' as const,
+    };
+    const globalCustom = {
+      stationMac: OTHER_MAC, dataPoint: 'custom_y', kind: 'motion', measurement: 'wind-speed',
+      sourceUnit: 'kph', displayUnit: 'kph', name: 'Custom Y', enabled: true,
+      batteryField: null, origin: 'global' as const, identityScope: 'custom-global' as const,
+    };
+    const authored = [
+      { index: 0, layer: 'station' as const, dataPoint: 'barn_wind', stationMacKey: MAC, stationMac: MAC, fields: { kind: 'motion', measurement: 'wind-speed', sourceUnit: 'kph', name: 'Barn Wind' } },
+      { index: 1, layer: 'global' as const, dataPoint: 'custom_y', fields: { kind: 'motion', measurement: 'wind-speed', sourceUnit: 'kph', name: 'Custom Y' } },
+    ];
+    const ipc = makeIpc(editorState({ rows: [...base.rows, stationCustom, globalCustom], authored }), [], PREVIEW_OK);
+    const fixture = await render(ipc);
+    const el = fixture.nativeElement as HTMLElement;
+
+    // Use defaults on both custom rows (their identity fragments are
+    // drafted for removal).
+    for (const dp of ['barn_wind', 'custom_y']) {
+      openEditor(fixture, dp);
+      ([...el.querySelectorAll('button')].find(b => b.textContent === 'Use defaults') as HTMLButtonElement).click();
+      await settle(fixture);
+    }
+
+    // A family choice afterward drafts the KNOWN dataPoint only.
+    const sel = el.querySelector('.unit-families select') as HTMLSelectElement;
+    sel.value = 'mph';
+    sel.dispatchEvent(new Event('change'));
+    await settle(fixture);
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement).click();
+    await settle(fixture);
+    const proposal = (ipc.requests.filter(r => r.path === '/preview-save').at(-1)!
+      .body as { proposal: Array<Record<string, unknown>> }).proposal;
+    // Neither custom row is resurrected in any form.
+    expect(proposal.some(f => f.dataPoint === 'barn_wind')).toBe(false);
+    expect(proposal.some(f => f.dataPoint === 'custom_y')).toBe(false);
+    // The known dataPoint still received its global template.
     expect(proposal).toContainEqual({ dataPoint: 'windspeedmph', displayUnit: 'mph' });
   });
 

@@ -1683,3 +1683,80 @@ describe('family unit choice keeps station-only custom rows station-scoped (PR #
       .toHaveProperty('displayUnit', 'fps');
   });
 });
+
+describe('per-identity family scope: global pressure custom with a station wind identity (PR #53 round 3 F1)', () => {
+  const MAC_B = 'AA:BB:CC:DD:EE:02';
+  const MIXED_BLOCK = {
+    platform: 'AmbientWeatherSensors',
+    name: 'Test Station',
+    apiKey: 'k', applicationKey: 'a',
+    _sensorMapV2: true,
+    configVersion: 2,
+    sensorMap: [
+      { dataPoint: 'custom_x', kind: 'motion', measurement: 'pressure', sourceUnit: 'hPa', name: 'Custom X' },
+      { dataPoint: 'custom_x', stationMac: MAC, kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph', displayUnit: 'mph', name: 'Custom X Wind' },
+    ],
+  };
+
+  it('the server classifies scope per RESOLVED identity, not per dataPoint', async () => {
+    const rig = makeRig(MIXED_BLOCK);
+    discoveryStore(rig, [MAC, MAC_B]);
+    const state = await handleGetEditorState(rig.deps, {});
+    const windRow = state.rows.find(r => r.dataPoint === 'custom_x' && r.stationMac === MAC)!;
+    const pressureRow = state.rows.find(r => r.dataPoint === 'custom_x' && r.stationMac === MAC_B)!;
+    expect(windRow.measurement).toBe('wind-speed');
+    expect(windRow.identityScope).toBe('custom-station');
+    expect(pressureRow.measurement).toBe('pressure');
+    expect(pressureRow.identityScope).toBe('custom-global');
+  });
+
+  it('a wind choice patches only the wind station; a barometer choice patches the global template; both identities survive reload', async () => {
+    const rig = makeRig(MIXED_BLOCK);
+    discoveryStore(rig, [MAC, MAC_B]);
+    const state = await handleGetEditorState(rig.deps, {});
+    const windRow = state.rows.find(r => r.dataPoint === 'custom_x' && r.stationMac === MAC)!;
+
+    // The ops applyFamilyChoice emits for this state (pinned by the
+    // matching DOM test): Wind Speed -> fps touches the custom-station
+    // row's own fragment; Barometer -> mmHg touches the global
+    // template and strips nothing (the only station exception has a
+    // different measurement and does not inherit).
+    const store = new DraftStore();
+    store.reset(state.authored);
+    store.setField(windRow, 'displayUnit', 'fps');
+    store.setFieldFor(undefined, 'custom_x', 'displayUnit', 'mmHg');
+
+    const payload = { base: MIXED_BLOCK, proposal: store.proposal() };
+    const result = await handleComposeSave(rig.deps, { ...payload, confirmDigest: await digestFor(rig, payload) });
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    const globalEntry = result.canonicalSensorMap.find(e => e.dataPoint === 'custom_x' && e.stationMac === undefined)!;
+    expect(globalEntry).toHaveProperty('measurement', 'pressure');
+    expect(globalEntry).toHaveProperty('displayUnit', 'mmHg');
+    const stationEntry = result.canonicalSensorMap.find(e => e.dataPoint === 'custom_x' && e.stationMac === MAC)!;
+    expect(stationEntry).toHaveProperty('measurement', 'wind-speed');
+    expect(stationEntry).toHaveProperty('displayUnit', 'fps');
+
+    // Canonical reload: both identities resolve, each with its own
+    // unit, with zero row errors.
+    const resolved = buildEffectiveSensorMap({
+      userOverrides: result.canonicalSensorMap,
+      discovery: { schemaVersion: 1, entries: [] },
+      uiState: { schemaVersion: 1, dismissedNoticeIds: [], forgottenFields: [] },
+      stations: [
+        { macAddress: MAC, name: 'Roof' },
+        { macAddress: MAC_B, name: 'Cabin' },
+      ],
+      configMode: 'v2',
+    });
+    expect(resolved.errors).toEqual([]);
+    const windResolved = resolved.rows.find(r => r.dataPoint === 'custom_x' && r.stationMac === MAC);
+    expect(windResolved).toHaveProperty('measurement', 'wind-speed');
+    expect(windResolved).toHaveProperty('displayUnit', 'fps');
+    const pressureResolved = resolved.rows.find(r => r.dataPoint === 'custom_x' && r.stationMac === MAC_B);
+    expect(pressureResolved).toHaveProperty('measurement', 'pressure');
+    expect(pressureResolved).toHaveProperty('displayUnit', 'mmHg');
+  });
+});

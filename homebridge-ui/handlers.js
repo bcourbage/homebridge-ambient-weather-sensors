@@ -1010,14 +1010,21 @@ function toEditorRowDto(row, layers) {
     if (row.kind === 'unrecognized') {
         return dto;
     }
-    // Identity scope for the family unit action (PR #53 round 2 F1):
-    // only known and custom-global dataPoints may take a global
-    // displayUnit template; a station-only custom identity must keep
-    // station scope.
+    // Identity scope for the family unit action (PR #53 rounds 2-3 F1):
+    // only known rows and rows genuinely GOVERNED by a global custom
+    // identity may take a global displayUnit template. Classification
+    // is per RESOLVED row, not per dataPoint: a station identity
+    // override may carry a DIFFERENT measurement than the global custom
+    // template (global pressure, station wind-speed — both valid), and
+    // writing that station's family unit onto the global fragment would
+    // be illegal-displayunit-for-measurement. A row is 'custom-global'
+    // only when its resolved measurement matches the accepted global
+    // identity's measurement.
     const globalOverride = layers.global.get(row.dataPoint);
     dto.identityScope = defaultRowFor(row.dataPoint) !== undefined
         ? 'known'
         : globalOverride?.kind !== undefined && globalOverride.measurement !== undefined
+            && globalOverride.measurement === row.measurement
             ? 'custom-global'
             : 'custom-station';
     dto.measurement = row.measurement;

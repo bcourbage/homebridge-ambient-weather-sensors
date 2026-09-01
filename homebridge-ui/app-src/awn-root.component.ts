@@ -801,6 +801,14 @@ export class AwnRootComponent {
       if (unit === undefined) {
         continue;
       }
+      // Round 3 F2: the row's identity lives in its station fragment;
+      // with that key drafted for whole-key removal (Use defaults), a
+      // unit patch would resurrect the row as a minimal replacement
+      // WITHOUT its identity (custom-missing-kind). Skip it — the row
+      // is on its way out.
+      if (this.store.keyRemovedFor(row.stationMac, row.dataPoint)) {
+        continue;
+      }
       if (unit === row.displayUnit) {
         this.store.clearField(row, 'displayUnit');
       } else {
@@ -819,18 +827,33 @@ export class AwnRootComponent {
     }
 
     for (const [dataPoint, rows] of byDataPoint) {
-      // known and custom-global identities share one measurement per
-      // dataPoint (the default map or the global fragment fixes it).
+      // known and custom-global rows share one measurement per
+      // dataPoint (the default map or the matched global identity
+      // fixes it; a station identity with a DIFFERENT measurement is
+      // classified custom-station and never reaches this group).
       const unit = choice.units[rows[0].measurement!];
       if (unit === undefined) {
+        continue;
+      }
+      // Round 3 F2: a custom dataPoint whose global identity fragment
+      // is drafted for removal must not get a unit patch — the
+      // minimal replacement would lack the identity
+      // (custom-missing-kind). Known dataPoints need no identity, so
+      // their replacement fragment stays legal.
+      if (rows[0].identityScope === 'custom-global' && this.store.keyRemovedFor(undefined, dataPoint)) {
         continue;
       }
       // The family choice supersedes pending row-level unit drafts.
       for (const row of rows) {
         this.store.clearField(row, 'displayUnit');
       }
-      // Strip station exceptions so the global template governs.
-      const exceptions = this.store.stationsAuthoringField(dataPoint, 'displayUnit');
+      // Strip station displayUnit exceptions — but ONLY for stations
+      // whose row actually inherits this global unit (round 3 F1): a
+      // station identity override with a different measurement keeps
+      // its own displayUnit untouched.
+      const inheritingMacs = new Set(rows.map(r => r.stationMac.toUpperCase()));
+      const exceptions = this.store.stationsAuthoringField(dataPoint, 'displayUnit')
+        .filter(mac => inheritingMacs.has(mac.toUpperCase()));
       for (const mac of exceptions) {
         this.store.removeFieldFor(mac, dataPoint, 'displayUnit');
       }
