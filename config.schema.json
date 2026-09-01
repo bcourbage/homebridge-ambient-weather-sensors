@@ -9,6 +9,13 @@
     "type": "object",
     "required": ["apiKey", "applicationKey"],
     "properties": {
+      "configVersion": {
+        "title": "Configuration version (managed by the sensor-map editor)",
+        "type": "integer",
+        "condition": {
+          "functionBody": "return false;"
+        }
+      },
       "name": {
         "title": "Name",
         "type": "string",
