@@ -1760,3 +1760,69 @@ describe('per-identity family scope: global pressure custom with a station wind 
     expect(pressureResolved).toHaveProperty('displayUnit', 'mmHg');
   });
 });
+
+describe('global custom removal + surviving same-identity station exception (PR #53 round 4)', () => {
+  it('the survivor keeps its identity and takes the family unit; the global template is gone for future stations', async () => {
+    const MAC_B = 'AA:BB:CC:DD:EE:02';
+    const NEVER_SEEN = 'AA:BB:CC:DD:EE:99';
+    const BLOCK = {
+      platform: 'AmbientWeatherSensors',
+      name: 'Test Station',
+      apiKey: 'k', applicationKey: 'a',
+      _sensorMapV2: true,
+      configVersion: 2,
+      sensorMap: [
+        { dataPoint: 'custom_x', kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph', name: 'Custom X' },
+        { dataPoint: 'custom_x', stationMac: MAC, kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph', name: 'Custom X (Roof)' },
+      ],
+    };
+    const rig = makeRig(BLOCK);
+    discoveryStore(rig, [MAC, MAC_B]);
+    const state = await handleGetEditorState(rig.deps, {});
+    // Station B inherits the global identity (global-origin row).
+    const inheriting = state.rows.find(r => r.dataPoint === 'custom_x' && r.stationMac === MAC_B)!;
+    expect(inheriting.origin).toBe('global');
+
+    // Use defaults on the global-origin row, then the family unit ops
+    // applyFamilyChoice emits for this state (pinned by the matching
+    // DOM test): a station-scoped patch on the surviving exception,
+    // no global replacement.
+    const store = new DraftStore();
+    store.reset(state.authored);
+    store.removeOverride(inheriting);
+    store.setFieldFor(MAC, 'custom_x', 'displayUnit', 'fps');
+
+    const payload = { base: BLOCK, proposal: store.proposal() };
+    const result = await handleComposeSave(rig.deps, { ...payload, confirmDigest: await digestFor(rig, payload) });
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    // No global custom_x fragment remains; the survivor keeps its
+    // full identity and gained the unit.
+    expect(result.canonicalSensorMap.find(e => e.dataPoint === 'custom_x' && e.stationMac === undefined)).toBeUndefined();
+    const survivor = result.canonicalSensorMap.find(e => e.dataPoint === 'custom_x' && e.stationMac === MAC)!;
+    expect(survivor).toHaveProperty('kind', 'motion');
+    expect(survivor).toHaveProperty('measurement', 'wind-speed');
+    expect(survivor).toHaveProperty('displayUnit', 'fps');
+
+    // Canonical reload: zero errors; the accessory lives only on the
+    // surviving station — not on B, not on a never-seen station.
+    const resolved = buildEffectiveSensorMap({
+      userOverrides: result.canonicalSensorMap,
+      discovery: { schemaVersion: 1, entries: [] },
+      uiState: { schemaVersion: 1, dismissedNoticeIds: [], forgottenFields: [] },
+      stations: [
+        { macAddress: MAC, name: 'Roof' },
+        { macAddress: MAC_B, name: 'Cabin' },
+        { macAddress: NEVER_SEEN, name: 'Future' },
+      ],
+      configMode: 'v2',
+    });
+    expect(resolved.errors).toEqual([]);
+    expect(resolved.rows.find(r => r.dataPoint === 'custom_x' && r.stationMac === MAC))
+      .toHaveProperty('displayUnit', 'fps');
+    expect(resolved.rows.find(r => r.dataPoint === 'custom_x' && r.stationMac === MAC_B)).toBeUndefined();
+    expect(resolved.rows.find(r => r.dataPoint === 'custom_x' && r.stationMac === NEVER_SEEN)).toBeUndefined();
+  });
+});

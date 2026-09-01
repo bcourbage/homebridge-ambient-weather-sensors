@@ -883,6 +883,56 @@ describe('draft editing + preview (PR B — no persistence)', () => {
     expect(proposal).toContainEqual({ dataPoint: 'windspeedmph', displayUnit: 'mph' });
   });
 
+  it('removing a global custom template still lets its surviving station exception take the family unit (round 4)', async () => {
+    const base = editorState();
+    // Global custom_x wind identity; station OTHER_MAC carries an
+    // independently valid exception with the SAME identity; station
+    // MAC inherits the global (global-origin row).
+    const inheritingRow = {
+      stationMac: MAC, dataPoint: 'custom_x', kind: 'motion', measurement: 'wind-speed',
+      sourceUnit: 'mph', displayUnit: 'mph', name: 'Custom X', enabled: true,
+      batteryField: null, origin: 'global' as const, identityScope: 'custom-global' as const,
+    };
+    const exceptionRow = {
+      stationMac: OTHER_MAC, dataPoint: 'custom_x', kind: 'motion', measurement: 'wind-speed',
+      sourceUnit: 'mph', displayUnit: 'mph', name: 'Custom X (Cabin)', enabled: true,
+      batteryField: null, origin: 'station' as const, identityScope: 'custom-global' as const,
+    };
+    const authored = [
+      { index: 0, layer: 'global' as const, dataPoint: 'custom_x', fields: { kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph', name: 'Custom X' } },
+      { index: 1, layer: 'station' as const, dataPoint: 'custom_x', stationMacKey: OTHER_MAC, stationMac: OTHER_MAC, fields: { kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph', name: 'Custom X (Cabin)' } },
+    ];
+    const ipc = makeIpc(editorState({ rows: [...base.rows, inheritingRow, exceptionRow], authored }), [], PREVIEW_OK);
+    const fixture = await render(ipc);
+    const el = fixture.nativeElement as HTMLElement;
+
+    // Use defaults on the GLOBAL-origin row (station MAC renders
+    // first, so openEditor hits it).
+    openEditor(fixture, 'custom_x');
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Use defaults') as HTMLButtonElement).click();
+    await settle(fixture);
+
+    const sel = el.querySelector('.unit-families select') as HTMLSelectElement;
+    sel.value = 'fps';
+    sel.dispatchEvent(new Event('change'));
+    await settle(fixture);
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement).click();
+    await settle(fixture);
+    const proposal = (ipc.requests.filter(r => r.path === '/preview-save').at(-1)!
+      .body as { proposal: Array<Record<string, unknown>> }).proposal;
+
+    // The global template is gone and NOT replaced; the surviving
+    // station exception keeps its full identity and takes the unit.
+    expect(proposal.find(f => f.dataPoint === 'custom_x' && f.stationMac === undefined)).toBeUndefined();
+    const survivor = proposal.find(f => f.dataPoint === 'custom_x' && f.stationMac === OTHER_MAC)!;
+    expect(survivor.kind).toBe('motion');
+    expect(survivor.measurement).toBe('wind-speed');
+    expect(survivor.displayUnit).toBe('fps');
+    // The known wind row already resolves fps with nothing authored,
+    // so the choice correctly authors nothing for it.
+    expect(proposal.some(f => f.dataPoint === 'windspeedmph')).toBe(false);
+  });
+
   it('a family choice supersedes an open row editor: the editor closes and the global draft stands', async () => {
     const ipc = makeIpc(editorState());
     const fixture = await render(ipc);

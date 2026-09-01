@@ -283,8 +283,13 @@ export class DraftStore {
     return [...macs];
   }
 
-  /** The authored value of a field at an explicit key, or undefined. */
-  authoredValueFor(stationMac: string | undefined, dataPoint: string, field: DraftableField): unknown {
+  /**
+   * The authored value of a field at an explicit key, or undefined.
+   * Accepts any authored field name (not just draftable ones): the
+   * family action reads identity fields (kind, measurement) to decide
+   * whether a station fragment survives a global-template removal.
+   */
+  authoredValueFor(stationMac: string | undefined, dataPoint: string, field: string): unknown {
     return this.authoredBaseline(keyFor(stationMac, dataPoint))[field];
   }
 

@@ -835,12 +835,35 @@ export class AwnRootComponent {
       if (unit === undefined) {
         continue;
       }
-      // Round 3 F2: a custom dataPoint whose global identity fragment
-      // is drafted for removal must not get a unit patch — the
-      // minimal replacement would lack the identity
-      // (custom-missing-kind). Known dataPoints need no identity, so
-      // their replacement fragment stays legal.
+      // Rounds 3-4 F2: a custom dataPoint whose global identity
+      // fragment is drafted for removal must not get a global unit
+      // patch — the minimal replacement would lack the identity
+      // (custom-missing-kind). But the family choice still covers
+      // every row that SURVIVES the removal (round 4): a station
+      // fragment for a custom dataPoint always carries its own full
+      // identity (the save boundary refuses partial custom
+      // exceptions), so such rows keep producing accessories and take
+      // station-scoped unit patches; purely global-origin rows
+      // disappear with the template and are skipped. Known dataPoints
+      // need no identity, so their replacement fragment stays legal
+      // and the normal path below handles them.
       if (rows[0].identityScope === 'custom-global' && this.store.keyRemovedFor(undefined, dataPoint)) {
+        for (const row of rows) {
+          if (this.store.keyRemovedFor(row.stationMac, dataPoint)) {
+            continue; // this station fragment is being removed too
+          }
+          const survives = this.store.authoredValueFor(row.stationMac, dataPoint, 'kind') !== undefined
+            && this.store.authoredValueFor(row.stationMac, dataPoint, 'measurement') !== undefined;
+          if (!survives) {
+            continue;
+          }
+          // Always an explicit patch: the row's resolved displayUnit
+          // may come from the global fragment being removed, so an
+          // equal-looking value can still need re-authoring on the
+          // surviving station fragment (prune drops it if that
+          // fragment already says so).
+          this.store.setFieldFor(row.stationMac, dataPoint, 'displayUnit', unit);
+        }
         continue;
       }
       // The family choice supersedes pending row-level unit drafts.
