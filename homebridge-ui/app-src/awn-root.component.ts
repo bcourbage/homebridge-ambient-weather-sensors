@@ -53,7 +53,13 @@ interface StationGroup {
   // mouse position, detaching the menu from its control (Bruno's
   // beta.15 RC feedback). An already-focused control skips that
   // scroll step entirely.
-  host: { '(mousedown)': 'preFocus($event)' },
+  host: {
+    '(mousedown)': 'preFocus($event)',
+    '(mouseover)': 'tipShow($event)',
+    '(mouseout)': 'tipHide($event)',
+    '(focusin)': 'tipShow($event)',
+    '(focusout)': 'tipHide()',
+  },
   imports: [ReactiveFormsModule],
   styles: `
     h3 { font-size: 0.95rem; margin: 16px 0 4px 0; }
@@ -133,6 +139,14 @@ interface StationGroup {
       background: var(--warn-bg); color: var(--warn-fg);
     }
     .change-row { padding: 4px 0; border-bottom: 1px solid var(--row-rule); font-size: 0.88rem; }
+    .app-tip {
+      position: fixed; z-index: 60; max-width: 340px;
+      background: var(--panel-bg); color: var(--fg);
+      border: 1px solid var(--rule); border-radius: 6px;
+      padding: 6px 9px; font-size: 0.8rem; line-height: 1.4;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+      pointer-events: none; white-space: normal;
+    }
     /* While a re-preview runs, the previous result stays visible but
        dimmed instead of being torn down (flicker on Skip). */
     .preview-block.previewing { opacity: 0.55; }
@@ -321,7 +335,7 @@ interface StationGroup {
                        beta.15 RC request): pins this row's changed
                        fields to their current values as a
                        station-scoped draft, then re-previews. -->
-                  <button type="button" class="exclude-change" title="This row keeps its current settings; everything else still changes."
+                  <button type="button" class="exclude-change" data-tip="This row keeps its current settings; everything else still changes."
                           [disabled]="previewPending() || saving() || confirmOpen() || reloadRequired()"
                           (click)="excludeChange(c)">Skip</button>
                 }
@@ -365,6 +379,19 @@ interface StationGroup {
           <div class="banner safe-mode">Preview refused ({{ pr.error.code }}): {{ pr.error.message }}</div>
         }
         </div>
+      }
+      <!-- The app's own tooltip (beta.15 RC feedback): native title
+           tooltips are unusable inside HB UI X's settings modal - the
+           modal's own title attribute competes and replaces them, they
+           appear late, and their box cannot be styled. Any element
+           with data-tip shows this instead, instantly, on hover or
+           keyboard focus. position:fixed shares the viewport
+           coordinate space with getBoundingClientRect, so anchoring
+           is exact and no scroll container can clip it. aria-hidden:
+           assistive tech already gets these texts from aria
+           attributes on the anchors. -->
+      @if (tip(); as t) {
+        <div class="app-tip" aria-hidden="true" [style.left.px]="t.x" [style.top.px]="t.y">{{ t.text }}</div>
       }
       <div #saveOutcome>
       @if (saving()) {
@@ -439,7 +466,7 @@ interface StationGroup {
       @for (group of groups(); track group.mac) {
         <h3>
           {{ group.title }}
-          <span class="station-meta"><code [title]="'station learned from: ' + group.source">{{ group.mac }}</code></span>
+          <span class="station-meta"><code [attr.data-tip]="'station learned from: ' + group.source">{{ group.mac }}</code></span>
         </h3>
         <div class="table-scroll">
         <table>
@@ -458,7 +485,7 @@ interface StationGroup {
                        review round 2). -->
                   <span class="info-q" tabindex="0" role="img" aria-label="About the Kind column"
                         [attr.aria-describedby]="kindHelpId(group.mac, 'desc')"
-                        [title]="KIND_HELP">?</span>
+                        [attr.data-tip]="KIND_HELP">?</span>
                   <span class="sr-only" [id]="kindHelpId(group.mac, 'desc')">{{ KIND_HELP }}</span>
                 </span>
               </th>
@@ -469,7 +496,7 @@ interface StationGroup {
           <tbody>
             @for (row of group.rows; track row.dataPoint) {
               <tr>
-                <td class="state" [title]="stateTitle(row)">
+                <td class="state" [attr.data-tip]="stateTitle(row)">
                   @if (row.kind !== 'unrecognized') {
                     @if (row.enabled) {
                       <svg class="state-icon on" viewBox="0 0 16 16" role="img" aria-label="enabled"><circle cx="8" cy="8" r="7" fill="currentColor"/><path d="M4.8 8.3l2.1 2.1 4.3-4.6" stroke="var(--page-bg)" stroke-width="1.8" fill="none" stroke-linecap="round"/></svg>
@@ -479,14 +506,14 @@ interface StationGroup {
                   }
                 </td>
                 <td>
-                  @if (isDirty(row)) { <span class="dirty-dot" title="draft edits"></span> }
-                  <code [title]="row.batteryField ? 'battery: ' + row.batteryField : ''">{{ row.dataPoint }}</code>
+                  @if (isDirty(row)) { <span class="dirty-dot" data-tip="draft edits"></span> }
+                  <code [attr.data-tip]="row.batteryField ? 'battery: ' + row.batteryField : null">{{ row.dataPoint }}</code>
                   @if (row.origin === 'global' || row.origin === 'station') {
-                    <span class="layer-dot {{ row.origin }}" [title]="row.origin + ' layer'"></span>
+                    <span class="layer-dot {{ row.origin }}" [attr.data-tip]="row.origin + ' layer'"></span>
                   }
                 </td>
                 <td>{{ row.name ?? '' }}</td>
-                <td class="kind" [title]="kindTitle(row)">
+                <td class="kind" [attr.data-tip]="kindTitle(row)">
                   @switch (row.kind) {
                     @case ('temperature') {
                       <svg class="kind-icon" viewBox="0 0 16 16" role="img" [attr.aria-label]="kindTitle(row)"><path d="M6.8 2.5a1.7 1.7 0 013.4 0v6a3.4 3.4 0 11-3.4 0z" fill="none" stroke="currentColor" stroke-width="1.4"/><circle cx="8.5" cy="11.4" r="1.5" fill="currentColor"/></svg>
@@ -510,9 +537,9 @@ interface StationGroup {
                 </td>
                 <td>
                   @if (isConverted(row)) {
-                    <span class="unit-converted" [title]="'converted from ' + unitLabel(row.sourceUnit)">{{ unitLabel(row.displayUnit) }}</span>
+                    <span class="unit-converted" [attr.data-tip]="'converted from ' + unitLabel(row.sourceUnit)">{{ unitLabel(row.displayUnit) }}</span>
                   } @else {
-                    <span [title]="unitCellTitle(row)">{{ unitCell(row) }}</span>
+                    <span [attr.data-tip]="unitCellTitle(row) || null">{{ unitCell(row) }}</span>
                   }
                 </td>
                 <td class="actions">
@@ -722,6 +749,32 @@ export class AwnRootComponent {
       || control instanceof HTMLTextAreaElement) {
       control.focus({ preventScroll: true });
     }
+  }
+
+  /** The in-page tooltip's state: text plus a viewport anchor. */
+  protected readonly tip = signal<{ text: string; x: number; y: number } | null>(null);
+
+  protected tipShow(ev: Event): void {
+    const anchor = (ev.target as HTMLElement).closest?.('[data-tip]') as HTMLElement | null;
+    const text = anchor?.getAttribute('data-tip');
+    if (!anchor || !text) {
+      return;
+    }
+    const r = anchor.getBoundingClientRect();
+    const maxWidth = 340;
+    const x = Math.max(8, Math.min(r.left, document.documentElement.clientWidth - maxWidth - 12));
+    this.tip.set({ text, x, y: r.bottom + 6 });
+  }
+
+  protected tipHide(ev?: Event): void {
+    if (ev) {
+      const from = (ev.target as HTMLElement).closest?.('[data-tip]');
+      const to = ((ev as MouseEvent).relatedTarget as HTMLElement | null)?.closest?.('[data-tip]');
+      if (!from || from === to) {
+        return; // not leaving an anchor, or moving within the same one
+      }
+    }
+    this.tip.set(null);
   }
 
   protected rowKey(row: EditorRowDto): string {

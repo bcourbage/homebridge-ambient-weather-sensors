@@ -227,13 +227,13 @@ describe('AwnRootComponent (TestBed, jsdom)', () => {
     expect(text).toContain('ft/sec');     // display unit of the conversion
     const converted = el.querySelector('.unit-converted') as HTMLElement;
     expect(converted).not.toBeNull();
-    expect(converted.getAttribute('title')).toBe('converted from mph');
+    expect(converted.getAttribute('data-tip')).toBe('converted from mph');
     // Battery + layer left the table (Bruno's beta.14 column trim):
     // battery lives in the data-point tooltip and the row editor; the
     // layer is a provenance dot for non-default rows.
     expect(text).not.toContain('battout');
     const tempfCode = [...el.querySelectorAll('td code')].find(c => c.textContent === 'tempf')!;
-    expect(tempfCode.getAttribute('title')).toBe('battery: battout');
+    expect(tempfCode.getAttribute('data-tip')).toBe('battery: battout');
     expect(el.querySelectorAll('.layer-dot.global')).toHaveLength(1);   // tempf
     expect(el.querySelectorAll('.layer-dot.station')).toHaveLength(1);  // windspeedmph
     // Opening a row's editor shows the demoted facts.
@@ -261,7 +261,7 @@ describe('AwnRootComponent (TestBed, jsdom)', () => {
       expect(q.textContent).toBe('?');
       expect(q.getAttribute('tabindex')).toBe('0');
       expect(q.getAttribute('aria-label')).toBe('About the Kind column');
-      expect(q.getAttribute('title')).toBe(KIND_HELP);
+      expect(q.getAttribute('data-tip')).toBe(KIND_HELP);
       const descId = q.getAttribute('aria-describedby')!;
       expect(descId).toBeTruthy();
       descIds.add(descId);
@@ -275,6 +275,18 @@ describe('AwnRootComponent (TestBed, jsdom)', () => {
     // kindSupport.test.ts).
     expect(KIND_HELP).toContain('Currently supported kinds are temperature, humidity, light, motion, CO₂, PM2.5 and PM10');
     expect(KIND_HELP).toContain('CO, leak, contact and occupancy are reserved for future support');
+
+    // Hover (or keyboard focus) shows the APP's own tooltip - native
+    // title tooltips are hijacked by the settings modal's own title
+    // attribute (beta.15 RC feedback) - and leaving hides it.
+    glyphs[0].dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+    fixture.detectChanges();
+    const tipEl = el.querySelector('.app-tip')!;
+    expect(tipEl).not.toBeNull();
+    expect(tipEl.textContent).toBe(KIND_HELP);
+    glyphs[0].dispatchEvent(new MouseEvent('mouseout', { bubbles: true }));
+    fixture.detectChanges();
+    expect(el.querySelector('.app-tip')).toBeNull();
   });
 
   it('passes cached-accessory uniqueIds to /editor-state (§8.7 source 3)', async () => {
