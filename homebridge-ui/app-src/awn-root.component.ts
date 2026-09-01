@@ -169,12 +169,15 @@ interface StationGroup {
        whose native title tooltip the browser draws outside the page
        layout (never clipped, no layout shift). */
     .th-help { white-space: nowrap; }
+    /* Hugs the "Kind" text (2px) so it reads as Kind's affordance,
+       not a stray element between the Kind and Units headers
+       (Bruno's beta.15 RC feedback). */
     .info-q {
-      display: inline-block; width: 15px; height: 15px; line-height: 15px;
+      display: inline-block; width: 14px; height: 14px; line-height: 14px;
       border-radius: 999px; text-align: center;
-      font-size: 0.72rem; font-weight: 600;
+      font-size: 0.7rem; font-weight: 600;
       background: var(--code-bg); color: var(--fg-sub);
-      cursor: help; margin-left: 4px; vertical-align: 1px;
+      cursor: help; margin-left: 2px; vertical-align: 1px;
     }
     /* Visually hidden, still exposed to assistive technology. */
     .sr-only {
@@ -288,7 +291,7 @@ interface StationGroup {
             }
           </div>
         </div>
-        <p class="sub unit-families-note">Sets the display unit for a whole category, on every station, including stations added later. Single rows can still be changed in their row editor.</p>
+        <p class="sub unit-families-note">Sets the display unit for a whole category, on every station, including stations added later. Single rows can still be changed in their row editor. Temperature has no unit choice here: Apple Home renders it in each device's own region format.</p>
       }
 
       @if (previewPending()) {
