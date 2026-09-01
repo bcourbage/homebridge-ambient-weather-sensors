@@ -208,6 +208,35 @@ describe('AwnRootComponent (TestBed, jsdom)', () => {
     expect(ipc.requests.map(r => r.path).sort()).toEqual(['/editor-state', '/vocabulary']);
   });
 
+  it('the Kind header explains the Apple Home accessory type (issue #50)', async () => {
+    const ipc = makeIpc(editorState());
+    const fixture = await render(ipc);
+    const el = fixture.nativeElement as HTMLElement;
+
+    // One info affordance per station table, keyboard-reachable (a
+    // real button), whose accessible name IS the full explanation —
+    // screen readers need no tooltip interaction.
+    const infoBtns = [...el.querySelectorAll('th.kind-col .info-btn')];
+    expect(infoBtns).toHaveLength(el.querySelectorAll('table').length);
+    for (const btn of infoBtns) {
+      expect(btn.tagName).toBe('BUTTON');
+      const label = btn.getAttribute('aria-label')!;
+      expect(label).toContain('Apple Home accessory type');
+      // The short list of types, per the request.
+      for (const kind of ['temperature', 'humidity', 'light', 'motion', 'leak',
+        'contact', 'occupancy', 'CO₂', 'CO', 'PM2.5', 'PM10']) {
+        expect(label).toContain(kind);
+      }
+      // The visual tooltip carries the same text (hidden from the
+      // accessibility tree — the button's name already says it).
+      const tip = btn.nextElementSibling as HTMLElement;
+      expect(tip.classList.contains('th-tip')).toBe(true);
+      expect(tip.getAttribute('role')).toBe('tooltip');
+      expect(tip.getAttribute('aria-hidden')).toBe('true');
+      expect(tip.textContent!.trim()).toBe(label);
+    }
+  });
+
   it('passes cached-accessory uniqueIds to /editor-state (§8.7 source 3)', async () => {
     const ipc = makeIpc(editorState(), [
       { context: { device: { uniqueId: `${MAC}-tempf` } } },
