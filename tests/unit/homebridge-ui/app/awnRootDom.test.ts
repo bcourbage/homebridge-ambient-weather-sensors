@@ -227,7 +227,7 @@ describe('AwnRootComponent (TestBed, jsdom)', () => {
     expect(text).toContain('ft/sec');     // display unit of the conversion
     const converted = el.querySelector('.unit-converted') as HTMLElement;
     expect(converted).not.toBeNull();
-    expect(converted.getAttribute('data-tip')).toBe('converted from mph');
+    expect(converted.getAttribute('data-tip')).toBe('Converted from mph.');
     // Battery + layer left the table (Bruno's beta.14 column trim):
     // battery lives in the data-point tooltip and the row editor; the
     // layer is a provenance dot for non-default rows.

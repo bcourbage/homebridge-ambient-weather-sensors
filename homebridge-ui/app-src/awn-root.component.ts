@@ -537,7 +537,7 @@ interface StationGroup {
                 </td>
                 <td>
                   @if (isConverted(row)) {
-                    <span class="unit-converted" [attr.data-tip]="'converted from ' + unitLabel(row.sourceUnit)">{{ unitLabel(row.displayUnit) }}</span>
+                    <span class="unit-converted" [attr.data-tip]="'Converted from ' + unitLabel(row.sourceUnit) + '.'">{{ unitLabel(row.displayUnit) }}</span>
                   } @else {
                     <span [attr.data-tip]="unitCellTitle(row) || null">{{ unitCell(row) }}</span>
                   }
@@ -1399,7 +1399,7 @@ export class AwnRootComponent {
     const nativeDisplay = (this.vocab()?.measurements[row.measurement]?.extendedDisplay ?? []).length === 0;
     return nativeDisplay
       ? 'The unit the station reports. Apple Home chooses the display format on each device.'
-      : 'Reported and displayed in this unit.';
+      : 'The default display: the unit the station reports. A blue value means the row converts to a different display unit.';
   }
 
   /** A row whose HomeKit display unit differs from the AWN source unit. */
