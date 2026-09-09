@@ -308,7 +308,7 @@ describe('no-bypass: preview → confirm → compose → update → save (PR C)'
     // 2-4. Confirmed save through the ONE route.
     const result = await composeAndPersist(client.deps, { ...payload, confirmDigest: preview.digest });
     expect(result.ok).toBe(true);
-    expect(client.events).toEqual(['freeze', 'compose', 'commit', 'update', 'save', 'unfreeze']);
+    expect(client.events).toEqual(['freeze', 'compose', 'commit', 'update', 'save']); // success keeps the form frozen (stale-copy Save guard)
     expect(client.snapshotExistedAtUpdate).toBe(true); // durable BEFORE persistence
     // Verbatim persistence, synchronized mirror included.
     const persisted = client.persistedArray!.find(b => b.platform === 'AmbientWeatherSensors')!;
@@ -344,7 +344,7 @@ describe('ordering: snapshot is durable before the client persistence half runs'
 
     const result = await composeAndPersist(client.deps, {}); // pure migration
     expect(result.ok).toBe(true);
-    expect(client.events).toEqual(['freeze', 'compose', 'commit', 'update', 'save', 'unfreeze']);
+    expect(client.events).toEqual(['freeze', 'compose', 'commit', 'update', 'save']); // success keeps the form frozen (stale-copy Save guard)
     expect(client.snapshotExistedAtUpdate).toBe(true);
     if (result.ok) {
       expect(result.snapshot).toBe('written');
@@ -777,7 +777,7 @@ describe('explicit-base orchestration (review #67 P1-3)', () => {
     const clonedBase = JSON.parse(JSON.stringify(LEGACY_BLOCK)) as Record<string, unknown>;
     const result = await composeAndPersist(client.deps, { base: clonedBase });
     expect(result.ok).toBe(true);
-    expect(client.events).toEqual(['freeze', 'compose', 'commit', 'update', 'save', 'unfreeze']);
+    expect(client.events).toEqual(['freeze', 'compose', 'commit', 'update', 'save']); // success keeps the form frozen (stale-copy Save guard)
     const awsBlocks = (client.persistedArray ?? []).filter(b => b.platform === 'AmbientWeatherSensors');
     expect(awsBlocks).toHaveLength(1);
     expect(awsBlocks[0].configVersion).toBe(2);
@@ -992,7 +992,7 @@ describe('session-digest staleness (beta.13 smoke F1: getPluginConfig is schema-
       blockIndex: 0,
     });
     expect(result.ok).toBe(true);
-    expect(client.events).toEqual(['freeze', 'compose', 'commit', 'update', 'save', 'unfreeze']);
+    expect(client.events).toEqual(['freeze', 'compose', 'commit', 'update', 'save']); // success keeps the form frozen (stale-copy Save guard)
     if (!result.ok) {
       return;
     }
@@ -1261,22 +1261,25 @@ describe('freeze failure safety (review #47 round 4)', () => {
     expect(existsSync(path.join(rig.persistDir, LEGACY_SNAPSHOT_FILE))).toBe(false);
   });
 
-  it('an unfreeze failure AFTER successful persistence never masks the save outcome', async () => {
+  it('a SUCCESSFUL save never unfreezes: the form copy is stale and its Save would clobber the write', async () => {
+    // Measured on HB UI X 5.29 (Bruno's Sep 8 repro): the settings
+    // form's Save REPLACES the platform block with its pre-save copy,
+    // undoing a fresh conversion. So success leaves the form frozen;
+    // the page banner directs a reload.
     const rig = makeRig(LEGACY_BLOCK);
     discoveryStore(rig);
     const client = makeClient(rig);
     client.deps.unfreezeSettingsForm = () => {
       client.events.push('unfreeze-throw');
-      throw new Error('showSchemaForm rejected');
+      throw new Error('must never be called on success');
     };
     const result = await composeAndPersist(client.deps, {
       baseDigest: blockDigest(LEGACY_BLOCK),
       blockIndex: 0,
     });
-    // The save completed and persisted; the cleanup failure is
-    // swallowed rather than replacing the authoritative outcome.
     expect(result.ok).toBe(true);
-    expect(client.events).toEqual(['freeze', 'compose', 'commit', 'update', 'save', 'unfreeze-throw']);
+    expect(result.ok && result.settingsRestoreFailed).toBeFalsy();
+    expect(client.events).toEqual(['freeze', 'compose', 'commit', 'update', 'save']);
   });
 });
 
@@ -1349,7 +1352,10 @@ describe('server-enforced two-phase protocol (review #47 round 5)', () => {
 });
 
 describe('settings-form restore failures are surfaced (review #47 round 5, P2)', () => {
-  it('an unfreeze failure after successful persistence returns ok WITH the restore flag', async () => {
+  it('an unfreeze failure after a REFUSED save returns the refusal WITH the restore flag', async () => {
+    // Restores happen only on refusals now (nothing was written, so
+    // the form copy still matches the disk); a failed restore there
+    // is surfaced, never silent.
     const rig = makeRig(LEGACY_BLOCK);
     discoveryStore(rig);
     const client = makeClient(rig);
@@ -1358,10 +1364,10 @@ describe('settings-form restore failures are surfaced (review #47 round 5, P2)',
       throw new Error('showSchemaForm rejected');
     };
     const result = await composeAndPersist(client.deps, {
-      baseDigest: blockDigest(LEGACY_BLOCK),
+      baseDigest: 'ff'.repeat(32), // stale digest: refused, nothing written
       blockIndex: 0,
     });
-    expect(result.ok).toBe(true);
+    expect(result.ok).toBe(false);
     expect(result.settingsRestoreFailed).toBe(true);
   });
 
@@ -1480,7 +1486,7 @@ describe('HB UI X form-value replacement (beta.14 smoke #6, measured on 5.28)', 
       blockIndex: 0,
     });
     expect(result.ok).toBe(true);
-    expect(client.events).toEqual(['freeze', 'compose', 'commit', 'update', 'save', 'unfreeze']);
+    expect(client.events).toEqual(['freeze', 'compose', 'commit', 'update', 'save']); // success keeps the form frozen (stale-copy Save guard)
     // The write carries the canonical platform key even though the
     // session copy lost it (HB UI X re-injects it too; belt and
     // braces so a merge-through never persists a platformless block).

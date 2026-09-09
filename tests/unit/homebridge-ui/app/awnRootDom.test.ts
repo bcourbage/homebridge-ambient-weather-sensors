@@ -1265,8 +1265,7 @@ describe('save flow (PR C / finding 5 — the ONE route is composeAndPersist)', 
     expect(ipc.persisted.map(p => p.event)).toEqual([
       'disableSaveButton',
       'update', 'save',
-      'enableSaveButton',
-    ]);
+    ]); // success keeps the settings form frozen (stale-copy Save guard)
     // The single update carries the composed block; undefined
     // tombstones for removed keys serialize away at persistence.
     const updates = ipc.persisted.filter(p => p.event === 'update');
@@ -1279,20 +1278,24 @@ describe('save flow (PR C / finding 5 — the ONE route is composeAndPersist)', 
     expect(el.textContent).not.toContain('does not exactly match');
   });
 
-  it('a settings-form restore failure after a successful save is surfaced, never silent (review #47 round 5, P2)', async () => {
+  it('a successful save keeps the settings form frozen and says so (HB UI X stale-copy Save guard)', async () => {
+    // The form's two-way-bound copy predates the save; HB UI X's form
+    // Save REPLACES the platform block with it (measured on 5.29:
+    // one click undid a fresh conversion). enableSaveButton must not
+    // run on success, and the banner directs a reload.
     const ipc = makeIpc(editorState(), [], NON_STRUCTURAL_PREVIEW, COMPOSE_OK);
     (ipc as unknown as Record<string, unknown>).enableSaveButton = () => {
-      throw new Error('modal already tearing down');
+      throw new Error('must never be called on success');
     };
     const fixture = await render(ipc);
     const el = await draftAndPreview(fixture);
     btn(el, 'Save changes')!.click();
     await settle(fixture);
-    // The authoritative outcome stands...
     expect(el.textContent).toContain('Saved.');
-    // ...and the degraded page is called out with a reload path.
-    expect(el.textContent).toContain('could not be restored after the save');
-    expect(btn(el, 'Reload now')).not.toBeNull();
+    expect(el.textContent).toContain('its Save button stays off');
+    expect(el.textContent).toContain('Reload the plugin settings page before editing those fields.');
+    // No degraded-page warning: nothing failed.
+    expect(el.textContent).not.toContain('could not be restored after the save');
   });
 
   it('a post-save digest mismatch surfaces the drift warning (receipt check)', async () => {

@@ -427,6 +427,8 @@ interface StationGroup {
               original legacy snapshot is untouched.
             }
             Homebridge applies structural changes on the next full restart.
+            The settings form above was loaded before this save and is now out of date; its Save button stays off.
+            Reload the plugin settings page before editing those fields.
           </div>
         } @else {
           <div class="banner safe-mode">Save failed ({{ sr.code }}): {{ sr.message }}</div>
