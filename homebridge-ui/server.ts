@@ -86,6 +86,9 @@ class UiServer extends HomebridgePluginUiServer {
     const storage = this.homebridgeStoragePath ?? process.cwd();
     this.deps = {
       persistDir: path.join(storage, 'plugin-data', 'ambient-weather'),
+      // Lets the unsaved-settings gate judge the form against the
+      // dynamic schema when one governs (v2-live mode).
+      storagePath: storage,
       log: bridgeLog,
       version: PLUGIN_VERSION,
       // Authoritative config.json path for the compose-save boundary

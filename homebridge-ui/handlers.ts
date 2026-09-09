@@ -43,6 +43,8 @@ import {
 } from '../dist/sensorMap/persistence/uiStateStore.js';
 import { DISPLAY_FAMILIES, UNIT_VOCABULARY, unitOptionsFor } from '../dist/sensorMap/unitVocabulary.js';
 import { defaultRowFor } from '../dist/sensorMap/defaultMap.js';
+import { dynamicSchemaPath } from '../dist/sensorMap/dynamicSchema.js';
+import { PLUGIN_NAME } from '../dist/settings.js';
 import type { Logger, ReadStoreOptions } from '../dist/sensorMap/persistence/atomicWrite.js';
 import type {
   DiscoveryStore,
@@ -70,6 +72,13 @@ import type {
 
 export interface HandlerDeps {
   persistDir: string;
+  /**
+   * Homebridge storage path, when the host provides it. Lets the
+   * unsaved-settings gate read the DYNAMIC schema (the one the form
+   * actually rendered in v2-live mode); absent, the packaged schema
+   * governs, as it does for HB UI X itself.
+   */
+  storagePath?: string;
   log: Logger;
   version: string;
   env?: NodeJS.ProcessEnv;
@@ -712,7 +721,7 @@ async function composeSaveInternal(
         },
       };
     }
-    const drifted = settingsFormDrift(p.formBlock as Record<string, unknown>, block);
+    const drifted = settingsFormDrift(p.formBlock as Record<string, unknown>, block, deps);
     if (drifted !== undefined) {
       return {
         ok: false,
@@ -1741,7 +1750,23 @@ let cachedSchemaProperties: Record<string, SchemaProp> | undefined;
  * drift gate cannot separate form edits from form artifacts, and the
  * save must refuse rather than guess.
  */
-function configSchemaProperties(): Record<string, SchemaProp> {
+function configSchemaProperties(deps?: HandlerDeps): Record<string, SchemaProp> {
+  // Judge the form against the schema it actually RENDERED: with the
+  // dynamic schema present (v2-live mode), HB UI X loads it instead
+  // of the packaged one, and a control it omits cannot hold an
+  // unsaved user edit. Absent or unreadable, HB UI X falls back to
+  // the packaged schema, so this gate does too.
+  if (deps?.storagePath) {
+    try {
+      const raw = readFileSync(dynamicSchemaPath(deps.storagePath, PLUGIN_NAME), 'utf8');
+      const parsed = JSON.parse(raw) as { schema?: { properties?: Record<string, SchemaProp> } };
+      if (parsed.schema?.properties && typeof parsed.schema.properties === 'object') {
+        return parsed.schema.properties;
+      }
+    } catch {
+      // fall through to the packaged schema
+    }
+  }
   if (!cachedSchemaProperties) {
     const here = path.dirname(fileURLToPath(import.meta.url));
     const raw = readFileSync(path.resolve(here, '..', 'config.schema.json'), 'utf8');
@@ -1856,8 +1881,9 @@ function propDrift(formValue: unknown, diskValue: unknown, prop: SchemaProp, pat
 function settingsFormDrift(
   formBlock: Record<string, unknown>,
   diskBlock: Record<string, unknown>,
+  deps?: HandlerDeps,
 ): string | undefined {
-  const schema = configSchemaProperties();
+  const schema = configSchemaProperties(deps);
   for (const key of new Set([...Object.keys(formBlock), ...Object.keys(diskBlock)])) {
     const prop = schema[key];
     const inForm = key in formBlock;

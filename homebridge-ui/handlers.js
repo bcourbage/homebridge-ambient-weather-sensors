@@ -28,6 +28,8 @@ import { loadNoticeStore, } from '../dist/sensorMap/persistence/noticesStore.js'
 import { loadUiStateStore, } from '../dist/sensorMap/persistence/uiStateStore.js';
 import { DISPLAY_FAMILIES, UNIT_VOCABULARY, unitOptionsFor } from '../dist/sensorMap/unitVocabulary.js';
 import { defaultRowFor } from '../dist/sensorMap/defaultMap.js';
+import { dynamicSchemaPath } from '../dist/sensorMap/dynamicSchema.js';
+import { PLUGIN_NAME } from '../dist/settings.js';
 /**
  * The UI bridge is a READ-ONLY consumer of the platform's persistence
  * stores (§8 single-writer): it must never quarantine-rename a corrupt
@@ -407,7 +409,7 @@ async function composeSaveInternal(deps, payload, persist) {
                 },
             };
         }
-        const drifted = settingsFormDrift(p.formBlock, block);
+        const drifted = settingsFormDrift(p.formBlock, block, deps);
         if (drifted !== undefined) {
             return {
                 ok: false,
@@ -1304,7 +1306,24 @@ let cachedSchemaProperties;
  * drift gate cannot separate form edits from form artifacts, and the
  * save must refuse rather than guess.
  */
-function configSchemaProperties() {
+function configSchemaProperties(deps) {
+    // Judge the form against the schema it actually RENDERED: with the
+    // dynamic schema present (v2-live mode), HB UI X loads it instead
+    // of the packaged one, and a control it omits cannot hold an
+    // unsaved user edit. Absent or unreadable, HB UI X falls back to
+    // the packaged schema, so this gate does too.
+    if (deps?.storagePath) {
+        try {
+            const raw = readFileSync(dynamicSchemaPath(deps.storagePath, PLUGIN_NAME), 'utf8');
+            const parsed = JSON.parse(raw);
+            if (parsed.schema?.properties && typeof parsed.schema.properties === 'object') {
+                return parsed.schema.properties;
+            }
+        }
+        catch {
+            // fall through to the packaged schema
+        }
+    }
     if (!cachedSchemaProperties) {
         const here = path.dirname(fileURLToPath(import.meta.url));
         const raw = readFileSync(path.resolve(here, '..', 'config.schema.json'), 'utf8');
@@ -1415,8 +1434,8 @@ function propDrift(formValue, diskValue, prop, pathPrefix) {
  *     cleared from the form is a real unsaved edit the editor save
  *     would destroy: refuse.
  */
-function settingsFormDrift(formBlock, diskBlock) {
-    const schema = configSchemaProperties();
+function settingsFormDrift(formBlock, diskBlock, deps) {
+    const schema = configSchemaProperties(deps);
     for (const key of new Set([...Object.keys(formBlock), ...Object.keys(diskBlock)])) {
         const prop = schema[key];
         const inForm = key in formBlock;
