@@ -234,8 +234,8 @@ export interface DisplayFamilyChoice {
   /**
    * True when the choice mirrors an option on AWN's own units page
    * (label and position must then match AWN_UNITS_PAGE exactly);
-   * false for plugin extras, which follow the AWN options and say so
-   * in their label. Pinned by unitVocabulary.test.ts.
+   * false for plugin extras, which follow the AWN options. Pinned by
+   * unitVocabulary.test.ts.
    */
   awn: boolean;
 }
@@ -302,14 +302,15 @@ export const DISPLAY_FAMILIES: ReadonlyArray<DisplayFamily> = [
   },
   {
     // AWN's Distance picker offers 'imperial'/'metric' (round 2 F2);
-    // nautical miles is a plugin extra and its label says so.
+    // nautical miles is a plugin extra (awn: false places it after
+    // the AWN-mirroring options; the label just names the unit).
     key: 'distance',
     label: 'Distance',
     measurements: ['distance'],
     choices: [
       { id: 'imperial', label: 'imperial', units: { distance: 'mi' }, awn: true },
       { id: 'metric',   label: 'metric',   units: { distance: 'km' }, awn: true },
-      { id: 'nm', label: 'nautical miles (plugin only)', units: { distance: 'nm' }, awn: false },
+      { id: 'nm', label: 'nautical miles', units: { distance: 'nm' }, awn: false },
     ],
   },
 ] as const;

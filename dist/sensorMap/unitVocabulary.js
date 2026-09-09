@@ -245,14 +245,15 @@ export const DISPLAY_FAMILIES = [
     },
     {
         // AWN's Distance picker offers 'imperial'/'metric' (round 2 F2);
-        // nautical miles is a plugin extra and its label says so.
+        // nautical miles is a plugin extra (awn: false places it after
+        // the AWN-mirroring options; the label just names the unit).
         key: 'distance',
         label: 'Distance',
         measurements: ['distance'],
         choices: [
             { id: 'imperial', label: 'imperial', units: { distance: 'mi' }, awn: true },
             { id: 'metric', label: 'metric', units: { distance: 'km' }, awn: true },
-            { id: 'nm', label: 'nautical miles (plugin only)', units: { distance: 'nm' }, awn: false },
+            { id: 'nm', label: 'nautical miles', units: { distance: 'nm' }, awn: false },
         ],
     },
 ];

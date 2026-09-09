@@ -222,14 +222,14 @@ describe('display families (GA #70 editor layer, PR #53)', () => {
       // AWN-mirroring choices reproduce AWN's visible option labels
       // verbatim, in AWN's order...
       expect(awnChoices.map(c => c.label), family.key).toEqual([...supported[i].awnOptions]);
-      // ...and precede every plugin extra, which must say it is one.
+      // ...and precede every plugin extra (extras carry no origin
+      // annotation in their label: the label says what the option is,
+      // and the awn flag carries the provenance).
       const firstExtra = family.choices.findIndex(c => !c.awn);
       if (firstExtra !== -1) {
         expect(family.choices.slice(firstExtra).every(c => !c.awn), family.key).toBe(true);
       }
-      for (const extra of extras) {
-        expect(extra.label, `${family.key}/${extra.id}`).toContain('plugin');
-      }
+      void extras;
     }
   });
 });
