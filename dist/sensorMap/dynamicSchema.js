@@ -52,11 +52,66 @@ export const V2_DEAD_LEGACY_CONTROLS = [
     // against the rollback mirror.
     'excludeSensors', 'includeOnly',
 ];
+/** The property a form key path roots at ('thresholds.uv' → 'thresholds'). */
+function rootKey(key) {
+    return key.split(/[.[]/, 1)[0];
+}
+/** Does any entry (recursively) reference a property key? */
+function containsKeyReference(entries) {
+    return entries.some(e => typeof e === 'string'
+        || (!!e && typeof e === 'object' && !Array.isArray(e)
+            && (typeof e.key === 'string'
+                || (Array.isArray(e.items)
+                    && containsKeyReference(e.items)))));
+}
 /**
- * The packaged schema minus the controls dead in v2-live mode. `form`
- * layout entries whose key roots at a removed property are pruned
- * with it (a layout entry for a property that no longer exists is at
- * best ignored by the form library and at worst an error).
+ * Prune a form-layout entry list of everything rooted at a dead
+ * property. The packaged layout uses every shape the form library
+ * accepts: plain-string key references, keyed objects, containers
+ * with nested `items` (dropped entirely when nothing keyed survives
+ * inside), and `help` blocks that describe the control BEFORE them
+ * (dropped with it, or they would float as orphaned text).
+ */
+function pruneFormEntries(entries, dead) {
+    const out = [];
+    let dropFollowingHelp = false;
+    for (const entry of entries) {
+        if (typeof entry === 'string') {
+            if (dead.has(rootKey(entry))) {
+                dropFollowingHelp = true;
+                continue;
+            }
+        }
+        else if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
+            const obj = entry;
+            if (obj.type === 'help' && dropFollowingHelp) {
+                continue;
+            }
+            if (typeof obj.key === 'string' && dead.has(rootKey(obj.key))) {
+                dropFollowingHelp = true;
+                continue;
+            }
+            if (Array.isArray(obj.items)) {
+                const items = pruneFormEntries(obj.items, dead);
+                if (!containsKeyReference(items)) {
+                    dropFollowingHelp = true;
+                    continue;
+                }
+                out.push({ ...obj, items });
+                dropFollowingHelp = false;
+                continue;
+            }
+        }
+        out.push(entry);
+        dropFollowingHelp = false;
+    }
+    return out;
+}
+/**
+ * The packaged schema minus the controls dead in v2-live mode, with
+ * every form-layout reference to them pruned as well (a layout entry
+ * for a property that no longer exists is at best ignored by the
+ * form library and at worst an error).
  */
 export function buildV2LiveSchema(packaged) {
     const out = structuredClone(packaged);
@@ -68,13 +123,7 @@ export function buildV2LiveSchema(packaged) {
         }
     }
     if (Array.isArray(out.form)) {
-        out.form = out.form.filter(entry => {
-            const key = entry?.key;
-            if (typeof key !== 'string') {
-                return true;
-            }
-            return !dead.has(key.split(/[.[]/, 1)[0]);
-        });
+        out.form = pruneFormEntries(out.form, dead);
     }
     return out;
 }

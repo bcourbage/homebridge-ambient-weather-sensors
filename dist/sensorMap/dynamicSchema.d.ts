@@ -16,10 +16,10 @@ interface PackagedSchema {
     [k: string]: unknown;
 }
 /**
- * The packaged schema minus the controls dead in v2-live mode. `form`
- * layout entries whose key roots at a removed property are pruned
- * with it (a layout entry for a property that no longer exists is at
- * best ignored by the form library and at worst an error).
+ * The packaged schema minus the controls dead in v2-live mode, with
+ * every form-layout reference to them pruned as well (a layout entry
+ * for a property that no longer exists is at best ignored by the
+ * form library and at worst an error).
  */
 export declare function buildV2LiveSchema(packaged: PackagedSchema): PackagedSchema;
 /**

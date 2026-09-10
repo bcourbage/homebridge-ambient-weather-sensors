@@ -92,20 +92,46 @@ describe('dynamic config schema', () => {
     expect(packaged.schema.properties.units).toBeDefined();
   });
 
-  it('prunes form layout entries rooted at removed properties, keeping the rest', () => {
-    const packaged = JSON.parse(readFileSync(PACKAGED_PATH, 'utf8')) as { form?: Array<{ key?: string }> };
-    const out = buildV2LiveSchema(packaged) as { form?: Array<{ key?: string }> };
+  it('the pruned form layout carries ZERO references to removed properties, at any depth (round 7)', () => {
+    const packaged = JSON.parse(readFileSync(PACKAGED_PATH, 'utf8')) as { form?: unknown[] };
+    const out = buildV2LiveSchema(packaged) as { form?: unknown[] };
     const dead = new Set(V2_DEAD_LEGACY_CONTROLS);
-    for (const entry of out.form ?? []) {
-      if (typeof entry.key === 'string') {
-        expect(dead.has(entry.key.split(/[.[]/, 1)[0]), entry.key).toBe(false);
+    const root = (key: string): string => key.split(/[.[]/, 1)[0];
+
+    // The reviewer's own measure: walk EVERYTHING (plain-string
+    // entries, keyed objects, nested items) and count dead references.
+    const deadRefs = (node: unknown, refs: string[]): string[] => {
+      if (typeof node === 'string' && dead.has(root(node))) {
+        refs.push(node);
+      } else if (Array.isArray(node)) {
+        for (const n of node) {
+          deadRefs(n, refs);
+        }
+      } else if (node && typeof node === 'object') {
+        const o = node as { key?: unknown; items?: unknown };
+        if (typeof o.key === 'string' && dead.has(root(o.key))) {
+          refs.push(o.key);
+        }
+        deadRefs(o.items, refs);
       }
-    }
-    // Layout entries for LIVE controls survive.
-    expect((out.form ?? []).some(e => typeof e.key === 'string' && e.key.startsWith('stationFilter'))).toBe(true);
-    // The packaged form has entries rooted at dead controls, so the
-    // pruning is proven to have removed something.
-    expect((packaged.form ?? []).some(e => typeof e.key === 'string' && dead.has(e.key.split(/[.[]/, 1)[0]))).toBe(true);
+      return refs;
+    };
+    // The packaged layout is full of them (else this test proves
+    // nothing); the pruned layout has none.
+    expect(deadRefs(packaged.form, []).length).toBeGreaterThan(20);
+    expect(deadRefs(out.form, [])).toEqual([]);
+
+    const flat = JSON.stringify(out.form);
+    // Containers whose keyed content all died are gone entirely...
+    expect(flat).not.toContain('Motion thresholds for extended sensors');
+    expect(flat).not.toContain('Display units for extended sensors');
+    // ...as are help blocks describing removed controls (they would
+    // float as orphaned text).
+    expect(flat).not.toContain('co2_in_aqin');
+    // Live controls, their helps, and their containers survive.
+    expect(flat).toContain('stationFilter');
+    expect(flat).toContain('_sensorMapV2');
+    expect(flat).toContain('extendedDisplayMode');
   });
 
   it('a single v2-live block writes the file; a legacy block removes it', async () => {
