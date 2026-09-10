@@ -6,7 +6,7 @@
  * fields), so the platform writes HB UI X's dynamic schema file and
  * removes it in every other mode.
  */
-import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 
@@ -18,6 +18,7 @@ import {
   buildV2LiveSchema,
   dynamicSchemaPath,
   syncDynamicSchema,
+  v2LiveVerdict,
 } from '../../../src/sensorMap/dynamicSchema';
 import { PLUGIN_NAME } from '../../../src/settings';
 
@@ -37,6 +38,32 @@ function makeRoot(): string {
 }
 
 const PACKAGED_PATH = path.join(__dirname, '..', '..', '..', 'config.schema.json');
+
+const V2_LIVE_BLOCK = {
+  platform: 'AmbientWeatherSensors', name: 'A', apiKey: 'k', applicationKey: 'a',
+  _sensorMapV2: true, configVersion: 2, sensorMap: [],
+};
+const LEGACY_BLOCK = {
+  platform: 'AmbientWeatherSensors', name: 'B', apiKey: 'k', applicationKey: 'a',
+  _sensorMapV2: true, temperatureSensors: true,
+};
+
+/** Write a config.json with the given platform blocks; returns its path. */
+function writeConfig(root: string, blocks: unknown[]): string {
+  const p = path.join(root, 'config.json');
+  writeFileSync(p, JSON.stringify({ platforms: blocks }, null, 2));
+  return p;
+}
+
+function syncOpts(root: string, blocks: unknown[]) {
+  return {
+    storagePath: root, pluginName: PLUGIN_NAME,
+    packagedSchemaPath: PACKAGED_PATH,
+    configPath: writeConfig(root, blocks),
+    env: {} as NodeJS.ProcessEnv,
+    log: silentLog,
+  };
+}
 
 describe('dynamic config schema', () => {
   it('the packaged schema declares the version this module writes', () => {
@@ -65,33 +92,92 @@ describe('dynamic config schema', () => {
     expect(packaged.schema.properties.units).toBeDefined();
   });
 
-  it('v2-live sync writes the file; any other mode removes it', async () => {
+  it('prunes form layout entries rooted at removed properties, keeping the rest', () => {
+    const packaged = JSON.parse(readFileSync(PACKAGED_PATH, 'utf8')) as { form?: Array<{ key?: string }> };
+    const out = buildV2LiveSchema(packaged) as { form?: Array<{ key?: string }> };
+    const dead = new Set(V2_DEAD_LEGACY_CONTROLS);
+    for (const entry of out.form ?? []) {
+      if (typeof entry.key === 'string') {
+        expect(dead.has(entry.key.split(/[.[]/, 1)[0]), entry.key).toBe(false);
+      }
+    }
+    // Layout entries for LIVE controls survive.
+    expect((out.form ?? []).some(e => typeof e.key === 'string' && e.key.startsWith('stationFilter'))).toBe(true);
+    // The packaged form has entries rooted at dead controls, so the
+    // pruning is proven to have removed something.
+    expect((packaged.form ?? []).some(e => typeof e.key === 'string' && dead.has(e.key.split(/[.[]/, 1)[0]))).toBe(true);
+  });
+
+  it('a single v2-live block writes the file; a legacy block removes it', async () => {
     const storage = makeRoot();
     const target = dynamicSchemaPath(storage, PLUGIN_NAME);
 
-    await syncDynamicSchema({
-      storagePath: storage, pluginName: PLUGIN_NAME,
-      packagedSchemaPath: PACKAGED_PATH, v2Live: true, log: silentLog,
-    });
+    await syncDynamicSchema(syncOpts(storage, [V2_LIVE_BLOCK]));
     expect(existsSync(target)).toBe(true);
     const written = JSON.parse(readFileSync(target, 'utf8')) as { schema: { properties: Record<string, unknown> } };
     expect(written.schema.properties.units).toBeUndefined();
+    expect(written.schema.properties.excludeSensors).toBeUndefined();
     expect(written.schema.properties.apiKey).toBeDefined();
 
-    await syncDynamicSchema({
-      storagePath: storage, pluginName: PLUGIN_NAME,
-      packagedSchemaPath: PACKAGED_PATH, v2Live: false, log: silentLog,
-    });
+    await syncDynamicSchema(syncOpts(storage, [LEGACY_BLOCK]));
     expect(existsSync(target)).toBe(false);
   });
 
-  it('sync failures never throw (startup safety)', async () => {
+  it('multiple plugin blocks conservatively keep the packaged form, in BOTH instance orders (multi-Home)', async () => {
+    // Startup order must not decide which form users get: the verdict
+    // is a pure function of the whole config, so every instance's sync
+    // converges on the same (packaged) outcome.
+    for (const blocks of [[V2_LIVE_BLOCK, LEGACY_BLOCK], [LEGACY_BLOCK, V2_LIVE_BLOCK], [V2_LIVE_BLOCK, { ...V2_LIVE_BLOCK, name: 'C' }]]) {
+      const storage = makeRoot();
+      const target = dynamicSchemaPath(storage, PLUGIN_NAME);
+      // Seed a stale reduced schema, as if a v2-live instance had won
+      // a race before the second block existed.
+      await syncDynamicSchema(syncOpts(storage, [V2_LIVE_BLOCK]));
+      expect(existsSync(target)).toBe(true);
+      // Each instance runs the same sync against the full config;
+      // simulate both processes.
+      const opts = syncOpts(storage, blocks);
+      await syncDynamicSchema(opts);
+      expect(existsSync(target), JSON.stringify(blocks.map(b => (b as { name: string }).name))).toBe(false);
+      await syncDynamicSchema(opts);
+      expect(existsSync(target)).toBe(false);
+    }
+  });
+
+  it('concurrent syncs converge without throwing', async () => {
     const storage = makeRoot();
+    const target = dynamicSchemaPath(storage, PLUGIN_NAME);
+    const opts = syncOpts(storage, [V2_LIVE_BLOCK]);
+    await Promise.all([syncDynamicSchema(opts), syncDynamicSchema(opts), syncDynamicSchema(opts)]);
+    expect(existsSync(target)).toBe(true);
+    const written = JSON.parse(readFileSync(target, 'utf8')) as { schema: { properties: Record<string, unknown> } };
+    expect(written.schema.properties.units).toBeUndefined();
+  });
+
+  it('the verdict is per-config, not per-block', () => {
+    expect(v2LiveVerdict({ platforms: [V2_LIVE_BLOCK] })).toBe(true);
+    expect(v2LiveVerdict({ platforms: [LEGACY_BLOCK] })).toBe(false);
+    expect(v2LiveVerdict({ platforms: [{ ...V2_LIVE_BLOCK, _sensorMapV2: false }] })).toBe(false);
+    expect(v2LiveVerdict({ platforms: [V2_LIVE_BLOCK, LEGACY_BLOCK] })).toBe(false);
+    expect(v2LiveVerdict({ platforms: [V2_LIVE_BLOCK, { ...V2_LIVE_BLOCK, name: 'C' }] })).toBe(false);
+    expect(v2LiveVerdict({ platforms: [] })).toBe(false);
+    expect(v2LiveVerdict(null)).toBe(false);
+  });
+
+  it('sync failures never throw, and leave the packaged form governing (startup safety)', async () => {
+    const storage = makeRoot();
+    const target = dynamicSchemaPath(storage, PLUGIN_NAME);
+    // Seed a reduced schema, then fail the sync (unreadable config):
+    // the stale file is removed so the packaged form governs.
+    await syncDynamicSchema(syncOpts(storage, [V2_LIVE_BLOCK]));
+    expect(existsSync(target)).toBe(true);
     await expect(syncDynamicSchema({
       storagePath: storage, pluginName: PLUGIN_NAME,
-      packagedSchemaPath: path.join(storage, 'missing.json'), v2Live: true, log: silentLog,
+      packagedSchemaPath: PACKAGED_PATH,
+      configPath: path.join(storage, 'missing-config.json'),
+      log: silentLog,
     })).resolves.toBeUndefined();
-    expect(existsSync(dynamicSchemaPath(storage, PLUGIN_NAME))).toBe(false);
+    expect(existsSync(target)).toBe(false);
   });
 
   it('the dynamic path stays inside the storage directory (HB UI X boundary check)', () => {

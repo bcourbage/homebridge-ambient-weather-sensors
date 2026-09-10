@@ -395,7 +395,7 @@ describe('draft editing + preview (PR B — no persistence)', () => {
     ],
     configOnly: [
       {
-        stationMac: MAC, dataPoint: 'weeklyrainin',
+        stationMac: MAC, dataPoint: 'weeklyrainin', change: 'modified' as const,
         before: { ...editorState().rows[1], dataPoint: 'weeklyrainin', enabled: false, displayUnit: 'in' },
         after: { ...editorState().rows[1], dataPoint: 'weeklyrainin', enabled: false, displayUnit: 'mm' },
       },
@@ -1029,6 +1029,69 @@ describe('draft editing + preview (PR B — no persistence)', () => {
     expect(previewCalls.length).toBe(previewCallsBefore + 1);
     const proposal = (previewCalls.at(-1)!.body as { proposal: Array<Record<string, unknown>> }).proposal;
     expect(proposal).toContainEqual({ dataPoint: 'weeklyrainin', stationMac: MAC, displayUnit: 'in' });
+  });
+
+  it('Skip is not rendered for a change with nothing representably pinnable (round 6 F3)', async () => {
+    // A row modified only through battery-ownership adjudication
+    // differs in hasBatterySubService alone - none of the editor's
+    // draftable fields changed, so a pin cannot represent the skip.
+    const batteryOnly: PreviewResultDto = {
+      ok: true, canonicalSensorMap: [], rows: [],
+      changes: [{
+        stationMac: MAC, dataPoint: 'tempf', change: 'modified', structural: true,
+        before: { ...editorState().rows[0], hasBatterySubService: true },
+        after: { ...editorState().rows[0], hasBatterySubService: false },
+      }],
+      configOnly: [], structuralChangeCount: 1, digest: 'ee'.repeat(32), warnings: [], notes: [],
+    };
+    const ipc = makeIpc(editorState(), [], batteryOnly);
+    const fixture = await render(ipc);
+    const el = fixture.nativeElement as HTMLElement;
+    const sel = el.querySelector('.unit-families select') as HTMLSelectElement;
+    sel.value = 'mph';
+    sel.dispatchEvent(new Event('change'));
+    await settle(fixture);
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement).click();
+    await settle(fixture);
+    expect([...el.querySelectorAll('.change-row')].some(r => r.textContent!.includes('tempf'))).toBe(true);
+    expect(el.querySelector('.change-row .exclude-change')).toBeNull();
+  });
+
+  it('Skipping a custom row pins its full identity so the exception stays valid (round 6 F3)', async () => {
+    const customBefore = {
+      stationMac: OTHER_MAC, dataPoint: 'barn_wind', kind: 'motion', measurement: 'wind-speed',
+      sourceUnit: 'mph', displayUnit: 'mph', name: 'Barn Wind', enabled: true,
+      batteryField: null, origin: 'global' as const, identityScope: 'custom-global' as const,
+    };
+    const customPreview: PreviewResultDto = {
+      ok: true, canonicalSensorMap: [], rows: [],
+      changes: [{
+        stationMac: OTHER_MAC, dataPoint: 'barn_wind', change: 'modified', structural: false,
+        before: customBefore,
+        after: { ...customBefore, displayUnit: 'fps' },
+      }],
+      configOnly: [], structuralChangeCount: 0, digest: 'aa'.repeat(32), warnings: [], notes: [],
+    };
+    const ipc = makeIpc(editorState(), [], customPreview);
+    const fixture = await render(ipc);
+    const el = fixture.nativeElement as HTMLElement;
+    const sel = el.querySelector('.unit-families select') as HTMLSelectElement;
+    sel.value = 'mph';
+    sel.dispatchEvent(new Event('change'));
+    await settle(fixture);
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement).click();
+    await settle(fixture);
+
+    (el.querySelector('.change-row .exclude-change') as HTMLButtonElement).click();
+    await settle(fixture);
+    const proposal = (ipc.requests.filter(r => r.path === '/preview-save').at(-1)!
+      .body as { proposal: Array<Record<string, unknown>> }).proposal;
+    // The pin fragment carries the custom identity, never a bare
+    // displayUnit that the boundary would refuse as custom-missing-kind.
+    expect(proposal).toContainEqual({
+      dataPoint: 'barn_wind', stationMac: OTHER_MAC,
+      kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph', displayUnit: 'mph',
+    });
   });
 
   it('a family choice supersedes an open row editor: the editor closes and the global draft stands', async () => {

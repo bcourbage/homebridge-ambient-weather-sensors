@@ -441,7 +441,8 @@ describe('unsaved-settings gate vs the dynamic schema (beta.15 conversion smoke)
     await syncDynamicSchema({
       storagePath: rig.root, pluginName: PLUGIN_NAME,
       packagedSchemaPath: path.join(__dirname, '..', '..', '..', 'config.schema.json'),
-      v2Live: true, log: silentLog,
+      configPath: rig.configPath,
+      log: silentLog,
     });
   }
 
@@ -481,5 +482,75 @@ describe('unsaved-settings gate vs the dynamic schema (beta.15 conversion smoke)
       expect(result.error.code).toBe('unsaved-settings-changes');
       expect(result.error.message).toContain('apiKey');
     }
+  });
+});
+
+describe('configOnly additions and removals (review round 6 F4)', () => {
+  const BLOCK_WITH_DISABLED_CUSTOM = {
+    platform: 'AmbientWeatherSensors',
+    name: 'Test Station',
+    apiKey: 'k', applicationKey: 'a',
+    _sensorMapV2: true,
+    configVersion: 2,
+    sensorMap: [{
+      dataPoint: 'barn_wind', stationMac: MAC, kind: 'motion', measurement: 'wind-speed',
+      sourceUnit: 'mph', enabled: false, name: 'Barn Wind',
+    }],
+  };
+
+  it('removing a disabled custom override lists as a config-only removal', async () => {
+    const rig = makeRig(BLOCK_WITH_DISABLED_CUSTOM);
+    discoveryStore(rig, ['windspeedmph', 'barn_wind']);
+    const result = await handlePreviewSave(rig.deps, {
+      base: BLOCK_WITH_DISABLED_CUSTOM,
+      proposal: [], // Use defaults on the disabled custom row: fragment gone
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    expect(result.changes).toEqual([]); // never enabled: no accessory change
+    const removed = result.configOnly.find(c => c.dataPoint === 'barn_wind');
+    expect(removed?.change).toBe('removed');
+    expect(removed?.before?.enabled).toBe(false);
+    expect(removed?.after).toBeUndefined();
+  });
+
+  it('adding a disabled custom row lists as a config-only addition', async () => {
+    const BASE = { ...BLOCK_WITH_DISABLED_CUSTOM, sensorMap: [] };
+    const rig = makeRig(BASE);
+    discoveryStore(rig, ['windspeedmph', 'barn_wind']);
+    const result = await handlePreviewSave(rig.deps, {
+      base: BASE,
+      proposal: [BLOCK_WITH_DISABLED_CUSTOM.sensorMap[0]],
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    expect(result.changes).toEqual([]);
+    const added = result.configOnly.find(c => c.dataPoint === 'barn_wind');
+    expect(added?.change).toBe('added');
+    expect(added?.after?.enabled).toBe(false);
+    expect(added?.before).toBeUndefined();
+  });
+
+  it('an enabled-to-disabled transition stays an accessory change, not a config-only entry', async () => {
+    const ENABLED = {
+      ...BLOCK_WITH_DISABLED_CUSTOM,
+      sensorMap: [{ ...BLOCK_WITH_DISABLED_CUSTOM.sensorMap[0], enabled: true }],
+    };
+    const rig = makeRig(ENABLED);
+    discoveryStore(rig, ['windspeedmph', 'barn_wind']);
+    const result = await handlePreviewSave(rig.deps, {
+      base: ENABLED,
+      proposal: [BLOCK_WITH_DISABLED_CUSTOM.sensorMap[0]], // enabled: false
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    expect(result.changes.map(c => [c.dataPoint, c.change])).toEqual([['barn_wind', 'removed']]);
+    expect(result.configOnly).toEqual([]);
   });
 });

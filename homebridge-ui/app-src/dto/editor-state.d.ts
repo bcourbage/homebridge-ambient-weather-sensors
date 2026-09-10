@@ -228,16 +228,23 @@ export interface PreviewChangeDto {
 
 /**
  * A saved-configuration change with NO accessory effect right now:
- * the row is disabled on both sides, so nothing registers or
- * updates, but the settings still save and take effect when the row
- * is enabled. Listed so the draft count and the preview visibly add
- * up (beta.15 RC feedback).
+ * nothing registers or updates, but the saved settings differ.
+ * Listed so the draft count and the preview visibly add up (beta.15
+ * RC feedback). Three shapes (review round 6 F4):
+ *   - 'modified': disabled on both sides with differing settings.
+ *   - 'added':    a disabled row exists only in the proposal (for
+ *                 example a new custom row authored disabled).
+ *   - 'removed':  a disabled row exists only in the current config
+ *                 (for example Use defaults on a disabled custom row).
+ * Enabled/disabled transitions are accessory changes and appear in
+ * `changes` instead.
  */
 export interface ConfigOnlyChangeDto {
   stationMac: string;
   dataPoint: string;
-  before: EditorRowDto;
-  after: EditorRowDto;
+  change: 'added' | 'removed' | 'modified';
+  before?: EditorRowDto;
+  after?: EditorRowDto;
 }
 
 /**

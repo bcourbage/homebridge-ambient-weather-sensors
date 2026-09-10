@@ -231,13 +231,21 @@ export class AmbientWeatherSensorsPlatform {
             // other mode the file is removed so the packaged full legacy
             // form governs. Non-blocking and never fatal (the UI falls back
             // to the packaged schema).
-            void syncDynamicSchema({
-                storagePath: this.api.user.storagePath(),
-                pluginName: PLUGIN_NAME,
-                packagedSchemaPath: path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'config.schema.json'),
-                v2Live: this.configMode === 'v2' && this.sensorMapV2,
-                log: this.log,
-            });
+            // The verdict comes from the COMPLETE config.json, not this
+            // instance's block: multi-Home instances all converge on the
+            // same file content regardless of startup order. Hosts without
+            // the path accessors (harnesses, unusual setups) skip the sync;
+            // the packaged schema then governs, which is safe everywhere.
+            if (typeof this.api.user?.storagePath === 'function' && typeof this.api.user?.configPath === 'function') {
+                void syncDynamicSchema({
+                    storagePath: this.api.user.storagePath(),
+                    pluginName: PLUGIN_NAME,
+                    packagedSchemaPath: path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'config.schema.json'),
+                    configPath: this.api.user.configPath(),
+                    env: process.env,
+                    log: this.log,
+                });
+            }
             if (this.configMode === 'safe-mode') {
                 // Per docs/future/sensor-map.md §17.2, safe mode is not a
                 // hard freeze — it's "reconciliation skipped, updates

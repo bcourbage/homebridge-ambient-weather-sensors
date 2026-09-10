@@ -754,17 +754,35 @@ export function computeSaveConsequences(ctx) {
         return out;
     };
     const beforeDisabled = disabledSet(currentMap.rows);
+    const afterDisabled = disabledSet(effectiveMap.rows);
     const configOnly = [];
-    for (const [key, a] of disabledSet(effectiveMap.rows)) {
+    for (const key of new Set([...beforeDisabled.keys(), ...afterDisabled.keys()])) {
         const b = beforeDisabled.get(key);
-        if (!b) {
-            continue;
+        const a = afterDisabled.get(key);
+        if (b && a) {
+            const differs = ROW_FIELDS.some(f => b[f] !== a[f]);
+            if (differs) {
+                configOnly.push({
+                    stationMac: a.stationMac, dataPoint: a.dataPoint, change: 'modified',
+                    before: toEditorRowDto(b, currentLayers),
+                    after: toEditorRowDto(a, proposedLayers),
+                });
+            }
         }
-        const differs = ROW_FIELDS.some(f => b[f] !== a[f]);
-        if (differs) {
+        else if (b && !after.has(key)) {
+            // Disabled row gone entirely (not enabled): a saved deletion,
+            // e.g. Use defaults on a disabled custom row (round 6 F4).
             configOnly.push({
-                stationMac: a.stationMac, dataPoint: a.dataPoint,
+                stationMac: b.stationMac, dataPoint: b.dataPoint, change: 'removed',
                 before: toEditorRowDto(b, currentLayers),
+            });
+        }
+        else if (a && !b && !before.has(key)) {
+            // Disabled row appears from nowhere (not an enabled->disabled
+            // transition): a saved addition, e.g. a custom row authored
+            // disabled.
+            configOnly.push({
+                stationMac: a.stationMac, dataPoint: a.dataPoint, change: 'added',
                 after: toEditorRowDto(a, proposedLayers),
             });
         }

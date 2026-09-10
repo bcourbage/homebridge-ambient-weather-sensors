@@ -20,9 +20,17 @@
  */
 import type { EditorAuthoredFragmentDto, EditorRowDto } from './dto/editor-state';
 
-/** The fields the PR B editor can draft. */
+/**
+ * The fields drafts may patch. The row editor's controls write the
+ * first six; the identity fields are written only by machinery that
+ * must produce a VALID custom fragment (preview Skip pinning a custom
+ * row copies its identity so the exception is not refused as
+ * custom-missing-kind; PR E's unrecognized-row assignment will write
+ * them from user input).
+ */
 export type DraftableField =
-  | 'enabled' | 'name' | 'displayUnit' | 'threshold' | 'triggerEnabled' | 'triggerDirection';
+  | 'enabled' | 'name' | 'displayUnit' | 'threshold' | 'triggerEnabled' | 'triggerDirection'
+  | 'kind' | 'measurement' | 'sourceUnit';
 
 /** Draft key: global fragments under '*', station fragments under the MAC key. */
 function keyFor(scope: string | undefined, dataPoint: string): string {

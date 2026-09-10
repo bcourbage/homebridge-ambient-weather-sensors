@@ -18,40 +18,84 @@
  * directory INSTEAD of the packaged schema, falling back to the
  * packaged one when the file is absent.
  *
- * The platform (the file's single writer) syncs it on every launch:
- * in v2-live mode it writes the packaged schema minus the dead
- * controls; in every other mode it deletes the file so the packaged
- * full legacy form governs. A mode change takes effect on the restart
- * that makes it real (structural config changes already require one).
+ * Every platform instance syncs the file on launch, but the verdict
+ * is a pure function of the COMPLETE config.json (v2LiveVerdict), so
+ * concurrent instances converge on the same content regardless of
+ * startup order — and with multiple blocks (multi-Home) the packaged
+ * full form conservatively governs. In v2-live mode the file carries
+ * the packaged schema minus the dead controls; in every other mode it
+ * is deleted. A mode change takes effect on the restart that makes it
+ * real (structural config changes already require one).
  */
 import * as fsSync from 'node:fs';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
+import { detectConfigMode } from './configMode.js';
 import { writeJsonStore } from './persistence/atomicWrite.js';
+import { shadowModeEnabled } from './shadowMode.js';
 /** Must match `dynamicSchemaVersion` in the packaged config.schema.json. */
 export const DYNAMIC_SCHEMA_VERSION = 1;
 /**
  * The legacy controls the v2-live runtime ignores. Deliberately NOT
  * including extendedDisplayMode / embedNameUpdateMinIntervalMinutes
  * (the embed×realtime battery guard reads them in both modes), nor
- * dataSource / stationFilter / credentials / exclude filters.
+ * dataSource / stationFilter / credentials.
  */
 export const V2_DEAD_LEGACY_CONTROLS = [
     'temperatureSensors', 'humiditySensors', 'solarRadiationSensors',
     'co2Sensors', 'airQualitySensors', 'extendedSensors',
     'windSensors', 'rainSensors', 'pressureSensors', 'uvSensors', 'lightningSensors',
     'thresholds', 'units',
+    // The accessory filters are consumed only by the v1.6 pipeline
+    // (parseDevices); the v2 path applies stationFilter alone, so
+    // editing these in v2 mode changes no accessories and goes stale
+    // against the rollback mirror.
+    'excludeSensors', 'includeOnly',
 ];
-/** The packaged schema minus the controls dead in v2-live mode. */
+/**
+ * The packaged schema minus the controls dead in v2-live mode. `form`
+ * layout entries whose key roots at a removed property are pruned
+ * with it (a layout entry for a property that no longer exists is at
+ * best ignored by the form library and at worst an error).
+ */
 export function buildV2LiveSchema(packaged) {
     const out = structuredClone(packaged);
+    const dead = new Set(V2_DEAD_LEGACY_CONTROLS);
     const props = out.schema?.properties;
     if (props) {
         for (const key of V2_DEAD_LEGACY_CONTROLS) {
             delete props[key];
         }
     }
+    if (Array.isArray(out.form)) {
+        out.form = out.form.filter(entry => {
+            const key = entry?.key;
+            if (typeof key !== 'string') {
+                return true;
+            }
+            return !dead.has(key.split(/[.[]/, 1)[0]);
+        });
+    }
     return out;
+}
+/**
+ * Is the settings form governed by the v2-live reduced schema? The
+ * verdict is derived from the COMPLETE config, never a single
+ * platform instance's block: with multiple AmbientWeatherSensors
+ * blocks (multi-Home), instances would otherwise fight over the one
+ * plugin-global schema file with startup order deciding the winner —
+ * so multi-block (and no-block, and unreadable) configurations
+ * conservatively keep the packaged full form.
+ */
+export function v2LiveVerdict(configJson, env) {
+    const platforms = configJson?.platforms;
+    const blocks = (Array.isArray(platforms) ? platforms : [])
+        .filter((b) => !!b && typeof b === 'object' && b.platform === 'AmbientWeatherSensors');
+    if (blocks.length !== 1) {
+        return false;
+    }
+    return detectConfigMode(blocks[0]).mode === 'v2'
+        && shadowModeEnabled({ env, config: blocks[0] });
 }
 /** The dynamic schema file for this plugin under the storage path. */
 export function dynamicSchemaPath(storagePath, pluginName) {
@@ -66,7 +110,9 @@ export function dynamicSchemaPath(storagePath, pluginName) {
 export async function syncDynamicSchema(opts) {
     const target = dynamicSchemaPath(opts.storagePath, opts.pluginName);
     try {
-        if (!opts.v2Live) {
+        const configJson = JSON.parse(await fs.readFile(opts.configPath, 'utf8'));
+        const v2Live = v2LiveVerdict(configJson, opts.env);
+        if (!v2Live) {
             if (fsSync.existsSync(target)) {
                 await fs.rm(target);
                 opts.log.info('[sensor-map v2] dynamic config schema removed; the packaged (full legacy) form governs.');
@@ -79,6 +125,15 @@ export async function syncDynamicSchema(opts) {
     }
     catch (e) {
         opts.log.warn(`[sensor-map v2] dynamic config schema sync failed (settings form falls back to the packaged schema): ${e.message}`);
+        // Conservative on any failure (unreadable config included): the
+        // packaged full form governs rather than a possibly stale
+        // reduced one.
+        try {
+            await fs.rm(target, { force: true });
+        }
+        catch {
+            // the startup-safety contract holds: never throw from here
+        }
     }
 }
 //# sourceMappingURL=dynamicSchema.js.map

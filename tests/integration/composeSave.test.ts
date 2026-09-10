@@ -1832,3 +1832,50 @@ describe('global custom removal + surviving same-identity station exception (PR 
     expect(resolved.rows.find(r => r.dataPoint === 'custom_x' && r.stationMac === NEVER_SEEN)).toBeUndefined();
   });
 });
+
+describe('Skip on a custom row composes cleanly (PR #53 round 6 F3)', () => {
+  it('the identity-bearing pin fragment is accepted where a bare pin was refused', async () => {
+    const BLOCK = {
+      platform: 'AmbientWeatherSensors',
+      name: 'Test Station',
+      apiKey: 'k', applicationKey: 'a',
+      _sensorMapV2: true,
+      configVersion: 2,
+      sensorMap: [{ dataPoint: 'barn_wind', kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph', name: 'Barn Wind' }],
+    };
+    const rig = makeRig(BLOCK);
+    discoveryStore(rig, [MAC, 'AA:BB:CC:DD:EE:02']);
+
+    // The reviewer's repro: a bare station pin on a custom dataPoint
+    // is refused as custom-missing-kind...
+    const bare = await handleComposeSave(rig.deps, {
+      base: BLOCK,
+      proposal: [
+        ...BLOCK.sensorMap,
+        { dataPoint: 'barn_wind', stationMac: MAC, displayUnit: 'mph' },
+      ],
+    });
+    expect(bare.ok).toBe(false);
+    if (!bare.ok) {
+      expect(bare.error.code).toBe('invalid-rows');
+    }
+
+    // ...and the identity-carrying pin excludeChange now writes is
+    // accepted, with the pinned station keeping mph while the global
+    // template moves to fps.
+    const payload = {
+      base: BLOCK,
+      proposal: [
+        { ...BLOCK.sensorMap[0], displayUnit: 'fps' },
+        { dataPoint: 'barn_wind', stationMac: MAC, kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph', displayUnit: 'mph' },
+      ],
+    };
+    const result = await handleComposeSave(rig.deps, { ...payload, confirmDigest: await digestFor(rig, payload) });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      const pinned = result.canonicalSensorMap.find(e => e.dataPoint === 'barn_wind' && e.stationMac === MAC);
+      expect(pinned).toHaveProperty('displayUnit', 'mph');
+      expect(pinned).toHaveProperty('kind', 'motion');
+    }
+  });
+});

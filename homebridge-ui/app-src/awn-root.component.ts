@@ -336,10 +336,15 @@ interface StationGroup {
                   <!-- Opt one row OUT of a broader change (Bruno's
                        beta.15 RC request): pins this row's changed
                        fields to their current values as a
-                       station-scoped draft, then re-previews. -->
-                  <button type="button" class="exclude-change" data-tip="This row keeps its current settings; everything else still changes."
-                          [disabled]="previewPending() || saving() || confirmOpen() || reloadRequired()"
-                          (click)="excludeChange(c)">Skip</button>
+                       station-scoped draft, then re-previews. Not
+                       rendered when nothing is representably
+                       pinnable (an indirect battery-ownership
+                       re-registration, for example). -->
+                  @if (skippableFields(c).length > 0) {
+                    <button type="button" class="exclude-change" data-tip="This row keeps its current settings; everything else still changes."
+                            [disabled]="previewPending() || saving() || confirmOpen() || reloadRequired()"
+                            (click)="excludeChange(c)">Skip</button>
+                  }
                 }
               </div>
             }
@@ -357,15 +362,20 @@ interface StationGroup {
             <!-- Saved-configuration changes with no accessory effect
                  right now, listed so the draft count and the preview
                  visibly add up (Bruno's beta.15 RC feedback). -->
-            @for (c of pr.configOnly; track c.stationMac + '|' + c.dataPoint) {
+            @for (c of pr.configOnly; track c.stationMac + '|' + c.dataPoint + '|' + c.change) {
               <div class="change-row">
-                <span class="change-kind chip-disabled" data-tip="This row is disabled, so no accessory changes now. The setting still saves and takes effect when the row is enabled.">disabled</span>
+                <span class="change-kind {{ c.change }}">{{ c.change }}</span>
+                <span class="change-kind chip-disabled" data-tip="This row is disabled, so no accessory changes now. The saved settings still change and take effect when the row is enabled.">disabled</span>
                 <code>{{ c.dataPoint }}</code>
                 <span class="station-meta">{{ c.stationMac }}</span>
-                <span class="muted"> {{ changeSummary(c.before, c.after) }}</span>
-                <button type="button" class="exclude-change" data-tip="This row keeps its current settings; everything else still changes."
-                        [disabled]="previewPending() || saving() || confirmOpen() || reloadRequired()"
-                        (click)="excludeChange(c)">Skip</button>
+                @if (c.change === 'modified') {
+                  <span class="muted"> {{ changeSummary(c.before!, c.after!) }}</span>
+                }
+                @if (skippableFields(c).length > 0) {
+                  <button type="button" class="exclude-change" data-tip="This row keeps its current settings; everything else still changes."
+                          [disabled]="previewPending() || saving() || confirmOpen() || reloadRequired()"
+                          (click)="excludeChange(c)">Skip</button>
+                }
               </div>
             }
           }
@@ -1131,26 +1141,51 @@ export class AwnRootComponent {
   }
 
   /**
-   * Opt one previewed row OUT of a broader change (beta.15 RC
-   * request): every field the proposal would change on this row is
-   * pinned to its CURRENT value as a station-scoped draft — a normal
-   * exception, previewable and savable like any edit — and the
-   * preview re-runs. A field the row does not currently carry cannot
-   * be pinned by an override and is left to the row editor.
+   * The fields Skip can pin for a change: row fields the editor can
+   * author, whose before value exists and differs. Empty means the
+   * change is NOT representable as a station exception — for example
+   * a row modified only through battery-ownership adjudication
+   * (hasBatterySubService / structural signature) — and Skip is not
+   * rendered for it (review round 6 F3).
    */
-  protected async excludeChange(c: PreviewChangeDto | ConfigOnlyChangeDto): Promise<void> {
+  protected skippableFields(c: { before?: EditorRowDto; after?: EditorRowDto }): DraftableField[] {
     const before = c.before;
     const after = c.after;
     if (!before || !after) {
-      return;
+      return [];
     }
-    const fields: DraftableField[] = ['enabled', 'name', 'displayUnit', 'threshold', 'triggerEnabled', 'triggerDirection'];
+    const candidates: DraftableField[] = ['enabled', 'name', 'displayUnit', 'threshold', 'triggerEnabled', 'triggerDirection'];
     const b = before as unknown as Record<string, unknown>;
     const a = after as unknown as Record<string, unknown>;
-    for (const field of fields) {
-      if (b[field] === a[field] || b[field] === undefined) {
-        continue;
+    return candidates.filter(field => b[field] !== a[field] && b[field] !== undefined);
+  }
+
+  /**
+   * Opt one previewed row OUT of a broader change (beta.15 RC
+   * request): every representable field the proposal would change on
+   * this row is pinned to its CURRENT value as a station-scoped
+   * draft — a normal exception, previewable and savable like any
+   * edit — and the preview re-runs. A custom row's exception carries
+   * the row's full identity alongside the pins: a bare station
+   * fragment for a custom dataPoint is refused as custom-missing-kind
+   * (review round 6 F3); for fragments that already author the
+   * identity, the copies prune away as no-ops.
+   */
+  protected async excludeChange(c: PreviewChangeDto | ConfigOnlyChangeDto): Promise<void> {
+    const before = c.before;
+    const fields = this.skippableFields(c);
+    if (!before || fields.length === 0) {
+      return;
+    }
+    const b = before as unknown as Record<string, unknown>;
+    if (before.identityScope !== undefined && before.identityScope !== 'known') {
+      for (const idField of ['kind', 'measurement', 'sourceUnit'] as const) {
+        if (b[idField] !== undefined) {
+          this.store.setFieldFor(before.stationMac, c.dataPoint, idField, b[idField]);
+        }
       }
+    }
+    for (const field of fields) {
       this.store.setFieldFor(before.stationMac, c.dataPoint, field, b[field]);
     }
     this.bump();
