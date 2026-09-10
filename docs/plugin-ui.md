@@ -43,7 +43,7 @@ grouped by station:
 | Data point | The AWN field name (`tempf`, `windspeedmph`, ...); its tooltip names the backing battery field when one exists, and a colored dot marks rows your configuration authors (see layers below) |
 | Name | The accessory name this row produces |
 | Kind | Sensor kind as an icon (thermometer, droplet, sun, motion wave) or a badge (CO₂, PM2.5, PM10, `?` for unrecognized); the tooltip carries the full kind and measurement |
-| Units | The unit HomeKit displays; highlighted when it differs from what the station reports (the tooltip names the source unit) |
+| Units | For extended sensors, the unit HomeKit displays (highlighted when converted; the tooltip names the source unit). For natively displayed kinds (temperature, humidity, air quality), the unit the station reports; Apple Home chooses the display format on each device |
 
 The provenance dot on the data point tells you where a row's
 configuration comes from:
@@ -79,6 +79,14 @@ exactly which accessories would register, deregister, or re-register.
 The page follows Homebridge UI X's light/dark theme, including live
 theme switches.
 
+With `configVersion: 2` and the v2 flag on, the settings form hides
+the legacy controls the runtime no longer reads (sensor category
+toggles, extended-sensor thresholds, display units): the plugin
+maintains a dynamic form schema reflecting the configuration mode,
+applied on the next full Homebridge restart after a mode change.
+Those legacy config fields still exist in config.json - the rollback
+mirror maintains them for 1.7.x downgrades.
+
 The v2 opt-in switch lives in the form below the panels: **Advanced
 (v2.0 preview) → Enable sensor-map v2 live path**, which selects the
 live v2 pipeline and populates the discovery and sensor-map panels.
@@ -93,6 +101,18 @@ problems surface as banners), but the editor is the recommended path.
 - **Per-row editing**: enable or disable a row, rename it, choose
   display units (matching AmbientWeather.net's unit choices), and set
   motion-trigger thresholds and direction.
+- **Family units**: the Units selectors above the tables set the
+  display unit for a whole category the way AmbientWeather.net does,
+  including the single Rainfall choice that keeps rain rate and
+  accumulation totals consistent. A selection drafts a global
+  template per data point (so it also applies to stations added
+  later) and clears per-station unit exceptions; everything else
+  those exceptions set is untouched. One exception to "stations added
+  later": a custom sensor defined for a single station changes its
+  unit on that station's own entry only, because its identity does
+  not exist globally. Single rows can still be changed in their row
+  editor afterward; a family whose rows currently disagree shows
+  Mixed.
 - **Per-station exceptions**: override a setting for one station
   while a global choice keeps applying to the others, matching the
   layer model shown in the table today.
@@ -109,6 +129,11 @@ problems surface as banners), but the editor is the recommended path.
   procedure as the snapshot, sourcing the fields from the chosen
   entry file's `legacy` object — see the README's rollback section
   for the exact steps.
+- **Opting single rows out of a preview**: every modified row in the
+  preview carries a Skip action. It pins that row's changed fields to
+  their current values as an ordinary station-scoped draft (the
+  preview re-runs by itself), so a broad change - a family unit, for
+  example - can go ahead while one or two rows stay as they are.
 - **Guarded saves**: every save is validated server-side against
   the same rules the runtime uses. Changes that would register,
   deregister, or re-register an accessory require explicit

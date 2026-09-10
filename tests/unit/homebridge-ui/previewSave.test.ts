@@ -19,7 +19,9 @@ import * as path from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { handleComposeSave, handlePreviewSave, type HandlerDeps } from '../../../homebridge-ui/handlers';
+import { handleCommitSave, handleComposeSave, handlePreviewSave, type HandlerDeps } from '../../../homebridge-ui/handlers';
+import { syncDynamicSchema } from '../../../src/sensorMap/dynamicSchema';
+import { PLUGIN_NAME } from '../../../src/settings';
 import { LEGACY_SNAPSHOT_FILE } from '../../../src/sensorMap/legacyMirror';
 
 const MAC = 'AA:BB:CC:DD:EE:01';
@@ -343,5 +345,212 @@ describe('/preview-save — pipeline parity with /compose-save', () => {
       expect(save.error.code).toBe('sensor-map-shape');
     }
     expect(existsSync(path.join(rig.persistDir, LEGACY_SNAPSHOT_FILE))).toBe(false);
+  });
+});
+
+describe('config-only changes: disabled rows whose settings change (beta.15 RC feedback)', () => {
+  it('a unit change on a disabled row lists under configOnly, not changes', async () => {
+    const BLOCK = {
+      platform: 'AmbientWeatherSensors',
+      name: 'Test Station',
+      apiKey: 'k', applicationKey: 'a',
+      _sensorMapV2: true,
+      configVersion: 2,
+      sensorMap: [{ dataPoint: 'weeklyrainin', enabled: false, displayUnit: 'in' }],
+    };
+    const rig = makeRig(BLOCK);
+    discoveryStore(rig, ['weeklyrainin', 'windspeedmph']);
+    const result = await handlePreviewSave(rig.deps, {
+      base: BLOCK,
+      proposal: [{ dataPoint: 'weeklyrainin', enabled: false, displayUnit: 'mm' }],
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    // No accessory registers or updates...
+    expect(result.changes).toEqual([]);
+    expect(result.structuralChangeCount).toBe(0);
+    // ...but the saved-configuration change is visible, disabled on
+    // both sides, with the unit diff carried in before/after.
+    expect(result.configOnly).toHaveLength(1);
+    const entry = result.configOnly[0];
+    expect(entry.dataPoint).toBe('weeklyrainin');
+    expect(entry.before.enabled).toBe(false);
+    expect(entry.after.enabled).toBe(false);
+    expect(entry.before.displayUnit).toBe('in');
+    expect(entry.after.displayUnit).toBe('mm');
+  });
+
+  it('an unchanged disabled row and an enabled-row change produce no configOnly entries', async () => {
+    const BLOCK = {
+      platform: 'AmbientWeatherSensors',
+      name: 'Test Station',
+      apiKey: 'k', applicationKey: 'a',
+      _sensorMapV2: true,
+      configVersion: 2,
+      sensorMap: [{ dataPoint: 'weeklyrainin', enabled: false, displayUnit: 'in' }],
+    };
+    const rig = makeRig(BLOCK);
+    discoveryStore(rig, ['weeklyrainin', 'windspeedmph']);
+    const result = await handlePreviewSave(rig.deps, {
+      base: BLOCK,
+      proposal: [
+        { dataPoint: 'weeklyrainin', enabled: false, displayUnit: 'in' },
+        { dataPoint: 'windspeedmph', displayUnit: 'kph' },
+      ],
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    expect(result.configOnly).toEqual([]);
+    expect(result.changes.map(c => c.dataPoint)).toEqual(['windspeedmph']);
+  });
+});
+
+describe('unsaved-settings gate vs the dynamic schema (beta.15 conversion smoke)', () => {
+  const V2_MIRRORED_BLOCK = {
+    platform: 'AmbientWeatherSensors',
+    name: 'Test Station',
+    apiKey: 'k', applicationKey: 'a',
+    _sensorMapV2: true,
+    configVersion: 2,
+    sensorMap: [{ dataPoint: 'windspeedmph', displayUnit: 'kph' }],
+    // Mirror-maintained legacy field the dynamic schema HIDES from
+    // the form: the form's copy will not carry it.
+    temperatureSensors: true,
+  };
+
+  /** The orchestrator's two-phase flow: validate, then commit (the
+   *  formBlock gate runs at commit). */
+  async function commitWithForm(rig: Rig, formBlock: Record<string, unknown>) {
+    const payload = {
+      base: V2_MIRRORED_BLOCK,
+      formBlock,
+      proposal: [{ dataPoint: 'windspeedmph', displayUnit: 'mph' }],
+    };
+    const validated = await handleComposeSave(rig.deps, payload);
+    if (!validated.ok) {
+      return validated;
+    }
+    return handleCommitSave(rig.deps, { ...payload, validationToken: validated.validationToken });
+  }
+
+  async function writeDynamicSchema(rig: Rig): Promise<void> {
+    await syncDynamicSchema({
+      storagePath: rig.root, pluginName: PLUGIN_NAME,
+      packagedSchemaPath: path.join(__dirname, '..', '..', '..', 'config.schema.json'),
+      configPath: rig.configPath,
+      log: silentLog,
+    });
+  }
+
+  it('a form copy missing a dynamic-schema-hidden field is NOT an unsaved edit', async () => {
+    const rig = makeRig(V2_MIRRORED_BLOCK);
+    rig.deps.storagePath = rig.root;
+    discoveryStore(rig, ['windspeedmph']);
+    await writeDynamicSchema(rig);
+    const { temperatureSensors, ...formBlock } = V2_MIRRORED_BLOCK;
+    void temperatureSensors;
+    const result = await commitWithForm(rig, formBlock);
+    expect(result.ok).toBe(true);
+  });
+
+  it('without the dynamic schema the same absence still refuses (a form that RENDERS the control may hold a real edit)', async () => {
+    const rig = makeRig(V2_MIRRORED_BLOCK);
+    rig.deps.storagePath = rig.root; // no dynamic schema file written
+    discoveryStore(rig, ['windspeedmph']);
+    const { temperatureSensors, ...formBlock } = V2_MIRRORED_BLOCK;
+    void temperatureSensors;
+    const result = await commitWithForm(rig, formBlock);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('unsaved-settings-changes');
+      expect(result.error.message).toContain('temperatureSensors');
+    }
+  });
+
+  it('a REAL edit to a control the dynamic schema still renders is refused', async () => {
+    const rig = makeRig(V2_MIRRORED_BLOCK);
+    rig.deps.storagePath = rig.root;
+    discoveryStore(rig, ['windspeedmph']);
+    await writeDynamicSchema(rig);
+    const result = await commitWithForm(rig, { ...V2_MIRRORED_BLOCK, apiKey: 'edited-in-the-form' });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('unsaved-settings-changes');
+      expect(result.error.message).toContain('apiKey');
+    }
+  });
+});
+
+describe('configOnly additions and removals (review round 6 F4)', () => {
+  const BLOCK_WITH_DISABLED_CUSTOM = {
+    platform: 'AmbientWeatherSensors',
+    name: 'Test Station',
+    apiKey: 'k', applicationKey: 'a',
+    _sensorMapV2: true,
+    configVersion: 2,
+    sensorMap: [{
+      dataPoint: 'barn_wind', stationMac: MAC, kind: 'motion', measurement: 'wind-speed',
+      sourceUnit: 'mph', enabled: false, name: 'Barn Wind',
+    }],
+  };
+
+  it('removing a disabled custom override lists as a config-only removal', async () => {
+    const rig = makeRig(BLOCK_WITH_DISABLED_CUSTOM);
+    discoveryStore(rig, ['windspeedmph', 'barn_wind']);
+    const result = await handlePreviewSave(rig.deps, {
+      base: BLOCK_WITH_DISABLED_CUSTOM,
+      proposal: [], // Use defaults on the disabled custom row: fragment gone
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    expect(result.changes).toEqual([]); // never enabled: no accessory change
+    const removed = result.configOnly.find(c => c.dataPoint === 'barn_wind');
+    expect(removed?.change).toBe('removed');
+    expect(removed?.before?.enabled).toBe(false);
+    expect(removed?.after).toBeUndefined();
+  });
+
+  it('adding a disabled custom row lists as a config-only addition', async () => {
+    const BASE = { ...BLOCK_WITH_DISABLED_CUSTOM, sensorMap: [] };
+    const rig = makeRig(BASE);
+    discoveryStore(rig, ['windspeedmph', 'barn_wind']);
+    const result = await handlePreviewSave(rig.deps, {
+      base: BASE,
+      proposal: [BLOCK_WITH_DISABLED_CUSTOM.sensorMap[0]],
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    expect(result.changes).toEqual([]);
+    const added = result.configOnly.find(c => c.dataPoint === 'barn_wind');
+    expect(added?.change).toBe('added');
+    expect(added?.after?.enabled).toBe(false);
+    expect(added?.before).toBeUndefined();
+  });
+
+  it('an enabled-to-disabled transition stays an accessory change, not a config-only entry', async () => {
+    const ENABLED = {
+      ...BLOCK_WITH_DISABLED_CUSTOM,
+      sensorMap: [{ ...BLOCK_WITH_DISABLED_CUSTOM.sensorMap[0], enabled: true }],
+    };
+    const rig = makeRig(ENABLED);
+    discoveryStore(rig, ['windspeedmph', 'barn_wind']);
+    const result = await handlePreviewSave(rig.deps, {
+      base: ENABLED,
+      proposal: [BLOCK_WITH_DISABLED_CUSTOM.sensorMap[0]], // enabled: false
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    expect(result.changes.map(c => [c.dataPoint, c.change])).toEqual([['barn_wind', 'removed']]);
+    expect(result.configOnly).toEqual([]);
   });
 });

@@ -168,6 +168,18 @@ export async function composeAndPersist(
       settingsRestoreFailed: true,
     };
   }
+  if (outcome.ok) {
+    // A SUCCESSFUL save leaves the settings form frozen: the form's
+    // two-way-bound copy of the config predates this save, and HB UI
+    // X's form Save REPLACES the platform block with that stale,
+    // schema-shaped copy — measured on HB UI X 5.29: one click undid
+    // a fresh conversion and stripped configVersion/sensorMap/units.
+    // The page banner tells the user to reload the settings page
+    // before editing the form again; refusals below still restore,
+    // because a refused save wrote nothing and the form copy still
+    // matches the disk.
+    return outcome;
+  }
   const restored = await unfreezeQuietly(deps);
   return restored ? outcome : { ...outcome, settingsRestoreFailed: true };
 }

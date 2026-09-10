@@ -1,4 +1,5 @@
 import * as path from 'path';
+import { fileURLToPath } from 'node:url';
 import { AirQualityAccessory } from './airQualityAccessory.js';
 import { batteryFieldForSensor, isCanonicalSensorForBattery, readBatteryLow } from './batteryFields.js';
 // Battery field naming pattern, used to detect raw battery field
@@ -14,6 +15,7 @@ import { UvAccessory } from './extendedSensors/uvAccessory.js';
 import { WindDirection10mAccessory, WindDirectionAccessory, WindGustAccessory, WindMaxDailyGustAccessory, WindSpeedAccessory, } from './extendedSensors/windAccessory.js';
 import { HumidityAccessory } from './humidityAccessory.js';
 import { RealtimeSource } from './realtimeSource.js';
+import { syncDynamicSchema } from './sensorMap/dynamicSchema.js';
 import { bindSafeMode } from './safeModeBinding.js';
 import { inferForCachedAccessory } from './sensorMap/bootstrap.js';
 import { coerceValue } from './sensorMap/coerceValue.js';
@@ -224,6 +226,26 @@ export class AmbientWeatherSensorsPlatform {
             // Non-blocking: swallow errors so a broken persistence store
             // never prevents the plugin from starting.
             this.shadow?.initialize().catch(e => this.log.warn(`[sensor-map v2 shadow] initialize failed: ${e.message}`));
+            // Keep the settings form truthful: in v2-live mode a dynamic
+            // schema hides the legacy controls the runtime ignores; in any
+            // other mode the file is removed so the packaged full legacy
+            // form governs. Non-blocking and never fatal (the UI falls back
+            // to the packaged schema).
+            // The verdict comes from the COMPLETE config.json, not this
+            // instance's block: multi-Home instances all converge on the
+            // same file content regardless of startup order. Hosts without
+            // the path accessors (harnesses, unusual setups) skip the sync;
+            // the packaged schema then governs, which is safe everywhere.
+            if (typeof this.api.user?.storagePath === 'function' && typeof this.api.user?.configPath === 'function') {
+                void syncDynamicSchema({
+                    storagePath: this.api.user.storagePath(),
+                    pluginName: PLUGIN_NAME,
+                    packagedSchemaPath: path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'config.schema.json'),
+                    configPath: this.api.user.configPath(),
+                    env: process.env,
+                    log: this.log,
+                });
+            }
             if (this.configMode === 'safe-mode') {
                 // Per docs/future/sensor-map.md §17.2, safe mode is not a
                 // hard freeze — it's "reconciliation skipped, updates

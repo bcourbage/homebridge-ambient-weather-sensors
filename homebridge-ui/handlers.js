@@ -26,7 +26,10 @@ import { shadowModeEnabled } from '../dist/sensorMap/shadowMode.js';
 import { loadDiscoveryStore, } from '../dist/sensorMap/persistence/discoveryStore.js';
 import { loadNoticeStore, } from '../dist/sensorMap/persistence/noticesStore.js';
 import { loadUiStateStore, } from '../dist/sensorMap/persistence/uiStateStore.js';
-import { UNIT_VOCABULARY, unitOptionsFor } from '../dist/sensorMap/unitVocabulary.js';
+import { DISPLAY_FAMILIES, UNIT_VOCABULARY, unitOptionsFor } from '../dist/sensorMap/unitVocabulary.js';
+import { defaultRowFor } from '../dist/sensorMap/defaultMap.js';
+import { dynamicSchemaPath } from '../dist/sensorMap/dynamicSchema.js';
+import { PLUGIN_NAME } from '../dist/settings.js';
 /**
  * The UI bridge is a READ-ONLY consumer of the platform's persistence
  * stores (§8 single-writer): it must never quarantine-rename a corrupt
@@ -406,7 +409,7 @@ async function composeSaveInternal(deps, payload, persist) {
                 },
             };
         }
-        const drifted = settingsFormDrift(p.formBlock, block);
+        const drifted = settingsFormDrift(p.formBlock, block, deps);
         if (drifted !== undefined) {
             return {
                 ok: false,
@@ -643,6 +646,7 @@ export async function handlePreviewSave(deps, payload) {
         canonicalSensorMap: canonical,
         rows: consequences.proposedRows,
         changes: consequences.changes,
+        configOnly: consequences.configOnly,
         structuralChangeCount: consequences.structuralChangeCount,
         digest: consequences.digest,
         warnings: effectiveMap.warnings.map(w => toDiagnosticDto('warning', w)),
@@ -734,6 +738,58 @@ export function computeSaveConsequences(ctx) {
     changes.sort((x, y) => x.stationMac === y.stationMac
         ? (x.dataPoint < y.dataPoint ? -1 : x.dataPoint > y.dataPoint ? 1 : 0)
         : (x.stationMac < y.stationMac ? -1 : 1));
+    // Saved-configuration changes with NO accessory effect right now:
+    // recognized rows DISABLED on both sides whose settings differ
+    // (e.g. a family unit landing on a disabled weekly-rain total).
+    // Listed so the draft count and the preview visibly add up
+    // (Bruno's beta.15 RC feedback); enabled/disabled transitions are
+    // already 'added'/'removed' above.
+    const disabledSet = (rows) => {
+        const out = new Map();
+        for (const row of rows) {
+            if (row.kind !== 'unrecognized' && !row.enabled) {
+                out.set(`${row.stationMac}|${row.dataPoint}`, row);
+            }
+        }
+        return out;
+    };
+    const beforeDisabled = disabledSet(currentMap.rows);
+    const afterDisabled = disabledSet(effectiveMap.rows);
+    const configOnly = [];
+    for (const key of new Set([...beforeDisabled.keys(), ...afterDisabled.keys()])) {
+        const b = beforeDisabled.get(key);
+        const a = afterDisabled.get(key);
+        if (b && a) {
+            const differs = ROW_FIELDS.some(f => b[f] !== a[f]);
+            if (differs) {
+                configOnly.push({
+                    stationMac: a.stationMac, dataPoint: a.dataPoint, change: 'modified',
+                    before: toEditorRowDto(b, currentLayers),
+                    after: toEditorRowDto(a, proposedLayers),
+                });
+            }
+        }
+        else if (b && !after.has(key)) {
+            // Disabled row gone entirely (not enabled): a saved deletion,
+            // e.g. Use defaults on a disabled custom row (round 6 F4).
+            configOnly.push({
+                stationMac: b.stationMac, dataPoint: b.dataPoint, change: 'removed',
+                before: toEditorRowDto(b, currentLayers),
+            });
+        }
+        else if (a && !b && !before.has(key)) {
+            // Disabled row appears from nowhere (not an enabled->disabled
+            // transition): a saved addition, e.g. a custom row authored
+            // disabled.
+            configOnly.push({
+                stationMac: a.stationMac, dataPoint: a.dataPoint, change: 'added',
+                after: toEditorRowDto(a, proposedLayers),
+            });
+        }
+    }
+    configOnly.sort((x, y) => x.stationMac === y.stationMac
+        ? (x.dataPoint < y.dataPoint ? -1 : x.dataPoint > y.dataPoint ? 1 : 0)
+        : (x.stationMac < y.stationMac ? -1 : 1));
     const proposedRows = effectiveMap.rows
         .map(row => toEditorRowDto(row, proposedLayers))
         .sort((a, b) => a.stationMac === b.stationMac
@@ -756,6 +812,7 @@ export function computeSaveConsequences(ctx) {
         .digest('hex');
     return {
         changes,
+        configOnly,
         structuralChangeCount: changes.filter(c => c.structural).length,
         digest,
         proposedRows,
@@ -950,7 +1007,15 @@ export function handleGetVocabulary() {
             extendedDisplay: unitOptionsFor(m, 'extended-display').map(o => ({ unit: o.unit, label: o.label })),
         };
     }
-    return { measurements };
+    // Display families: pure projection of DISPLAY_FAMILIES (the Units
+    // panel's canonical metadata - PR #53 review F2/F4).
+    const families = DISPLAY_FAMILIES.map(f => ({
+        key: f.key,
+        label: f.label,
+        measurements: [...f.measurements],
+        choices: f.choices.map(c => ({ id: c.id, label: c.label, units: { ...c.units } })),
+    }));
+    return { measurements, families };
 }
 /**
  * Layer/origin metadata must reflect what the resolver ACCEPTED
@@ -1001,6 +1066,23 @@ function toEditorRowDto(row, layers) {
     if (row.kind === 'unrecognized') {
         return dto;
     }
+    // Identity scope for the family unit action (PR #53 rounds 2-3 F1):
+    // only known rows and rows genuinely GOVERNED by a global custom
+    // identity may take a global displayUnit template. Classification
+    // is per RESOLVED row, not per dataPoint: a station identity
+    // override may carry a DIFFERENT measurement than the global custom
+    // template (global pressure, station wind-speed — both valid), and
+    // writing that station's family unit onto the global fragment would
+    // be illegal-displayunit-for-measurement. A row is 'custom-global'
+    // only when its resolved measurement matches the accepted global
+    // identity's measurement.
+    const globalOverride = layers.global.get(row.dataPoint);
+    dto.identityScope = defaultRowFor(row.dataPoint) !== undefined
+        ? 'known'
+        : globalOverride?.kind !== undefined && globalOverride.measurement !== undefined
+            && globalOverride.measurement === row.measurement
+            ? 'custom-global'
+            : 'custom-station';
     dto.measurement = row.measurement;
     dto.name = row.name;
     // Mirror the resolver exactly (review #32 F2): null means "no
@@ -1242,7 +1324,24 @@ let cachedSchemaProperties;
  * drift gate cannot separate form edits from form artifacts, and the
  * save must refuse rather than guess.
  */
-function configSchemaProperties() {
+function configSchemaProperties(deps) {
+    // Judge the form against the schema it actually RENDERED: with the
+    // dynamic schema present (v2-live mode), HB UI X loads it instead
+    // of the packaged one, and a control it omits cannot hold an
+    // unsaved user edit. Absent or unreadable, HB UI X falls back to
+    // the packaged schema, so this gate does too.
+    if (deps?.storagePath) {
+        try {
+            const raw = readFileSync(dynamicSchemaPath(deps.storagePath, PLUGIN_NAME), 'utf8');
+            const parsed = JSON.parse(raw);
+            if (parsed.schema?.properties && typeof parsed.schema.properties === 'object') {
+                return parsed.schema.properties;
+            }
+        }
+        catch {
+            // fall through to the packaged schema
+        }
+    }
     if (!cachedSchemaProperties) {
         const here = path.dirname(fileURLToPath(import.meta.url));
         const raw = readFileSync(path.resolve(here, '..', 'config.schema.json'), 'utf8');
@@ -1353,8 +1452,8 @@ function propDrift(formValue, diskValue, prop, pathPrefix) {
  *     cleared from the form is a real unsaved edit the editor save
  *     would destroy: refuse.
  */
-function settingsFormDrift(formBlock, diskBlock) {
-    const schema = configSchemaProperties();
+function settingsFormDrift(formBlock, diskBlock, deps) {
+    const schema = configSchemaProperties(deps);
     for (const key of new Set([...Object.keys(formBlock), ...Object.keys(diskBlock)])) {
         const prop = schema[key];
         const inForm = key in formBlock;

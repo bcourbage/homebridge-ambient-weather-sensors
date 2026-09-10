@@ -17,8 +17,10 @@ import * as path from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { blockDigest, handleCommitSave, handleComposeSave, handlePreviewSave, syntheticProbeMac, type HandlerDeps } from '../../homebridge-ui/handlers';
+import { blockDigest, handleCommitSave, handleComposeSave, handleGetEditorState, handlePreviewSave, syntheticProbeMac, type HandlerDeps } from '../../homebridge-ui/handlers';
 import { composeAndPersist, type OrchestratorDeps } from '../../homebridge-ui/saveOrchestrator';
+import { DraftStore } from '../../homebridge-ui/app-src/draft-store';
+import { buildEffectiveSensorMap } from '../../src/sensorMap/buildEffectiveMap';
 import { LEGACY_JOURNAL_DIR, LEGACY_SENSOR_FIELDS, LEGACY_SNAPSHOT_FILE, recognizeMirror } from '../../src/sensorMap/legacyMirror';
 
 const MAC = 'AA:BB:CC:DD:EE:01';
@@ -306,7 +308,7 @@ describe('no-bypass: preview → confirm → compose → update → save (PR C)'
     // 2-4. Confirmed save through the ONE route.
     const result = await composeAndPersist(client.deps, { ...payload, confirmDigest: preview.digest });
     expect(result.ok).toBe(true);
-    expect(client.events).toEqual(['freeze', 'compose', 'commit', 'update', 'save', 'unfreeze']);
+    expect(client.events).toEqual(['freeze', 'compose', 'commit', 'update', 'save']); // success keeps the form frozen (stale-copy Save guard)
     expect(client.snapshotExistedAtUpdate).toBe(true); // durable BEFORE persistence
     // Verbatim persistence, synchronized mirror included.
     const persisted = client.persistedArray!.find(b => b.platform === 'AmbientWeatherSensors')!;
@@ -342,7 +344,7 @@ describe('ordering: snapshot is durable before the client persistence half runs'
 
     const result = await composeAndPersist(client.deps, {}); // pure migration
     expect(result.ok).toBe(true);
-    expect(client.events).toEqual(['freeze', 'compose', 'commit', 'update', 'save', 'unfreeze']);
+    expect(client.events).toEqual(['freeze', 'compose', 'commit', 'update', 'save']); // success keeps the form frozen (stale-copy Save guard)
     expect(client.snapshotExistedAtUpdate).toBe(true);
     if (result.ok) {
       expect(result.snapshot).toBe('written');
@@ -775,7 +777,7 @@ describe('explicit-base orchestration (review #67 P1-3)', () => {
     const clonedBase = JSON.parse(JSON.stringify(LEGACY_BLOCK)) as Record<string, unknown>;
     const result = await composeAndPersist(client.deps, { base: clonedBase });
     expect(result.ok).toBe(true);
-    expect(client.events).toEqual(['freeze', 'compose', 'commit', 'update', 'save', 'unfreeze']);
+    expect(client.events).toEqual(['freeze', 'compose', 'commit', 'update', 'save']); // success keeps the form frozen (stale-copy Save guard)
     const awsBlocks = (client.persistedArray ?? []).filter(b => b.platform === 'AmbientWeatherSensors');
     expect(awsBlocks).toHaveLength(1);
     expect(awsBlocks[0].configVersion).toBe(2);
@@ -990,7 +992,7 @@ describe('session-digest staleness (beta.13 smoke F1: getPluginConfig is schema-
       blockIndex: 0,
     });
     expect(result.ok).toBe(true);
-    expect(client.events).toEqual(['freeze', 'compose', 'commit', 'update', 'save', 'unfreeze']);
+    expect(client.events).toEqual(['freeze', 'compose', 'commit', 'update', 'save']); // success keeps the form frozen (stale-copy Save guard)
     if (!result.ok) {
       return;
     }
@@ -1259,22 +1261,25 @@ describe('freeze failure safety (review #47 round 4)', () => {
     expect(existsSync(path.join(rig.persistDir, LEGACY_SNAPSHOT_FILE))).toBe(false);
   });
 
-  it('an unfreeze failure AFTER successful persistence never masks the save outcome', async () => {
+  it('a SUCCESSFUL save never unfreezes: the form copy is stale and its Save would clobber the write', async () => {
+    // Measured on HB UI X 5.29 (Bruno's Sep 8 repro): the settings
+    // form's Save REPLACES the platform block with its pre-save copy,
+    // undoing a fresh conversion. So success leaves the form frozen;
+    // the page banner directs a reload.
     const rig = makeRig(LEGACY_BLOCK);
     discoveryStore(rig);
     const client = makeClient(rig);
     client.deps.unfreezeSettingsForm = () => {
       client.events.push('unfreeze-throw');
-      throw new Error('showSchemaForm rejected');
+      throw new Error('must never be called on success');
     };
     const result = await composeAndPersist(client.deps, {
       baseDigest: blockDigest(LEGACY_BLOCK),
       blockIndex: 0,
     });
-    // The save completed and persisted; the cleanup failure is
-    // swallowed rather than replacing the authoritative outcome.
     expect(result.ok).toBe(true);
-    expect(client.events).toEqual(['freeze', 'compose', 'commit', 'update', 'save', 'unfreeze-throw']);
+    expect(result.ok && result.settingsRestoreFailed).toBeFalsy();
+    expect(client.events).toEqual(['freeze', 'compose', 'commit', 'update', 'save']);
   });
 });
 
@@ -1347,7 +1352,10 @@ describe('server-enforced two-phase protocol (review #47 round 5)', () => {
 });
 
 describe('settings-form restore failures are surfaced (review #47 round 5, P2)', () => {
-  it('an unfreeze failure after successful persistence returns ok WITH the restore flag', async () => {
+  it('an unfreeze failure after a REFUSED save returns the refusal WITH the restore flag', async () => {
+    // Restores happen only on refusals now (nothing was written, so
+    // the form copy still matches the disk); a failed restore there
+    // is surfaced, never silent.
     const rig = makeRig(LEGACY_BLOCK);
     discoveryStore(rig);
     const client = makeClient(rig);
@@ -1356,10 +1364,10 @@ describe('settings-form restore failures are surfaced (review #47 round 5, P2)',
       throw new Error('showSchemaForm rejected');
     };
     const result = await composeAndPersist(client.deps, {
-      baseDigest: blockDigest(LEGACY_BLOCK),
+      baseDigest: 'ff'.repeat(32), // stale digest: refused, nothing written
       blockIndex: 0,
     });
-    expect(result.ok).toBe(true);
+    expect(result.ok).toBe(false);
     expect(result.settingsRestoreFailed).toBe(true);
   });
 
@@ -1478,7 +1486,7 @@ describe('HB UI X form-value replacement (beta.14 smoke #6, measured on 5.28)', 
       blockIndex: 0,
     });
     expect(result.ok).toBe(true);
-    expect(client.events).toEqual(['freeze', 'compose', 'commit', 'update', 'save', 'unfreeze']);
+    expect(client.events).toEqual(['freeze', 'compose', 'commit', 'update', 'save']); // success keeps the form frozen (stale-copy Save guard)
     // The write carries the canonical platform key even though the
     // session copy lost it (HB UI X re-injects it too; belt and
     // braces so a merge-through never persists a platformless block).
@@ -1542,5 +1550,332 @@ describe('HB UI X form-value replacement (beta.14 smoke #6, measured on 5.28)', 
     // Composed from DISK, so the child-bridge settings survive the
     // save even though the session copy never carried them.
     expect(client.persistedArray![0]._bridge).toEqual({ username: '0E:22:33:44:55:66', port: 51900 });
+  });
+});
+
+describe('family unit choice becomes a GLOBAL template future stations inherit (PR #53 review F1)', () => {
+  it('editor-state → DraftStore family action → compose → canonical map → a never-seen station resolves the chosen unit', async () => {
+    const MAC_B = 'AA:BB:CC:DD:EE:02';
+    const NEVER_SEEN = 'AA:BB:CC:DD:EE:99';
+    const V2_BLOCK = {
+      platform: 'AmbientWeatherSensors',
+      name: 'Test Station',
+      apiKey: 'k', applicationKey: 'a',
+      _sensorMapV2: true,
+      configVersion: 2,
+      // A station exception that authors displayUnit AND an unrelated
+      // field: the family action must strip ONLY displayUnit.
+      sensorMap: [{ dataPoint: 'windspeedmph', stationMac: MAC, displayUnit: 'kph', name: 'Roof Wind' }],
+    };
+    const rig = makeRig(V2_BLOCK);
+    discoveryStore(rig, [MAC, MAC_B]);
+
+    // The exact browser flow: authored fragments from /editor-state
+    // feed the DraftStore; the family action strips displayUnit from
+    // station exceptions and authors the global template.
+    const state = await handleGetEditorState(rig.deps, {});
+    const store = new DraftStore();
+    store.reset(state.authored);
+    for (const mac of store.stationsAuthoringField('windspeedmph', 'displayUnit')) {
+      store.removeFieldFor(mac, 'windspeedmph', 'displayUnit');
+    }
+    store.setFieldFor(undefined, 'windspeedmph', 'displayUnit', 'fps');
+
+    const payload = { base: V2_BLOCK, proposal: store.proposal() };
+    const result = await handleComposeSave(rig.deps, { ...payload, confirmDigest: await digestFor(rig, payload) });
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+
+    // Canonical form: a global displayUnit template exists; the
+    // station exception keeps its name but no longer pins a unit.
+    const globalEntry = result.canonicalSensorMap.find(e => e.dataPoint === 'windspeedmph' && e.stationMac === undefined);
+    expect(globalEntry).toHaveProperty('displayUnit', 'fps');
+    const exception = result.canonicalSensorMap.find(e => e.dataPoint === 'windspeedmph' && e.stationMac === MAC);
+    expect(exception).toHaveProperty('name', 'Roof Wind');
+    expect(exception).not.toHaveProperty('displayUnit');
+
+    // A station that has NEVER been seen resolves the chosen unit
+    // from the global template — the set-once model, canonicalized
+    // and reloaded.
+    const resolved = buildEffectiveSensorMap({
+      userOverrides: result.canonicalSensorMap,
+      discovery: { schemaVersion: 1, entries: [] },
+      uiState: { schemaVersion: 1, dismissedNoticeIds: [], forgottenFields: [] },
+      stations: [
+        { macAddress: MAC, name: 'Roof' },
+        { macAddress: MAC_B, name: 'Cabin' },
+        { macAddress: NEVER_SEEN, name: 'Future' },
+      ],
+      configMode: 'v2',
+    });
+    for (const mac of [MAC, MAC_B, NEVER_SEEN]) {
+      const row = resolved.rows.find(r => r.dataPoint === 'windspeedmph' && r.stationMac === mac);
+      expect(row, `windspeedmph on ${mac}`).toBeDefined();
+      expect(row).toHaveProperty('displayUnit', 'fps');
+    }
+    // The unrelated exception field still applies to its station only.
+    expect(resolved.rows.find(r => r.dataPoint === 'windspeedmph' && r.stationMac === MAC))
+      .toHaveProperty('name', 'Roof Wind');
+  });
+});
+
+describe('family unit choice keeps station-only custom rows station-scoped (PR #53 round 2 F1)', () => {
+  it('a station-only custom wind row gets a station unit patch, never a bare global custom fragment', async () => {
+    const MAC_B = 'AA:BB:CC:DD:EE:02';
+    const NEVER_SEEN = 'AA:BB:CC:DD:EE:99';
+    const V2_BLOCK = {
+      platform: 'AmbientWeatherSensors',
+      name: 'Test Station',
+      apiKey: 'k', applicationKey: 'a',
+      _sensorMapV2: true,
+      configVersion: 2,
+      // A custom identity that exists ONLY on one station.
+      sensorMap: [{
+        dataPoint: 'barn_wind', stationMac: MAC, kind: 'motion', measurement: 'wind-speed',
+        sourceUnit: 'mph', name: 'Barn Wind',
+      }],
+    };
+    const rig = makeRig(V2_BLOCK);
+    discoveryStore(rig, [MAC, MAC_B]);
+
+    const state = await handleGetEditorState(rig.deps, {});
+    const barn = state.rows.find(r => r.dataPoint === 'barn_wind' && r.stationMac === MAC)!;
+    expect(barn.identityScope).toBe('custom-station');
+    const known = state.rows.find(r => r.dataPoint === 'windspeedmph' && r.stationMac === MAC)!;
+    expect(known.identityScope).toBe('known');
+
+    // The family action, per identity scope (what applyFamilyChoice
+    // does): global template for the known dataPoint, a station-
+    // scoped patch for the custom row.
+    const store = new DraftStore();
+    store.reset(state.authored);
+    store.setFieldFor(undefined, 'windspeedmph', 'displayUnit', 'fps');
+    store.setField(barn, 'displayUnit', 'fps');
+
+    const proposal = store.proposal();
+    // No bare global fragment for the custom dataPoint.
+    expect(proposal.find(f => f.dataPoint === 'barn_wind' && f.stationMac === undefined)).toBeUndefined();
+
+    const payload = { base: V2_BLOCK, proposal };
+    const result = await handleComposeSave(rig.deps, { ...payload, confirmDigest: await digestFor(rig, payload) });
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    expect(result.canonicalSensorMap.find(e => e.dataPoint === 'barn_wind' && e.stationMac === undefined)).toBeUndefined();
+    const stationEntry = result.canonicalSensorMap.find(e => e.dataPoint === 'barn_wind' && e.stationMac === MAC);
+    expect(stationEntry).toHaveProperty('displayUnit', 'fps');
+    expect(stationEntry).toHaveProperty('kind', 'motion');
+
+    // The custom row's unit changed on ITS station; the accessory
+    // never appears on a station that has not been seen.
+    const resolved = buildEffectiveSensorMap({
+      userOverrides: result.canonicalSensorMap,
+      discovery: { schemaVersion: 1, entries: [] },
+      uiState: { schemaVersion: 1, dismissedNoticeIds: [], forgottenFields: [] },
+      stations: [
+        { macAddress: MAC, name: 'Roof' },
+        { macAddress: NEVER_SEEN, name: 'Future' },
+      ],
+      configMode: 'v2',
+    });
+    expect(resolved.rows.find(r => r.dataPoint === 'barn_wind' && r.stationMac === MAC))
+      .toHaveProperty('displayUnit', 'fps');
+    expect(resolved.rows.find(r => r.dataPoint === 'barn_wind' && r.stationMac === NEVER_SEEN)).toBeUndefined();
+    // The known dataPoint still follows the global template everywhere.
+    expect(resolved.rows.find(r => r.dataPoint === 'windspeedmph' && r.stationMac === NEVER_SEEN))
+      .toHaveProperty('displayUnit', 'fps');
+  });
+});
+
+describe('per-identity family scope: global pressure custom with a station wind identity (PR #53 round 3 F1)', () => {
+  const MAC_B = 'AA:BB:CC:DD:EE:02';
+  const MIXED_BLOCK = {
+    platform: 'AmbientWeatherSensors',
+    name: 'Test Station',
+    apiKey: 'k', applicationKey: 'a',
+    _sensorMapV2: true,
+    configVersion: 2,
+    sensorMap: [
+      { dataPoint: 'custom_x', kind: 'motion', measurement: 'pressure', sourceUnit: 'hPa', name: 'Custom X' },
+      { dataPoint: 'custom_x', stationMac: MAC, kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph', displayUnit: 'mph', name: 'Custom X Wind' },
+    ],
+  };
+
+  it('the server classifies scope per RESOLVED identity, not per dataPoint', async () => {
+    const rig = makeRig(MIXED_BLOCK);
+    discoveryStore(rig, [MAC, MAC_B]);
+    const state = await handleGetEditorState(rig.deps, {});
+    const windRow = state.rows.find(r => r.dataPoint === 'custom_x' && r.stationMac === MAC)!;
+    const pressureRow = state.rows.find(r => r.dataPoint === 'custom_x' && r.stationMac === MAC_B)!;
+    expect(windRow.measurement).toBe('wind-speed');
+    expect(windRow.identityScope).toBe('custom-station');
+    expect(pressureRow.measurement).toBe('pressure');
+    expect(pressureRow.identityScope).toBe('custom-global');
+  });
+
+  it('a wind choice patches only the wind station; a barometer choice patches the global template; both identities survive reload', async () => {
+    const rig = makeRig(MIXED_BLOCK);
+    discoveryStore(rig, [MAC, MAC_B]);
+    const state = await handleGetEditorState(rig.deps, {});
+    const windRow = state.rows.find(r => r.dataPoint === 'custom_x' && r.stationMac === MAC)!;
+
+    // The ops applyFamilyChoice emits for this state (pinned by the
+    // matching DOM test): Wind Speed -> fps touches the custom-station
+    // row's own fragment; Barometer -> mmHg touches the global
+    // template and strips nothing (the only station exception has a
+    // different measurement and does not inherit).
+    const store = new DraftStore();
+    store.reset(state.authored);
+    store.setField(windRow, 'displayUnit', 'fps');
+    store.setFieldFor(undefined, 'custom_x', 'displayUnit', 'mmHg');
+
+    const payload = { base: MIXED_BLOCK, proposal: store.proposal() };
+    const result = await handleComposeSave(rig.deps, { ...payload, confirmDigest: await digestFor(rig, payload) });
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    const globalEntry = result.canonicalSensorMap.find(e => e.dataPoint === 'custom_x' && e.stationMac === undefined)!;
+    expect(globalEntry).toHaveProperty('measurement', 'pressure');
+    expect(globalEntry).toHaveProperty('displayUnit', 'mmHg');
+    const stationEntry = result.canonicalSensorMap.find(e => e.dataPoint === 'custom_x' && e.stationMac === MAC)!;
+    expect(stationEntry).toHaveProperty('measurement', 'wind-speed');
+    expect(stationEntry).toHaveProperty('displayUnit', 'fps');
+
+    // Canonical reload: both identities resolve, each with its own
+    // unit, with zero row errors.
+    const resolved = buildEffectiveSensorMap({
+      userOverrides: result.canonicalSensorMap,
+      discovery: { schemaVersion: 1, entries: [] },
+      uiState: { schemaVersion: 1, dismissedNoticeIds: [], forgottenFields: [] },
+      stations: [
+        { macAddress: MAC, name: 'Roof' },
+        { macAddress: MAC_B, name: 'Cabin' },
+      ],
+      configMode: 'v2',
+    });
+    expect(resolved.errors).toEqual([]);
+    const windResolved = resolved.rows.find(r => r.dataPoint === 'custom_x' && r.stationMac === MAC);
+    expect(windResolved).toHaveProperty('measurement', 'wind-speed');
+    expect(windResolved).toHaveProperty('displayUnit', 'fps');
+    const pressureResolved = resolved.rows.find(r => r.dataPoint === 'custom_x' && r.stationMac === MAC_B);
+    expect(pressureResolved).toHaveProperty('measurement', 'pressure');
+    expect(pressureResolved).toHaveProperty('displayUnit', 'mmHg');
+  });
+});
+
+describe('global custom removal + surviving same-identity station exception (PR #53 round 4)', () => {
+  it('the survivor keeps its identity and takes the family unit; the global template is gone for future stations', async () => {
+    const MAC_B = 'AA:BB:CC:DD:EE:02';
+    const NEVER_SEEN = 'AA:BB:CC:DD:EE:99';
+    const BLOCK = {
+      platform: 'AmbientWeatherSensors',
+      name: 'Test Station',
+      apiKey: 'k', applicationKey: 'a',
+      _sensorMapV2: true,
+      configVersion: 2,
+      sensorMap: [
+        { dataPoint: 'custom_x', kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph', name: 'Custom X' },
+        { dataPoint: 'custom_x', stationMac: MAC, kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph', name: 'Custom X (Roof)' },
+      ],
+    };
+    const rig = makeRig(BLOCK);
+    discoveryStore(rig, [MAC, MAC_B]);
+    const state = await handleGetEditorState(rig.deps, {});
+    // Station B inherits the global identity (global-origin row).
+    const inheriting = state.rows.find(r => r.dataPoint === 'custom_x' && r.stationMac === MAC_B)!;
+    expect(inheriting.origin).toBe('global');
+
+    // Use defaults on the global-origin row, then the family unit ops
+    // applyFamilyChoice emits for this state (pinned by the matching
+    // DOM test): a station-scoped patch on the surviving exception,
+    // no global replacement.
+    const store = new DraftStore();
+    store.reset(state.authored);
+    store.removeOverride(inheriting);
+    store.setFieldFor(MAC, 'custom_x', 'displayUnit', 'fps');
+
+    const payload = { base: BLOCK, proposal: store.proposal() };
+    const result = await handleComposeSave(rig.deps, { ...payload, confirmDigest: await digestFor(rig, payload) });
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    // No global custom_x fragment remains; the survivor keeps its
+    // full identity and gained the unit.
+    expect(result.canonicalSensorMap.find(e => e.dataPoint === 'custom_x' && e.stationMac === undefined)).toBeUndefined();
+    const survivor = result.canonicalSensorMap.find(e => e.dataPoint === 'custom_x' && e.stationMac === MAC)!;
+    expect(survivor).toHaveProperty('kind', 'motion');
+    expect(survivor).toHaveProperty('measurement', 'wind-speed');
+    expect(survivor).toHaveProperty('displayUnit', 'fps');
+
+    // Canonical reload: zero errors; the accessory lives only on the
+    // surviving station — not on B, not on a never-seen station.
+    const resolved = buildEffectiveSensorMap({
+      userOverrides: result.canonicalSensorMap,
+      discovery: { schemaVersion: 1, entries: [] },
+      uiState: { schemaVersion: 1, dismissedNoticeIds: [], forgottenFields: [] },
+      stations: [
+        { macAddress: MAC, name: 'Roof' },
+        { macAddress: MAC_B, name: 'Cabin' },
+        { macAddress: NEVER_SEEN, name: 'Future' },
+      ],
+      configMode: 'v2',
+    });
+    expect(resolved.errors).toEqual([]);
+    expect(resolved.rows.find(r => r.dataPoint === 'custom_x' && r.stationMac === MAC))
+      .toHaveProperty('displayUnit', 'fps');
+    expect(resolved.rows.find(r => r.dataPoint === 'custom_x' && r.stationMac === MAC_B)).toBeUndefined();
+    expect(resolved.rows.find(r => r.dataPoint === 'custom_x' && r.stationMac === NEVER_SEEN)).toBeUndefined();
+  });
+});
+
+describe('Skip on a custom row composes cleanly (PR #53 round 6 F3)', () => {
+  it('the identity-bearing pin fragment is accepted where a bare pin was refused', async () => {
+    const BLOCK = {
+      platform: 'AmbientWeatherSensors',
+      name: 'Test Station',
+      apiKey: 'k', applicationKey: 'a',
+      _sensorMapV2: true,
+      configVersion: 2,
+      sensorMap: [{ dataPoint: 'barn_wind', kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph', name: 'Barn Wind' }],
+    };
+    const rig = makeRig(BLOCK);
+    discoveryStore(rig, [MAC, 'AA:BB:CC:DD:EE:02']);
+
+    // The reviewer's repro: a bare station pin on a custom dataPoint
+    // is refused as custom-missing-kind...
+    const bare = await handleComposeSave(rig.deps, {
+      base: BLOCK,
+      proposal: [
+        ...BLOCK.sensorMap,
+        { dataPoint: 'barn_wind', stationMac: MAC, displayUnit: 'mph' },
+      ],
+    });
+    expect(bare.ok).toBe(false);
+    if (!bare.ok) {
+      expect(bare.error.code).toBe('invalid-rows');
+    }
+
+    // ...and the identity-carrying pin excludeChange now writes is
+    // accepted, with the pinned station keeping mph while the global
+    // template moves to fps.
+    const payload = {
+      base: BLOCK,
+      proposal: [
+        { ...BLOCK.sensorMap[0], displayUnit: 'fps' },
+        { dataPoint: 'barn_wind', stationMac: MAC, kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph', displayUnit: 'mph' },
+      ],
+    };
+    const result = await handleComposeSave(rig.deps, { ...payload, confirmDigest: await digestFor(rig, payload) });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      const pinned = result.canonicalSensorMap.find(e => e.dataPoint === 'barn_wind' && e.stationMac === MAC);
+      expect(pinned).toHaveProperty('displayUnit', 'mph');
+      expect(pinned).toHaveProperty('kind', 'motion');
+    }
   });
 });
