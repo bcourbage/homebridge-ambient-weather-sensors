@@ -9,6 +9,28 @@ entries short and user-facing.
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/
 
+## [2.0.0-beta.15] — 2026-09-10
+
+### Added
+
+- **Display units for whole categories.** A Units panel above the sensor-map tables sets the display unit per category the way AmbientWeather.net does: Barometer, Wind Speed, Rainfall (one choice keeps rain rate and accumulation totals consistent), and Distance. A choice applies to every station, including stations added later; single rows can still be changed in their row editor, and a category whose rows disagree shows Mixed. Temperature and other natively displayed kinds have no unit choice: Apple Home renders those in each device's own region format.
+- **Skip single rows in a preview.** Every modified row in the preview carries a Skip action that keeps that row's current settings while the rest of the change proceeds. Rows where no setting can represent the skip (for example a re-registration caused by battery ownership moving) offer no Skip.
+- **Previews account for every draft.** Changes that save without touching a registered accessory, such as unit changes on disabled rows, are now listed with a "disabled" marker instead of silently making the draft count and the change list disagree.
+- **Kind column help.** A ? next to the Kind header explains that Kind is the Apple Home accessory type and lists the currently supported and reserved kinds.
+- **Sponsor link.** The plugin settings page and the fallback settings form link to [github.com/sponsors/bcourbage](https://github.com/sponsors/bcourbage).
+
+### Changed
+
+- **The settings form hides controls the v2 configuration no longer uses.** With a converted configuration, the sensor category checkboxes, extended-sensor thresholds, display-units fieldset, and the Exclude Sensors / Include Only filters disappear from the settings form: the sensor map governs all of that, and the plugin maintains those legacy fields only as a rollback mirror for 1.7.x downgrades. The full form remains for legacy configurations and multi-Home setups.
+- **Tooltips render inside the page.** Homebridge UI X's settings window competes with native browser tooltips, so the page now draws its own: instant, keyboard-accessible, and correctly themed. The Units column tooltips also state whether a value is the station's own unit, a chosen conversion, or a conversion fixed by HomeKit (light level is always lux).
+
+### Fixed
+
+- **The settings form's Save button can no longer undo a fresh editor save.** The form's copy of the configuration predates the save, and saving it again overwrote the editor's work, in the worst case deregistering every accessory. After a successful editor save the form's Save button now stays off; reload the plugin settings page to edit those fields again.
+- **Saving no longer fails with "unsaved settings changes" on a converted configuration.** The check now compares the form against the reduced schema it actually renders, so hidden legacy fields no longer read as pending edits.
+- **Units dropdowns behave.** They follow the light/dark theme, align with their labels, and choosing one no longer scrolls the page away from the opening menu.
+- **Previews update in place.** Skipping a row or re-previewing refreshes the existing list instead of tearing it down and rebuilding it.
+
 ## [2.0.0-beta.14] — 2026-08-31
 
 ### Fixed
