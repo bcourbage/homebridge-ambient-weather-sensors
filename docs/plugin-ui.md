@@ -141,10 +141,24 @@ problems surface as banners), but the editor is the recommended path.
   consequences drifted since that preview is refused. Invalid rows
   are refused with the reason; nothing is written on any refusal.
 - **Restart to apply structure**: the saved configuration takes full
-  effect (registrations included) on the next Homebridge restart.
-  Restart Homebridge itself, not just this plugin's child bridge — a
-  child-bridge restart reuses the configuration the main Homebridge
-  process already holds in memory and will not pick up the save.
+  effect (registrations included) on the next restart. Restarting
+  this plugin's child bridge from the Homebridge UI is enough — that
+  action re-reads the plugin's configuration from disk before
+  respawning (verified against Homebridge 2.4.0). Killing the child
+  process directly does NOT pick up the save (the crash-respawn path
+  reuses the parent's cached configuration); a full Homebridge
+  restart also works.
 
-Assigning unrecognized fields to new custom sensors (declaring a
-kind, measurement, and source unit) arrives in an upcoming beta.
+## Assigning unrecognized fields
+
+An unrecognized row (a `?` in the Kind column) offers **Assign**
+instead of Edit: choosing a measurement and the unit the station
+reports turns the field into a custom sensor. The measurement
+determines the accessory kind (shown in the form), the choices offered
+are exactly the combinations this plugin can build, and the assignment
+drafts nothing until it is complete — an unfinished form never blocks
+a save of other rows for missing identity fields, only for being open.
+The new sensor applies to the one station whose row was assigned, is
+enabled by default, and previews as a registration like any other
+structural change. Display unit, threshold, and trigger direction can
+be set in the same form or edited later like any row.

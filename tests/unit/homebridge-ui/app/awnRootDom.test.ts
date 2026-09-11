@@ -53,6 +53,11 @@ const VOCAB: VocabularyDto = {
       customSource: [],
       extendedDisplay: [{ unit: 'in', label: 'in' }, { unit: 'mm', label: 'mm' }],
     },
+    distance: {
+      customSource: [{ unit: 'mi', label: 'miles' }, { unit: 'km', label: 'km' }],
+      extendedDisplay: [{ unit: 'mi', label: 'miles' }, { unit: 'km', label: 'km' }],
+    },
+    timestamp: { customSource: [], extendedDisplay: [] },
   },
   families: [
     {
@@ -77,6 +82,12 @@ const VOCAB: VocabularyDto = {
         { id: 'metric', label: 'mm/hr', units: { 'rain-rate': 'mm_per_hr', 'rain-accumulation': 'mm' } },
       ],
     },
+  ],
+  assignments: [
+    { measurement: 'temperature', kind: 'temperature', label: 'Temperature' },
+    { measurement: 'wind-speed', kind: 'motion', label: 'Wind speed' },
+    { measurement: 'distance', kind: 'motion', label: 'Distance' },
+    { measurement: 'timestamp', kind: 'motion', label: 'Timestamp' },
   ],
 };
 
@@ -1659,5 +1670,192 @@ describe('settings-form freeze contract (review #47 round 4, P1)', () => {
     deps.freezeSettingsForm();
     deps.unfreezeSettingsForm();
     expect(calls).toEqual(['disableSaveButton', 'enableSaveButton']);
+  });
+});
+
+describe('unrecognized-row assignment (PR E)', () => {
+  async function settle(fixture: ComponentFixture<AwnRootComponent>): Promise<void> {
+    await new Promise((r) => setTimeout(r, 0));
+    await fixture.whenStable();
+    fixture.detectChanges();
+  }
+
+  function rowFor(fixture: ComponentFixture<AwnRootComponent>, dp: string): HTMLTableRowElement {
+    const el = fixture.nativeElement as HTMLElement;
+    return [...el.querySelectorAll('tbody tr')]
+      .find(r => r.querySelector('td code')?.textContent === dp) as HTMLTableRowElement;
+  }
+
+  function openAssign(fixture: ComponentFixture<AwnRootComponent>, dp: string): HTMLElement {
+    (rowFor(fixture, dp).querySelector('button') as HTMLButtonElement).click();
+    fixture.detectChanges();
+    return fixture.nativeElement as HTMLElement;
+  }
+
+  function choose(select: HTMLSelectElement, value: string): void {
+    select.value = value;
+    select.dispatchEvent(new Event('change'));
+  }
+
+  function formSelect(el: HTMLElement, control: string): HTMLSelectElement {
+    return el.querySelector(`.editor-form select[formcontrolname="${control}"]`) as HTMLSelectElement;
+  }
+
+  const UNREC: EditorRowDto = {
+    stationMac: MAC, dataPoint: 'xbarnwind', kind: 'unrecognized', enabled: false,
+    batteryField: null, origin: 'unrecognized',
+    firstSeen: '2026-09-01T00:00:00Z', lastSeen: '2026-09-10T00:00:00Z',
+  };
+  const stateWithUnrec = (): EditorStateDto =>
+    editorState({ rows: [...editorState().rows, UNREC] });
+
+  it('renders an unrecognized row with a ? badge, no state icon, and an Assign button', async () => {
+    const fixture = await render(makeIpc(stateWithUnrec(), []));
+    const tr = rowFor(fixture, 'xbarnwind');
+    expect(tr.querySelector('.kind-badge.muted')?.textContent).toBe('?');
+    expect(tr.querySelector('.state-icon')).toBeNull();
+    expect(tr.querySelector('td.actions button')?.textContent).toBe('Assign');
+  });
+
+  it('a complete assignment drafts the full identity fragment, enabled authored explicitly', async () => {
+    const ipc = makeIpc(stateWithUnrec(), [], {
+      ok: true, canonicalSensorMap: [], rows: [], changes: [], configOnly: [],
+      structuralChangeCount: 0, digest: 'cd'.repeat(32), warnings: [], notes: [],
+    });
+    const fixture = await render(ipc);
+    const el = openAssign(fixture, 'xbarnwind');
+
+    choose(formSelect(el, 'measurement'), 'wind-speed');
+    await settle(fixture);
+    // The fact line names the resulting accessory kind; the source
+    // unit is still missing, so nothing is drafted yet.
+    expect(el.textContent).toContain('Creates a motion accessory.');
+    expect(el.textContent).toContain('Choose the unit the station reports this field in');
+    expect(el.textContent).toContain('No draft changes yet.');
+
+    choose(formSelect(el, 'sourceUnit'), 'mph');
+    await settle(fixture);
+    expect(el.textContent).toContain('1 draft change, not saved yet.');
+
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement).click();
+    await settle(fixture);
+    const req = ipc.requests.find(r => r.path === '/preview-save');
+    expect((req?.body as { proposal: unknown[] }).proposal).toEqual([{
+      dataPoint: 'xbarnwind', stationMac: MAC,
+      kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph',
+      enabled: true, name: 'xbarnwind',
+    }]);
+  });
+
+  it('an incomplete assignment drafts nothing and blocks Preview', async () => {
+    const ipc = makeIpc(stateWithUnrec(), []);
+    const fixture = await render(ipc);
+    const el = openAssign(fixture, 'xbarnwind');
+    expect(el.textContent).toContain('Choose a measurement to assign this field');
+
+    choose(formSelect(el, 'measurement'), 'wind-speed');
+    await settle(fixture);
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement).click();
+    await settle(fixture);
+    expect(ipc.requests.some(r => r.path === '/preview-save')).toBe(false);
+    expect(el.textContent).toContain('No draft changes yet.');
+  });
+
+  it('Cancel discards a completed assignment', async () => {
+    const fixture = await render(makeIpc(stateWithUnrec(), []));
+    const el = openAssign(fixture, 'xbarnwind');
+    choose(formSelect(el, 'measurement'), 'wind-speed');
+    await settle(fixture);
+    choose(formSelect(el, 'sourceUnit'), 'mph');
+    await settle(fixture);
+    expect(el.textContent).toContain('1 draft change, not saved yet.');
+
+    ([...el.querySelectorAll('.editor-form button')].find(b => b.textContent === 'Cancel') as HTMLButtonElement).click();
+    await settle(fixture);
+    expect(el.textContent).toContain('No draft changes yet.');
+  });
+
+  it('a timestamp assignment renders no source-unit control and omits sourceUnit from the fragment', async () => {
+    const ipc = makeIpc(stateWithUnrec(), [], {
+      ok: true, canonicalSensorMap: [], rows: [], changes: [], configOnly: [],
+      structuralChangeCount: 0, digest: 'cd'.repeat(32), warnings: [], notes: [],
+    });
+    const fixture = await render(ipc);
+    const el = openAssign(fixture, 'xbarnwind');
+    choose(formSelect(el, 'measurement'), 'timestamp');
+    await settle(fixture);
+    expect(formSelect(el, 'sourceUnit')).toBeNull();
+    expect(el.textContent).toContain('1 draft change, not saved yet.');
+
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement).click();
+    await settle(fixture);
+    const req = ipc.requests.find(r => r.path === '/preview-save');
+    expect((req?.body as { proposal: unknown[] }).proposal).toEqual([{
+      dataPoint: 'xbarnwind', stationMac: MAC,
+      kind: 'motion', measurement: 'timestamp',
+      enabled: true, name: 'xbarnwind',
+    }]);
+  });
+
+  it('switching measurement resets the unit controls and applies the measurement-aware trigger default', async () => {
+    const ipc = makeIpc(stateWithUnrec(), [], {
+      ok: true, canonicalSensorMap: [], rows: [], changes: [], configOnly: [],
+      structuralChangeCount: 0, digest: 'cd'.repeat(32), warnings: [], notes: [],
+    });
+    const fixture = await render(ipc);
+    const el = openAssign(fixture, 'xbarnwind');
+    choose(formSelect(el, 'measurement'), 'wind-speed');
+    await settle(fixture);
+    choose(formSelect(el, 'sourceUnit'), 'mph');
+    await settle(fixture);
+
+    // Switch to distance: the stale mph source unit is reset (mph is
+    // not a distance unit) and the trigger default flips to below.
+    choose(formSelect(el, 'measurement'), 'distance');
+    await settle(fixture);
+    expect(formSelect(el, 'sourceUnit').value).toBe('');
+    expect(el.textContent).toContain('No draft changes yet.');
+    expect(formSelect(el, 'triggerDirection').value).toBe('below');
+
+    choose(formSelect(el, 'sourceUnit'), 'km');
+    await settle(fixture);
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement).click();
+    await settle(fixture);
+    const req = ipc.requests.find(r => r.path === '/preview-save');
+    // The untouched 'below' default is NOT authored: resolveRow's
+    // measurement-aware fallback already produces it.
+    expect((req?.body as { proposal: unknown[] }).proposal).toEqual([{
+      dataPoint: 'xbarnwind', stationMac: MAC,
+      kind: 'motion', measurement: 'distance', sourceUnit: 'km',
+      enabled: true, name: 'xbarnwind',
+    }]);
+  });
+
+  it('threshold and an explicit trigger direction join the fragment', async () => {
+    const ipc = makeIpc(stateWithUnrec(), [], {
+      ok: true, canonicalSensorMap: [], rows: [], changes: [], configOnly: [],
+      structuralChangeCount: 0, digest: 'cd'.repeat(32), warnings: [], notes: [],
+    });
+    const fixture = await render(ipc);
+    const el = openAssign(fixture, 'xbarnwind');
+    choose(formSelect(el, 'measurement'), 'distance');
+    await settle(fixture);
+    choose(formSelect(el, 'sourceUnit'), 'km');
+    await settle(fixture);
+    const threshold = el.querySelector('.editor-form input[type="number"]') as HTMLInputElement;
+    threshold.value = '15';
+    threshold.dispatchEvent(new Event('input'));
+    await settle(fixture);
+    choose(formSelect(el, 'triggerDirection'), 'above');
+    await settle(fixture);
+
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement).click();
+    await settle(fixture);
+    const req = ipc.requests.find(r => r.path === '/preview-save');
+    expect((req?.body as { proposal: unknown[] }).proposal).toEqual([{
+      dataPoint: 'xbarnwind', stationMac: MAC,
+      kind: 'motion', measurement: 'distance', sourceUnit: 'km',
+      enabled: true, name: 'xbarnwind', threshold: 15, triggerDirection: 'above',
+    }]);
   });
 });

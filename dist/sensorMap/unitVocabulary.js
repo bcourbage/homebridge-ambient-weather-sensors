@@ -121,6 +121,34 @@ export function unitOptionsFor(measurement, context) {
     return UNIT_VOCABULARY[measurement].filter(o => context === 'custom-source' ? o.selectableAsCustomSourceUnit : o.selectableAsExtendedDisplayUnit);
 }
 /**
+ * Human-facing label per measurement, for pickers that enumerate
+ * measurements themselves (the unrecognized-row assignment control,
+ * PR E). Labels name the MEASUREMENT, not any wrapper's use of it:
+ * `count` is a daily count whatever is being counted, `distance` is a
+ * distance — the built-in lightning rows are one use, a custom row
+ * may be another. Total over the Measurement union so a new
+ * measurement cannot ship unlabeled.
+ */
+export const MEASUREMENT_LABELS = {
+    'temperature': 'Temperature',
+    'humidity': 'Humidity',
+    'illuminance': 'Light level',
+    'co2': 'CO₂',
+    'co': 'CO',
+    'pm25': 'PM2.5',
+    'pm10': 'PM10',
+    'wind-speed': 'Wind speed',
+    'rain-rate': 'Rain rate',
+    'rain-accumulation': 'Rain accumulation',
+    'pressure': 'Pressure',
+    'distance': 'Distance',
+    'uv-index': 'UV index',
+    'count': 'Daily count',
+    'direction': 'Direction',
+    'timestamp': 'Timestamp',
+    'boolean': 'On/off',
+};
+/**
  * The observed AmbientWeather.net units page — the auditable reference
  * "matches AWN" is measured against. Every AWN category and option is
  * classified rather than silently omitted:

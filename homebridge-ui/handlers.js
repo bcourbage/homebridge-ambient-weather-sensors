@@ -26,7 +26,8 @@ import { shadowModeEnabled } from '../dist/sensorMap/shadowMode.js';
 import { loadDiscoveryStore, } from '../dist/sensorMap/persistence/discoveryStore.js';
 import { loadNoticeStore, } from '../dist/sensorMap/persistence/noticesStore.js';
 import { loadUiStateStore, } from '../dist/sensorMap/persistence/uiStateStore.js';
-import { DISPLAY_FAMILIES, UNIT_VOCABULARY, unitOptionsFor } from '../dist/sensorMap/unitVocabulary.js';
+import { DISPLAY_FAMILIES, MEASUREMENT_LABELS, UNIT_VOCABULARY, unitOptionsFor } from '../dist/sensorMap/unitVocabulary.js';
+import { WRAPPER_FOR_KIND_AND_MEASUREMENT } from '../dist/sensorMap/wrappers.js';
 import { defaultRowFor } from '../dist/sensorMap/defaultMap.js';
 import { dynamicSchemaPath } from '../dist/sensorMap/dynamicSchema.js';
 import { PLUGIN_NAME } from '../dist/settings.js';
@@ -1015,7 +1016,23 @@ export function handleGetVocabulary() {
         measurements: [...f.measurements],
         choices: f.choices.map(c => ({ id: c.id, label: c.label, units: { ...c.units } })),
     }));
-    return { measurements, families };
+    // Assignment targets for unrecognized rows (PR E): exactly the
+    // (kind, measurement) pairs WRAPPER_FOR_KIND_AND_MEASUREMENT can
+    // build, in vocabulary measurement order. Anything else — including
+    // compatible-but-unimplemented pairs like (co, co) — would be
+    // refused by the save pipeline as no-wrapper, so the picker never
+    // offers it (§3.9: the table is the only way custom sensors pick a
+    // wrapper).
+    const vocabOrder = Object.keys(UNIT_VOCABULARY);
+    const assignments = Object.keys(WRAPPER_FOR_KIND_AND_MEASUREMENT)
+        .map(key => {
+        const sep = key.indexOf('|');
+        const kind = key.slice(0, sep);
+        const measurement = key.slice(sep + 1);
+        return { measurement, kind, label: MEASUREMENT_LABELS[measurement] };
+    })
+        .sort((a, b) => vocabOrder.indexOf(a.measurement) - vocabOrder.indexOf(b.measurement));
+    return { measurements, families, assignments };
 }
 /**
  * Layer/origin metadata must reflect what the resolver ACCEPTED

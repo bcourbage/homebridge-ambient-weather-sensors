@@ -57,6 +57,16 @@ export type UnitSelectionContext = 'custom-source' | 'extended-display';
 /** Ordered options for a measurement, filtered to a selection context. */
 export declare function unitOptionsFor(measurement: Measurement, context: UnitSelectionContext): ReadonlyArray<UnitOption>;
 /**
+ * Human-facing label per measurement, for pickers that enumerate
+ * measurements themselves (the unrecognized-row assignment control,
+ * PR E). Labels name the MEASUREMENT, not any wrapper's use of it:
+ * `count` is a daily count whatever is being counted, `distance` is a
+ * distance — the built-in lightning rows are one use, a custom row
+ * may be another. Total over the Measurement union so a new
+ * measurement cannot ship unlabeled.
+ */
+export declare const MEASUREMENT_LABELS: Readonly<Record<Measurement, string>>;
+/**
  * The observed AmbientWeather.net units page — the auditable reference
  * "matches AWN" is measured against. Every AWN category and option is
  * classified rather than silently omitted:

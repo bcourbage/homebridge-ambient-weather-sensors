@@ -307,9 +307,23 @@ export interface DisplayFamilyDto {
 }
 
 /**
+ * One assignable identity for an unrecognized row (PR E): a
+ * (kind, measurement) pair the wrapper table can actually build,
+ * labeled by measurement. The list is a server-side projection of
+ * WRAPPER_FOR_KIND_AND_MEASUREMENT — the browser never decides what
+ * is buildable.
+ */
+export interface AssignmentOptionDto {
+  measurement: string;
+  kind: string;
+  label: string;
+}
+
+/**
  * Response of request '/vocabulary': per-measurement unit options for
  * each selection context, in vocabulary display order, plus the
- * display families the Units panel offers, in AWN units-page order.
+ * display families the Units panel offers, in AWN units-page order,
+ * plus the assignment targets unrecognized rows may take.
  */
 export interface VocabularyDto {
   measurements: {
@@ -319,4 +333,5 @@ export interface VocabularyDto {
     };
   };
   families: DisplayFamilyDto[];
+  assignments: AssignmentOptionDto[];
 }
