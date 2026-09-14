@@ -46,7 +46,7 @@ export async function composeAndPersist(deps, args) {
             ok: false,
             error: {
                 code: 'unsaved-settings-changes',
-                message: `The settings form could not be frozen for the save: ${e instanceof Error ? e.message : String(e)}. `
+                message: `The page's save controls could not be locked for the save: ${e instanceof Error ? e.message : String(e)}. `
                     + 'Reload the plugin settings and retry; nothing was written.',
             },
             ...(restored ? {} : { settingsRestoreFailed: true }),
@@ -65,8 +65,8 @@ export async function composeAndPersist(deps, args) {
             ok: false,
             error: {
                 code: 'invalid-proposal',
-                message: `The save failed (${e instanceof Error ? e.message : String(e)}) and the settings form could `
-                    + 'not be restored. Reload the plugin settings page.',
+                message: `The save failed (${e instanceof Error ? e.message : String(e)}) and the page's save controls `
+                    + 'could not be re-asserted. Reload the plugin settings page.',
             },
             settingsRestoreFailed: true,
         };
@@ -281,7 +281,7 @@ async function composeAndPersistFrozen(deps, args) {
             ok: false,
             error: {
                 code: 'unsaved-settings-changes',
-                message: 'The plugin settings changed while the save was running. Review the settings form and retry; '
+                message: 'The plugin settings changed while the save was running. Reload the plugin settings page and retry; '
                     + 'nothing was written.',
             },
         };

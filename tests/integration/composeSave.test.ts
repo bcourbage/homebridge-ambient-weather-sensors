@@ -1252,7 +1252,7 @@ describe('freeze failure safety (review #47 round 4)', () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error.code).toBe('unsaved-settings-changes');
-      expect(result.error.message).toContain('could not be frozen');
+      expect(result.error.message).toContain('could not be locked');
     }
     // A partial freeze is restored before refusing; nothing was
     // requested or written.
@@ -2181,8 +2181,11 @@ describe('stationFilter consequences (PR #60 review F1)', () => {
     const removedB = preview.changes.filter(c => c.stationMac === MAC_B && c.change === 'removed');
     expect(removedB.length).toBeGreaterThan(0);
     expect(removedB.every(c => c.structural)).toBe(true);
-    // Station A untouched.
-    expect(preview.changes.filter(c => c.stationMac === MAC)).toEqual([]);
+    // Station A: crossing the 2->1 boundary renames every retained row
+    // in place (round 2 P2) — modified, non-structural, displayName set.
+    const aChanges = preview.changes.filter(c => c.stationMac === MAC);
+    expect(aChanges.length).toBeGreaterThan(0);
+    expect(aChanges.every(c => c.change === 'modified' && !c.structural && c.displayName !== undefined)).toBe(true);
     expect(preview.structuralChangeCount).toBeGreaterThan(0);
 
     // The structural removal demands confirmation like any other.
@@ -2210,7 +2213,9 @@ describe('stationFilter consequences (PR #60 review F1)', () => {
     const addedB = preview.changes.filter(c => c.stationMac === MAC_B && c.change === 'added');
     expect(addedB.length).toBeGreaterThan(0);
     expect(addedB.every(c => c.structural)).toBe(true);
-    expect(preview.changes.filter(c => c.stationMac === MAC)).toEqual([]);
+    // Station A crosses 1->2: retained rows gain the prefix in place.
+    const aChanges = preview.changes.filter(c => c.stationMac === MAC);
+    expect(aChanges.every(c => c.change === 'modified' && !c.structural && c.displayName !== undefined)).toBe(true);
   });
 
   it('the preview filter matches with the runtime rules: MAC form, case-insensitive, trimmed', async () => {
@@ -2226,7 +2231,8 @@ describe('stationFilter consequences (PR #60 review F1)', () => {
       return;
     }
     expect(preview.changes.some(c => c.stationMac === MAC_B && c.change === 'removed')).toBe(true);
-    expect(preview.changes.filter(c => c.stationMac === MAC)).toEqual([]);
+    expect(preview.changes.filter(c => c.stationMac === MAC)
+      .every(c => c.change === 'modified' && c.displayName !== undefined)).toBe(true);
   });
 
   it('a deliberately non-matching filter (the documented wipe) previews EVERYTHING as removals rather than refusing', async () => {
@@ -2243,5 +2249,142 @@ describe('stationFilter consequences (PR #60 review F1)', () => {
     }
     expect(preview.changes.length).toBeGreaterThan(0);
     expect(preview.changes.every(c => c.change === 'removed' && c.structural)).toBe(true);
+  });
+});
+
+describe('stationFilter never shrinks the authored map (PR #60 round 2 P1)', () => {
+  const MAC_B = 'AA:BB:CC:DD:EE:02';
+  const BLOCK_WITH_B_STATE = {
+    platform: 'AmbientWeatherSensors',
+    name: 'Test Station',
+    apiKey: 'k', applicationKey: 'a',
+    configVersion: 2,
+    sensorMap: [
+      // A full station-scoped custom identity on station B...
+      { dataPoint: 'barn_wind', stationMac: MAC_B, kind: 'motion', measurement: 'wind-speed', sourceUnit: 'kph', name: 'Barn Wind' },
+      // ...and an unrelated known-row override on B.
+      { dataPoint: 'tempf', stationMac: MAC_B, name: 'Roof Temp Renamed' },
+    ],
+  };
+
+  function twoStationDiscovery(rig: Rig): void {
+    writeFileSync(path.join(rig.persistDir, 'discovery.json'), JSON.stringify({
+      schemaVersion: 1,
+      entries: [
+        { stationMac: MAC, stationName: 'Backyard', dataPoint: 'tempf', firstSeen: '2026-01-01T00:00:00Z', lastSeen: '2026-01-02T00:00:00Z' },
+        { stationMac: MAC_B, stationName: 'Roof', dataPoint: 'tempf', firstSeen: '2026-01-01T00:00:00Z', lastSeen: '2026-01-02T00:00:00Z' },
+        { stationMac: MAC_B, stationName: 'Roof', dataPoint: 'barn_wind', firstSeen: '2026-01-01T00:00:00Z', lastSeen: '2026-01-02T00:00:00Z' },
+      ],
+    }));
+  }
+
+  async function commitFiltered(rig: Rig, filter: string[], base: Record<string, unknown>) {
+    const payload = {
+      base,
+      proposal: (base.sensorMap as unknown[]) ?? [],
+      settings: { stationFilter: filter },
+    };
+    const preview = await handlePreviewSave(rig.deps, payload);
+    expect(preview.ok).toBe(true);
+    const withDigest = { ...payload, confirmDigest: preview.ok ? preview.digest : undefined };
+    const validated = await handleComposeSave(rig.deps, withDigest);
+    expect(validated.ok).toBe(true);
+    if (!validated.ok) {
+      throw new Error('validate refused');
+    }
+    const committed = await handleCommitSave(rig.deps, { ...withDigest, validationToken: validated.validationToken });
+    expect(committed.ok).toBe(true);
+    return { preview, committed } as { preview: typeof preview; committed: typeof committed };
+  }
+
+  it('narrowing to A previews B as removals but preserves B custom identity + override in the saved map and mirror', async () => {
+    const rig = makeRig(BLOCK_WITH_B_STATE);
+    twoStationDiscovery(rig);
+    const { preview, committed } = await commitFiltered(rig, ['Backyard'], BLOCK_WITH_B_STATE);
+    if (!preview.ok || !committed.ok) {
+      return;
+    }
+    expect(preview.changes.some(c => c.stationMac === MAC_B && c.change === 'removed')).toBe(true);
+
+    const map = committed.nextConfig.sensorMap as Array<Record<string, unknown>>;
+    const custom = map.find(e => e.dataPoint === 'barn_wind' && e.stationMac === MAC_B);
+    expect(custom).toMatchObject({ kind: 'motion', measurement: 'wind-speed', sourceUnit: 'kph', name: 'Barn Wind' });
+    expect(map.find(e => e.dataPoint === 'tempf' && e.stationMac === MAC_B))
+      .toMatchObject({ name: 'Roof Temp Renamed' });
+    // The rollback mirror describes the FULL map: B's custom exclusions
+    // must still be present (custom rows are the downgrade-loss
+    // boundary and are excluded by dataPoint on 1.7).
+    const mirror = committed.nextConfig.excludeSensors as string[] | undefined;
+    expect(mirror ?? []).toContain('barn_wind');
+
+    // Widen back: B returns with the SAME resolved identity/settings.
+    const narrowed = committed.nextConfig as Record<string, unknown>;
+    // Sync disk to the committed state (the orchestrator persists it;
+    // here the rig writes it directly).
+    writeFileSync(rig.configPath, JSON.stringify({ platforms: [narrowed] }, null, 4));
+    const second = await commitFiltered(rig, [], narrowed);
+    if (!second.preview.ok || !second.committed.ok) {
+      return;
+    }
+    expect(second.preview.changes.some(c => c.stationMac === MAC_B && c.change === 'added')).toBe(true);
+    const map2 = second.committed.nextConfig.sensorMap as Array<Record<string, unknown>>;
+    expect(map2.find(e => e.dataPoint === 'barn_wind' && e.stationMac === MAC_B))
+      .toMatchObject({ kind: 'motion', measurement: 'wind-speed', sourceUnit: 'kph', name: 'Barn Wind' });
+  });
+
+  it('the deliberately non-matching filter removes every runtime accessory yet preserves the entire authored map', async () => {
+    const rig = makeRig(BLOCK_WITH_B_STATE);
+    twoStationDiscovery(rig);
+    const { preview, committed } = await commitFiltered(rig, ['CLEAR'], BLOCK_WITH_B_STATE);
+    if (!preview.ok || !committed.ok) {
+      return;
+    }
+    expect(preview.changes.length).toBeGreaterThan(0);
+    expect(preview.changes.every(c => c.change === 'removed')).toBe(true);
+    const map = committed.nextConfig.sensorMap as Array<Record<string, unknown>>;
+    expect(map.find(e => e.dataPoint === 'barn_wind' && e.stationMac === MAC_B)).toBeDefined();
+    expect(map.find(e => e.dataPoint === 'tempf' && e.stationMac === MAC_B)).toBeDefined();
+  });
+
+  it('crossing the one-station boundary previews the retained station as in-place renames (round 2 P2)', async () => {
+    const rig = makeRig(BLOCK_WITH_B_STATE);
+    twoStationDiscovery(rig);
+    // 2 -> 1: retained station A rows switch from prefixed to bare names.
+    const preview = await handlePreviewSave(rig.deps, {
+      base: BLOCK_WITH_B_STATE,
+      proposal: BLOCK_WITH_B_STATE.sensorMap,
+      settings: { stationFilter: ['Backyard'] },
+    });
+    expect(preview.ok).toBe(true);
+    if (!preview.ok) {
+      return;
+    }
+    const renamesA = preview.changes.filter(c => c.stationMac === MAC && c.change === 'modified' && c.displayName);
+    expect(renamesA.length).toBeGreaterThan(0);
+    for (const r of renamesA) {
+      expect(r.structural, `${r.dataPoint} rename is in-place`).toBe(false);
+      expect(r.displayName!.before).toContain('Backyard');
+      expect(r.displayName!.after.startsWith('Backyard')).toBe(false);
+    }
+
+    // 1 -> 2: from a filtered config, widening previews the prefixed forms.
+    const narrowedBlock = { ...BLOCK_WITH_B_STATE, stationFilter: ['Backyard'] };
+    const rig2 = makeRig(narrowedBlock);
+    twoStationDiscovery(rig2);
+    const widen = await handlePreviewSave(rig2.deps, {
+      base: narrowedBlock,
+      proposal: narrowedBlock.sensorMap,
+      settings: { stationFilter: [] },
+    });
+    expect(widen.ok).toBe(true);
+    if (!widen.ok) {
+      return;
+    }
+    const renames2 = widen.changes.filter(c => c.stationMac === MAC && c.change === 'modified' && c.displayName);
+    expect(renames2.length).toBeGreaterThan(0);
+    for (const r of renames2) {
+      expect(r.displayName!.before.startsWith('Backyard')).toBe(false);
+      expect(r.displayName!.after).toContain('Backyard');
+    }
   });
 });

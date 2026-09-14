@@ -404,6 +404,9 @@ interface StationGroup {
             @for (c of pr.changes; track c.stationMac + '|' + c.dataPoint + '|' + c.change) {
               <div class="change-row">
                 <span class="change-kind {{ c.change }}">{{ c.change }}</span>
+                @if (c.displayName) {
+                  <span class="rename-note">tile name "{{ c.displayName.before }}" becomes "{{ c.displayName.after }}"</span>
+                }
                 @if (c.structural) {
                   <span class="structural-chip">{{ structuralVerb(c.change) }}</span>
                 }

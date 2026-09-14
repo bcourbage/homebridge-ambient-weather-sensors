@@ -86,7 +86,6 @@ appear as banners above the table.
 
 ## Using the editor
 
-The status, discovery, and notices panels are read-only observations.
 The sensor map is the editor: Edit on any row opens its controls, and
 changes are DRAFTS until saved. "Preview changes" dry-runs a draft
 through the real save pipeline without writing anything, and shows
@@ -94,12 +93,10 @@ exactly which accessories would register, deregister, or re-register.
 The page follows Homebridge UI X's light/dark theme, including live
 theme switches.
 
-With `configVersion: 2` and the v2 flag on, the settings form hides
-the legacy controls the runtime no longer reads (sensor category
-toggles, extended-sensor thresholds, display units): the plugin
-Legacy config fields still exist in config.json after a conversion -
-the rollback mirror maintains them for 1.7.x downgrades; the page
-never renders controls for them.
+Legacy config fields (sensor category toggles, extended-sensor
+thresholds, display units, exclude/include filters) still exist in
+config.json after a conversion - the rollback mirror maintains them
+for 1.7.x downgrades. The page never renders controls for them.
 
 The v2 pipeline is on by default. An installation that explicitly
 opts out (`_sensorMapV2: false` or `SENSOR_MAP_V2=0`) sees the table

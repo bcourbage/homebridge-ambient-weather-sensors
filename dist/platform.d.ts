@@ -166,7 +166,8 @@ export declare class AmbientWeatherSensorsPlatform implements DynamicPlatformPlu
     /**
      * Flag-gated v2 reconciler (finding-#4 Stage 4, first commit). Runs in
      * place of the v1.6.0 discoverDevices path when `sensorMapV2` is on
-     * (default OFF, so shipping behaviour is unchanged).
+     * (default ON since beta.17; the explicit opt-out selects the
+     * v1.6.0 path).
      *
      * Pipeline:
      *   1. Fetch the raw AWN station payloads; apply stationFilter.

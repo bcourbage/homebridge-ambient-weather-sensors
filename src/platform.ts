@@ -291,11 +291,11 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
   // runs:
   //
   //   'legacy' / 'v2' — normal operation via `discoverDevices()`.
-  //                     With `_sensorMapV2` OFF (default) the v1.6.0
-  //                     code path drives everything; with it ON the
-  //                     flag-gated `discoverDevicesV2` reconciler runs
-  //                     the row-driven construction + routing pipeline
-  //                     instead (finding-#4 Stage 4).
+  //                     By default (GA #65) the `discoverDevicesV2`
+  //                     reconciler runs the row-driven construction +
+  //                     routing pipeline; an explicit opt-out
+  //                     (_sensorMapV2: false / SENSOR_MAP_V2=0) keeps
+  //                     the v1.6.0 code path (finding-#4 Stage 4).
   //   'safe-mode'    — safe mode is contractually reconciliation-free
   //                     per sensor-map.md §17.2. `discoverDevices()`
   //                     is NOT called; `safeModeStart()` runs the
@@ -926,7 +926,8 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
 
   async discoverDevices() {
     // Flag-gated v2 reconciler. Row-driven construction + routing,
-    // default OFF. See discoverDevicesV2 for the full contract.
+    // default ON since beta.17 (GA #65); explicit opt-outs keep the
+    // v1.6.0 path. See discoverDevicesV2 for the full contract.
     if (this.sensorMapV2) {
       await this.discoverDevicesV2();
       return;
@@ -1086,7 +1087,8 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
   /**
    * Flag-gated v2 reconciler (finding-#4 Stage 4, first commit). Runs in
    * place of the v1.6.0 discoverDevices path when `sensorMapV2` is on
-   * (default OFF, so shipping behaviour is unchanged).
+   * (default ON since beta.17; the explicit opt-out selects the
+   * v1.6.0 path).
    *
    * Pipeline:
    *   1. Fetch the raw AWN station payloads; apply stationFilter.

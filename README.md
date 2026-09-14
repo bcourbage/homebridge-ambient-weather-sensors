@@ -139,11 +139,10 @@ paths, from fastest to most thorough:
   last-known values, and restoring a legacy config and resuming
   normal 1.x reconciliation removes them.
 
-The plugin's settings page carries the v2 panels: status, discovery,
-notices, and the sensor-map editor (draft, preview, and save with
-guarded confirmation — saving requires the v2 flag).
-[docs/plugin-ui.md](./docs/plugin-ui.md) explains each panel and how
-saving works. See `docs/future/sensor-map.md` for the full design if
+The plugin's settings page is the sensor-map editor with its
+Connection section: draft, preview, and save with guarded
+confirmation. [docs/plugin-ui.md](./docs/plugin-ui.md) explains the
+page and how saving works. See `docs/future/sensor-map.md` for the full design if
 you're curious about the shape of the v2 config.
 
 ## What's New in v1.7.2

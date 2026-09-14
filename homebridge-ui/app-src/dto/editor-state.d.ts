@@ -240,6 +240,14 @@ export interface PreviewChangeDto {
   structural: boolean;
   before?: EditorRowDto;
   after?: EditorRowDto;
+  /**
+   * Present when the platform-composed HAP display name changes in
+   * place — e.g. a stationFilter change crossing the one-station
+   * boundary switches every retained accessory between prefixed and
+   * bare names (round 2 P2). An in-place rename, not a structural
+   * re-registration.
+   */
+  displayName?: { before: string; after: string };
 }
 
 /**

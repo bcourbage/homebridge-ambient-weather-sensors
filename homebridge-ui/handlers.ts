@@ -32,6 +32,7 @@ import {
 import { sensorMapShapeError, type EffectiveMapConfig } from '../dist/sensorMap/platformEffectiveMap.js';
 import { NON_TRIGGERING_MEASUREMENTS, STATION_MAC_REGEX } from '../dist/sensorMap/validation.js';
 import { filterStationInventory } from '../dist/sensorMap/stationMatch.js';
+import { composeRowDisplayName } from '../dist/sensorMap/displayName.js';
 import { v2ConstructionEnabled } from '../dist/sensorMap/v2Flag.js';
 import {
   loadDiscoveryStore,
@@ -387,8 +388,10 @@ export interface ComposeSavePayload {
  */
 interface SavePipelineContext {
   block: Record<string, unknown>;
-  /** The assembled inventory through the ON-DISK block's stationFilter (the before-world). */
+  /** The assembled inventory through the ON-DISK block's stationFilter (the before runtime world). */
   stationsBefore: StationInventory;
+  /** The assembled inventory through the PATCHED block's stationFilter (the after runtime world). */
+  stationsAfter: StationInventory;
   /** The block with the settings patch applied — what compose consumes. */
   effectiveBlock: Record<string, unknown>;
   /** Settings keys the patch changed (credential VALUES never appear). */
@@ -677,28 +680,32 @@ async function runSavePipeline(
   let proposal: SensorMapOverride[];
   let assembled: StationInventory;
   if (p.proposal === undefined) {
-    // Compat seeding reads the CURRENT config's semantics, so it uses
-    // the current filter's view of the inventory.
-    proposal = compatToOverrides(
-      block as LegacyConfig,
-      filterStationInventory(assemble([]), (block as Record<string, unknown>).stationFilter),
-    );
+    // Compat seeding is an AUTHORING concern: it translates the
+    // legacy config's semantics for every station, unfiltered — the
+    // station filter narrows the runtime, never the configuration.
+    proposal = compatToOverrides(block as LegacyConfig, assemble([]));
     assembled = assemble(proposal);
   } else {
     proposal = p.proposal as SensorMapOverride[];
     assembled = assemble(proposal);
   }
-  // The runtime applies stationFilter BEFORE reconciliation, so the
-  // preview must see the same worlds (PR #60 review F1): the
-  // before-side through the ON-DISK filter, the after-side through the
-  // PATCHED one. A filter narrowed by this save therefore previews the
-  // excluded station's accessories as removals, and the confirmation
-  // digest certifies that operation. The availability gate below stays
-  // on the UNFILTERED inventory: a deliberately non-matching filter
-  // (the documented accessory-wipe trick) is a valid save, not a
-  // missing-inventory condition.
+  // THREE inventory views (PR #60 review rounds 1-2). The runtime
+  // applies stationFilter BEFORE reconciliation, so runtime
+  // CONSEQUENCES are computed per side through that side's filter —
+  // the before-world through the on-disk filter, the after-world
+  // through the patched one. But the filter is a runtime-visibility
+  // concern, never an authoring concern: validation, canonical
+  // serialization, the divergence gate, and the mirror all use the
+  // UNFILTERED inventory, so a filtered-out station's overrides and
+  // custom identities stay byte-present in the saved configuration
+  // (round 2 P1: canonicalize skips entries for stations absent from
+  // its inventory — feeding it a filtered list deletes config). The
+  // availability gate also stays unfiltered: a deliberately
+  // non-matching filter (the documented accessory-wipe trick) is a
+  // valid save, not a missing-inventory condition.
   const stationsBefore = filterStationInventory(assembled, (block as Record<string, unknown>).stationFilter);
-  const stations = filterStationInventory(assembled, effectiveBlock.stationFilter);
+  const stationsAfter = filterStationInventory(assembled, effectiveBlock.stationFilter);
+  const stations = assembled;
   const legacyEnablesSensors = LEGACY_CATEGORY_TOGGLES.some(k => block[k] === true);
   const wouldConfigure = legacyEnablesSensors
     || proposal.length > 0
@@ -792,7 +799,7 @@ async function runSavePipeline(
 
   return {
     ok: true,
-    ctx: { block, effectiveBlock, settingsChanged, modeResult, proposal, stations, stationsBefore, discovery, uiState, effectiveMap, canonical },
+    ctx: { block, effectiveBlock, settingsChanged, modeResult, proposal, stations, stationsBefore, stationsAfter, discovery, uiState, effectiveMap, canonical },
   };
 }
 
@@ -883,7 +890,7 @@ async function composeSaveInternal(
       ok: false,
       error: {
         code: 'unsaved-settings-changes',
-        message: 'The settings form state was not provided, so unsaved form changes cannot be ruled out. '
+        message: 'The page did not provide its configuration copy, so divergence cannot be ruled out. '
           + 'Reload the plugin settings and retry; nothing was written.',
       },
     };
@@ -894,7 +901,7 @@ async function composeSaveInternal(
         ok: false,
         error: {
           code: 'unsaved-settings-changes',
-          message: 'The settings form state could not be verified. Reload the plugin settings and retry; nothing was written.',
+          message: 'The page configuration copy could not be verified. Reload the plugin settings and retry; nothing was written.',
         },
       };
     }
@@ -904,8 +911,8 @@ async function composeSaveInternal(
         ok: false,
         error: {
           code: 'unsaved-settings-changes',
-          message: `The settings form has unsaved changes ('${drifted}'). Save or discard those changes in the `
-            + 'settings form first; nothing was written.',
+          message: `The page's configuration copy differs from the saved configuration ('${drifted}'). `
+            + 'Reload the plugin settings page and retry; nothing was written.',
         },
       };
     }
@@ -1042,7 +1049,7 @@ async function composeSaveInternal(
       ok: false,
       error: {
         code: 'stale-confirmation',
-        message: 'The configuration, proposal, settings form, or station inventory changed between validating '
+        message: 'The configuration, proposal, page state, or station inventory changed between validating '
           + 'and committing this save. Preview again and retry; nothing was written.',
       },
     };
@@ -1186,7 +1193,19 @@ export interface SaveConsequences {
  * digest verification in PR C.
  */
 export function computeSaveConsequences(ctx: SavePipelineContext): SaveConsequences {
-  const { block, modeResult, proposal, stations, stationsBefore, discovery, uiState, effectiveMap, canonical } = ctx;
+  const { block, modeResult, proposal, stationsBefore, stationsAfter, discovery, uiState, canonical } = ctx;
+
+  // The after-side RUNTIME world: the validated proposal evaluated
+  // over the PATCHED filter's inventory (round 2 P1: ctx.effectiveMap
+  // is the authoring/serialization map over the unfiltered inventory
+  // and must not be the consequence model).
+  const proposedRuntimeMap = buildEffectiveSensorMap({
+    userOverrides: proposal,
+    discovery,
+    uiState,
+    stations: stationsAfter,
+    configMode: 'v2',
+  });
 
   // CURRENT effective state from the on-disk block over the SAME
   // inventory: a legacy config's current state is its compat
@@ -1206,8 +1225,15 @@ export function computeSaveConsequences(ctx: SavePipelineContext): SaveConsequen
     stations: stationsBefore,
     configMode: 'v2',
   });
+  // The row universe is a UNION (defaults x stations, discovery pairs,
+  // override targets), so filtering the inventory alone does not
+  // remove a filtered-out station's discovery-driven rows. The runtime
+  // world per side is rows whose station the filter leaves VISIBLE.
+  const macsBefore = new Set(stationsBefore.map(st => st.macAddress.toUpperCase()));
+  const macsAfter = new Set(stationsAfter.map(st => st.macAddress.toUpperCase()));
+
   const currentLayers = acceptedOverrideLayers(currentOverrides, currentMap.errors);
-  const proposedLayers = acceptedOverrideLayers(proposal, effectiveMap.errors);
+  const proposedLayers = acceptedOverrideLayers(proposal, proposedRuntimeMap.errors);
 
   type ConfiguredRow = Exclude<EffectiveSensorRow, { kind: 'unrecognized' }>;
   const accessorySet = (rows: EffectiveSensorRow[]): Map<string, ConfiguredRow> => {
@@ -1219,8 +1245,8 @@ export function computeSaveConsequences(ctx: SavePipelineContext): SaveConsequen
     }
     return out;
   };
-  const before = accessorySet(currentMap.rows);
-  const after = accessorySet(effectiveMap.rows);
+  const before = accessorySet(currentMap.rows.filter(r => macsBefore.has(r.stationMac.toUpperCase())));
+  const after = accessorySet(proposedRuntimeMap.rows.filter(r => macsAfter.has(r.stationMac.toUpperCase())));
 
   // Fields whose change matters to the user. structuralSignature
   // decides the `structural` flag (re-registration); the rest mark a
@@ -1231,6 +1257,20 @@ export function computeSaveConsequences(ctx: SavePipelineContext): SaveConsequen
     'sourceUnit', 'displayUnit', 'threshold', 'triggerEnabled',
     'triggerDirection', 'batteryField', 'hasBatterySubService', 'embedName',
   ] as const;
+  // The platform composes HAP display names from the RUNTIME station
+  // inventory (station prefix only when multiple stations are
+  // visible), so a filter change that crosses the 1-station boundary
+  // RENAMES every retained accessory in place. Model it with the
+  // platform's own recipe per side (round 2 P2).
+  const composedName = (row: ConfiguredRow, inventory: StationInventory): string => {
+    const station = inventory.find(st => st.macAddress.toUpperCase() === row.stationMac.toUpperCase());
+    return composeRowDisplayName(
+      { macAddress: row.stationMac, name: station?.name ?? '' },
+      row.name,
+      inventory.length > 1,
+    );
+  };
+
   const changes: PreviewChangeDto[] = [];
   for (const [key, b] of before) {
     const a = after.get(key);
@@ -1244,13 +1284,16 @@ export function computeSaveConsequences(ctx: SavePipelineContext): SaveConsequen
     }
     const differs = ROW_FIELDS.filter(f =>
       (b as unknown as Record<string, unknown>)[f] !== (a as unknown as Record<string, unknown>)[f]);
-    if (differs.length > 0) {
+    const nameBefore = composedName(b, stationsBefore);
+    const nameAfter = composedName(a, stationsAfter);
+    if (differs.length > 0 || nameBefore !== nameAfter) {
       changes.push({
         stationMac: b.stationMac, dataPoint: b.dataPoint,
         change: 'modified',
         structural: b.structuralSignature !== a.structuralSignature,
         before: toEditorRowDto(b, currentLayers),
         after: toEditorRowDto(a, proposedLayers),
+        ...(nameBefore !== nameAfter ? { displayName: { before: nameBefore, after: nameAfter } } : {}),
       });
     }
   }
@@ -1282,8 +1325,8 @@ export function computeSaveConsequences(ctx: SavePipelineContext): SaveConsequen
     }
     return out;
   };
-  const beforeDisabled = disabledSet(currentMap.rows);
-  const afterDisabled = disabledSet(effectiveMap.rows);
+  const beforeDisabled = disabledSet(currentMap.rows.filter(r => macsBefore.has(r.stationMac.toUpperCase())));
+  const afterDisabled = disabledSet(proposedRuntimeMap.rows.filter(r => macsAfter.has(r.stationMac.toUpperCase())));
   const configOnly: ConfigOnlyChangeDto[] = [];
   for (const key of new Set([...beforeDisabled.keys(), ...afterDisabled.keys()])) {
     const b = beforeDisabled.get(key);
@@ -1319,7 +1362,7 @@ export function computeSaveConsequences(ctx: SavePipelineContext): SaveConsequen
     ? (x.dataPoint < y.dataPoint ? -1 : x.dataPoint > y.dataPoint ? 1 : 0)
     : (x.stationMac < y.stationMac ? -1 : 1));
 
-  const proposedRows = effectiveMap.rows
+  const proposedRows = proposedRuntimeMap.rows
     .map(row => toEditorRowDto(row, proposedLayers))
     .sort((a, b) => a.stationMac === b.stationMac
       ? (a.dataPoint < b.dataPoint ? -1 : a.dataPoint > b.dataPoint ? 1 : 0)
