@@ -310,8 +310,8 @@ async function runSavePipeline(deps, p) {
     // ---- 3c. SETTINGS PATCH (beta.17, GA #56): applied to a copy of
     //          the on-disk block inside this transaction, fail-closed on
     //          any malformed value. Compose consumes the PATCHED block;
-    //          the base digest and the settings-form drift gate keep
-    //          judging the on-disk one.
+    //          the base digest and the configuration-copy drift gate
+    //          keep judging the on-disk one.
     const settingsOutcome = applySettingsPatch(block, p.settings);
     if ('error' in settingsOutcome) {
         return { ok: false, error: { code: 'invalid-settings', message: `${settingsOutcome.error} Nothing was written.` } };
@@ -548,16 +548,16 @@ async function composeSaveInternal(deps, payload, persist) {
             },
         };
     }
-    // ---- 7b3. UNSAVED-SETTINGS GATE (review #47 P1-1): editor
+    // ---- 7b3. CONFIGURATION-COPY DRIFT GATE (review #47 P1-1):
     //           persistence replaces HB UI X's in-memory config with the
-    //           disk-derived composed block, so a settings-form edit the
-    //           user has not saved (a credential, a toggle, a filter)
-    //           would be silently discarded — and the post-save receipt
-    //           would still read clean, because disk matches what was
-    //           composed. When the client supplies its in-memory copy,
-    //           refuse any difference from disk beyond the schema form's
-    //           measured automatic materialization (empty arrays for
-    //           absent keys, a pre-beta.17 session's leftovers).
+    //           disk-derived composed block, so any divergence in that
+    //           session copy would be silently discarded — and the
+    //           post-save receipt would still read clean, because disk
+    //           matches what was composed. When the client supplies its
+    //           copy, refuse any difference from disk beyond the
+    //           measured automatic materialization a pre-beta.17
+    //           schema-form session left behind (empty arrays for
+    //           absent keys).
     //           Fail-safe by design: unmeasured normalization refuses
     //           too, and reloading the page clears it. REQUIRED for
     //           digest sessions (review #47 round 3, P2): a digest save
@@ -678,9 +678,10 @@ async function composeSaveInternal(deps, payload, persist) {
     //          two-phase protocol (review #47 round 5, P1): /commit-save
     //          only writes when presented with the token /compose-save
     //          issued for EXACTLY this state — the authoritative disk
-    //          block, the canonicalized proposal, the settings-form
-    //          state, the inventory-bound consequences, the composed
-    //          output, and the prospective record outcome. The commit
+    //          block, the canonicalized proposal, the page's
+    //          configuration-copy state, the inventory-bound
+    //          consequences, the composed output, and the prospective
+    //          record outcome. The commit
     //          recomputes the token from CURRENT state, so a direct
     //          commit (stale client, console request, future refactor)
     //          refuses before anything is written, and any drift between
@@ -1061,6 +1062,10 @@ export function computeSaveConsequences(ctx) {
         proposed: setSummary(after),
         changes: changeProjection,
         configOnly: configOnlyProjection,
+        // The visible settings banner is a consequence too (round 4 P2):
+        // key NAMES only, never values — a consequence-equivalent switch
+        // between settings patches must not reuse the old confirmation.
+        settingsChanged: [...ctx.settingsChanged].sort(),
     }))
         .digest('hex');
     return {
@@ -1640,7 +1645,7 @@ function configSchemaProperties(deps) {
     return cachedSchemaProperties;
 }
 /**
- * Is `value` something the schema form MATERIALIZES on its own for a
+ * Is `value` something a pre-beta.17 schema-form session MATERIALIZED on its own for a
  * key absent from config.json? Measured on HB UI X 5.28: the form
  * value fills every declared `default` (top-level AND nested inside
  * object properties like `thresholds`/`units`), and has also been
@@ -1716,7 +1721,7 @@ function propDrift(formValue, diskValue, prop, pathPrefix) {
  * holds an UNSAVED USER EDIT relative to the on-disk block, or
  * undefined when it holds none (review #47 P1-1).
  *
- * Scope (measured on HB UI X 5.28): the settings modal's schema form
+ * Scope (measured on HB UI X 5.28, pre-beta.17 — the form no longer renders): the settings modal's schema form
  * binds two-way into pluginConfig[0] and REPLACES the block with the
  * form VALUE — which contains only schema-declared properties, with
  * every declared default materialized. Consequences for this gate:

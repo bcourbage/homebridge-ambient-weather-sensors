@@ -2118,3 +2118,54 @@ describe('Connection settings (beta.17, GA #56)', () => {
     expect(control(el, 'apiKey').hasAttribute('disabled')).toBe(true);
   });
 });
+
+describe('preview race vs Connection edits (PR #60 round 4 P2)', () => {
+  async function settle(fixture: ComponentFixture<AwnRootComponent>): Promise<void> {
+    await new Promise((r) => setTimeout(r, 0));
+    await fixture.whenStable();
+    fixture.detectChanges();
+  }
+
+  it('a Connection edit while a preview is in flight discards the stale response and never re-arms Save', async () => {
+    const PREVIEW: PreviewResultDto = {
+      ok: true, canonicalSensorMap: [], rows: [], changes: [], configOnly: [],
+      settingsChanged: ['name'], structuralChangeCount: 0,
+      digest: 'aa'.repeat(32), warnings: [], notes: [],
+    };
+    const ipc = makeIpc(editorState(), [], PREVIEW);
+    // Defer /preview-save until the test releases it.
+    let releasePreview: (() => void) | null = null;
+    const innerRequest = ipc.request.bind(ipc);
+    ipc.request = async (path: string, body?: unknown) => {
+      if (path === '/preview-save') {
+        await new Promise<void>((r) => { releasePreview = r; });
+      }
+      return innerRequest(path, body);
+    };
+
+    const fixture = await render(ipc);
+    const el = fixture.nativeElement as HTMLElement;
+    (el.querySelector('.conn-summary') as HTMLButtonElement).click();
+    fixture.detectChanges();
+    const name = el.querySelector('.conn-grid [formcontrolname="name"]') as HTMLInputElement;
+    name.value = 'First Name';
+    name.dispatchEvent(new Event('input'));
+    await settle(fixture);
+
+    // Start the preview; it hangs on the deferred request.
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement).click();
+    await settle(fixture);
+    expect(releasePreview).not.toBeNull();
+
+    // Mid-flight: edit a connection setting again.
+    name.value = 'Second Name';
+    name.dispatchEvent(new Event('input'));
+    await settle(fixture);
+
+    // The stale response lands — and must be DISCARDED.
+    releasePreview!();
+    await settle(fixture);
+    expect(el.textContent).not.toContain('Settings saved with this change');
+    expect([...el.querySelectorAll('button')].some(b => b.textContent === 'Save changes')).toBe(false);
+  });
+});

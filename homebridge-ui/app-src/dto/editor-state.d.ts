@@ -275,9 +275,8 @@ export interface ConfigOnlyChangeDto {
  * Response of request '/preview-save' — a server-authoritative dry
  * run of the save. NO writes happen; the browser never computes
  * signatures or diffs itself. `digest` is the stateless confirmation
- * token a structural save must present (activated with the save path
- * in a later release; carried here so the preview contract is
- * complete).
+ * token a structural save must present to /compose-save (live since
+ * PR C).
  */
 export type PreviewResultDto =
   | {
@@ -292,9 +291,12 @@ export type PreviewResultDto =
     settingsChanged: string[];
     structuralChangeCount: number;
     /**
-     * sha256 over canonical JSON of (on-disk block, canonical map,
-     * sorted current accessory set, sorted proposed accessory set) —
-     * bound to the previewed CONSEQUENCES, not just the typed inputs.
+     * sha256 over canonical JSON of the previewed CONSEQUENCES: the
+     * on-disk block, the canonical map, both sorted accessory sets,
+     * the normalized changes and configOnly lists (salient row fields
+     * and composed display-name renames; volatile observation
+     * timestamps excluded), and the settingsChanged key list. Every
+     * consequence the user sees is bound.
      */
     digest: string;
     warnings: EditorDiagnosticDto[];

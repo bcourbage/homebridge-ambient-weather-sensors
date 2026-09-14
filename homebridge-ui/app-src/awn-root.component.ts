@@ -806,7 +806,7 @@ export class AwnRootComponent {
   protected readonly notices = signal<Array<{ id: string; dataPoint: string; occurredAt: string }>>([]);
   protected settingsForm: ReturnType<FormBuilder['group']> | null = null;
   private settingsBaseline: EditorSettingsDto | null = null;
-  /** Bumped on every settings-form event so computed() re-evaluates. */
+  /** Bumped on every Connection-form event so computed() re-evaluates. */
   private readonly settingsVersion = signal(0);
   protected readonly confirmOpen = signal(false);
   /**
@@ -816,9 +816,10 @@ export class AwnRootComponent {
    */
   protected readonly postSaveDrift = signal(false);
   /**
-   * The save outcome stands, but restoring the settings form (or its
-   * Save button) failed afterward — the page is degraded and only a
-   * reload fixes it (review #47 round 5, P2). Never silent.
+   * The save outcome stands, but re-asserting the page's save-control
+   * state (the permanently disabled native Save) failed afterward —
+   * the page is degraded and only a reload fixes it (review #47
+   * round 5, P2). Never silent.
    */
   protected readonly settingsRestoreFailed = signal(false);
   protected readonly saveResult = signal<
@@ -1771,6 +1772,7 @@ export class AwnRootComponent {
     // response for an OLDER draft must never install its results (or
     // its digest) over the newer state.
     const draftVersionAtStart = this.draftVersion();
+    const settingsVersionAtStart = this.settingsVersion();
     this.previewPending.set(true);
     // The PREVIOUS result stays visible (dimmed) while the request
     // runs - clearing it here rebuilt the whole list on every Skip
@@ -1789,10 +1791,12 @@ export class AwnRootComponent {
         settings: this.settingsPatch(),
         cachedAccessoryUniqueIds,
       });
-      if (this.draftVersion() === draftVersionAtStart) {
+      if (this.draftVersion() === draftVersionAtStart && this.settingsVersion() === settingsVersionAtStart) {
         this.previewResult.set(result);
       } else {
-        this.previewResult.set(null); // drafts moved on; never show a stale preview
+        // Row drafts OR connection settings moved on (round 4 P2) —
+        // never show a stale preview or re-arm Save under one.
+        this.previewResult.set(null);
       }
     } catch (e) {
       if (this.draftVersion() === draftVersionAtStart) {

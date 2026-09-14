@@ -91,8 +91,9 @@ export interface ComposeAndPersistArgs {
    * The config block being edited. Only valid for callers holding a
    * FAITHFUL copy of the on-disk block (tests, scripts). A browser
    * client must pass `baseDigest` + `blockIndex` from /editor-state
-   * instead: getPluginConfig() returns HB UI X's schema-form-mutated
-   * in-memory copy, which never byte-matches disk. Omit both when
+   * instead: getPluginConfig() returns HB UI X's session copy, which
+   * is not guaranteed to byte-match disk (pre-beta.17 the schema form
+   * actively mutated it). Omit both when
    * exactly one AmbientWeatherSensors block exists and no session
    * token is available.
    */
