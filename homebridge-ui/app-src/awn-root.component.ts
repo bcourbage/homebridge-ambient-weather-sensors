@@ -1799,7 +1799,10 @@ export class AwnRootComponent {
         this.previewResult.set(null);
       }
     } catch (e) {
-      if (this.draftVersion() === draftVersionAtStart) {
+      // The SAME two-version predicate as the success path (round 5):
+      // an obsolete transport error must not surface after a
+      // mid-flight row or Connection edit.
+      if (this.draftVersion() === draftVersionAtStart && this.settingsVersion() === settingsVersionAtStart) {
         this.previewResult.set({
           ok: false,
           error: { code: 'transport', message: e instanceof Error ? e.message : String(e) },

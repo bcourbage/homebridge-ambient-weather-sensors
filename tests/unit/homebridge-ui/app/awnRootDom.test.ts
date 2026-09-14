@@ -2169,3 +2169,44 @@ describe('preview race vs Connection edits (PR #60 round 4 P2)', () => {
     expect([...el.querySelectorAll('button')].some(b => b.textContent === 'Save changes')).toBe(false);
   });
 });
+
+describe('rejected-preview race vs Connection edits (PR #60 round 5)', () => {
+  it('a mid-flight Connection edit also discards an OBSOLETE transport error', async () => {
+    const ipc = makeIpc(editorState(), []);
+    let rejectPreview: ((e: Error) => void) | null = null;
+    const innerRequest = ipc.request.bind(ipc);
+    ipc.request = async (path: string, body?: unknown) => {
+      if (path === '/preview-save') {
+        await new Promise<void>((_r, rej) => { rejectPreview = rej as (e: Error) => void; });
+      }
+      return innerRequest(path, body);
+    };
+
+    const fixture = await render(ipc);
+    const el = fixture.nativeElement as HTMLElement;
+    const settle = async (): Promise<void> => {
+      await new Promise((r) => setTimeout(r, 0));
+      await fixture.whenStable();
+      fixture.detectChanges();
+    };
+    (el.querySelector('.conn-summary') as HTMLButtonElement).click();
+    fixture.detectChanges();
+    const name = el.querySelector('.conn-grid [formcontrolname="name"]') as HTMLInputElement;
+    name.value = 'First Name';
+    name.dispatchEvent(new Event('input'));
+    await settle();
+
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement).click();
+    await settle();
+    expect(rejectPreview).not.toBeNull();
+
+    name.value = 'Second Name';
+    name.dispatchEvent(new Event('input'));
+    await settle();
+
+    rejectPreview!(new Error('bridge exploded mid-flight'));
+    await settle();
+    expect(el.textContent).not.toContain('bridge exploded mid-flight');
+    expect(el.textContent).not.toContain('Preview refused');
+  });
+});
