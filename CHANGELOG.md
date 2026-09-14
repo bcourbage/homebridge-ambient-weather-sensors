@@ -9,6 +9,21 @@ entries short and user-facing.
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/
 
+## [2.0.0-beta.16] — 2026-09-13
+
+### Added
+
+- **Assign unrecognized fields to custom sensors.** An unrecognized row (a `?` in the Kind column) now offers Assign in place of Edit: choose a measurement and the unit the station reports it in, and the field becomes a real accessory. The accessory kind follows from the measurement, the choices offered are exactly the combinations this plugin can build, and the assignment applies to that one station. New sensors are enabled by default and preview as a registration like any other structural change; name, display unit, threshold, and trigger direction can be set in the same form or edited later like any row. Switching the source unit clears a typed threshold, since a threshold is expressed in the source unit and 10 mph and 10 km/hr are different triggers.
+
+### Changed
+
+- **Applying a saved sensor map no longer requires a full Homebridge restart.** Restarting this plugin's child bridge from the Homebridge UI re-reads the saved configuration before the bridge comes back (verified on Homebridge 2.4.0); the documentation now says so. Killing the child process by hand still does not apply a save, and a full restart also works.
+- **A custom count sensor displays a plain number.** The "strike" wording belongs to the built-in lightning counters; a count the plugin knows nothing about is shown without a label it cannot vouch for.
+
+### Fixed
+
+- **Row editors no longer offer trigger controls that cannot work.** Wind direction and last-rain time rows are motion accessories that never cross a threshold; their editors previously rendered threshold and trigger fields whose values a save would silently strip. Those controls now appear only where a threshold is real.
+
 ## [2.0.0-beta.15] — 2026-09-10
 
 ### Added
