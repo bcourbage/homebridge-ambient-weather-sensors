@@ -28,13 +28,7 @@
 import { describe, expect, it, afterEach, vi } from 'vitest';
 
 import { AmbientWeatherSensorsPlatform } from '../../src/platform';
-import { compatToOverrides, type LegacyConfig } from '../../src/sensorMap/compat';
-import { buildEffectiveSensorMap } from '../../src/sensorMap/buildEffectiveMap';
-import { canonicalizeSensorMap } from '../../src/sensorMap/canonicalizeSensorMap';
-import { composeV2ConfigSave } from '../../src/sensorMap/legacyMirror';
-import { emptyDiscoveryStore } from '../../src/sensorMap/persistence/discoveryStore';
-import { emptyUiStateStore } from '../../src/sensorMap/persistence/uiStateStore';
-import type { StationInventory } from '../../src/sensorMap/types';
+import { convertedConfigFor } from '../helpers/conversion';
 import {
   HapMockAPI,
   serializeRegistered,
@@ -51,10 +45,6 @@ import { MockLogger } from '../helpers/mockHomebridge';
 afterEach(() => {
   vi.restoreAllMocks();
 });
-
-function inventoryOf(stations: RawStation[]): StationInventory {
-  return stations.map(s => ({ macAddress: s.macAddress, name: s.info?.name ?? s.macAddress }));
-}
 
 /**
  * Run the real platform lifecycle over a config and an AWN payload,
@@ -97,38 +87,6 @@ async function runLifecycle(
   }
   vi.restoreAllMocks();
   return { accessories: serializeRegistered(api), unregisteredCount: api.unregistered.length };
-}
-
-/**
- * The byte-real conversion: exactly what the guarded save pipeline
- * writes for this legacy config — compat translation, canonical
- * sensorMap, legacy mirror, configVersion 2 — with the v2 flag on
- * (the editor requires the flag before it may convert).
- */
-function convertedConfigFor(config: LegacyConfig, stations: RawStation[]): Record<string, unknown> {
-  const inventory = inventoryOf(stations);
-  const overrides = compatToOverrides(config, inventory);
-  const canonical = canonicalizeSensorMap({
-    overrides,
-    stations: inventory,
-    discovery: emptyDiscoveryStore(),
-    uiState: emptyUiStateStore(),
-  });
-  const effectiveMap = buildEffectiveSensorMap({
-    userOverrides: canonical,
-    discovery: emptyDiscoveryStore(),
-    uiState: emptyUiStateStore(),
-    stations: inventory,
-    configMode: 'v2',
-  });
-  expect(effectiveMap.errors).toEqual([]);
-  const { nextConfig } = composeV2ConfigSave(
-    { platform: 'AmbientWeatherSensors', apiKey: 'k', applicationKey: 'k', _sensorMapV2: true, ...config },
-    canonical,
-    effectiveMap,
-    'legacy',
-  );
-  return nextConfig as Record<string, unknown>;
 }
 
 const CORPUS = [...CONFIG_MATRIX, ...demeterBaselines()];
