@@ -26,6 +26,14 @@ import { ExtendedSensorBase } from './extendedSensorBase.js';
  * a raw number before passing into setValue().
  */
 declare abstract class LightningCountLikeAccessory extends ExtendedSensorBase {
+    /**
+     * The noun the Value text counts, or null for a bare number. The
+     * strike wording belongs to the KNOWN AWN lightning fields; a custom
+     * count row (any other dataPoint routed here by (motion, count))
+     * counts something this class knows nothing about, so its Value
+     * stays neutral (§17.1: canonical wrappers are generic).
+     */
+    private readonly countNoun;
     constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory, sensorLabel: string, awnKey: string, row?: NumericSensorRow);
     protected formatValue(rawCount: number): string;
 }

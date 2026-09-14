@@ -46,10 +46,14 @@ class LightningCountLikeAccessory extends ExtendedSensorBase {
             measurement: 'count',
             sourceUnit: 'count',
         }, row);
+        this.countNoun = (row?.dataPoint ?? awnKey) === awnKey ? 'strike' : null;
     }
     formatValue(rawCount) {
         const n = Math.max(0, Math.round(rawCount));
-        return `${n} ${n === 1 ? 'strike' : 'strikes'}`;
+        if (this.countNoun === null) {
+            return String(n);
+        }
+        return `${n} ${n === 1 ? this.countNoun : this.countNoun + 's'}`;
     }
 }
 /**

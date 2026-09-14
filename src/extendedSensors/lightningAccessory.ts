@@ -35,6 +35,15 @@ import { convertDistance, DistanceUnit } from './unitConversions.js';
  */
 
 abstract class LightningCountLikeAccessory extends ExtendedSensorBase {
+  /**
+   * The noun the Value text counts, or null for a bare number. The
+   * strike wording belongs to the KNOWN AWN lightning fields; a custom
+   * count row (any other dataPoint routed here by (motion, count))
+   * counts something this class knows nothing about, so its Value
+   * stays neutral (§17.1: canonical wrappers are generic).
+   */
+  private readonly countNoun: string | null;
+
   constructor(
     platform: AmbientWeatherSensorsPlatform,
     accessory: PlatformAccessory,
@@ -61,11 +70,15 @@ abstract class LightningCountLikeAccessory extends ExtendedSensorBase {
       measurement: 'count',
       sourceUnit: 'count',
     }, row);
+    this.countNoun = (row?.dataPoint ?? awnKey) === awnKey ? 'strike' : null;
   }
 
   protected formatValue(rawCount: number): string {
     const n = Math.max(0, Math.round(rawCount));
-    return `${n} ${n === 1 ? 'strike' : 'strikes'}`;
+    if (this.countNoun === null) {
+      return String(n);
+    }
+    return `${n} ${n === 1 ? this.countNoun : this.countNoun + 's'}`;
   }
 
   // No qualitative bucket — a strike count is a count.

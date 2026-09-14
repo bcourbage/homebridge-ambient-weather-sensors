@@ -61,8 +61,11 @@ const NATIVE_HAP_MEASUREMENTS = [
  * their wrappers hardcode `threshold: Infinity`. `validateOverrideBody`
  * warn-strips threshold / triggerEnabled / triggerDirection on these so
  * a user-supplied value isn't silently ignored. See finding-#4 review.
+ * Exported so the editor's vocabulary projection can hide the trigger
+ * controls for exactly the measurements this strip governs (PR #57
+ * review F3) — the engine stays the single authority.
  */
-const NON_TRIGGERING_MEASUREMENTS = [
+export const NON_TRIGGERING_MEASUREMENTS = [
     'direction', 'timestamp', 'boolean',
 ];
 /**

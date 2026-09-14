@@ -1879,3 +1879,100 @@ describe('Skip on a custom row composes cleanly (PR #53 round 6 F3)', () => {
     }
   });
 });
+
+describe('unrecognized-field assignment saves as a new custom sensor (PR E)', () => {
+  const BLOCK = {
+    platform: 'AmbientWeatherSensors',
+    name: 'Test Station',
+    apiKey: 'k', applicationKey: 'a',
+    _sensorMapV2: true,
+    configVersion: 2,
+    sensorMap: [],
+  };
+
+  function seedUnrecognized(rig: Rig): void {
+    writeFileSync(path.join(rig.persistDir, 'discovery.json'), JSON.stringify({
+      schemaVersion: 1,
+      entries: [
+        { stationMac: MAC, stationName: 'Home', dataPoint: 'tempf', firstSeen: '2026-01-01T00:00:00Z', lastSeen: '2026-01-02T00:00:00Z' },
+        { stationMac: MAC, stationName: 'Home', dataPoint: 'xbarnwind', firstSeen: '2026-01-01T00:00:00Z', lastSeen: '2026-01-02T00:00:00Z' },
+      ],
+    }));
+  }
+
+  it('an incomplete identity is refused; the assignment fragment previews as a structural add and commits', async () => {
+    const rig = makeRig(BLOCK);
+    seedUnrecognized(rig);
+
+    // The atomicity backstop: were a partial fragment ever composed
+    // (the editor prevents it), the pipeline still refuses it whole.
+    const partial = await handleComposeSave(rig.deps, {
+      base: BLOCK,
+      proposal: [{ dataPoint: 'xbarnwind', stationMac: MAC, kind: 'motion', measurement: 'wind-speed', enabled: true }],
+    });
+    expect(partial.ok).toBe(false);
+    if (!partial.ok) {
+      expect(partial.error.code).toBe('invalid-rows');
+    }
+
+    // The fragment the assignment editor drafts, verbatim.
+    const payload = {
+      base: BLOCK,
+      proposal: [{
+        dataPoint: 'xbarnwind', stationMac: MAC,
+        kind: 'motion', measurement: 'wind-speed', sourceUnit: 'kph',
+        enabled: true, name: 'Barn Wind',
+      }],
+    };
+
+    const preview = await handlePreviewSave(rig.deps, payload);
+    expect(preview.ok).toBe(true);
+    if (!preview.ok) {
+      return;
+    }
+    const added = preview.changes.find(c => c.dataPoint === 'xbarnwind');
+    expect(added?.change).toBe('added');
+    expect(added?.structural).toBe(true);
+    expect(added?.after?.kind).toBe('motion');
+    expect(added?.after?.measurement).toBe('wind-speed');
+
+    const result = await commitFor(rig, { ...payload, confirmDigest: preview.digest });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      const entry = result.canonicalSensorMap.find(e => e.dataPoint === 'xbarnwind' && e.stationMac === MAC);
+      // The canonical entry re-declares the full identity (a reload
+      // would otherwise drop it as custom-missing-kind).
+      expect(entry).toHaveProperty('kind', 'motion');
+      expect(entry).toHaveProperty('measurement', 'wind-speed');
+      expect(entry).toHaveProperty('sourceUnit', 'kph');
+      expect(entry).toHaveProperty('name', 'Barn Wind');
+    }
+  });
+
+  it('a timestamp assignment (no sourceUnit) commits and resolves to the motion timestamp wrapper', async () => {
+    const rig = makeRig(BLOCK);
+    seedUnrecognized(rig);
+
+    const payload = {
+      base: BLOCK,
+      proposal: [{
+        dataPoint: 'xbarnwind', stationMac: MAC,
+        kind: 'motion', measurement: 'timestamp',
+        enabled: true, name: 'Barn Event',
+      }],
+    };
+    const preview = await handlePreviewSave(rig.deps, payload);
+    expect(preview.ok).toBe(true);
+    if (!preview.ok) {
+      return;
+    }
+    const result = await commitFor(rig, { ...payload, confirmDigest: preview.digest });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      const entry = result.canonicalSensorMap.find(e => e.dataPoint === 'xbarnwind');
+      expect(entry).toHaveProperty('kind', 'motion');
+      expect(entry).toHaveProperty('measurement', 'timestamp');
+      expect(entry).not.toHaveProperty('sourceUnit');
+    }
+  });
+});

@@ -27,7 +27,9 @@ import {
 } from '../../../homebridge-ui/handlers';
 import { buildEffectiveSensorMap } from '../../../src/sensorMap/buildEffectiveMap';
 import { composeV2ConfigSave } from '../../../src/sensorMap/legacyMirror';
-import { UNIT_VOCABULARY, unitOptionsFor } from '../../../src/sensorMap/unitVocabulary';
+import { MEASUREMENT_LABELS, UNIT_VOCABULARY, unitOptionsFor } from '../../../src/sensorMap/unitVocabulary';
+import { NON_TRIGGERING_MEASUREMENTS } from '../../../src/sensorMap/validation';
+import { WRAPPER_FOR_KIND_AND_MEASUREMENT } from '../../../src/sensorMap/wrappers';
 import type { Measurement } from '../../../src/sensorMap/types';
 
 const MAC = 'AA:BB:CC:DD:EE:01';
@@ -517,6 +519,63 @@ describe('/vocabulary', () => {
         unitOptionsFor(m, 'custom-source').map(o => ({ unit: o.unit, label: o.label })));
       expect(dto.measurements[m].extendedDisplay).toEqual(
         unitOptionsFor(m, 'extended-display').map(o => ({ unit: o.unit, label: o.label })));
+    }
+  });
+
+  it('assignments are an exact projection of WRAPPER_FOR_KIND_AND_MEASUREMENT (PR E)', () => {
+    const dto = handleGetVocabulary();
+    // One entry per wrapper-table key — never more (a pair the table
+    // cannot build would be refused by the pipeline as no-wrapper, so
+    // the picker must not offer it), never fewer, each labeled by its
+    // measurement. Order follows the vocabulary's measurement order.
+    const tableKeys = Object.keys(WRAPPER_FOR_KIND_AND_MEASUREMENT);
+    expect(dto.assignments).toHaveLength(tableKeys.length);
+    expect(new Set(dto.assignments.map(a => `${a.kind}|${a.measurement}`))).toEqual(new Set(tableKeys));
+    for (const a of dto.assignments) {
+      expect(a.label).toBe(MEASUREMENT_LABELS[a.measurement as Measurement]);
+      expect(a.label).toBeTruthy();
+    }
+    const vocabOrder = Object.keys(UNIT_VOCABULARY);
+    const indices = dto.assignments.map(a => vocabOrder.indexOf(a.measurement));
+    expect(indices).toEqual([...indices].sort((x, y) => x - y));
+    // The reserved kinds have no wrapper and must never be offered.
+    for (const reserved of ['co', 'leak', 'contact', 'occupancy']) {
+      expect(dto.assignments.some(a => a.kind === reserved)).toBe(false);
+    }
+    // Every numeric assignment target has source units to pick from;
+    // timestamp deliberately has none (sourceUnit is fixed to 'ms'
+    // and must be omitted from the fragment).
+    for (const a of dto.assignments) {
+      const sources = dto.measurements[a.measurement].customSource;
+      if (a.measurement === 'timestamp') {
+        expect(sources).toHaveLength(0);
+      } else {
+        expect(sources.length).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  it('assignment triggering flags mirror the validator strip; one kind per measurement (round 1 F3/F4)', () => {
+    const dto = handleGetVocabulary();
+    for (const a of dto.assignments) {
+      const stripGoverned = (NON_TRIGGERING_MEASUREMENTS as readonly string[]).includes(a.measurement);
+      expect(a.triggering, `${a.kind}|${a.measurement}`).toBe(a.kind === 'motion' && !stripGoverned);
+    }
+    expect(dto.assignments.filter(a => a.kind === 'motion' && !a.triggering).map(a => a.measurement).sort())
+      .toEqual(['direction', 'timestamp']);
+    // Uniqueness invariant (round 1 F4): the assignment UI tracks and
+    // resolves choices BY MEASUREMENT ALONE (one select, kind derived).
+    // A second kind for any measurement — e.g. the deferred boolean
+    // wrappers (leak/contact/occupancy) — makes that resolution
+    // ambiguous. This test failing means the UI needs a kind selector
+    // BEFORE the new wrapper-table entry lands.
+    const measurements = dto.assignments.map(a => a.measurement);
+    expect(new Set(measurements).size).toBe(measurements.length);
+  });
+
+  it('every measurement carries a label (PR E)', () => {
+    for (const m of Object.keys(UNIT_VOCABULARY) as Measurement[]) {
+      expect(MEASUREMENT_LABELS[m]).toBeTruthy();
     }
   });
 

@@ -19,13 +19,14 @@
  * styles below add only what the page doesn't define.
  */
 import { ChangeDetectionStrategy, Component, computed, inject, signal, viewChild, type ElementRef } from '@angular/core';
-import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
+import { FormBuilder, ReactiveFormsModule, Validators, type AbstractControl } from '@angular/forms';
 
 import { DraftStore, type DraftableField } from './draft-store';
 import { HomebridgeService } from './homebridge.service';
-import { KIND_HELP } from './kind-support';
+import { KIND_HELP, KIND_SUPPORT } from './kind-support';
 import { composeAndPersist } from '../saveOrchestrator';
 import type {
+  AssignmentOptionDto,
   DisplayFamilyChoiceDto,
   DisplayFamilyDto,
   EditorRowDto,
@@ -572,9 +573,11 @@ interface StationGroup {
                 <td class="actions">
                   <!-- The editor's own footer owns closing (OK /
                        Cancel), so the column shows nothing while the
-                       row is open. -->
-                  @if (row.kind !== 'unrecognized' && !isExpanded(row)) {
-                    <button type="button" (click)="toggleEdit(row)" [disabled]="saving() || confirmOpen() || reloadRequired()">Edit</button>
+                       row is open. Unrecognized rows offer Assign
+                       (PR E): the same editor, opened in its
+                       assignment shape. -->
+                  @if (!isExpanded(row)) {
+                    <button type="button" (click)="toggleEdit(row)" [disabled]="saving() || confirmOpen() || reloadRequired()">{{ row.kind === 'unrecognized' ? 'Assign' : 'Edit' }}</button>
                   }
                 </td>
               </tr>
@@ -582,6 +585,38 @@ interface StationGroup {
                 <tr>
                   <td colspan="6" class="editor-form" (mousedown)="formPointerDown($event)">
                     <form [formGroup]="editForm!">
+                      @if (row.kind === 'unrecognized') {
+                        <!-- Assignment controls (PR E). The identity
+                             is atomic: applyEdit drafts nothing until
+                             measurement and (for numeric measurements)
+                             source unit are both chosen, so a partial
+                             custom fragment never reaches the save
+                             pipeline's custom-missing-* refusals. -->
+                        <label>Measurement
+                          <select formControlName="measurement">
+                            <option value="">Choose…</option>
+                            @for (a of assignmentOptions(); track a.measurement) {
+                              <option [value]="a.measurement">{{ a.label }}</option>
+                            }
+                          </select>
+                        </label>
+                        @if (assignSourceOptions().length > 0) {
+                          <label>Source unit
+                            <select formControlName="sourceUnit">
+                              <option value="">Choose…</option>
+                              @for (u of assignSourceOptions(); track u.unit) {
+                                <option [value]="u.unit">{{ u.label }}</option>
+                              }
+                            </select>
+                          </label>
+                        }
+                        @if (assignedKindLabel()) {
+                          <span class="muted">Creates a {{ assignedKindLabel() }} accessory.</span>
+                        }
+                        @if (assignError()) {
+                          <span class="field-error">{{ assignError() }}</span>
+                        }
+                      }
                       <label><input type="checkbox" formControlName="enabled" /> Enabled</label>
                       <label>Name <input type="text" formControlName="name" /></label>
                       @if (editForm!.get('name')?.invalid) {
@@ -596,7 +631,7 @@ interface StationGroup {
                           </select>
                         </label>
                       }
-                      @if (row.kind === 'motion') {
+                      @if (showsTriggerControls(row)) {
                         <label>Threshold <input type="number" step="any" formControlName="threshold" /></label>
                         @if (editForm!.get('threshold')?.invalid) {
                           <span class="field-error">Threshold is required for this row. Restore a value or choose Cancel.</span>
@@ -610,9 +645,15 @@ interface StationGroup {
                       }
                       <!-- Read-only row facts that left the table
                            (Bruno's beta.14 column trim). -->
-                      <span class="muted row-facts">
-                        {{ kindTitle(row) }}@if (row.batteryField) {, battery <code>{{ row.batteryField }}</code>}, {{ row.origin }} layer
-                      </span>
+                      @if (row.kind === 'unrecognized') {
+                        <span class="muted row-facts">
+                          Unrecognized field. Assigning it creates a custom sensor for this station only.
+                        </span>
+                      } @else {
+                        <span class="muted row-facts">
+                          {{ kindTitle(row) }}@if (row.batteryField) {, battery <code>{{ row.batteryField }}</code>}, {{ row.origin }} layer
+                        </span>
+                      }
                       <!-- Dialog-shaped footer (Bruno's row-editor
                            feedback): OK keeps this row's drafts and
                            collapses; Cancel discards them and
@@ -686,6 +727,10 @@ export class AwnRootComponent {
 
   protected readonly expandedKey = signal<string | null>(null);
   protected editForm: ReturnType<FormBuilder['group']> | null = null;
+  /** The measurement the open assignment form last held, to detect switches that must reset the unit/trigger controls. */
+  private lastAssignMeasurement = '';
+  /** The source unit the open assignment form last held; a switch resets the threshold, which is stored in this unit. */
+  private lastAssignSourceUnit = '';
 
   protected readonly draftCount = computed(() => {
     this.draftVersion();
@@ -818,10 +863,114 @@ export class AwnRootComponent {
   }
 
   protected displayUnitOptions(row: EditorRowDto): UnitOptionDto[] {
-    if (!row.measurement) {
+    // For an unrecognized row being assigned, the measurement lives in
+    // the open form rather than on the row.
+    const m = row.measurement ?? (this.isExpanded(row) ? this.assignedMeasurement() : '');
+    if (!m) {
       return [];
     }
-    return this.vocab()?.measurements[row.measurement]?.extendedDisplay ?? [];
+    return this.vocab()?.measurements[m]?.extendedDisplay ?? [];
+  }
+
+  // ---- Unrecognized-row assignment (PR E) ------------------------
+
+  /** The (kind, measurement) pairs the wrapper table can build — server-projected, never decided here. */
+  protected assignmentOptions(): AssignmentOptionDto[] {
+    return this.vocab()?.assignments ?? [];
+  }
+
+  protected assignmentFor(measurement: unknown): AssignmentOptionDto | undefined {
+    return typeof measurement === 'string' && measurement !== ''
+      ? this.assignmentOptions().find(a => a.measurement === measurement)
+      : undefined;
+  }
+
+  /** The open form's measurement choice ('' before one is made). */
+  protected assignedMeasurement(): string {
+    const v = this.editForm?.get('measurement')?.value as unknown;
+    return typeof v === 'string' ? v : '';
+  }
+
+  protected assignSourceOptions(): UnitOptionDto[] {
+    const m = this.assignedMeasurement();
+    return m ? (this.vocab()?.measurements[m]?.customSource ?? []) : [];
+  }
+
+  /** Label of the accessory kind the chosen measurement produces, for the form's fact line. */
+  protected assignedKindLabel(): string | null {
+    const opt = this.assignmentFor(this.assignedMeasurement());
+    if (!opt) {
+      return null;
+    }
+    return (KIND_SUPPORT as Record<string, { label: string }>)[opt.kind]?.label ?? opt.kind;
+  }
+
+  /** The message shown while the assignment is incomplete (the state that blocks Preview). */
+  protected assignError(): string | null {
+    if (!this.editForm) {
+      return null;
+    }
+    const m = this.assignedMeasurement();
+    if (m === '') {
+      return 'Choose a measurement to assign this field, or Cancel.';
+    }
+    if (this.assignSourceOptions().length > 0) {
+      const su = this.editForm.get('sourceUnit')?.value as unknown;
+      if (typeof su !== 'string' || su === '') {
+        return 'Choose the unit the station reports this field in, or Cancel.';
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Mirrors resolveRow's measurement-aware trigger default: pressure
+   * and distance alarm LOW (storm incoming, strike nearby); everything
+   * else alarms high. The form preselects it and applyEdit treats it
+   * as the original, so an untouched default is never authored.
+   */
+  protected assignmentDefaultDirection(measurement: unknown): 'above' | 'below' {
+    return measurement === 'pressure' || measurement === 'distance' ? 'below' : 'above';
+  }
+
+  /** The row's kind for form gating: the drafted assignment's kind while an unrecognized row's editor is open. */
+  protected effectiveKind(row: EditorRowDto): string {
+    if (row.kind !== 'unrecognized') {
+      return row.kind;
+    }
+    if (!this.isExpanded(row)) {
+      return 'unrecognized';
+    }
+    return this.assignmentFor(this.assignedMeasurement())?.kind ?? 'unrecognized';
+  }
+
+  /**
+   * Whether a measurement's rows can cross a threshold, per the
+   * server's projection of the validator's non-triggering strip
+   * (PR #57 review F3). Unknown measurements default to true — the
+   * server list covers every motion measurement, and the gate below
+   * also requires kind motion.
+   */
+  protected triggeringFor(measurement: string | undefined): boolean {
+    if (!measurement) {
+      return true;
+    }
+    return this.assignmentOptions().find(a => a.measurement === measurement)?.triggering ?? true;
+  }
+
+  /**
+   * The one gate for threshold and trigger controls, row editors and
+   * assignments alike: motion kind AND a triggering measurement.
+   * Direction and timestamp rows are kind motion but hardcode
+   * threshold Infinity; the validator warn-strips trigger fields on
+   * them, so the editor never offers controls the save would nullify.
+   */
+  protected showsTriggerControls(row: EditorRowDto): boolean {
+    if (this.effectiveKind(row) !== 'motion') {
+      return false;
+    }
+    const measurement = row.kind === 'unrecognized' ? this.assignedMeasurement() : row.measurement;
+    return this.triggeringFor(measurement);
   }
 
   /**
@@ -1053,27 +1202,86 @@ export class AwnRootComponent {
       this.editFormInvalid.set(false);
       return;
     }
-    const current = (field: 'enabled' | 'name' | 'displayUnit' | 'threshold' | 'triggerDirection'): unknown =>
+    const current = (field: DraftableField): unknown =>
       this.store.draftedValue(row, field) ?? (row as unknown as Record<string, unknown>)[field];
+    const isAssign = row.kind === 'unrecognized';
+    const draftedMeasurement = typeof current('measurement') === 'string' ? current('measurement') as string : '';
     // Blank-control policy (review #43 round 2): a blanked required
     // value is an INVALID form state — inline error, Preview blocked —
     // never a silent no-draft. `name` is always required; `threshold`
     // is required exactly when the row currently displays one (a
     // threshold-less row may stay blank; removing an authored value
     // is Use defaults' job, and a default-sourced value cannot be
-    // removed by an override at all).
+    // removed by an override at all). An unrecognized row's form
+    // additionally carries measurement + sourceUnit, and the group
+    // validator holds the form invalid until the identity is complete
+    // (measurement chosen, plus a source unit when the measurement is
+    // numeric) — the same policy, applied to the assignment.
+    this.lastAssignMeasurement = draftedMeasurement;
+    this.lastAssignSourceUnit = typeof current('sourceUnit') === 'string' ? current('sourceUnit') as string : '';
     this.editForm = this.fb.group({
-      enabled: [current('enabled') === true],
-      name: [typeof current('name') === 'string' ? current('name') : '', Validators.required],
+      ...(isAssign ? {
+        measurement: [draftedMeasurement],
+        sourceUnit: [typeof current('sourceUnit') === 'string' ? current('sourceUnit') : ''],
+      } : {}),
+      // The unrecognized row's `enabled: false` is a sentinel (nothing
+      // registers), not a setting — only a DRAFT can say otherwise,
+      // and a fresh assignment defaults ON.
+      enabled: [isAssign ? (this.store.draftedValue(row, 'enabled') ?? true) === true : current('enabled') === true],
+      name: [
+        typeof current('name') === 'string' ? current('name') : (isAssign ? row.dataPoint : ''),
+        Validators.required,
+      ],
       displayUnit: [typeof current('displayUnit') === 'string' ? current('displayUnit') : ''],
       threshold: [
         typeof current('threshold') === 'number' ? current('threshold') : null,
         typeof current('threshold') === 'number' ? Validators.required : [],
       ],
-      triggerDirection: [current('triggerDirection') === 'below' ? 'below' : 'above'],
-    });
+      triggerDirection: [
+        current('triggerDirection') === 'below' ? 'below'
+          : current('triggerDirection') === 'above' ? 'above'
+            : this.assignmentDefaultDirection(draftedMeasurement),
+      ],
+    }, isAssign ? {
+      validators: [(g: AbstractControl): { assignIncomplete: true } | null => {
+        const m = g.get('measurement')?.value as unknown;
+        if (typeof m !== 'string' || m === '') {
+          return { assignIncomplete: true };
+        }
+        const needsSource = (this.vocab()?.measurements[m]?.customSource ?? []).length > 0;
+        const su = g.get('sourceUnit')?.value as unknown;
+        return needsSource && (typeof su !== 'string' || su === '') ? { assignIncomplete: true } : null;
+      }],
+    } : {});
     this.editFormInvalid.set(this.editForm.invalid);
     this.editForm.valueChanges.subscribe((v: Record<string, unknown>) => {
+      if (isAssign && v.measurement !== this.lastAssignMeasurement) {
+        // A measurement switch invalidates every measurement-scoped
+        // choice: the previous units would be illegal for the new
+        // measurement, and the trigger default is measurement-aware
+        // (pressure/distance alarm LOW, mirroring resolveRow).
+        this.lastAssignMeasurement = typeof v.measurement === 'string' ? v.measurement : '';
+        const reset = {
+          sourceUnit: '',
+          displayUnit: '',
+          threshold: null,
+          triggerDirection: this.assignmentDefaultDirection(v.measurement),
+        };
+        this.editForm?.patchValue(reset, { emitEvent: false });
+        v = { ...v, ...reset };
+        this.lastAssignSourceUnit = '';
+      } else if (isAssign && v.sourceUnit !== this.lastAssignSourceUnit) {
+        // A source-unit switch REINTERPRETS a threshold: thresholds are
+        // stored in the row's sourceUnit, so 10 with mph and 10 with
+        // km/hr are different physical triggers (PR #57 review F2).
+        // Reset rather than convert; the user re-enters the number in
+        // the unit now shown.
+        this.lastAssignSourceUnit = typeof v.sourceUnit === 'string' ? v.sourceUnit : '';
+        if (typeof v.threshold === 'number') {
+          this.editForm?.patchValue({ threshold: null }, { emitEvent: false });
+          v = { ...v, threshold: null };
+        }
+      }
       this.applyEdit(row, v);
       this.editFormInvalid.set(this.editForm?.invalid ?? false);
     });
@@ -1092,7 +1300,7 @@ export class AwnRootComponent {
    * disagree.
    */
   private applyEdit(row: EditorRowDto, v: Record<string, unknown>): void {
-    const sync = (field: 'enabled' | 'name' | 'displayUnit' | 'threshold' | 'triggerDirection',
+    const sync = (field: DraftableField,
       formValue: unknown, original: unknown, valid: boolean): void => {
       if (!valid || formValue === original) {
         this.store.clearField(row, field);
@@ -1100,11 +1308,51 @@ export class AwnRootComponent {
         this.store.setField(row, field, formValue);
       }
     };
+    if (row.kind === 'unrecognized') {
+      const opt = this.assignmentFor(v.measurement);
+      const needsSource = opt ? (this.vocab()?.measurements[opt.measurement]?.customSource ?? []).length > 0 : false;
+      const sourceOk = !needsSource || (typeof v.sourceUnit === 'string' && v.sourceUnit !== '');
+      if (!opt || !sourceOk) {
+        // The identity is ATOMIC: an incomplete assignment drafts
+        // nothing at all, so a partial custom fragment (which the
+        // pipeline would refuse as custom-missing-*) can never be
+        // composed, whatever order the controls were touched in.
+        this.store.resetRow(row);
+        this.bump();
+        return;
+      }
+      this.store.setField(row, 'kind', opt.kind);
+      this.store.setField(row, 'measurement', opt.measurement);
+      if (needsSource) {
+        this.store.setField(row, 'sourceUnit', v.sourceUnit);
+      } else {
+        // Timestamp rows must OMIT sourceUnit ('ms' is the contract).
+        this.store.clearField(row, 'sourceUnit');
+      }
+      // enabled is authored explicitly in BOTH states: the unrecognized
+      // row's enabled:false is a sentinel, and the resolved default for
+      // an assigned row is true — syncing against the sentinel would
+      // author the opposite of the user's unchecked intent.
+      this.store.setField(row, 'enabled', v.enabled === true);
+      sync('name', v.name, undefined, typeof v.name === 'string' && v.name !== '');
+      sync('displayUnit', v.displayUnit, undefined,
+        typeof v.displayUnit === 'string' && v.displayUnit !== '');
+      if (opt.kind === 'motion' && this.triggeringFor(opt.measurement)) {
+        sync('threshold', v.threshold, undefined, typeof v.threshold === 'number');
+        sync('triggerDirection', v.triggerDirection, this.assignmentDefaultDirection(opt.measurement),
+          v.triggerDirection === 'above' || v.triggerDirection === 'below');
+      } else {
+        this.store.clearField(row, 'threshold');
+        this.store.clearField(row, 'triggerDirection');
+      }
+      this.bump();
+      return;
+    }
     sync('enabled', v.enabled === true, row.enabled, true);
     sync('name', v.name, row.name, typeof v.name === 'string' && v.name !== '');
     sync('displayUnit', v.displayUnit, row.displayUnit,
       typeof v.displayUnit === 'string' && v.displayUnit !== '');
-    if (row.kind === 'motion') {
+    if (row.kind === 'motion' && this.triggeringFor(row.measurement)) {
       sync('threshold', v.threshold, row.threshold, typeof v.threshold === 'number');
       sync('triggerDirection', v.triggerDirection, row.triggerDirection,
         v.triggerDirection === 'above' || v.triggerDirection === 'below');

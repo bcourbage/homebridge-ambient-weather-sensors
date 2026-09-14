@@ -21,6 +21,7 @@ import {
   AWN_UNITS_PAGE,
   DISPLAY_FAMILIES,
   LEGACY_SCHEMA_UNIT_EXPOSURE,
+  MEASUREMENT_LABELS,
   UNIT_VOCABULARY,
   V17_LEGAL_LEGACY_UNITS,
   unitOptionsFor,
@@ -231,5 +232,35 @@ describe('display families (GA #70 editor layer, PR #53)', () => {
       }
       void extras;
     }
+  });
+});
+
+describe('MEASUREMENT_LABELS (PR #57 rounds 1-3)', () => {
+  it('pins every label as a LITERAL, so a wording regression cannot hide behind the constant', () => {
+    // The vocabulary projection tests compare the DTO against
+    // MEASUREMENT_LABELS itself, which is tautological for wording.
+    // This literal snapshot is the wording gate. In particular, count
+    // is generic ("Count", not "Daily count"): the wrapper renders and
+    // thresholds whatever the field reports; any reset cadence belongs
+    // to the AWN field, not the wrapper (round 2/3 finding).
+    expect(MEASUREMENT_LABELS).toEqual({
+      'temperature': 'Temperature',
+      'humidity': 'Humidity',
+      'illuminance': 'Light level',
+      'co2': 'CO₂',
+      'co': 'CO',
+      'pm25': 'PM2.5',
+      'pm10': 'PM10',
+      'wind-speed': 'Wind speed',
+      'rain-rate': 'Rain rate',
+      'rain-accumulation': 'Rain accumulation',
+      'pressure': 'Pressure',
+      'distance': 'Distance',
+      'uv-index': 'UV index',
+      'count': 'Count',
+      'direction': 'Direction',
+      'timestamp': 'Timestamp',
+      'boolean': 'On/off',
+    });
   });
 });

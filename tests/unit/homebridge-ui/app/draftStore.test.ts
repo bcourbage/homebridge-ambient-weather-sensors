@@ -226,3 +226,26 @@ describe('field removal from authored fragments (PR #53 review F1)', () => {
     expect(store.stationsAuthoringField('windspeedmph', 'displayUnit')).toEqual([MAC]);
   });
 });
+
+describe('identity fields on an unauthored row (PR E)', () => {
+  it('kind/measurement/sourceUnit drafts on an unrecognized row emit one station-scoped fragment', () => {
+    const store = new DraftStore();
+    store.reset([]);
+    const r = row({ dataPoint: 'xbarnwind', origin: 'unrecognized', kind: 'unrecognized', enabled: false });
+    store.setField(r, 'kind', 'motion');
+    store.setField(r, 'measurement', 'wind-speed');
+    store.setField(r, 'sourceUnit', 'kph');
+    store.setField(r, 'enabled', true);
+    store.setField(r, 'name', 'Barn Wind');
+    expect(store.proposal()).toEqual([{
+      dataPoint: 'xbarnwind', stationMac: MAC,
+      kind: 'motion', measurement: 'wind-speed', sourceUnit: 'kph',
+      enabled: true, name: 'Barn Wind',
+    }]);
+    // The unrecognized row has no authored baseline, so every identity
+    // patch is a real draft; resetRow withdraws the assignment whole.
+    expect(store.isRowDirty(r)).toBe(true);
+    store.resetRow(r);
+    expect(store.proposal()).toEqual([]);
+  });
+});

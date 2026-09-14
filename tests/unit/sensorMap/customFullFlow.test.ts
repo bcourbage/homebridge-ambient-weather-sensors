@@ -193,7 +193,12 @@ const ENTRIES: Entry[] = [
     // and stays quiet).
     override: { dataPoint: 'barn_strikes', kind: 'motion', measurement: 'count', sourceUnit: 'count', name: 'Barn Strikes', threshold: 5, triggerDirection: 'below' },
     wrapperId: 'lightning-day', value: 3,
-    assert: extendedState('3 strikes', true),
+    // NEUTRAL Value text (PR #57 review F1): the strike noun belongs to
+    // the known AWN lightning fields; a custom count row counts
+    // something this wrapper knows nothing about. The known-row wording
+    // ("1 strike" / "5 strikes") stays pinned in
+    // tests/wrappers/extendedSensors/lightningAccessory.test.ts.
+    assert: extendedState('3', true),
   },
   {
     key: 'motion|timestamp',
