@@ -19,6 +19,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import * as path from 'node:path';
 
 import type { LegacyConfig } from '../../src/sensorMap/compat';
+import { LEGACY_SENSOR_FIELDS } from '../../src/sensorMap/legacyMirror';
 
 export interface RawStation {
   macAddress: string;
@@ -199,16 +200,36 @@ export const PAYLOAD_MATRIX: Array<{ label: string; stations: RawStation[] }> = 
 ];
 
 
-/** The captured Demeter conversion baselines, as corpus entries. */
+/**
+ * The captured Demeter conversion baselines, as corpus entries.
+ *
+ * The loader ENFORCES the fixtures' stated contract mechanically
+ * (PR #59 review F4): the envelope must be exactly the journal shape,
+ * and every legacy key must be in LEGACY_SENSOR_FIELDS — the same
+ * allowlist the journal writer uses — so a future production baseline
+ * carrying a credential (apiKey, applicationKey, anything) fails the
+ * suite instead of being committed while CI stays green.
+ */
 export function demeterBaselines(): Array<{ label: string; config: LegacyConfig }> {
   const dir = path.resolve(__dirname, '../fixtures/configs/demeter');
+  const allowed = new Set<string>(LEGACY_SENSOR_FIELDS);
   return readdirSync(dir)
     .filter(f => f.endsWith('.json'))
     .sort()
     .map(f => {
-      const parsed = JSON.parse(readFileSync(path.join(dir, f), 'utf8')) as {
-        savedAt: string; legacy: LegacyConfig;
-      };
-      return { label: `demeter baseline ${f} (${parsed.savedAt})`, config: parsed.legacy };
+      const parsed = JSON.parse(readFileSync(path.join(dir, f), 'utf8')) as Record<string, unknown>;
+      const keys = Object.keys(parsed).sort();
+      if (JSON.stringify(keys) !== JSON.stringify(['legacy', 'savedAt', 'schemaVersion'])
+        || parsed.schemaVersion !== 1
+        || typeof parsed.savedAt !== 'string' || Number.isNaN(Date.parse(parsed.savedAt))
+        || !parsed.legacy || typeof parsed.legacy !== 'object' || Array.isArray(parsed.legacy)) {
+        throw new Error(`demeter baseline ${f}: not a valid conversion-journal envelope`);
+      }
+      const illegal = Object.keys(parsed.legacy as Record<string, unknown>)
+        .filter(k => !allowed.has(k));
+      if (illegal.length > 0) {
+        throw new Error(`demeter baseline ${f}: keys outside LEGACY_SENSOR_FIELDS: ${illegal.join(', ')}`);
+      }
+      return { label: `demeter baseline ${f} (${parsed.savedAt})`, config: parsed.legacy as LegacyConfig };
     });
 }

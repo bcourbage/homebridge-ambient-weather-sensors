@@ -32,6 +32,7 @@ import { convertedConfigFor } from '../helpers/conversion';
 import {
   HapMockAPI,
   serializeRegistered,
+  type HapLifecyclePlatformAccessory,
   type SerializedAccessory,
 } from '../helpers/hapLifecycle';
 import {
@@ -55,7 +56,13 @@ afterEach(() => {
 async function runLifecycle(
   config: Record<string, unknown>,
   stations: RawStation[],
-): Promise<{ accessories: SerializedAccessory[]; unregisteredCount: number }> {
+  cached: HapLifecyclePlatformAccessory[] = [],
+): Promise<{
+  accessories: SerializedAccessory[];
+  unregisteredCount: number;
+  api: HapMockAPI;
+  raw: HapLifecyclePlatformAccessory[];
+}> {
   const api = new HapMockAPI();
   const log = new MockLogger();
   const fetchSpy = vi.spyOn(global, 'fetch').mockImplementation(async () => new Response(
@@ -64,11 +71,16 @@ async function runLifecycle(
   ));
   vi.spyOn(global, 'setInterval').mockImplementation(() => 0 as unknown as ReturnType<typeof setInterval>);
 
-  new AmbientWeatherSensorsPlatform(
+  const platform = new AmbientWeatherSensorsPlatform(
     log as never,
     { platform: 'AmbientWeatherSensors', apiKey: 'k', applicationKey: 'k', ...config } as never,
     api as never,
   );
+  // Homebridge hands cached accessories to configureAccessory BEFORE
+  // didFinishLaunching; the cached-upgrade journey does the same.
+  for (const a of cached) {
+    platform.configureAccessory(a as never);
+  }
   api.emit('didFinishLaunching');
   // Zero-registration corpus entries are legitimate (empty config,
   // master toggle off), so completion cannot be "registered.length
@@ -86,7 +98,19 @@ async function runLifecycle(
     await new Promise((r) => setImmediate(r));
   }
   vi.restoreAllMocks();
-  return { accessories: serializeRegistered(api), unregisteredCount: api.unregistered.length };
+  return {
+    accessories: serializeRegistered(api),
+    unregisteredCount: api.unregistered.length,
+    api,
+    raw: api.registered,
+  };
+}
+
+/** Serialize an arbitrary accessory list the same way serializeRegistered does. */
+function serializeAccessories(list: HapLifecyclePlatformAccessory[]): SerializedAccessory[] {
+  const api = new HapMockAPI();
+  api.registered.push(...list);
+  return serializeRegistered(api);
 }
 
 const CORPUS = [...CONFIG_MATRIX, ...demeterBaselines()];
@@ -151,7 +175,8 @@ describe('migration equivalence — full HAP graph, legacy path vs converted pat
     for (const { label: payloadLabel, stations } of PAYLOAD_MATRIX) {
       it(`graphs match: ${cfgLabel} / ${payloadLabel}`, async () => {
         const legacy = await runLifecycle(config as Record<string, unknown>, stations);
-        const converted = await runLifecycle(convertedConfigFor(config, stations), stations);
+        const convertedCfg = convertedConfigFor(config, stations);
+        const converted = await runLifecycle(convertedCfg, stations);
 
         // Fresh-start runs must never unregister anything.
         expect(legacy.unregisteredCount).toBe(0);
@@ -180,6 +205,37 @@ describe('migration equivalence — full HAP graph, legacy path vs converted pat
         if (allowed.length > 0) {
           const present = new Set(legacy.accessories.map(a => a.uniqueId));
           expect(observed).toEqual(allowed.filter(d => present.has(d.uniqueId)));
+        }
+
+        // ---- Cached-upgrade journey (PR #59 review F1): the REAL
+        // user path is not a fresh start — the v1.6 cache exists when
+        // the converted config first boots. The legacy run's real HAP
+        // accessories ARE that cache. The converted boot must restore
+        // and reconcile them IN PLACE: zero registrations (a
+        // replace-the-cache mutation fails here), zero
+        // unregistrations (churn fails here), and the same objects
+        // carry the same graphs afterward.
+        const cachedBoot = await runLifecycle(convertedCfg, stations, legacy.raw);
+        expect(cachedBoot.api.registered, 'cached boot registered').toEqual([]);
+        expect(cachedBoot.api.unregistered, 'cached boot unregistered').toEqual([]);
+        const reconciled = serializeAccessories(legacy.raw);
+        expect(reconciled.map(a => a.uniqueId)).toEqual(converted.accessories.map(a => a.uniqueId));
+        const cachedObserved: GraphValueDiff[] = [];
+        for (let i = 0; i < converted.accessories.length; i++) {
+          const fresh = converted.accessories[i];
+          const rec = reconciled[i];
+          expect(rec.displayName, `${fresh.uniqueId} displayName after cached boot`).toBe(fresh.displayName);
+          if (allowed.length === 0) {
+            expect(rec.graph, `${fresh.uniqueId} graph after cached boot`).toEqual(fresh.graph);
+          } else {
+            cachedObserved.push(...valueDiffs(fresh, rec));
+          }
+        }
+        if (allowed.length > 0) {
+          // The cached boot runs the CONVERTED config on both sides of
+          // this comparison, so even the pinned legacy-vs-converted
+          // value deviations must vanish here.
+          expect(cachedObserved).toEqual([]);
         }
       });
     }

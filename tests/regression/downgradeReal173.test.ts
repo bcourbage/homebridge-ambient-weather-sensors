@@ -37,6 +37,7 @@ import { convertedConfigFor, documentedRollback, inventoryOf } from '../helpers/
 import {
   HapMockAPI,
   serializeRegistered,
+  type HapLifecyclePlatformAccessory,
   type SerializedAccessory,
 } from '../helpers/hapLifecycle';
 import {
@@ -66,7 +67,14 @@ async function runLifecycleWith(
   Ctor: PlatformCtor,
   config: Record<string, unknown>,
   stations: RawStation[],
-): Promise<{ accessories: SerializedAccessory[]; unregisteredCount: number; log: MockLogger }> {
+  cached: HapLifecyclePlatformAccessory[] = [],
+): Promise<{
+  accessories: SerializedAccessory[];
+  unregisteredCount: number;
+  log: MockLogger;
+  api: HapMockAPI;
+  raw: HapLifecyclePlatformAccessory[];
+}> {
   const api = new HapMockAPI();
   const log = new MockLogger();
   vi.spyOn(global, 'fetch').mockImplementation(async () => new Response(
@@ -75,11 +83,14 @@ async function runLifecycleWith(
   ));
   vi.spyOn(global, 'setInterval').mockImplementation(() => 0 as unknown as ReturnType<typeof setInterval>);
 
-  new Ctor(
+  const platform = new Ctor(
     log as never,
     { platform: 'AmbientWeatherSensors', apiKey: 'k', applicationKey: 'k', ...config } as never,
     api as never,
-  );
+  ) as { configureAccessory(a: never): void };
+  for (const a of cached) {
+    platform.configureAccessory(a as never);
+  }
   api.emit('didFinishLaunching');
   // Both 1.7.3's pipeline and HEAD's end by logging `Data source:`.
   await vi.waitFor(() => {
@@ -89,8 +100,35 @@ async function runLifecycleWith(
     await new Promise((r) => setImmediate(r));
   }
   vi.restoreAllMocks();
-  return { accessories: serializeRegistered(api), unregisteredCount: api.unregistered.length, log };
+  return {
+    accessories: serializeRegistered(api),
+    unregisteredCount: api.unregistered.length,
+    log,
+    api,
+    raw: api.registered,
+  };
 }
+
+function serializeAccessories(list: HapLifecyclePlatformAccessory[]): SerializedAccessory[] {
+  const api = new HapMockAPI();
+  api.registered.push(...list);
+  return serializeRegistered(api);
+}
+
+describe('real 1.7.3 provenance', () => {
+  it('the proof dependency is exactly the published 1.7.3', async () => {
+    // The alias is pinned @1.7.3 (no range) in package.json; this
+    // assertion makes a silent lockfile drift to a later 1.7.x fail
+    // the suite instead of quietly changing which implementation the
+    // proof executes (PR #59 review F3).
+    const { readFileSync } = await import('node:fs');
+    const path = await import('node:path');
+    const pkg = JSON.parse(readFileSync(
+      path.resolve(__dirname, '../../node_modules/awn-v1-7-3/package.json'), 'utf8',
+    )) as { version: string };
+    expect(pkg.version).toBe('1.7.3');
+  });
+});
 
 describe('real 1.7.3 guard: HEAD-emitted v2 config freezes the plugin', () => {
   it('no fetch, no registrations, no unregistrations, guard error logged', async () => {
@@ -117,6 +155,46 @@ describe('real 1.7.3 guard: HEAD-emitted v2 config freezes the plugin', () => {
     expect(api.registered).toEqual([]);
     expect(api.unregistered).toEqual([]);
   });
+
+  it('a v2-WRITTEN cache is preserved untouched through the freeze (review F2)', async () => {
+    const fullHouse = CONFIG_MATRIX.find(c => c.label === 'full house — every category')!;
+    const converted = convertedConfigFor(fullHouse.config, ALL_STATIONS);
+
+    // The cache a real downgrade encounters: written by HEAD's v2
+    // lifecycle on the converted config.
+    const v2Run = await runLifecycleWith(
+      AmbientWeatherSensorsPlatform as unknown as PlatformCtor, converted, ALL_STATIONS,
+    );
+    expect(v2Run.raw.length).toBeGreaterThan(0);
+    const before = serializeAccessories(v2Run.raw);
+
+    const api = new HapMockAPI();
+    const log = new MockLogger();
+    const fetchSpy = vi.spyOn(global, 'fetch').mockImplementation(async () => new Response('[]'));
+    vi.spyOn(global, 'setInterval').mockImplementation(() => 0 as unknown as ReturnType<typeof setInterval>);
+    const platform = new (Platform173 as unknown as PlatformCtor)(
+      log as never,
+      { platform: 'AmbientWeatherSensors', apiKey: 'k', applicationKey: 'k', ...converted } as never,
+      api as never,
+    ) as { configureAccessory(a: never): void };
+    for (const a of v2Run.raw) {
+      platform.configureAccessory(a as never);
+    }
+    api.emit('didFinishLaunching');
+    await vi.waitFor(() => {
+      expect(log.logs.some(l => l.level === 'error' && /written by plugin version 2\.x/.test(l.message))).toBe(true);
+    });
+    for (let i = 0; i < 4; i++) {
+      await new Promise((r) => setImmediate(r));
+    }
+    // Frozen means FROZEN: no fetch, no HAP mutations of any kind, and
+    // the cached accessories' graphs are byte-identical afterward.
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(api.registered).toEqual([]);
+    expect(api.unregistered).toEqual([]);
+    expect(api.updated).toEqual([]);
+    expect(serializeAccessories(v2Run.raw)).toEqual(before);
+  });
 });
 
 describe('rollback equivalence — real 1.7.3 vs HEAD flag-off, full HAP graph, whole corpus', () => {
@@ -140,6 +218,27 @@ describe('rollback equivalence — real 1.7.3 vs HEAD flag-off, full HAP graph, 
         const o = v173.accessories[i];
         expect(o.displayName, `${h.uniqueId} displayName`).toBe(h.displayName);
         expect(o.graph, `${h.uniqueId} graph`).toEqual(h.graph);
+      }
+
+      // ---- Cached rollback journey (review F2): the REAL downgrade
+      // boots 1.7.3 against the cache the v2 run wrote. Every
+      // representable cached accessory must be restored in place —
+      // zero registrations, zero unregistrations (the corpus has no
+      // custom rows) — and carry the same graph as a fresh 1.7.3 run.
+      const v2Run = await runLifecycleWith(
+        AmbientWeatherSensorsPlatform as unknown as PlatformCtor,
+        convertedConfigFor(config, ALL_STATIONS), ALL_STATIONS,
+      );
+      const cachedBoot = await runLifecycleWith(
+        Platform173 as unknown as PlatformCtor, rolledBack, ALL_STATIONS, v2Run.raw,
+      );
+      expect(cachedBoot.api.registered, 'cached rollback registered').toEqual([]);
+      expect(cachedBoot.api.unregistered, 'cached rollback unregistered').toEqual([]);
+      const restored = serializeAccessories(v2Run.raw);
+      expect(restored.map(a => a.uniqueId)).toEqual(v173.accessories.map(a => a.uniqueId));
+      for (let i = 0; i < restored.length; i++) {
+        expect(restored[i].graph, `${restored[i].uniqueId} graph after cached rollback`)
+          .toEqual(v173.accessories[i].graph);
       }
     });
   }
@@ -184,5 +283,27 @@ describe('custom-row downgrade loss boundary on real 1.7.3', () => {
     expect(ids).toContain(`${OUTDOOR_STATION.macAddress}-tempf`);
     expect(ids).toContain(`${OUTDOOR_STATION.macAddress}-humidity`);
     expect(v173.unregisteredCount).toBe(0);
+
+    // ---- Cached variant (review F2): the v2 run REGISTERED the
+    // custom accessory, so the downgrade's cache contains it. Real
+    // 1.7.3 must unregister EXACTLY that one accessory — the
+    // documented loss boundary — and restore every representable one
+    // in place with zero new registrations.
+    const v2Run = await runLifecycleWith(
+      AmbientWeatherSensorsPlatform as unknown as PlatformCtor,
+      nextConfig as Record<string, unknown>, [payload],
+    );
+    const customUid = `${OUTDOOR_STATION.macAddress}-barn_temp`;
+    const cachedCustom = v2Run.raw.find(a =>
+      (a.context.device as { uniqueId?: string } | undefined)?.uniqueId === customUid);
+    expect(cachedCustom, 'v2 run registered the custom accessory').toBeDefined();
+
+    const cachedBoot = await runLifecycleWith(
+      Platform173 as unknown as PlatformCtor, rolledBack, [payload], v2Run.raw,
+    );
+    expect(cachedBoot.api.registered, 'cached custom-loss registered').toEqual([]);
+    expect(cachedBoot.api.unregistered, 'cached custom-loss unregistered').toEqual([cachedCustom]);
+    const survivors = serializeAccessories(v2Run.raw.filter(a => a !== cachedCustom));
+    expect(survivors.map(a => a.uniqueId)).toContain(`${OUTDOOR_STATION.macAddress}-tempf`);
   });
 });

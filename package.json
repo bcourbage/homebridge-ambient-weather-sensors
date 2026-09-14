@@ -73,7 +73,7 @@
     "@eslint/js": "^9.17.0",
     "@types/node": "^22.10.0",
     "@vitest/coverage-v8": "4.1.11",
-    "awn-v1-7-3": "npm:@bcourbage/homebridge-ambient-weather-sensors@^1.7.3",
+    "awn-v1-7-3": "npm:@bcourbage/homebridge-ambient-weather-sensors@1.7.3",
     "bootstrap": "^5.3.8",
     "eslint": "^9.17.0",
     "homebridge": "^2.0.0",
