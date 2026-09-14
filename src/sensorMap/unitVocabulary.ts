@@ -167,7 +167,7 @@ export const MEASUREMENT_LABELS: Readonly<Record<Measurement, string>> = {
   'pressure': 'Pressure',
   'distance': 'Distance',
   'uv-index': 'UV index',
-  'count': 'Daily count',
+  'count': 'Count',
   'direction': 'Direction',
   'timestamp': 'Timestamp',
   'boolean': 'On/off',

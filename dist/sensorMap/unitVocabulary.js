@@ -143,7 +143,7 @@ export const MEASUREMENT_LABELS = {
     'pressure': 'Pressure',
     'distance': 'Distance',
     'uv-index': 'UV index',
-    'count': 'Daily count',
+    'count': 'Count',
     'direction': 'Direction',
     'timestamp': 'Timestamp',
     'boolean': 'On/off',
