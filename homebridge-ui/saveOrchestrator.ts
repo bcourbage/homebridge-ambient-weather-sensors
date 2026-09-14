@@ -81,6 +81,12 @@ export interface ComposeAndPersistArgs {
    * translation of the on-disk config).
    */
   proposal?: unknown[];
+  /**
+   * Live-settings patch (beta.17, GA #56): forwarded verbatim into the
+   * guarded transaction; the server validates and applies it. Absent
+   * means a sensor-only save.
+   */
+  settings?: unknown;
   /** Optional fresh AWN station list, when one is genuinely available. */
   liveStations?: Array<{ macAddress: string; name?: string }>;
   /**
@@ -367,6 +373,7 @@ async function composeAndPersistFrozen(
     // (review #47 P1-1).
     formBlock: digestSession ? cfgArray[index] : undefined,
     proposal: args.proposal,
+    settings: args.settings,
     cachedAccessoryUniqueIds,
     liveStations: args.liveStations,
     confirmDigest: args.confirmDigest,

@@ -191,7 +191,7 @@ export class HomebridgeService {
     // config (measured on production — every later read saw zero
     // blocks). Mid-save form EDITS are handled by the orchestrator's
     // re-read refusal instead.
-    if (!ipc.disableSaveButton || !ipc.enableSaveButton) {
+    if (!ipc.disableSaveButton) {
       throw new Error('This Homebridge UI does not expose the Save button controls; saving is unavailable.');
     }
     return {
@@ -199,11 +199,16 @@ export class HomebridgeService {
       getPluginConfig: () => ipc.getPluginConfig() as Promise<Array<Record<string, unknown>>>,
       updatePluginConfig: (config) => ipc.updatePluginConfig!(config),
       savePluginConfig: () => ipc.savePluginConfig!(),
+      // Since beta.17 the native footer Save is PERMANENTLY disabled
+      // (index.html disables it before anything else runs, and the
+      // page never enables it). Freeze re-asserts the disable;
+      // unfreeze deliberately does NOT enable — there is exactly one
+      // functional save path, the page's own guarded Save.
       freezeSettingsForm: () => {
         ipc.disableSaveButton!();
       },
       unfreezeSettingsForm: () => {
-        ipc.enableSaveButton!();
+        ipc.disableSaveButton!();
       },
       ...(ipc.getCachedAccessories
         ? { getCachedAccessories: () => ipc.getCachedAccessories!() }

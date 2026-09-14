@@ -96,236 +96,58 @@
 </head>
 <body>
   <!--
-    HB UI X renders its schema-based config form at the top of this
-    page automatically when homebridge.showSchemaForm() is called
-    (see the script block below). The form appears BEFORE the h1
-    below — Homebridge injects it into the top of <body>. Our
-    preview panels come after.
+    The schema form is never rendered (beta.17): every editable
+    setting lives in the app below, and rendering the form would
+    recreate the second-writer hazard the guarded save prevents.
   -->
 
   <div id="awn">
-    <h1>Sensor-map v2.0 preview</h1>
-    <p class="sub" id="version">v2 preview</p>
-
-    <div id="statusBanner" class="banner info">Loading status…</div>
-
-    <div id="warnings"></div>
-
-    <h2 class="title-row">
-      <span class="grow">Status</span>
-      <button id="refresh">Refresh</button>
-    </h2>
-    <table>
-      <tbody>
-        <tr><th>Config mode</th><td id="configMode">—</td></tr>
-        <tr><th>Sensor-map v2 flag</th><td id="v2Flag">—</td></tr>
-        <tr><th>Plugin version</th><td id="pluginVersion">—</td></tr>
-      </tbody>
-    </table>
-
-    <h2>Discovered stations &amp; datapoints</h2>
-    <p class="sub">Populated by the plugin as it observes AWN payloads. Empty until the first successful v2 discovery or poll with the sensor-map v2 flag on.</p>
-    <div id="discovery"></div>
-
-    <h2>Notices</h2>
-    <p class="sub">Structural-change notices are recorded when the plugin re-registers an accessory whose structure changed (for example after a sensor-map edit). Expected whenever the v2 flag is on and structure changes. Existing notices remain visible after the flag is turned off; no new structural notices are generated while it is off.</p>
-    <div id="notices"></div>
-
     <!--
       The Angular sensor-map editor (#69) bootstraps onto this element.
-      Its bundle is committed under app/ with content-hashed filenames;
-      the script reference between the markers below is REWRITTEN by
-      scripts/update-ui-fragment.mjs after every `npm run build:app` —
-      never edit that block by hand.
+      Since beta.17 (GA #56/#65) it is the WHOLE settings page: the
+      preview-era chrome (status table, discovered-datapoints dump,
+      notices panel) and the schema form are gone; connection settings
+      live inside the app, and the ONLY functional save path is the
+      app's own guarded Save. The bundle is committed under app/ with
+      content-hashed filenames; the script reference between the
+      markers below is REWRITTEN by scripts/update-ui-fragment.mjs
+      after every `npm run build:app` — never edit that block by hand.
     -->
     <awn-root></awn-root>
 
+    <p class="sub page-footer">
+      Save changes with the Save button on this page. The Homebridge Save button below is disabled by design; the Homebridge UI offers no way to hide it.
+    </p>
     <p class="sub page-footer">
       <a href="https://github.com/sponsors/bcourbage" target="_blank" rel="noopener">Sponsor this plugin on GitHub</a>
     </p>
   </div>
   <!-- awn-app:assets:begin -->
-  <script type="module" src="app/main-IIP2WAWR.js"></script>
+  <script type="module" src="app/main-RCYPKE2P.js"></script>
   <!-- awn-app:assets:end -->
 
   <script>
     // homebridge is injected into window by Homebridge UI X.
     /* global homebridge */
 
-    // eslint-disable-next-line no-console
-    console.log('[awn-ui] script loaded, homebridge=' + (typeof homebridge));
-
-    async function refresh() {
-      let config = {};
-      try {
-        const cfgList = await homebridge.getPluginConfig();
-        config = Array.isArray(cfgList) && cfgList[0] ? cfgList[0] : {};
-      } catch (e) {
-        console.error('getPluginConfig failed', e);
-      }
-      let status;
-      try {
-        status = await homebridge.request('/status', { config });
-      } catch (e) {
-        document.getElementById('statusBanner').className = 'banner safe-mode';
-        document.getElementById('statusBanner').textContent =
-          'Failed to load plugin status: ' + (e && e.message ? e.message : e);
-        return;
-      }
-      renderBanner(status);
-      renderStatus(status);
-      try {
-        renderDiscovery(await homebridge.request('/discovery'));
-        renderNotices(await homebridge.request('/notices'));
-      } catch (e) {
-        console.error('load failed', e);
-      }
-    }
-
-    function renderBanner(status) {
-      const el = document.getElementById('statusBanner');
-      if (status.configMode === 'safe-mode') {
-        el.className = 'banner safe-mode';
-        el.textContent = status.safeModeBanner || 'Plugin is in safe mode.';
-      } else if (status.readOnly) {
-        el.className = 'banner';
-        // Truthfulness branch (review #45 round 2): saving requires
-        // the v2 flag; the page must never claim a config-converting
-        // operation is available while the server would refuse it.
-        el.textContent = status.v2Flag && status.v2Flag.enabled
-          ? 'The status panels below are read-only observations. The sensor-map editor further down can draft, preview, and save changes: every save flows through a guarded snapshot-first boundary, and changes that would register or remove HomeKit accessories require explicit confirmation. Ordinary plugin settings (including the v2 flag) remain editable in the settings form above.'
-          : 'The status panels below are read-only observations. The sensor-map editor further down is draft-and-preview only while the sensor-map v2 flag is off — saving is disabled. Enable "Advanced (v2.0 preview)" in the settings form above and restart Homebridge to edit for real.';
-      } else {
-        el.className = 'banner info';
-        el.textContent = 'v2 sensor map active.';
-      }
-      // Warnings — separate area below.
-      const warns = document.getElementById('warnings');
-      warns.innerHTML = '';
-      (status.configWarnings || []).forEach((w) => {
-        const d = document.createElement('div');
-        d.className = 'banner';
-        d.textContent = w;
-        warns.appendChild(d);
-      });
-    }
-
-    function renderStatus(status) {
-      document.getElementById('version').textContent = 'v' + status.version + ' preview';
-      document.getElementById('configMode').textContent = status.configMode;
-      const flag = document.getElementById('v2Flag');
-      const on = status.v2Flag && status.v2Flag.enabled;
-      flag.innerHTML = '';
-      const pill = document.createElement('span');
-      pill.className = 'flag ' + (on ? 'on' : 'off');
-      pill.textContent = on ? 'ON' : 'OFF';
-      flag.appendChild(pill);
-      if (on) {
-        const src = document.createElement('span');
-        src.className = 'flag-source';
-        src.textContent = 'source: ' + status.v2Flag.source;
-        flag.appendChild(src);
-      }
-      document.getElementById('pluginVersion').textContent = status.version;
-    }
-
-    function renderDiscovery(store) {
-      const el = document.getElementById('discovery');
-      const entries = (store && store.entries) || [];
-      if (entries.length === 0) {
-        el.innerHTML = '<div class="empty">No datapoints observed yet.</div>';
-        return;
-      }
-      const byStation = new Map();
-      entries.forEach((e) => {
-        const key = e.stationMac + '|' + e.stationName;
-        if (!byStation.has(key)) byStation.set(key, []);
-        byStation.get(key).push(e);
-      });
-      let html = '';
-      for (const [key, list] of byStation) {
-        const [mac, name] = key.split('|');
-        html += '<h3 style="font-size:0.95rem; margin:12px 0 4px 0;">' + escape(name || '(unnamed)') +
-                ' <code>' + escape(mac) + '</code></h3>';
-        html += '<table><thead><tr><th>Datapoint</th><th>First seen</th><th>Last seen</th></tr></thead><tbody>';
-        list.sort((a, b) => a.dataPoint.localeCompare(b.dataPoint));
-        for (const e of list) {
-          html += '<tr><td><code>' + escape(e.dataPoint) + '</code></td>' +
-                  '<td>' + escape(e.firstSeen) + '</td>' +
-                  '<td>' + escape(e.lastSeen) + '</td></tr>';
-        }
-        html += '</tbody></table>';
-      }
-      el.innerHTML = html;
-    }
-
-    function renderNotices(store) {
-      const el = document.getElementById('notices');
-      const notices = (store && store.notices) || [];
-      if (notices.length === 0) {
-        el.innerHTML = '<div class="empty">No notices.</div>';
-        return;
-      }
-      let html = '<table><thead><tr><th>Occurred</th><th>Datapoint</th><th>Station</th><th>Old → new</th></tr></thead><tbody>';
-      for (const n of notices) {
-        html += '<tr><td>' + escape(n.occurredAt) + '</td>' +
-                '<td><code>' + escape(n.dataPoint) + '</code></td>' +
-                '<td><code>' + escape(n.stationMac) + '</code></td>' +
-                '<td>' + escape(n.oldSignature || '—') + ' → ' + escape(n.newSignature) + '</td></tr>';
-      }
-      html += '</tbody></table>';
-      el.innerHTML = html;
-    }
-
-    function escape(s) {
-      return String(s == null ? '' : s)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;');
-    }
-
-    document.getElementById('refresh').addEventListener('click', () => {
-      refresh().catch((e) => {
-        // eslint-disable-next-line no-console
-        console.warn('[awn-ui] refresh failed', e);
-      });
-    });
-
-    // Enable HB UI X's built-in Save button. In custom UI mode the
-    // Save button is disabled by default; without this call it
-    // spins forever when the user clicks Save because HB UI X
-    // waits for a signal that never comes. Every custom UI plugin
-    // that embeds the schema form calls this before showSchemaForm.
-    // (The sensor-map editor temporarily disables the button and
-    // hides the form while one of ITS saves runs, so a form edit
-    // cannot race the guarded persistence; both are restored after.)
-    homebridge.enableSaveButton();
-
-    // Render HB UI X's schema-based config form ABOVE our preview
-    // panels. Without this, enabling `customUi: true` in the schema
-    // would hide the config form entirely — users would have no way
-    // to edit ordinary settings (credentials, toggles, filters)
-    // through the UI. Those fields save through HB UI X directly;
-    // sensor-map saves flow through the guarded server compose
-    // boundary (/compose-save) and only its RESULT is persisted via
-    // HB UI X. The two must not race: an editor save refuses while
-    // this form holds unsaved changes (unsaved-settings-changes).
-    homebridge.showSchemaForm();
-
-    // Kick off the observation-panel refresh in the background.
-    // Do NOT block the modal on it — during v2.0.0-beta.5 users hit
-    // a Safari + HB UI X interaction where the server bridge
-    // response never reached the iframe (postMessage to a null
-    // contentWindow inside HB UI X's frontend). Blocking the
-    // modal on that request made the entire schema form unusable.
-    // Now the schema form is usable immediately; the observation
-    // panels populate if the request succeeds, or stay on their
-    // placeholder text otherwise.
-    refresh().catch((e) => {
+    // THE FIRST STATEMENT, synchronous, before any asynchronous
+    // initialization (beta.17 requirement): the native footer Save is
+    // never a save path for this plugin. In custom UI mode HB UI X
+    // ships it disabled and this page never calls enableSaveButton();
+    // the explicit disable below is the defensive belt in case a host
+    // version changes the default. The page's own guarded Save is the
+    // only functional save path. (HB UI X's SDK has no call to HIDE
+    // the button — tracked upstream; see the note in the page footer.)
+    try {
+      homebridge.disableSaveButton();
+    } catch (e) {
       // eslint-disable-next-line no-console
-      console.warn('[awn-ui] initial refresh failed', e);
-    });
+      console.warn('[awn-ui] disableSaveButton unavailable', e);
+    }
+
+    // The schema form is never shown (beta.17): every editable setting
+    // lives in the app, and rendering the form would recreate the
+    // second-writer hazard the guarded save exists to prevent.
   </script>
 </body>
 </html>

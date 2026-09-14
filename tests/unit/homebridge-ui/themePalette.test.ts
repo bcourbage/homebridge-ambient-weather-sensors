@@ -153,8 +153,11 @@ describe('custom-UI theme palette', () => {
     }
   });
 
-  it('the flag-source label is palette-driven (the exact regression)', () => {
-    expect(script).toContain("src.className = 'flag-source'");
-    expect(css).toMatch(/#awn \.flag-source \{[^}]*color: var\(--fg-sub\)/);
+  it('the removed preview chrome left no orphaned script (beta.17)', () => {
+    // The status/discovery/notices panels and their renderers are
+    // gone; the page script holds only the synchronous native-Save
+    // disable.
+    expect(script).not.toContain('flag-source');
+    expect(script).not.toContain('renderBanner');
   });
 });

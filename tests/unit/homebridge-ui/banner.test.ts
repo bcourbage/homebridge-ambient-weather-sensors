@@ -1,11 +1,8 @@
 /**
- * Top-banner truthfulness regression (review #45 round 2): the
- * fragment page's status banner must branch on the v2 flag — never
- * claiming a config-converting save is available while the server
- * would refuse it, and never hiding that saving exists when it is.
- *
- * The banner lives in the handwritten inline script, so this pins the
- * source: the branch condition and both texts' load-bearing claims.
+ * The consolidated page's static contract (beta.17, GA #56/#65):
+ * exactly one functional save path. The native footer Save is
+ * disabled SYNCHRONOUSLY, before any asynchronous initialization, and
+ * nothing on the page can re-enable it or summon the schema form.
  */
 import { readFileSync } from 'node:fs';
 import * as path from 'node:path';
@@ -15,25 +12,32 @@ import { describe, expect, it } from 'vitest';
 const html = readFileSync(
   path.join(__dirname, '..', '..', '..', 'homebridge-ui', 'public', 'index.html'), 'utf8');
 
-describe('status banner flag-truthfulness', () => {
-  it('branches on status.v2Flag.enabled', () => {
-    expect(html).toContain('status.v2Flag && status.v2Flag.enabled');
+describe('single-save page contract', () => {
+  it('disableSaveButton is the first statement, before any await or request', () => {
+    const script = html.slice(html.indexOf('<script>'), html.lastIndexOf('</script>'));
+    const disableAt = script.indexOf('homebridge.disableSaveButton()');
+    expect(disableAt).toBeGreaterThan(-1);
+    for (const asyncMarker of ['await ', 'homebridge.request', 'getPluginConfig', 'setTimeout', 'then(']) {
+      const at = script.indexOf(asyncMarker);
+      if (at !== -1) {
+        expect(at, `${asyncMarker} before the disable`).toBeGreaterThan(disableAt);
+      }
+    }
   });
 
-  it('the flag-ON text describes guarded saving with confirmation', () => {
-    expect(html).toMatch(/can draft, preview, and save changes[\s\S]*guarded snapshot-first boundary[\s\S]*explicit confirmation/);
+  it('never enables the native Save and never shows the schema form', () => {
+    expect(html).not.toContain('homebridge.enableSaveButton');
+    expect(html).not.toContain('showSchemaForm()');
   });
 
-  it('the flag-OFF text says draft-and-preview only and directs to the flag + restart', () => {
-    expect(html).toMatch(/draft-and-preview only while the sensor-map v2 flag is off — saving is disabled/);
-    expect(html).toMatch(/restart Homebridge to edit for real/);
+  it('tells the user the in-page Save is the save path', () => {
+    expect(html).toContain('Save changes with the Save button on this page');
+    expect(html).toContain('disabled by design');
   });
 
-  it('no unconditional claim that the editor saves', () => {
-    // Both save-capable phrasings must live inside the ternary that
-    // tests the flag: strip the branch and assert no save claim
-    // remains elsewhere in the page.
-    const withoutBranch = html.replace(/status\.v2Flag && status\.v2Flag\.enabled[\s\S]*?restart Homebridge to edit for real\.';/, '');
-    expect(withoutBranch).not.toContain('save changes');
+  it('the preview-era chrome is gone', () => {
+    for (const gone of ['Sensor-map v2.0 preview', 'Discovered stations', 'id="statusBanner"', 'id="discovery"', 'id="notices"', 'renderDiscovery']) {
+      expect(html, gone).not.toContain(gone);
+    }
   });
 });

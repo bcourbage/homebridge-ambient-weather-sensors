@@ -100,6 +100,13 @@ function editorState(overrides: Partial<EditorStateDto> = {}): EditorStateDto {
   return {
     configMode: 'v2',
     v2FlagEnabled: true,
+    settings: {
+      name: 'Test AWN',
+      dataSource: 'polling',
+      stationFilter: [],
+      apiKeySet: true,
+      applicationKeySet: true,
+    },
     editorAvailable: true,
     baseDigest: 'digest-live',
     blockIndex: 0,
@@ -185,6 +192,9 @@ function makeIpc(
       if (path === '/vocabulary') {
         return VOCAB;
       }
+      if (path === '/notices') {
+        return { schemaVersion: 1, notices: [] };
+      }
       if (path === '/preview-save' && previewResult !== undefined) {
         return previewResult;
       }
@@ -258,7 +268,7 @@ describe('AwnRootComponent (TestBed, jsdom)', () => {
     fixture.detectChanges();
     expect(el.querySelector('.row-facts')!.textContent).toContain('battery battout');
     expect(el.querySelector('.row-facts')!.textContent).toContain('global layer');
-    expect(ipc.requests.map(r => r.path).sort()).toEqual(['/editor-state', '/vocabulary']);
+    expect(ipc.requests.map(r => r.path).sort()).toEqual(['/editor-state', '/notices', '/vocabulary']);
   });
 
   it('the Kind header shows a ? glyph with a native title tooltip and screen-reader description (issue #50)', async () => {
@@ -1256,7 +1266,7 @@ describe('draft editing + preview (PR B — no persistence)', () => {
     await settle(fixture);
 
     const paths = new Set(ipc.requests.map(r => r.path));
-    expect([...paths].sort()).toEqual(['/editor-state', '/preview-save', '/vocabulary']);
+    expect([...paths].sort()).toEqual(['/editor-state', '/notices', '/preview-save', '/vocabulary']);
     expect('updatePluginConfig' in ipc).toBe(false);
     expect('savePluginConfig' in ipc).toBe(false);
   });
@@ -1371,8 +1381,10 @@ describe('save flow (PR C / finding 5 — the ONE route is composeAndPersist)', 
     btn(el, 'Save changes')!.click();
     await settle(fixture);
     expect(el.textContent).toContain('Saved.');
-    expect(el.textContent).toContain('its Save button stays off');
-    expect(el.textContent).toContain('Reload the plugin settings page before editing those fields.');
+    // Precise restart claim (beta.17 requirement): the page names the
+    // child-bridge restart and never implies it performed one.
+    expect(el.textContent).toContain("Restart Child Bridge action");
+    expect(el.textContent).toContain('This page cannot trigger the restart itself.');
     // No degraded-page warning: nothing failed.
     expect(el.textContent).not.toContain('could not be restored after the save');
   });
@@ -1645,14 +1657,19 @@ describe('settings-form freeze contract (review #47 round 4, P1)', () => {
     };
   }
 
-  it('a bridge missing either Save button control cannot save (fail closed)', () => {
-    for (const missing of ['disableSaveButton', 'enableSaveButton'] as const) {
-      TestBed.resetTestingModule();
-      const ipc = fullIpc();
-      delete (ipc as Record<string, unknown>)[missing];
-      const service = serviceWith(ipc);
-      expect(() => service.orchestratorDeps(), missing).toThrow(/Save button controls/);
-    }
+  it('a bridge missing the disable control cannot save (fail closed); enable is no longer required', () => {
+    TestBed.resetTestingModule();
+    const ipc = fullIpc();
+    delete (ipc as Record<string, unknown>).disableSaveButton;
+    const service = serviceWith(ipc);
+    expect(() => service.orchestratorDeps()).toThrow(/Save button controls/);
+    // beta.17 never enables the native Save, so a bridge without
+    // enableSaveButton still saves.
+    TestBed.resetTestingModule();
+    const ipc2 = fullIpc();
+    delete (ipc2 as Record<string, unknown>).enableSaveButton;
+    const service2 = serviceWith(ipc2);
+    expect(() => service2.orchestratorDeps()).not.toThrow();
   });
 
   it('the freeze never touches the schema form (its two-way binding zeroes pluginConfig on destroy)', () => {
@@ -1674,7 +1691,9 @@ describe('settings-form freeze contract (review #47 round 4, P1)', () => {
     const deps = service.orchestratorDeps();
     deps.freezeSettingsForm();
     deps.unfreezeSettingsForm();
-    expect(calls).toEqual(['disableSaveButton', 'enableSaveButton']);
+    // beta.17: the native Save is PERMANENTLY disabled — unfreeze
+    // re-asserts the disable and never enables.
+    expect(calls).toEqual(['disableSaveButton', 'disableSaveButton']);
   });
 });
 
@@ -1981,5 +2000,121 @@ describe('PR #57 round 1: trigger gating and sourceUnit switches', () => {
       kind: 'motion', measurement: 'wind-speed', sourceUnit: 'fps',
       enabled: true, name: 'xbarnwind',
     }]);
+  });
+});
+
+describe('Connection settings (beta.17, GA #56)', () => {
+  async function settle(fixture: ComponentFixture<AwnRootComponent>): Promise<void> {
+    await new Promise((r) => setTimeout(r, 0));
+    await fixture.whenStable();
+    fixture.detectChanges();
+  }
+  function openConnection(fixture: ComponentFixture<AwnRootComponent>): HTMLElement {
+    const el = fixture.nativeElement as HTMLElement;
+    (el.querySelector('.conn-summary') as HTMLButtonElement).click();
+    fixture.detectChanges();
+    return el;
+  }
+  function control(el: HTMLElement, name: string): HTMLInputElement {
+    return el.querySelector(`.conn-grid [formcontrolname="${name}"]`) as HTMLInputElement;
+  }
+  function typeInto(input: HTMLInputElement, value: string): void {
+    input.value = value;
+    input.dispatchEvent(new Event('input'));
+  }
+  const PREVIEW: PreviewResultDto = {
+    ok: true, canonicalSensorMap: [], rows: [], changes: [], configOnly: [],
+    settingsChanged: ['name'], structuralChangeCount: 0,
+    digest: 'ef'.repeat(32), warnings: [], notes: [],
+  };
+
+  it('a name edit counts as a draft, previews with a settings patch, and renders the settings chip', async () => {
+    const ipc = makeIpc(editorState(), [], PREVIEW);
+    const fixture = await render(ipc);
+    const el = openConnection(fixture);
+    typeInto(control(el, 'name'), 'Renamed AWN');
+    await settle(fixture);
+    expect(el.textContent).toContain('1 draft change, not saved yet.');
+
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement).click();
+    await settle(fixture);
+    const req = ipc.requests.find(r => r.path === '/preview-save');
+    expect((req?.body as { settings?: unknown }).settings).toEqual({ name: 'Renamed AWN' });
+    expect(el.textContent).toContain('Settings saved with this change: name.');
+  });
+
+  it('credential intents from the form: typed value = set, checkbox = clear, both = blocked', async () => {
+    const ipc = makeIpc(editorState(), [], PREVIEW);
+    const fixture = await render(ipc);
+    const el = openConnection(fixture);
+
+    typeInto(control(el, 'apiKey'), 'new-key-value');
+    const appClear = control(el, 'applicationKeyClear');
+    appClear.checked = true;
+    appClear.dispatchEvent(new Event('change'));
+    await settle(fixture);
+    expect(el.textContent).toContain('2 draft changes, not saved yet.');
+
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement).click();
+    await settle(fixture);
+    const req = ipc.requests.find(r => r.path === '/preview-save');
+    expect((req?.body as { settings?: unknown }).settings).toEqual({
+      apiKey: { set: 'new-key-value' },
+      applicationKey: { clear: true },
+    });
+
+    // Checking clear after typing: mutually exclusive BY CONSTRUCTION —
+    // the typed value is wiped and the text input locks, so the intent
+    // flips to {clear:true} and a conflicting payload cannot be built.
+    const apiClear = control(el, 'apiKeyClear');
+    apiClear.checked = true;
+    apiClear.dispatchEvent(new Event('change'));
+    await settle(fixture);
+    expect(control(el, 'apiKey').value).toBe('');
+    expect(control(el, 'apiKey').disabled).toBe(true);
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement).click();
+    await settle(fixture);
+    const req2 = ipc.requests.filter(r => r.path === '/preview-save').pop();
+    expect((req2?.body as { settings?: unknown }).settings).toEqual({
+      apiKey: { clear: true },
+      applicationKey: { clear: true },
+    });
+  });
+
+  it('an untouched form previews with NO settings field (sensor-only save)', async () => {
+    const ipc = makeIpc(editorState(), [], PREVIEW);
+    const fixture = await render(ipc);
+    const el = fixture.nativeElement as HTMLElement;
+    // Draft a row change only.
+    const tr = [...el.querySelectorAll('tbody tr')]
+      .find(r => r.querySelector('td code')?.textContent === 'tempinf')!;
+    (tr.querySelector('button') as HTMLButtonElement).click();
+    fixture.detectChanges();
+    const name = el.querySelector('.editor-form input[type="text"]') as HTMLInputElement;
+    typeInto(name, 'Patio Temp');
+    await settle(fixture);
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement).click();
+    await settle(fixture);
+    const req = ipc.requests.find(r => r.path === '/preview-save');
+    expect('settings' in (req!.body as Record<string, unknown>)
+      && (req!.body as Record<string, unknown>).settings !== undefined).toBe(false);
+  });
+
+  it('discard resets the Connection form along with row drafts', async () => {
+    const fixture = await render(makeIpc(editorState(), []));
+    const el = openConnection(fixture);
+    typeInto(control(el, 'name'), 'Renamed AWN');
+    await settle(fixture);
+    expect(el.textContent).toContain('1 draft change, not saved yet.');
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Discard drafts') as HTMLButtonElement).click();
+    await settle(fixture);
+    expect(el.textContent).toContain('No draft changes yet.');
+  });
+
+  it('a read-only page (editor unavailable) renders the Connection form disabled', async () => {
+    const fixture = await render(makeIpc(editorState({ editorAvailable: false }), []));
+    const el = openConnection(fixture);
+    expect(control(el, 'name').hasAttribute('disabled')).toBe(true);
+    expect(control(el, 'apiKey').hasAttribute('disabled')).toBe(true);
   });
 });

@@ -18,7 +18,7 @@
  * and theme variables (light + dark) apply to it as-is. Component
  * styles below add only what the page doesn't define.
  */
-import { ChangeDetectionStrategy, Component, computed, inject, signal, viewChild, type ElementRef } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, effect, inject, signal, viewChild, type ElementRef } from '@angular/core';
 import { FormBuilder, ReactiveFormsModule, Validators, type AbstractControl } from '@angular/forms';
 
 import { DraftStore, type DraftableField } from './draft-store';
@@ -27,6 +27,7 @@ import { KIND_HELP, KIND_SUPPORT } from './kind-support';
 import { composeAndPersist } from '../saveOrchestrator';
 import type {
   AssignmentOptionDto,
+  EditorSettingsDto,
   DisplayFamilyChoiceDto,
   DisplayFamilyDto,
   EditorRowDto,
@@ -232,9 +233,28 @@ interface StationGroup {
     }
     th.actions { background: var(--panel-bg); }
     td.actions button { padding: 3px 0; width: 62px; text-align: center; }
+    .connection { border: 1px solid var(--rule); border-radius: 6px; margin: 10px 0; }
+    .conn-summary {
+      display: flex; align-items: baseline; gap: 8px; width: 100%;
+      background: none; border: none; color: var(--fg);
+      padding: 8px 12px; cursor: pointer; text-align: left; font-weight: 600;
+    }
+    .conn-caret { color: var(--fg-sub); font-size: 0.8em; }
+    .conn-meta { color: var(--fg-sub); font-weight: 400; font-size: 0.9em; }
+    .conn-grid {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+      gap: 10px 16px; padding: 4px 12px 12px;
+    }
+    .conn-grid label { display: flex; flex-direction: column; gap: 4px; color: var(--fg-sub); font-size: 0.9em; }
+    .conn-grid label.conn-clear { flex-direction: row; align-items: center; align-self: end; }
+    .conn-grid input, .conn-grid select, .conn-grid textarea {
+      font: inherit; color: var(--fg); background: var(--panel-bg);
+      border: 1px solid var(--rule); border-radius: 4px; padding: 4px 8px;
+    }
+    .notices-block { margin-top: 16px; }
+    .notices-list { margin: 0; padding: 4px 12px 12px 28px; color: var(--fg-sub); }
   `,
   template: `
-    <h2>Sensor map <span class="station-meta">draft editor preview</span></h2>
     @if (!available) {
       <div class="banner">
         This page is running outside Homebridge UI X, so the sensor map
@@ -268,6 +288,60 @@ interface StationGroup {
           <div class="banner">Rollback mirror: {{ state()!.mirrorState }}. Do NOT use the marker-deletion rollback. Freeze on the current 1.7.x, restore the snapshot, or save here again to regenerate the mirror.</div>
         }
       }
+
+      <!-- Connection settings (beta.17, GA #56): the schema form is
+           retired, so the plugin's live settings are edited here and
+           save through the same guarded pipeline as the sensor map.
+           Credential inputs are INTENTS: a blank field means
+           unchanged; replacing types a new value; clearing requires
+           the explicit checkbox. -->
+      <div class="connection">
+        <button type="button" class="conn-summary" (click)="connectionOpen.set(!connectionOpen())" [attr.aria-expanded]="connectionOpen()">
+          <span class="conn-caret">{{ connectionOpen() ? '\u25be' : '\u25b8' }}</span>
+          Connection &amp; polling
+          <span class="conn-meta">{{ connectionSummary() }}</span>
+        </button>
+        @if (connectionOpen() && settingsForm) {
+          <form [formGroup]="settingsForm" class="conn-grid">
+            <label>Name
+              <input type="text" formControlName="name" />
+            </label>
+            <label>Data source
+              <select formControlName="dataSource">
+                <option value="polling">Polling</option>
+                <option value="realtime">Realtime</option>
+              </select>
+            </label>
+            <label>API key
+              <input type="password" autocomplete="off" formControlName="apiKey"
+                [attr.placeholder]="state()!.settings.apiKeySet ? 'unchanged' : 'not set'"
+                />
+            </label>
+            <label class="conn-clear">
+              <input type="checkbox" formControlName="apiKeyClear" />
+              Clear the stored API key
+            </label>
+            <label>Application key
+              <input type="password" autocomplete="off" formControlName="applicationKey"
+                [attr.placeholder]="state()!.settings.applicationKeySet ? 'unchanged' : 'not set'"
+                />
+            </label>
+            <label class="conn-clear">
+              <input type="checkbox" formControlName="applicationKeyClear" />
+              Clear the stored application key
+            </label>
+            <label>Station filter (one entry per line)
+              <textarea rows="2" formControlName="stationFilter" placeholder="All stations"></textarea>
+            </label>
+            <label>Embed-name update interval (minutes)
+              <input type="number" min="0" step="1" formControlName="embedInterval" placeholder="2" />
+            </label>
+            @if (settingsError()) {
+              <span class="field-error">{{ settingsError() }}</span>
+            }
+          </form>
+        }
+      </div>
 
       <!-- Always rendered while the editor is usable: appearing only
            on the first draft shifted the whole page down mid-edit
@@ -321,6 +395,9 @@ interface StationGroup {
         <div class="preview-block" [class.previewing]="previewPending()">
         @if (pr.ok) {
           <h3>Preview</h3>
+          @if ((pr.settingsChanged ?? []).length > 0) {
+            <div class="banner info">{{ settingsChangedLabel(pr.settingsChanged ?? []) }}</div>
+          }
           @if (pr.changes.length === 0) {
             <div class="banner info">No accessory changes: nothing registers, deregisters, or updates. (Edits to disabled rows still save and take effect when the row is enabled.)</div>
           } @else {
@@ -437,9 +514,9 @@ interface StationGroup {
               <code>legacy-conversion-journal</code> folder; the
               original legacy snapshot is untouched.
             }
-            Homebridge applies structural changes on the next full restart.
-            The settings form above was loaded before this save and is now out of date; its Save button stays off.
-            Reload the plugin settings page before editing those fields.
+            Changes apply when the plugin restarts. Use Homebridge's
+            Restart Child Bridge action for this plugin, or restart
+            Homebridge. This page cannot trigger the restart itself.
           </div>
         } @else {
           <div class="banner safe-mode">Save failed ({{ sr.code }}): {{ sr.message }}</div>
@@ -450,7 +527,7 @@ interface StationGroup {
       }
       @if (settingsRestoreFailed()) {
         <div class="banner">
-          The settings form above could not be restored after the save. The save result shown here stands; reload the plugin settings page to restore the form.
+          The page could not re-assert its save controls after the save. The save result shown here stands; reload the plugin settings page.
           <button type="button" (click)="reloadPage()">Reload now</button>
         </div>
       }
@@ -677,6 +754,24 @@ interface StationGroup {
         </table>
         </div>
       }
+
+      <!-- Structural-change history, demoted from a permanent panel to
+           a collapsed disclosure (beta.17, GA #56). -->
+      @if (notices().length > 0) {
+        <div class="connection notices-block">
+          <button type="button" class="conn-summary" (click)="noticesOpen.set(!noticesOpen())" [attr.aria-expanded]="noticesOpen()">
+            <span class="conn-caret">{{ noticesOpen() ? '\u25be' : '\u25b8' }}</span>
+            Recent structural changes ({{ notices().length }})
+          </button>
+          @if (noticesOpen()) {
+            <ul class="notices-list">
+              @for (n of notices(); track n.id) {
+                <li><code>{{ n.dataPoint }}</code> re-registered {{ n.occurredAt.slice(0, 10) }} (structure changed)</li>
+              }
+            </ul>
+          }
+        </div>
+      }
     }
   `,
 })
@@ -701,6 +796,15 @@ export class AwnRootComponent {
    * the user is directed to reload before doing anything else.
    */
   protected readonly reloadRequired = signal(false);
+
+  // ---- Connection settings (beta.17, GA #56) ----
+  protected readonly connectionOpen = signal(false);
+  protected readonly noticesOpen = signal(false);
+  protected readonly notices = signal<Array<{ id: string; dataPoint: string; occurredAt: string }>>([]);
+  protected settingsForm: ReturnType<FormBuilder['group']> | null = null;
+  private settingsBaseline: EditorSettingsDto | null = null;
+  /** Bumped on every settings-form event so computed() re-evaluates. */
+  private readonly settingsVersion = signal(0);
   protected readonly confirmOpen = signal(false);
   /**
    * Post-save receipt failure: the reloaded on-disk block does not
@@ -734,8 +838,209 @@ export class AwnRootComponent {
 
   protected readonly draftCount = computed(() => {
     this.draftVersion();
-    return this.store.draftCount;
+    this.settingsVersion();
+    return this.store.draftCount + this.settingsDirtyKeys().length;
   });
+
+  /** Settings keys the form changed vs the loaded baseline (credential intents included). */
+  protected settingsDirtyKeys(): string[] {
+    const f = this.settingsForm;
+    const b = this.settingsBaseline;
+    if (!f || !b) {
+      return [];
+    }
+    const v = f.value as Record<string, unknown>;
+    const keys: string[] = [];
+    if (typeof v.name === 'string' && v.name.trim() !== '' && v.name.trim() !== b.name) {
+      keys.push('name');
+    }
+    if (v.dataSource === 'polling' || v.dataSource === 'realtime') {
+      if (v.dataSource !== b.dataSource) {
+        keys.push('dataSource');
+      }
+    }
+    if (typeof v.apiKey === 'string' && v.apiKey.trim() !== '') {
+      keys.push('apiKey');
+    } else if (v.apiKeyClear === true) {
+      keys.push('apiKey');
+    }
+    if (typeof v.applicationKey === 'string' && v.applicationKey.trim() !== '') {
+      keys.push('applicationKey');
+    } else if (v.applicationKeyClear === true) {
+      keys.push('applicationKey');
+    }
+    const filter = this.parseStationFilter(v.stationFilter);
+    if (JSON.stringify(filter) !== JSON.stringify(b.stationFilter)) {
+      keys.push('stationFilter');
+    }
+    const interval = v.embedInterval;
+    const baselineInterval = b.embedNameUpdateMinIntervalMinutes;
+    if (interval === null || interval === '' || interval === undefined) {
+      if (baselineInterval !== undefined) {
+        keys.push('embedNameUpdateMinIntervalMinutes');
+      }
+    } else if (typeof interval === 'number' && interval !== baselineInterval) {
+      keys.push('embedNameUpdateMinIntervalMinutes');
+    }
+    return keys;
+  }
+
+  private parseStationFilter(raw: unknown): string[] {
+    return typeof raw === 'string'
+      ? raw.split('\n').map(e => e.trim()).filter(e => e !== '')
+      : [];
+  }
+
+  /**
+   * The settings portion of a save/preview payload, or undefined for a
+   * sensor-only save. Credential fields become INTENTS: text entered =
+   * replace, checkbox = clear, both blank = the key is absent and the
+   * stored secret is untouched.
+   */
+  protected settingsPatch(): Record<string, unknown> | undefined {
+    const keys = this.settingsDirtyKeys();
+    if (keys.length === 0 || !this.settingsForm) {
+      return undefined;
+    }
+    const v = this.settingsForm.value as Record<string, unknown>;
+    const patch: Record<string, unknown> = {};
+    if (keys.includes('name')) {
+      patch.name = (v.name as string).trim();
+    }
+    if (keys.includes('dataSource')) {
+      patch.dataSource = v.dataSource;
+    }
+    if (keys.includes('apiKey')) {
+      patch.apiKey = v.apiKeyClear === true ? { clear: true } : { set: (v.apiKey as string).trim() };
+    }
+    if (keys.includes('applicationKey')) {
+      patch.applicationKey = v.applicationKeyClear === true ? { clear: true } : { set: (v.applicationKey as string).trim() };
+    }
+    if (keys.includes('stationFilter')) {
+      patch.stationFilter = this.parseStationFilter(v.stationFilter);
+    }
+    if (keys.includes('embedNameUpdateMinIntervalMinutes')) {
+      const interval = v.embedInterval;
+      patch.embedNameUpdateMinIntervalMinutes =
+        (interval === null || interval === '' || interval === undefined) ? null : interval;
+    }
+    return patch;
+  }
+
+  /** Inline validation message for the Connection form; non-null blocks Preview. */
+  protected settingsError(): string | null {
+    this.settingsVersion();
+    const f = this.settingsForm;
+    if (!f || !this.settingsBaseline) {
+      return null;
+    }
+    const v = f.value as Record<string, unknown>;
+    if (typeof v.name === 'string' && v.name.trim() === '' && this.settingsBaseline.name !== '') {
+      return 'Name cannot be blank. Restore a value.';
+    }
+    if (typeof v.apiKey === 'string' && v.apiKey.trim() !== '' && v.apiKeyClear === true) {
+      return 'Choose one for the API key: a replacement value or the clear checkbox.';
+    }
+    if (typeof v.applicationKey === 'string' && v.applicationKey.trim() !== '' && v.applicationKeyClear === true) {
+      return 'Choose one for the application key: a replacement value or the clear checkbox.';
+    }
+    const interval = v.embedInterval;
+    if (interval !== null && interval !== '' && interval !== undefined
+      && (typeof interval !== 'number' || !Number.isFinite(interval) || interval < 0)) {
+      return 'The embed-name interval must be zero or a positive number of minutes.';
+    }
+    return null;
+  }
+
+  protected settingsLocked(): boolean {
+    return !(this.state()?.editorAvailable ?? false) || this.saving() || this.confirmOpen() || this.reloadRequired();
+  }
+
+  protected connectionSummary(): string {
+    const st = this.state()?.settings;
+    if (!st) {
+      return '';
+    }
+    const key = st.apiKeySet ? 'API key set' : 'API key missing';
+    const filter = st.stationFilter.length > 0 ? `${st.stationFilter.length} station filter ${st.stationFilter.length === 1 ? 'entry' : 'entries'}` : 'all stations';
+    return `${st.dataSource} \u00b7 ${key} \u00b7 ${filter}`;
+  }
+
+  protected settingsChangedLabel(keys: string[]): string {
+    const labels: Record<string, string> = {
+      name: 'name',
+      dataSource: 'data source',
+      apiKey: 'API key',
+      applicationKey: 'application key',
+      stationFilter: 'station filter',
+      embedNameUpdateMinIntervalMinutes: 'embed-name interval',
+    };
+    return 'Settings saved with this change: ' + keys.map(k => labels[k] ?? k).join(', ') + '.';
+  }
+
+  private buildSettingsForm(): void {
+    const st = this.state()?.settings;
+    if (!st) {
+      return;
+    }
+    this.settingsBaseline = st;
+    this.settingsForm = this.fb.group({
+      name: [st.name],
+      dataSource: [st.dataSource],
+      apiKey: [''],
+      apiKeyClear: [false],
+      applicationKey: [''],
+      applicationKeyClear: [false],
+      stationFilter: [st.stationFilter.join('\n')],
+      embedInterval: [st.embedNameUpdateMinIntervalMinutes ?? null],
+    });
+    this.settingsForm.valueChanges.subscribe(() => {
+      this.settingsVersion.update(x => x + 1);
+      // A settings edit invalidates a shown preview like any draft.
+      this.previewResult.set(null);
+      this.saveResult.set(null);
+      this.syncSettingsControlState();
+    });
+    this.settingsVersion.update(x => x + 1);
+    this.syncSettingsControlState();
+  }
+
+  /**
+   * Reactive forms override attribute-level disabling, so control
+   * state is driven here: the whole form locks on read-only pages and
+   * during saves, and a credential's text input locks while its clear
+   * checkbox is on.
+   */
+  protected syncSettingsControlState(): void {
+    const f = this.settingsForm;
+    if (!f) {
+      return;
+    }
+    if (this.settingsLocked()) {
+      if (f.enabled) {
+        f.disable({ emitEvent: false });
+      }
+      return;
+    }
+    if (f.disabled) {
+      f.enable({ emitEvent: false });
+    }
+    const v = f.value as Record<string, unknown>;
+    const syncCred = (text: string, clear: unknown): void => {
+      const ctl = f.get(text);
+      if (!ctl) {
+        return;
+      }
+      if (clear === true && ctl.enabled) {
+        ctl.setValue('', { emitEvent: false });
+        ctl.disable({ emitEvent: false });
+      } else if (clear !== true && ctl.disabled) {
+        ctl.enable({ emitEvent: false });
+      }
+    };
+    syncCred('apiKey', v.apiKeyClear);
+    syncCred('applicationKey', v.applicationKeyClear);
+  }
 
   /** Flat unit-code → display-label map across all measurements (#70). */
   private readonly unitLabels = computed<ReadonlyMap<string, string>>(() => {
@@ -775,6 +1080,15 @@ export class AwnRootComponent {
   });
 
   constructor() {
+    // Keep the Connection form's control state in sync with the page
+    // locks (reactive forms ignore attribute-level disabling).
+    effect(() => {
+      this.saving();
+      this.confirmOpen();
+      this.reloadRequired();
+      this.state();
+      this.syncSettingsControlState();
+    });
     if (this.hb.available) {
       void this.load();
     }
@@ -789,6 +1103,10 @@ export class AwnRootComponent {
       ]);
       this.state.set(state);
       this.vocab.set(vocab);
+      this.buildSettingsForm();
+      void this.hb.request<{ notices?: Array<{ id: string; dataPoint: string; occurredAt: string }> }>('/notices')
+        .then(n => this.notices.set(Array.isArray(n?.notices) ? n.notices : []))
+        .catch(() => this.notices.set([]));
       this.store.reset(state.authored);
       // Fresh baseline: drafts and preview are void, but NOT the save
       // banner — a post-save reload must not erase its own receipt
@@ -1382,6 +1700,7 @@ export class AwnRootComponent {
 
   protected discardAll(): void {
     this.store.discardAll();
+    this.buildSettingsForm();
     this.expandedKey.set(null);
     this.editForm = null;
     this.editFormInvalid.set(false);
@@ -1441,7 +1760,7 @@ export class AwnRootComponent {
   }
 
   protected async preview(): Promise<void> {
-    if (this.editFormInvalid()) {
+    if (this.editFormInvalid() || this.settingsError() !== null) {
       return; // an invalid (blanked) control blocks previewing
     }
     // Bind the request to the draft version it previews (review #43
@@ -1464,6 +1783,7 @@ export class AwnRootComponent {
       const result = await this.hb.request<PreviewResultDto>('/preview-save', {
         baseDigest: this.state()?.baseDigest,
         proposal: this.store.proposal(),
+        settings: this.settingsPatch(),
         cachedAccessoryUniqueIds,
       });
       if (this.draftVersion() === draftVersionAtStart) {
@@ -1541,6 +1861,7 @@ export class AwnRootComponent {
     try {
       const result = await composeAndPersist(this.hb.orchestratorDeps(), {
         proposal: this.store.proposal(),
+        settings: this.settingsPatch(),
         confirmDigest,
         baseDigest: this.state()?.baseDigest,
         blockIndex: this.state()?.blockIndex,

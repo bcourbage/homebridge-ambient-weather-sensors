@@ -257,6 +257,7 @@ async function composeAndPersistFrozen(deps, args) {
         // (review #47 P1-1).
         formBlock: digestSession ? cfgArray[index] : undefined,
         proposal: args.proposal,
+        settings: args.settings,
         cachedAccessoryUniqueIds,
         liveStations: args.liveStations,
         confirmDigest: args.confirmDigest,
