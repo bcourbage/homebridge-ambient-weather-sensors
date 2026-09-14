@@ -2388,3 +2388,120 @@ describe('stationFilter never shrinks the authored map (PR #60 round 2 P1)', () 
     }
   });
 });
+
+describe('indeterminate station-filter membership fails closed (PR #60 round 3 P1)', () => {
+  const BLOCK = {
+    platform: 'AmbientWeatherSensors',
+    name: 'Test Station',
+    apiKey: 'k', applicationKey: 'a',
+    configVersion: 2,
+    sensorMap: [],
+    stationFilter: ['Backyard'],
+  };
+
+  it('a cached-only station under a NAME filter refuses preview and save with the remedies', async () => {
+    const rig = makeRig(BLOCK);
+    // NO discovery store: the station is known only from cached
+    // accessories, so its name is unknown to the assembled inventory —
+    // the PR-A journey (fresh 1.7.x upgrade, no discovery.json yet).
+    const payload = {
+      base: BLOCK,
+      proposal: [{ dataPoint: 'tempf', stationMac: MAC, enabled: false }],
+      cachedAccessoryUniqueIds: [`${MAC}-tempf`],
+    };
+    const preview = await handlePreviewSave(rig.deps, payload);
+    expect(preview.ok).toBe(false);
+    if (!preview.ok) {
+      expect(preview.error.code).toBe('indeterminate-station-filter');
+      expect(preview.error.message).toContain(MAC);
+      expect(preview.error.message).toContain('MAC form');
+    }
+    const save = await handleComposeSave(rig.deps, payload);
+    expect(save.ok).toBe(false);
+    if (!save.ok) {
+      expect(save.error.code).toBe('indeterminate-station-filter');
+    }
+  });
+
+  it('the SAME journey with a MAC-form filter is determinate and previews the structural consequence', async () => {
+    const macBlock = { ...BLOCK, stationFilter: [MAC] };
+    const rig = makeRig(macBlock);
+    const preview = await handlePreviewSave(rig.deps, {
+      base: macBlock,
+      proposal: [{ dataPoint: 'tempf', stationMac: MAC, enabled: false }],
+      cachedAccessoryUniqueIds: [`${MAC}-tempf`],
+    });
+    expect(preview.ok).toBe(true);
+    if (preview.ok) {
+      expect(preview.changes.some(c => c.dataPoint === 'tempf' && c.change === 'removed' && c.structural)).toBe(true);
+    }
+  });
+
+  it('a name filter with discovery-supplied names stays fully usable', async () => {
+    const rig = makeRig(BLOCK);
+    discoveryStore(rig); // discovery names the station
+    const preview = await handlePreviewSave(rig.deps, {
+      base: BLOCK,
+      proposal: [{ dataPoint: 'tempf', stationMac: MAC, enabled: false }],
+    });
+    // 'Backyard' does not match discovery's 'Home' station name; the
+    // membership is determinate (excluded), so this previews cleanly.
+    expect(preview.ok).toBe(true);
+  });
+});
+
+describe('the confirmation digest binds every visible consequence (PR #60 round 3 P2)', () => {
+  const MAC_B = 'AA:BB:CC:DD:EE:02';
+  const BLOCK = {
+    platform: 'AmbientWeatherSensors',
+    name: 'Test Station',
+    apiKey: 'k', applicationKey: 'a',
+    configVersion: 2,
+    sensorMap: [],
+  };
+
+  function namedDiscovery(rig: Rig, nameA: string): void {
+    writeFileSync(path.join(rig.persistDir, 'discovery.json'), JSON.stringify({
+      schemaVersion: 1,
+      entries: [
+        { stationMac: MAC, stationName: nameA, dataPoint: 'tempf', firstSeen: '2026-01-01T00:00:00Z', lastSeen: '2026-01-02T00:00:00Z' },
+        { stationMac: MAC_B, stationName: 'Roof', dataPoint: 'tempf', firstSeen: '2026-01-01T00:00:00Z', lastSeen: '2026-01-02T00:00:00Z' },
+      ],
+    }));
+  }
+
+  it('a discovery station-name change between preview and commit stales the digest (the rename it showed changed)', async () => {
+    const rig = makeRig(BLOCK);
+    namedDiscovery(rig, 'Backyard');
+    const payload = {
+      base: BLOCK,
+      proposal: [],
+      settings: { stationFilter: [MAC] }, // narrows 2 -> 1: renames station A's rows in place
+    };
+    const preview = await handlePreviewSave(rig.deps, payload);
+    expect(preview.ok).toBe(true);
+    if (!preview.ok) {
+      return;
+    }
+    // The preview showed renames composed from the name 'Backyard'.
+    expect(preview.changes.some(c => c.displayName?.before.startsWith('Backyard'))).toBe(true);
+
+    // The station is renamed in discovery before the commit: the same
+    // MACs, the same structural signatures — only the shown rename
+    // differs. The old digest must refuse.
+    namedDiscovery(rig, 'Garden');
+    const refused = await handleComposeSave(rig.deps, { ...payload, confirmDigest: preview.digest });
+    expect(refused.ok).toBe(false);
+    if (!refused.ok) {
+      expect(refused.error.code).toBe('stale-confirmation');
+    }
+
+    // A fresh preview over the new name proceeds.
+    const fresh = await handlePreviewSave(rig.deps, payload);
+    expect(fresh.ok).toBe(true);
+    if (fresh.ok) {
+      expect(fresh.digest).not.toBe(preview.digest);
+      expect(fresh.changes.some(c => c.displayName?.before.startsWith('Garden'))).toBe(true);
+    }
+  });
+});

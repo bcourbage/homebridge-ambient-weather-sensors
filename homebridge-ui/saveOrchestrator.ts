@@ -32,20 +32,17 @@ export interface OrchestratorDeps {
   /** homebridge.savePluginConfig */
   savePluginConfig(): Promise<unknown>;
   /**
-   * Freeze the OTHER config writer for the duration of a save
-   * (review #47 round 3, P1): the settings form and HB UI X's Save
-   * button stay live while /compose-save runs, so a form edit made
-   * after the formBlock sample was taken would be silently erased by
-   * the clear-then-set persistence. Called BEFORE the first
-   * getPluginConfig() read; unfreezeSettingsForm runs in `finally`.
-   * In the real page this disables HB UI X's Save button ONLY — the
-   * schema form (RETIRED at beta.17 — never rendered; the rules below
-   * remain as defense in depth) must never be hidden mid-save: HB UI X binds the form
-   * two-way into pluginConfig[0], and destroying the form writes
-   * undefined through that binding, zeroing the session's config
-   * (measured on production). Form EDITS during the save are caught
-   * by the pre-persistence re-read, which refuses rather than
-   * persisting over them.
+   * Re-assert the disable on HB UI X's native Save button for the
+   * duration of a save. Since beta.17 the button is PERMANENTLY
+   * disabled (the page disables it before any initialization and
+   * never enables it), so this is defense in depth against anything
+   * re-enabling it while /compose-save runs — an enabled native Save
+   * click writes the session's in-memory copy over the guarded
+   * write. Called BEFORE the first getPluginConfig() read;
+   * unfreezeSettingsForm runs in `finally` and re-asserts the SAME
+   * disable. Divergence of the in-memory copy during the save is
+   * caught by the pre-persistence re-read, which refuses rather than
+   * persisting over it.
    */
   freezeSettingsForm(): void | Promise<unknown>;
   unfreezeSettingsForm(): void | Promise<unknown>;
@@ -123,10 +120,10 @@ export interface ComposeAndPersistArgs {
 
 /**
  * The orchestrator's result: the authoritative save outcome, plus a
- * flag when the settings-form RESTORE failed afterward (review #47
- * round 5, P2) — the outcome stands, but the page's form may be
- * hidden or its Save button dead, and the component must tell the
- * user to reload rather than leave a silently degraded page.
+ * flag when re-asserting the page's save-control state failed
+ * afterward (review #47 round 5, P2) — the outcome stands, but the
+ * page may be degraded, and the component must tell the user to
+ * reload rather than leave it silently so.
  */
 export type PersistOutcome = ComposeSaveResult & { settingsRestoreFailed?: true };
 
@@ -134,10 +131,11 @@ export async function composeAndPersist(
   deps: OrchestratorDeps,
   args: ComposeAndPersistArgs,
 ): Promise<PersistOutcome> {
-  // The settings form and HB UI X's Save button are a SECOND writer of
-  // the same config; frozen for the whole operation so no form edit
-  // can land between the formBlock sample and the clear-then-set
-  // persistence (review #47 round 3, P1). Failure-safe (round 4): a
+  // HB UI X's native Save button is a potential SECOND writer of the
+  // same config (it writes the session's in-memory copy); its disable
+  // is re-asserted for the whole operation so nothing can land between
+  // the configuration sample and the persistence (review #47 round 3,
+  // P1; permanently disabled since beta.17). Failure-safe (round 4): a
   // freeze that throws may have PARTIALLY applied, so the restore is
   // attempted before refusing; and an unfreeze failure never masks
   // the authoritative save outcome — by the time cleanup runs, the
@@ -176,15 +174,11 @@ export async function composeAndPersist(
     };
   }
   if (outcome.ok) {
-    // A SUCCESSFUL save leaves the settings form frozen: the form's
-    // two-way-bound copy of the config predates this save, and HB UI
-    // X's form Save REPLACES the platform block with that stale,
-    // schema-shaped copy — measured on HB UI X 5.29: one click undid
-    // a fresh conversion and stripped configVersion/sensorMap/units.
-    // The page banner tells the user to reload the settings page
-    // before editing the form again; refusals below still restore,
-    // because a refused save wrote nothing and the form copy still
-    // matches the disk.
+    // A SUCCESSFUL save leaves the native Save disabled — its
+    // permanent state since beta.17. (Pre-beta.17 history, kept
+    // because it motivated this shape: HB UI X's form Save REPLACED
+    // the platform block with the session's stale schema-shaped copy;
+    // measured on 5.29, one click undid a fresh conversion.)
     return outcome;
   }
   const restored = await unfreezeQuietly(deps);
@@ -192,10 +186,10 @@ export async function composeAndPersist(
 }
 
 /**
- * Restore the settings form without ever throwing: the save outcome
- * is authoritative, and a cleanup failure must not replace it (a
- * completed save reported as a transport error is worse than a
- * momentarily locked form). Returns whether the restore succeeded so
+ * Re-assert the page's save-control state without ever throwing: the
+ * save outcome is authoritative, and a cleanup failure must not
+ * replace it (a completed save reported as a transport error is worse
+ * than a momentarily degraded page). Returns whether it succeeded so
  * the caller can FLAG the degraded page instead of hiding it.
  */
 async function unfreezeQuietly(deps: OrchestratorDeps): Promise<boolean> {
@@ -424,8 +418,8 @@ async function composeAndPersistFrozen(
 
   // HB UI X applies updatePluginConfig by MERGING each submitted block
   // into its in-memory copy (Object.assign), so a key the composed
-  // config REMOVED — a legacy field the mirror omits, or a schema
-  // default the settings form materialized — would silently survive
+  // config REMOVED — a legacy field the mirror omits, or a default a
+  // pre-beta.17 schema form materialized into an old session — would silently survive
   // into the persisted file, and a resurrected mirrored field makes
   // the freshly written mirror hash STALE on arrival. Explicit
   // `undefined` tombstones for the removed keys make the merge produce

@@ -31,7 +31,7 @@ import {
 } from '../dist/sensorMap/legacyMirror.js';
 import { sensorMapShapeError, type EffectiveMapConfig } from '../dist/sensorMap/platformEffectiveMap.js';
 import { NON_TRIGGERING_MEASUREMENTS, STATION_MAC_REGEX } from '../dist/sensorMap/validation.js';
-import { filterStationInventory } from '../dist/sensorMap/stationMatch.js';
+import { filterStationInventory, indeterminateFilterStations } from '../dist/sensorMap/stationMatch.js';
 import { composeRowDisplayName } from '../dist/sensorMap/displayName.js';
 import { v2ConstructionEnabled } from '../dist/sensorMap/v2Flag.js';
 import {
@@ -241,7 +241,8 @@ export type ComposeSaveError =
   | { code: 'conversion-journal-error'; message: string }
   | { code: 'unsaved-settings-changes'; message: string }
   | { code: 'commit-without-validation'; message: string }
-  | { code: 'invalid-settings'; message: string };
+  | { code: 'invalid-settings'; message: string }
+  | { code: 'indeterminate-station-filter'; message: string };
 
 export type ComposeSaveResult =
   | {
@@ -299,8 +300,9 @@ export interface ComposeSavePayload {
    * ONLY to locate + staleness-check the on-disk block — never as the
    * authoritative current configuration. Only valid for callers that
    * hold a FAITHFUL copy of the on-disk block; a browser client must
-   * send `baseDigest` instead (HB UI X's getPluginConfig() returns the
-   * schema form's mutated in-memory copy, which never byte-matches).
+   * send `baseDigest` instead (HB UI X's getPluginConfig() returns its
+   * session's IN-MEMORY copy, which is not guaranteed to byte-match
+   * disk).
    */
   base?: unknown;
   /**
@@ -591,12 +593,11 @@ async function runSavePipeline(
   //         what the client loaded, refuse rather than compose against
   //         a stale view. The PREFERRED token is `baseDigest`, the
   //         canonical digest /editor-state issued for the block it
-  //         rendered: HB UI X's getPluginConfig() hands the client the
-  //         settings page's IN-MEMORY config, which the standard
-  //         schema form mutates (it materializes schema defaults such
-  //         as `includeOnly: []`), so a client-side block copy can
-  //         NEVER be trusted to byte-match disk (beta.13 smoke:
-  //         preview refused stale-base on an untouched config). The
+  //         rendered: HB UI X's getPluginConfig() hands the client its
+  //         session's IN-MEMORY config, which is not guaranteed to
+  //         byte-match disk (pre-beta.17 the schema form materialized
+  //         defaults into it; beta.13 smoke: preview refused
+  //         stale-base on an untouched config). The
   //         digest ties the session to what the EDITOR loaded from
   //         disk instead. A raw `base` block is still accepted for
   //         callers that hold a faithful copy.
@@ -703,6 +704,33 @@ async function runSavePipeline(
   // availability gate also stays unfiltered: a deliberately
   // non-matching filter (the documented accessory-wipe trick) is a
   // valid save, not a missing-inventory condition.
+  // FAIL CLOSED on indeterminate filter membership (round 3 P1): a
+  // name-form filter cannot be evaluated for a station whose name the
+  // assembled inventory does not know (cached-only or override-derived
+  // stations carry no name), while the runtime evaluates the same
+  // filter after fetching, with the real name. Interpreting the
+  // unknown name as excluded could preview ZERO consequences for a
+  // structural operation the runtime will perform. Refuse with the
+  // remedies instead.
+  for (const [label, filt] of [
+    ['current', (block as Record<string, unknown>).stationFilter],
+    ['proposed', effectiveBlock.stationFilter],
+  ] as const) {
+    const indeterminate = indeterminateFilterStations(assembled, filt);
+    if (indeterminate.length > 0) {
+      const macs = indeterminate.map(st => st.macAddress).join(', ');
+      return {
+        ok: false,
+        error: {
+          code: 'indeterminate-station-filter',
+          message: `The ${label} station filter uses station names, but the name of station ${macs} is not known `
+            + 'yet (the station is known only from cached accessories or overrides), so the preview cannot '
+            + 'determine which accessories the filter keeps. Run the plugin until it records the station in its '
+            + 'discovery data, or use the MAC form in the station filter. Nothing was written.',
+        },
+      };
+    }
+  }
   const stationsBefore = filterStationInventory(assembled, (block as Record<string, unknown>).stationFilter);
   const stationsAfter = filterStationInventory(assembled, effectiveBlock.stationFilter);
   const stations = assembled;
@@ -806,9 +834,9 @@ async function runSavePipeline(
 /**
  * VALIDATE phase of the two-phase save (review #47 round 4, P1-2):
  * every gate and the full composition run, but NOTHING is durably
- * recorded — no snapshot, no journal entry. The client re-checks its
- * frozen settings form after this succeeds, then calls /commit-save;
- * an attempt abandoned at the re-check therefore consumes nothing,
+ * recorded — no snapshot, no journal entry. The client re-samples its
+ * in-memory configuration copy after this succeeds, then calls
+ * /commit-save; an attempt abandoned at the re-check consumes nothing,
  * and the permanent snapshot always describes the configuration
  * immediately preceding an ACTUAL conversion. The `snapshot` result
  * reports the prospective outcome ('pending-write' /
@@ -847,14 +875,15 @@ async function composeSaveInternal(
   }
   const { block, effectiveBlock, settingsChanged, modeResult, effectiveMap, canonical } = r.ctx;
 
-  // ---- 7b2. V2-FLAG GATE (review #45 P1-1): saving converts the
-  //           configuration to v2, and a v2 config with the flag OFF
-  //           is exactly the dangerous state the rollback docs warn
-  //           about (the flag-off runtime cannot read sensorMap and
-  //           can deregister cached accessories). The editor is
-  //           disabled client-side when the flag is off; this is the
-  //           fail-closed server backstop. Previews stay available —
-  //           a dry run is how users decide whether to opt in.
+  // ---- 7b2. V2 OPT-OUT GATE (review #45 P1-1): saving converts the
+  //           configuration to v2, and a v2 config on an installation
+  //           that explicitly opts out of the v2 runtime is exactly
+  //           the dangerous state the rollback docs warn about (the
+  //           v1.6 pipeline cannot read sensorMap and can deregister
+  //           cached accessories). The editor is read-only client-side
+  //           under the opt-out; this is the fail-closed server
+  //           backstop. Previews stay available — a dry run is how
+  //           users decide whether to remove the opt-out.
   if (detectV2FlagSource(block as ConfigInputShape, deps.env ?? process.env) === 'opted-out') {
     return {
       ok: false,
@@ -877,14 +906,15 @@ async function composeSaveInternal(
   //           composed. When the client supplies its in-memory copy,
   //           refuse any difference from disk beyond the schema form's
   //           measured automatic materialization (empty arrays for
-  //           absent keys). Fail-safe by design: unmeasured form
-  //           normalization refuses too, and saving or discarding the
-  //           form changes clears it. REQUIRED for digest sessions
-  //           (review #47 round 3, P2): a digest save comes from the
-  //           browser, where the settings form is always present —
-  //           omitting formBlock must not bypass the gate. Callers
-  //           without a form use the faithful raw-`base` path, whose
-  //           byte-equality proves the same thing.
+  //           absent keys, a pre-beta.17 session's leftovers).
+  //           Fail-safe by design: unmeasured normalization refuses
+  //           too, and reloading the page clears it. REQUIRED for
+  //           digest sessions (review #47 round 3, P2): a digest save
+  //           comes from the browser, which always holds an in-memory
+  //           configuration copy — omitting formBlock must not bypass
+  //           the gate. Callers without one use the faithful
+  //           raw-`base` path, whose byte-equality proves the same
+  //           thing.
   if (typeof p.baseDigest === 'string' && p.formBlock === undefined) {
     return {
       ok: false,
@@ -1006,10 +1036,10 @@ async function composeSaveInternal(
   //          the phases refuses the same way. An integrity token, not
   //          an auth token: the bridge already trusts its session —
   //          the token guarantees VALIDATE-BEFORE-COMMIT on matching
-  //          state; it cannot prove the browser performed the
-  //          intervening settings-form re-read, which remains
-  //          client-enforced in composeAndPersist (pinned by the
-  //          hostile-mutation test).
+  //          state; it cannot prove the browser re-sampled its
+  //          in-memory configuration copy between the phases, which
+  //          remains client-enforced in composeAndPersist (pinned by
+  //          the hostile-mutation test).
   const nextConfigDigest = blockDigest(composed.nextConfig);
   const validationToken = createHash('sha256').update(canonicalJsonLocal({
     v: 1,
@@ -1040,7 +1070,7 @@ async function composeSaveInternal(
       error: {
         code: 'commit-without-validation',
         message: 'The commit did not present a validation token. Saves must validate first (/compose-save), '
-          + 're-check the settings form, and then commit. Nothing was written.',
+          + 'then commit. Nothing was written.',
       },
     };
   }
@@ -1376,12 +1406,53 @@ export function computeSaveConsequences(ctx: SavePipelineContext): SaveConsequen
         structuralSignature: row.structuralSignature,
       }))
       .sort((a, b) => `${a.stationMac}|${a.dataPoint}` < `${b.stationMac}|${b.dataPoint}` ? -1 : 1);
+  // The digest binds EVERY user-visible consequence (round 3 P2): the
+  // full normalized change list — kind of change, structural flag, the
+  // salient row fields on both sides, and the composed display-name
+  // rename — plus the config-only list. A stable PROJECTION rather
+  // than the raw DTOs, because rows carry volatile observation
+  // timestamps (firstSeen/lastSeen) that must not stale a digest
+  // between preview and commit. A discovery station-name change that
+  // alters a shown rename therefore changes the digest, and the stale
+  // confirmation refuses.
+  const rowProjection = (r: EditorRowDto | undefined): Record<string, unknown> | null => r ? {
+    enabled: r.enabled,
+    name: r.name ?? null,
+    kind: r.kind,
+    measurement: r.measurement ?? null,
+    sourceUnit: r.sourceUnit ?? null,
+    displayUnit: r.displayUnit ?? null,
+    threshold: r.threshold ?? null,
+    triggerEnabled: r.triggerEnabled ?? null,
+    triggerDirection: r.triggerDirection ?? null,
+    batteryField: r.batteryField,
+    hasBatterySubService: r.hasBatterySubService ?? null,
+    embedName: r.embedName ?? null,
+  } : null;
+  const changeProjection = changes.map(c => ({
+    stationMac: c.stationMac,
+    dataPoint: c.dataPoint,
+    change: c.change,
+    structural: c.structural,
+    displayName: c.displayName ?? null,
+    before: rowProjection(c.before),
+    after: rowProjection(c.after),
+  }));
+  const configOnlyProjection = configOnly.map(c => ({
+    stationMac: c.stationMac,
+    dataPoint: c.dataPoint,
+    change: c.change,
+    before: rowProjection(c.before),
+    after: rowProjection(c.after),
+  }));
   const digest = createHash('sha256')
     .update(canonicalJsonLocal({
       base: block,
       canonical,
       current: setSummary(before),
       proposed: setSummary(after),
+      changes: changeProjection,
+      configOnly: configOnlyProjection,
     }))
     .digest('hex');
 
@@ -2027,8 +2098,10 @@ interface SchemaProp {
 let cachedSchemaProperties: Record<string, SchemaProp> | undefined;
 
 /**
- * The plugin's config.schema.json property map — the source of truth
- * for what HB UI X's settings form can EXPRESS. Read from the package
+ * The plugin's config.schema.json property map — the vocabulary the
+ * drift gate tolerates as automatic materialization in a session's
+ * in-memory copy (the schema form that produced such copies retired
+ * at beta.17; the tolerance remains for old sessions). Read from the package
  * root (this file compiles into homebridge-ui/); packaging tests pin
  * the schema into the published tarball. The path derives from
  * import.meta.url — the package is ESM, where __dirname does not
@@ -2047,7 +2120,7 @@ function configSchemaProperties(deps?: HandlerDeps): Record<string, SchemaProp> 
     const parsed = JSON.parse(raw) as { schema?: { properties?: Record<string, SchemaProp> } };
     const properties = parsed.schema?.properties;
     if (!properties || typeof properties !== 'object') {
-      throw new Error('config.schema.json has no schema.properties; cannot evaluate the settings form state.');
+      throw new Error('config.schema.json has no schema.properties; cannot evaluate the configuration copy.');
     }
     cachedSchemaProperties = properties;
   }

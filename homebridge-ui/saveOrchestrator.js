@@ -28,10 +28,11 @@ function withTimeout(work, ms, label) {
     });
 }
 export async function composeAndPersist(deps, args) {
-    // The settings form and HB UI X's Save button are a SECOND writer of
-    // the same config; frozen for the whole operation so no form edit
-    // can land between the formBlock sample and the clear-then-set
-    // persistence (review #47 round 3, P1). Failure-safe (round 4): a
+    // HB UI X's native Save button is a potential SECOND writer of the
+    // same config (it writes the session's in-memory copy); its disable
+    // is re-asserted for the whole operation so nothing can land between
+    // the configuration sample and the persistence (review #47 round 3,
+    // P1; permanently disabled since beta.17). Failure-safe (round 4): a
     // freeze that throws may have PARTIALLY applied, so the restore is
     // attempted before refusing; and an unfreeze failure never masks
     // the authoritative save outcome — by the time cleanup runs, the
@@ -72,25 +73,21 @@ export async function composeAndPersist(deps, args) {
         };
     }
     if (outcome.ok) {
-        // A SUCCESSFUL save leaves the settings form frozen: the form's
-        // two-way-bound copy of the config predates this save, and HB UI
-        // X's form Save REPLACES the platform block with that stale,
-        // schema-shaped copy — measured on HB UI X 5.29: one click undid
-        // a fresh conversion and stripped configVersion/sensorMap/units.
-        // The page banner tells the user to reload the settings page
-        // before editing the form again; refusals below still restore,
-        // because a refused save wrote nothing and the form copy still
-        // matches the disk.
+        // A SUCCESSFUL save leaves the native Save disabled — its
+        // permanent state since beta.17. (Pre-beta.17 history, kept
+        // because it motivated this shape: HB UI X's form Save REPLACED
+        // the platform block with the session's stale schema-shaped copy;
+        // measured on 5.29, one click undid a fresh conversion.)
         return outcome;
     }
     const restored = await unfreezeQuietly(deps);
     return restored ? outcome : { ...outcome, settingsRestoreFailed: true };
 }
 /**
- * Restore the settings form without ever throwing: the save outcome
- * is authoritative, and a cleanup failure must not replace it (a
- * completed save reported as a transport error is worse than a
- * momentarily locked form). Returns whether the restore succeeded so
+ * Re-assert the page's save-control state without ever throwing: the
+ * save outcome is authoritative, and a cleanup failure must not
+ * replace it (a completed save reported as a transport error is worse
+ * than a momentarily degraded page). Returns whether it succeeded so
  * the caller can FLAG the degraded page instead of hiding it.
  */
 async function unfreezeQuietly(deps) {
@@ -302,8 +299,8 @@ async function composeAndPersistFrozen(deps, args) {
     }
     // HB UI X applies updatePluginConfig by MERGING each submitted block
     // into its in-memory copy (Object.assign), so a key the composed
-    // config REMOVED — a legacy field the mirror omits, or a schema
-    // default the settings form materialized — would silently survive
+    // config REMOVED — a legacy field the mirror omits, or a default a
+    // pre-beta.17 schema form materialized into an old session — would silently survive
     // into the persisted file, and a resurrected mirrored field makes
     // the freshly written mirror hash STALE on arrival. Explicit
     // `undefined` tombstones for the removed keys make the merge produce
