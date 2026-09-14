@@ -1283,6 +1283,35 @@ v2.0 accessory graph (produced by loading the same config via compat layer)
 
 Full-graph equivalence, not just structural signature.
 
+**Discharged (2026-09-13) — the executed definition of this gate.** Two
+suites over one shared corpus (`tests/helpers/legacyConfigCorpus.ts`:
+the synthetic matrix plus the captured Demeter conversion baselines):
+
+- `tests/regression/migrationGraphEquivalence.test.ts` — the REAL
+  platform lifecycle (real @homebridge/hap-nodejs objects,
+  `tests/helpers/hapLifecycle.ts`) runs each legacy config twice:
+  flag-off legacy path, and flag-on over `composeV2ConfigSave`'s
+  byte-real output for that config. Identical uniqueId sets,
+  platform-composed display names, and full serialized graphs (props
+  and values, `AccessoryInformation.Name` included); zero unregister
+  calls. Initial-value behavior is covered because the payload seeds
+  values through each path's own construction. One accepted deviation
+  is pinned exactly, never exempted loosely: conversion validates, so
+  a malformed legacy unit that v1.6 rendered as garbage renders in the
+  documented default after conversion (same accessory, same structure).
+- `tests/regression/downgradeReal173.test.ts` — the REAL published
+  1.7.3 (devDependency alias) executes in-process: it freezes on a
+  HEAD-emitted v2 config (no fetch, no registrations, cache
+  preserved), and after the documented rollback deletion it produces
+  graphs identical to HEAD's flag-off path over the whole corpus —
+  §5's projection property and the flag-off "byte-identical" claim,
+  executed rather than asserted. The custom-row loss boundary
+  (exclusions defeating the broad matchers) is pinned on real 1.7.3.
+
+Update behavior beyond the initial seed (subsequent poll/realtime
+ticks) remains covered by the routing suites
+(`tests/integration/discoverV2.test.ts`), not by the graph gate.
+
 ### 12.8 Safe-mode read-only tests
 
 - On a `configVersion: 3` (or any unsupported version), cached accessories continue to load via `configureAccessory()` with their last-known values

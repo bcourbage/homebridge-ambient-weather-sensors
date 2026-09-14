@@ -99,3 +99,21 @@ describe('HAP graph parity vs the v1.7.0 golden (finding-#4 review P1-C)', () =>
     expect(serializeHapGraph(accessory)).toEqual((golden as never)[wrapperId][battery]);
   });
 });
+
+describe('golden provenance tripwire (migration proof F3)', () => {
+  it('the v1.7.0 golden fixture is the byte-exact file generated from the v1.7.0 dist', async () => {
+    // The golden is generated MANUALLY (genGraphFixtures.mjs against
+    // the v1.7.0 worktree's dist) and nothing in CI regenerates it. If
+    // someone regenerated it from HEAD's dist by mistake, every parity
+    // test above would become a tautology. This hash pins the file
+    // bytes: regenerating the golden requires updating the hash HERE,
+    // consciously, with the provenance re-verified against the v1.7.0
+    // tag.
+    const { createHash } = await import('node:crypto');
+    const { readFileSync } = await import('node:fs');
+    const path = await import('node:path');
+    const bytes = readFileSync(path.resolve(__dirname, '../fixtures/graph/v1.7.0.json'));
+    expect(createHash('sha256').update(bytes).digest('hex'))
+      .toBe('ababd41fefa0f446382c2ad7d9fc0e9f849788809d1d57fa584931136f27e67c');
+  });
+});

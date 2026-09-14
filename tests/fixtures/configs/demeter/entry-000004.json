@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "savedAt": "2026-09-09T04:14:47.364Z",
+  "legacy": {
+    "temperatureSensors": true,
+    "humiditySensors": true,
+    "solarRadiationSensors": true,
+    "co2Sensors": false,
+    "airQualitySensors": false,
+    "extendedSensors": true,
+    "windSensors": true,
+    "rainSensors": true,
+    "pressureSensors": true,
+    "uvSensors": true,
+    "lightningSensors": false,
+    "extendedDisplayMode": "static",
+    "thresholds": {
+      "windSpeedEnabled": true,
+      "windSpeedMph": 25,
+      "windGustEnabled": true,
+      "windGustMph": 35,
+      "rainRateEnabled": true,
+      "rainRateInHr": 0.01,
+      "uvEnabled": true,
+      "uv": 3,
+      "lightningDistanceEnabled": true,
+      "lightningDistanceMi": 10,
+      "pressureEnabled": true,
+      "pressureInHg": 29.5
+    },
+    "units": {
+      "windSpeed": "kts",
+      "rain": "in",
+      "pressure": "inHg",
+      "distance": "mi"
+    },
+    "excludeSensors": [
+      "weeklyrainin",
+      "monthlyrainin",
+      "yearlyrainin",
+      "feelsLikein",
+      "dewPointin"
+    ]
+  }
+}
