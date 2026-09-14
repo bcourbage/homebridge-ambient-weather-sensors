@@ -31,7 +31,7 @@ import {
 } from '../dist/sensorMap/legacyMirror.js';
 import { sensorMapShapeError, type EffectiveMapConfig } from '../dist/sensorMap/platformEffectiveMap.js';
 import { NON_TRIGGERING_MEASUREMENTS, STATION_MAC_REGEX } from '../dist/sensorMap/validation.js';
-import { shadowModeEnabled } from '../dist/sensorMap/shadowMode.js';
+import { v2ConstructionEnabled } from '../dist/sensorMap/v2Flag.js';
 import {
   loadDiscoveryStore,
 } from '../dist/sensorMap/persistence/discoveryStore.js';
@@ -44,7 +44,6 @@ import {
 import { DISPLAY_FAMILIES, MEASUREMENT_LABELS, UNIT_VOCABULARY, unitOptionsFor } from '../dist/sensorMap/unitVocabulary.js';
 import { WRAPPER_FOR_KIND_AND_MEASUREMENT } from '../dist/sensorMap/wrappers.js';
 import { defaultRowFor } from '../dist/sensorMap/defaultMap.js';
-import { dynamicSchemaPath } from '../dist/sensorMap/dynamicSchema.js';
 import { PLUGIN_NAME } from '../dist/settings.js';
 import type { Logger, ReadStoreOptions } from '../dist/sensorMap/persistence/atomicWrite.js';
 import type {
@@ -105,7 +104,7 @@ export interface StatusPayload {
   version: string;
   v2Flag: {
     enabled: boolean;
-    source: 'env' | 'config' | 'none';
+    source: 'env' | 'default' | 'opted-out';
   };
   configMode: 'legacy' | 'v2' | 'safe-mode';
   configWarnings: string[];
@@ -147,7 +146,7 @@ export async function handleGetStatus(deps: HandlerDeps, payload: unknown): Prom
   return {
     version: deps.version,
     v2Flag: {
-      enabled: flagSource !== 'none',
+      enabled: flagSource !== 'opted-out',
       source: flagSource,
     },
     configMode: modeResult.mode,
@@ -184,17 +183,21 @@ function extractConfig(payload: unknown): ConfigInputShape {
   return {};
 }
 
+/**
+ * Post-flip (GA #65): v2 construction is the DEFAULT. The source
+ * distinguishes only the explicit opt-outs — 'default' and 'env' mean
+ * enabled; 'opted-out' means an explicit config/env disable.
+ */
 function detectV2FlagSource(
   config: ConfigInputShape | undefined,
   env: NodeJS.ProcessEnv,
-): 'env' | 'config' | 'none' {
+): 'env' | 'default' | 'opted-out' {
   if (env.SENSOR_MAP_V2 === '1' || env.SENSOR_MAP_V2 === 'true') {
     return 'env';
   }
-  if (shadowModeEnabled({ env: {}, config: (config as Record<string, unknown>) ?? {} })) {
-    return 'config';
-  }
-  return 'none';
+  return v2ConstructionEnabled({ env, config: (config as Record<string, unknown>) ?? {} })
+    ? 'default'
+    : 'opted-out';
 }
 
 // ---- Compose-save boundary (GA task #67 / finding 5) ---------------
@@ -673,14 +676,15 @@ async function composeSaveInternal(
   //           disabled client-side when the flag is off; this is the
   //           fail-closed server backstop. Previews stay available —
   //           a dry run is how users decide whether to opt in.
-  if (detectV2FlagSource(block as ConfigInputShape, deps.env ?? process.env) === 'none') {
+  if (detectV2FlagSource(block as ConfigInputShape, deps.env ?? process.env) === 'opted-out') {
     return {
       ok: false,
       error: {
         code: 'v2-flag-off',
-        message: 'The sensor-map v2 flag is off, so the runtime would not read a saved sensor map — and a v2 '
-          + 'configuration with the flag off can deregister cached accessories. Enable "Advanced (v2.0 preview) → '
-          + 'Enable sensor-map v2 live path" in the settings form, restart Homebridge, and retry. Nothing was written.',
+        message: 'This installation explicitly opts out of the sensor-map runtime (_sensorMapV2: false or '
+          + 'SENSOR_MAP_V2=0), so the runtime would not read a saved sensor map — and a v2 configuration with the '
+          + 'opt-out active can deregister cached accessories. Remove the opt-out, restart Homebridge, and retry. '
+          + 'Nothing was written.',
       },
     };
   }
@@ -1228,7 +1232,7 @@ export async function handleGetEditorState(
   const block = blocks[0];
 
   const modeResult = detectConfigMode(block as ConfigInputShape);
-  const v2FlagEnabled = detectV2FlagSource(block as ConfigInputShape, deps.env ?? process.env) !== 'none';
+  const v2FlagEnabled = detectV2FlagSource(block as ConfigInputShape, deps.env ?? process.env) !== 'opted-out';
   // detectConfigMode already includes safeModeBanner in warnings —
   // no separate push, or safe mode would show the banner twice.
   for (const w of modeResult.warnings) {
@@ -1792,22 +1796,9 @@ let cachedSchemaProperties: Record<string, SchemaProp> | undefined;
  * save must refuse rather than guess.
  */
 function configSchemaProperties(deps?: HandlerDeps): Record<string, SchemaProp> {
-  // Judge the form against the schema it actually RENDERED: with the
-  // dynamic schema present (v2-live mode), HB UI X loads it instead
-  // of the packaged one, and a control it omits cannot hold an
-  // unsaved user edit. Absent or unreadable, HB UI X falls back to
-  // the packaged schema, so this gate does too.
-  if (deps?.storagePath) {
-    try {
-      const raw = readFileSync(dynamicSchemaPath(deps.storagePath, PLUGIN_NAME), 'utf8');
-      const parsed = JSON.parse(raw) as { schema?: { properties?: Record<string, SchemaProp> } };
-      if (parsed.schema?.properties && typeof parsed.schema.properties === 'object') {
-        return parsed.schema.properties;
-      }
-    } catch {
-      // fall through to the packaged schema
-    }
-  }
+  // The dynamic-schema preference retired with the schema form
+  // (beta.17): no form renders, so the packaged schema is the only
+  // materialization vocabulary the drift gate needs.
   if (!cachedSchemaProperties) {
     const here = path.dirname(fileURLToPath(import.meta.url));
     const raw = readFileSync(path.resolve(here, '..', 'config.schema.json'), 'utf8');

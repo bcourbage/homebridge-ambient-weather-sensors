@@ -235,13 +235,12 @@ describe('structural confirmation digest (PR C / finding 5)', () => {
 });
 
 describe('v2-flag gate on saves (review #45 P1-1)', () => {
-  it('a save with the flag OFF is refused — the preview still works', async () => {
-    const flagOff = { ...LEGACY_BLOCK } as Record<string, unknown>;
-    delete flagOff._sensorMapV2;
+  it('a save with an EXPLICIT opt-out is refused — the preview still works (post-flip: absent flag saves fine)', async () => {
+    const flagOff = { ...LEGACY_BLOCK, _sensorMapV2: false } as Record<string, unknown>;
     const rig = makeRig(flagOff);
     discoveryStore(rig);
     const preview = await handlePreviewSave(rig.deps, { base: flagOff });
-    expect(preview.ok).toBe(true); // dry runs are how users decide to opt in
+    expect(preview.ok).toBe(true); // dry runs are how users decide to remove the opt-out
     const save = await handleComposeSave(rig.deps, { base: flagOff });
     expect(save.ok).toBe(false);
     if (!save.ok) {

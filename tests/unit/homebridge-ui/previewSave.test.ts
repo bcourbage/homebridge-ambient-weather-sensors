@@ -20,7 +20,6 @@ import * as path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { handleCommitSave, handleComposeSave, handlePreviewSave, type HandlerDeps } from '../../../homebridge-ui/handlers';
-import { syncDynamicSchema } from '../../../src/sensorMap/dynamicSchema';
 import { PLUGIN_NAME } from '../../../src/settings';
 import { LEGACY_SNAPSHOT_FILE } from '../../../src/sensorMap/legacyMirror';
 
@@ -409,7 +408,7 @@ describe('config-only changes: disabled rows whose settings change (beta.15 RC f
   });
 });
 
-describe('unsaved-settings gate vs the dynamic schema (beta.15 conversion smoke)', () => {
+describe('unsaved-settings gate (UI in-memory copy vs disk, packaged schema)', () => {
   const V2_MIRRORED_BLOCK = {
     platform: 'AmbientWeatherSensors',
     name: 'Test Station',
@@ -417,8 +416,8 @@ describe('unsaved-settings gate vs the dynamic schema (beta.15 conversion smoke)
     _sensorMapV2: true,
     configVersion: 2,
     sensorMap: [{ dataPoint: 'windspeedmph', displayUnit: 'kph' }],
-    // Mirror-maintained legacy field the dynamic schema HIDES from
-    // the form: the form's copy will not carry it.
+    // Mirror-maintained legacy field: present on disk; a UI copy that
+    // dropped it diverges from disk.
     temperatureSensors: true,
   };
 
@@ -437,29 +436,22 @@ describe('unsaved-settings gate vs the dynamic schema (beta.15 conversion smoke)
     return handleCommitSave(rig.deps, { ...payload, validationToken: validated.validationToken });
   }
 
-  async function writeDynamicSchema(rig: Rig): Promise<void> {
-    await syncDynamicSchema({
-      storagePath: rig.root, pluginName: PLUGIN_NAME,
-      packagedSchemaPath: path.join(__dirname, '..', '..', '..', 'config.schema.json'),
-      configPath: rig.configPath,
-      log: silentLog,
-    });
-  }
+  // The dynamic-schema variant of this gate retired with the schema
+  // form (beta.17): no form renders, the UI's in-memory copy is
+  // expected to byte-match disk, and any divergence beyond the
+  // packaged schema's measured materialization refuses.
 
-  it('a form copy missing a dynamic-schema-hidden field is NOT an unsaved edit', async () => {
+  it('a byte-matching UI copy passes', async () => {
     const rig = makeRig(V2_MIRRORED_BLOCK);
     rig.deps.storagePath = rig.root;
     discoveryStore(rig, ['windspeedmph']);
-    await writeDynamicSchema(rig);
-    const { temperatureSensors, ...formBlock } = V2_MIRRORED_BLOCK;
-    void temperatureSensors;
-    const result = await commitWithForm(rig, formBlock);
+    const result = await commitWithForm(rig, { ...V2_MIRRORED_BLOCK });
     expect(result.ok).toBe(true);
   });
 
-  it('without the dynamic schema the same absence still refuses (a form that RENDERS the control may hold a real edit)', async () => {
+  it('a UI copy missing a disk field refuses (divergent copy could be persisted later)', async () => {
     const rig = makeRig(V2_MIRRORED_BLOCK);
-    rig.deps.storagePath = rig.root; // no dynamic schema file written
+    rig.deps.storagePath = rig.root;
     discoveryStore(rig, ['windspeedmph']);
     const { temperatureSensors, ...formBlock } = V2_MIRRORED_BLOCK;
     void temperatureSensors;
@@ -471,11 +463,10 @@ describe('unsaved-settings gate vs the dynamic schema (beta.15 conversion smoke)
     }
   });
 
-  it('a REAL edit to a control the dynamic schema still renders is refused', async () => {
+  it('an edited value in the UI copy refuses', async () => {
     const rig = makeRig(V2_MIRRORED_BLOCK);
     rig.deps.storagePath = rig.root;
     discoveryStore(rig, ['windspeedmph']);
-    await writeDynamicSchema(rig);
     const result = await commitWithForm(rig, { ...V2_MIRRORED_BLOCK, apiKey: 'edited-in-the-form' });
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -484,6 +475,7 @@ describe('unsaved-settings gate vs the dynamic schema (beta.15 conversion smoke)
     }
   });
 });
+
 
 describe('configOnly additions and removals (review round 6 F4)', () => {
   const BLOCK_WITH_DISABLED_CUSTOM = {

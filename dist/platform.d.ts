@@ -65,7 +65,6 @@ export declare class AmbientWeatherSensorsPlatform implements DynamicPlatformPlu
     private pollTimer;
     private realtimeSource;
     private readonly safeModeBindings;
-    private readonly shadow;
     private readonly sensorMapV2;
     private v2Routing;
     private v2EffectiveMap;
@@ -349,8 +348,7 @@ export declare class AmbientWeatherSensorsPlatform implements DynamicPlatformPlu
      *     characteristic via `updateCharacteristic`);
      *   - call `registerPlatformAccessories` / `unregisterPlatformAccessories`;
      *   - call `updatePlatformAccessories` (no displayName rewrites);
-     *   - write to any plugin persistence file (the shadowMode observer
-     *     has its own safe-mode short-circuit for its persist tree);
+     *   - write to any plugin persistence file;
      *   - reconcile against `parseDevices`'s "orphan" set;
      *   - run realtime — transport is polling ONLY (realtime would
      *     require interpreting apiKey/applicationKey semantics from the

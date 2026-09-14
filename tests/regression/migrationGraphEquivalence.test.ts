@@ -25,6 +25,10 @@
  * cannot see (it builds wrappers from DEFAULT rows with an empty
  * config — never a converted config, never the platform's naming).
  */
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import * as os from 'node:os';
+import * as nodePath from 'node:path';
+
 import { describe, expect, it, afterEach, vi } from 'vitest';
 
 import { AmbientWeatherSensorsPlatform } from '../../src/platform';
@@ -62,8 +66,16 @@ async function runLifecycle(
   unregisteredCount: number;
   api: HapMockAPI;
   raw: HapLifecyclePlatformAccessory[];
+  configBytesChanged: boolean;
 }> {
   const api = new HapMockAPI();
+  // A REAL config.json behind api.user.configPath, so an unsolicited
+  // write by the lifecycle is detectable byte-for-byte.
+  const cfgDir = mkdtempSync(nodePath.join(os.tmpdir(), 'awn-graph-cfg-'));
+  const cfgFile = nodePath.join(cfgDir, 'config.json');
+  const cfgBytes = JSON.stringify({ bridge: { name: 'T' }, platforms: [config] }, null, 4);
+  writeFileSync(cfgFile, cfgBytes);
+  (api.user as { configPath?: () => string }).configPath = () => cfgFile;
   const log = new MockLogger();
   const fetchSpy = vi.spyOn(global, 'fetch').mockImplementation(async () => new Response(
     JSON.stringify(stations),
@@ -98,11 +110,14 @@ async function runLifecycle(
     await new Promise((r) => setImmediate(r));
   }
   vi.restoreAllMocks();
+  const configBytesChanged = readFileSync(cfgFile, 'utf8') !== cfgBytes;
+  rmSync(cfgDir, { recursive: true, force: true });
   return {
     accessories: serializeRegistered(api),
     unregisteredCount: api.unregistered.length,
     api,
     raw: api.registered,
+    configBytesChanged,
   };
 }
 
@@ -174,7 +189,10 @@ describe('migration equivalence — full HAP graph, legacy path vs converted pat
   for (const { label: cfgLabel, config } of CORPUS) {
     for (const { label: payloadLabel, stations } of PAYLOAD_MATRIX) {
       it(`graphs match: ${cfgLabel} / ${payloadLabel}`, async () => {
-        const legacy = await runLifecycle(config as Record<string, unknown>, stations);
+        // POST-FLIP (GA #65): the v1.6.0 pipeline is reachable only
+        // through the explicit opt-out; that is the baseline this
+        // equivalence gate measures against.
+        const legacy = await runLifecycle({ ...(config as Record<string, unknown>), _sensorMapV2: false }, stations);
         const convertedCfg = convertedConfigFor(config, stations);
         const converted = await runLifecycle(convertedCfg, stations);
 
@@ -237,6 +255,24 @@ describe('migration equivalence — full HAP graph, legacy path vs converted pat
           // value deviations must vanish here.
           expect(cachedObserved).toEqual([]);
         }
+
+        // ---- Default-on journey (GA #65 / beta.17 requirement): the
+        // UNMODIFIED legacy config, no flag anywhere, now runs the v2
+        // pipeline via the compat layer. It must produce EXACTLY the
+        // converted run's graphs (both sides are v2, so even the
+        // pinned deviations vanish), churn nothing, and never write
+        // config.json.
+        const defaultOn = await runLifecycle(config as Record<string, unknown>, stations);
+        expect(defaultOn.unregisteredCount, 'default-on unregistered').toBe(0);
+        expect(defaultOn.accessories.map(a => a.uniqueId))
+          .toEqual(converted.accessories.map(a => a.uniqueId));
+        for (let i = 0; i < converted.accessories.length; i++) {
+          expect(defaultOn.accessories[i].displayName, `${converted.accessories[i].uniqueId} displayName default-on`)
+            .toBe(converted.accessories[i].displayName);
+          expect(defaultOn.accessories[i].graph, `${converted.accessories[i].uniqueId} graph default-on`)
+            .toEqual(converted.accessories[i].graph);
+        }
+        expect(defaultOn.configBytesChanged, 'default-on config.json write').toBe(false);
       });
     }
   }

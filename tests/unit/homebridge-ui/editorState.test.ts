@@ -408,8 +408,10 @@ describe('/editor-state — mirrorState (review #45 round 4)', () => {
 });
 
 describe('/editor-state — v2-flag gating (review #45 P1-1)', () => {
-  it('flag OFF: editorAvailable false with a directing banner (rows still preview)', async () => {
-    const rig = makeRig([LEGACY_BLOCK]); // no _sensorMapV2, env {}
+  it('explicit opt-out: editorAvailable false with a directing banner (rows still preview)', async () => {
+    // Post-flip a BARE config is v2-enabled; only the explicit
+    // opt-out disables the editor.
+    const rig = makeRig([{ ...LEGACY_BLOCK, _sensorMapV2: false }]);
     discoveryStore(rig, [{ mac: MAC, dataPoint: 'tempf' }]);
     const dto = await handleGetEditorState(rig.deps, {});
     expect(dto.v2FlagEnabled).toBe(false);
@@ -447,7 +449,9 @@ describe('/editor-state — legacy and troubled configurations', () => {
     ]);
     const dto = await handleGetEditorState(rig.deps, {});
     expect(dto.configMode).toBe('legacy');
-    expect(dto.v2FlagEnabled).toBe(false);
+    // Post-flip the editor is enabled by default even on a legacy
+    // config: the migration preview doubles as the live editor entry.
+    expect(dto.v2FlagEnabled).toBe(true);
     expect(dto.authoredSource).toBe('compat-seeded');
     const tempf = dto.rows.find(r => r.stationMac === MAC && r.dataPoint === 'tempf');
     expect(tempf?.enabled).toBe(true);
