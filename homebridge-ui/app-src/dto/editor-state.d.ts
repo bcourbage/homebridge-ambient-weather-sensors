@@ -151,9 +151,25 @@ export interface EditorDiagnosticDto {
 }
 
 /** Response of request '/editor-state'. */
+/**
+ * Live plugin settings for the consolidated page (beta.17, GA #56).
+ * Credentials appear ONLY as presence booleans — never as values, on
+ * any DTO surface.
+ */
+export interface EditorSettingsDto {
+  name: string;
+  dataSource: 'polling' | 'realtime';
+  stationFilter: string[];
+  embedNameUpdateMinIntervalMinutes?: number;
+  apiKeySet: boolean;
+  applicationKeySet: boolean;
+}
+
 export interface EditorStateDto {
   configMode: 'legacy' | 'v2' | 'safe-mode';
   v2FlagEnabled: boolean;
+  /** Live settings rendered by the Connection section. */
+  settings: EditorSettingsDto;
   /**
    * True when this server's save path is live (PR C, finding 5) —
    * the client gates every save-capable control on it, so a newer
@@ -264,6 +280,8 @@ export type PreviewResultDto =
     rows: EditorRowDto[];
     changes: PreviewChangeDto[];
     configOnly: ConfigOnlyChangeDto[];
+    /** Settings keys this save changes (names only; never values). */
+    settingsChanged: string[];
     structuralChangeCount: number;
     /**
      * sha256 over canonical JSON of (on-disk block, canonical map,

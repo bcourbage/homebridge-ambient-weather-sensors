@@ -1975,3 +1975,159 @@ describe('unrecognized-field assignment saves as a new custom sensor (PR E)', ()
     }
   });
 });
+
+describe('consolidated-page settings through the guarded save (beta.17, GA #56)', () => {
+  const BLOCK = {
+    platform: 'AmbientWeatherSensors',
+    name: 'Test Station',
+    apiKey: 'secret-api-key-value', applicationKey: 'secret-app-key-value',
+    configVersion: 2,
+    sensorMap: [{ dataPoint: 'windspeedmph', displayUnit: 'kph' }],
+  };
+
+  async function commitSettings(rig: Rig, settings: unknown, proposal?: unknown[]) {
+    const payload = {
+      base: BLOCK,
+      proposal: proposal ?? BLOCK.sensorMap,
+      settings,
+    };
+    const validated = await handleComposeSave(rig.deps, payload);
+    if (!validated.ok) {
+      return validated;
+    }
+    return handleCommitSave(rig.deps, { ...payload, validationToken: validated.validationToken });
+  }
+
+  it('every moved setting round-trips: name, dataSource, stationFilter, embed interval', async () => {
+    const rig = makeRig(BLOCK);
+    discoveryStore(rig);
+    const result = await commitSettings(rig, {
+      name: 'Renamed Platform',
+      dataSource: 'realtime',
+      stationFilter: ['Backyard WS-2000'],
+      embedNameUpdateMinIntervalMinutes: 5,
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.settingsChanged.sort()).toEqual(
+        ['dataSource', 'embedNameUpdateMinIntervalMinutes', 'name', 'stationFilter']);
+      expect(result.nextConfig.name).toBe('Renamed Platform');
+      expect(result.nextConfig.dataSource).toBe('realtime');
+      expect(result.nextConfig.stationFilter).toEqual(['Backyard WS-2000']);
+      expect(result.nextConfig.embedNameUpdateMinIntervalMinutes).toBe(5);
+      // Untouched credentials pass through byte-for-byte.
+      expect(result.nextConfig.apiKey).toBe('secret-api-key-value');
+      expect(result.nextConfig.applicationKey).toBe('secret-app-key-value');
+    }
+  });
+
+  it('a sensor-only save (no settings field) preserves credentials byte-for-byte', async () => {
+    const rig = makeRig(BLOCK);
+    discoveryStore(rig);
+    const result = await commitSettings(rig, undefined,
+      [{ dataPoint: 'windspeedmph', displayUnit: 'mph' }]);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.settingsChanged).toEqual([]);
+      expect(result.nextConfig.apiKey).toBe('secret-api-key-value');
+      expect(result.nextConfig.applicationKey).toBe('secret-app-key-value');
+    }
+  });
+
+  it('credential intents: absent = unchanged, {set} replaces, {clear} removes', async () => {
+    const rig = makeRig(BLOCK);
+    discoveryStore(rig);
+    const result = await commitSettings(rig, {
+      apiKey: { set: 'new-api-key' },
+      applicationKey: { clear: true },
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.settingsChanged.sort()).toEqual(['apiKey', 'applicationKey']);
+      expect(result.nextConfig.apiKey).toBe('new-api-key');
+      expect('applicationKey' in result.nextConfig).toBe(false);
+    }
+  });
+
+  it('setting a credential to its existing value still reports changed (no equality oracle on secrets)', async () => {
+    const rig = makeRig(BLOCK);
+    discoveryStore(rig);
+    const result = await commitSettings(rig, { apiKey: { set: 'secret-api-key-value' } });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.settingsChanged).toEqual(['apiKey']);
+    }
+  });
+
+  it('malformed settings refuse fail-closed with nothing written', async () => {
+    const rig = makeRig(BLOCK);
+    discoveryStore(rig);
+    const before = readFileSync(rig.configPath, 'utf8');
+    for (const bad of [
+      { zzUnknown: 1 },
+      { dataSource: 'websocket' },
+      { name: '' },
+      { apiKey: { set: 'x', clear: true } },
+      { apiKey: 'plain-string' },
+      { apiKey: { set: '' } },
+      { stationFilter: 'not-an-array' },
+      { embedNameUpdateMinIntervalMinutes: -1 },
+    ]) {
+      const result = await commitSettings(rig, bad);
+      expect(result.ok, JSON.stringify(bad)).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code, JSON.stringify(bad)).toBe('invalid-settings');
+      }
+    }
+    expect(readFileSync(rig.configPath, 'utf8')).toBe(before);
+  });
+
+  it('no secret leaks across DTOs, previews, snapshots, or the journal', async () => {
+    const LEGACY_WITH_SECRETS = {
+      platform: 'AmbientWeatherSensors',
+      name: 'Test Station',
+      apiKey: 'secret-api-key-value', applicationKey: 'secret-app-key-value',
+      temperatureSensors: true,
+    };
+    const rig = makeRig(LEGACY_WITH_SECRETS);
+    discoveryStore(rig);
+
+    // /editor-state carries presence booleans, never values.
+    const state = await handleGetEditorState(rig.deps, {});
+    expect(state.settings.apiKeySet).toBe(true);
+    expect(state.settings.applicationKeySet).toBe(true);
+    expect(JSON.stringify(state)).not.toContain('secret-api-key-value');
+    expect(JSON.stringify(state)).not.toContain('secret-app-key-value');
+
+    // A preview result never carries the values either.
+    const preview = await handlePreviewSave(rig.deps, { base: LEGACY_WITH_SECRETS });
+    expect(preview.ok).toBe(true);
+    expect(JSON.stringify(preview)).not.toContain('secret-api-key-value');
+
+    // A legacy CONVERSION (which snapshots + journals) writes no
+    // secret into either record.
+    const payload = { base: LEGACY_WITH_SECRETS };
+    const digest = await digestFor(rig, payload);
+    const validated = await handleComposeSave(rig.deps, { ...payload, confirmDigest: digest });
+    expect(validated.ok).toBe(true);
+    if (validated.ok) {
+      const committed = await handleCommitSave(rig.deps, {
+        ...payload, confirmDigest: digest, validationToken: validated.validationToken,
+      });
+      expect(committed.ok).toBe(true);
+    }
+    const snapshot = readFileSync(path.join(rig.persistDir, 'legacy-config-snapshot.json'), 'utf8');
+    expect(snapshot).not.toContain('secret-api-key-value');
+    expect(snapshot).not.toContain('secret-app-key-value');
+    // The journal starts on the first RE-conversion (the immutable
+    // snapshot covers the first); sweep it when present.
+    const journalDir = path.join(rig.persistDir, 'legacy-conversion-journal');
+    if (existsSync(journalDir)) {
+      for (const f of readdirSync(journalDir)) {
+        const entry = readFileSync(path.join(journalDir, f), 'utf8');
+        expect(entry, f).not.toContain('secret-api-key-value');
+        expect(entry, f).not.toContain('secret-app-key-value');
+      }
+    }
+  });
+});

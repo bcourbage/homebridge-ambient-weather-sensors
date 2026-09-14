@@ -99,12 +99,125 @@ const LEGACY_CATEGORY_TOGGLES = [
     'windSensors', 'rainSensors', 'pressureSensors', 'uvSensors',
     'lightningSensors',
 ];
+const SETTINGS_KEYS = new Set([
+    'name', 'dataSource', 'stationFilter', 'embedNameUpdateMinIntervalMinutes', 'apiKey', 'applicationKey',
+]);
 /**
- * Steps 1–7b of the guarded save: authoritative on-disk config, block
- * location + staleness check, mode + sensorMap-shape gates, proposal
- * shape/seeding, §8.7 inventory, same-machinery validation, canonical
- * serialization, and the hard divergence gate. Performs NO writes.
+ * Apply the consolidated page's settings patch to a COPY of the
+ * on-disk block. Fail-closed: any unknown key or malformed value
+ * refuses the whole save. Credentials are intent-shaped; a sensor-only
+ * save (no settings field at all) returns the block object UNTOUCHED,
+ * so stored credentials pass through compose byte-for-byte.
  */
+function applySettingsPatch(block, raw) {
+    if (raw === undefined) {
+        return { block, changed: [] };
+    }
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+        return { error: 'settings must be an object.' };
+    }
+    const patch = raw;
+    const unknownKeys = Object.keys(patch).filter(k => !SETTINGS_KEYS.has(k));
+    if (unknownKeys.length > 0) {
+        return { error: `settings contains unsupported keys: ${unknownKeys.join(', ')}.` };
+    }
+    const next = { ...block };
+    const changed = [];
+    if ('name' in patch) {
+        if (typeof patch.name !== 'string' || patch.name.trim() === '') {
+            return { error: 'settings.name must be a non-empty string.' };
+        }
+        const v = patch.name.trim();
+        if (v !== block.name) {
+            next.name = v;
+            changed.push('name');
+        }
+    }
+    if ('dataSource' in patch) {
+        if (patch.dataSource !== 'polling' && patch.dataSource !== 'realtime') {
+            return { error: "settings.dataSource must be 'polling' or 'realtime'." };
+        }
+        const current = block.dataSource === 'realtime' ? 'realtime' : 'polling';
+        if (patch.dataSource !== current) {
+            if (patch.dataSource === 'polling') {
+                delete next.dataSource; // polling is the default; keep the block minimal
+            }
+            else {
+                next.dataSource = 'realtime';
+            }
+            changed.push('dataSource');
+        }
+    }
+    if ('stationFilter' in patch) {
+        if (!Array.isArray(patch.stationFilter)
+            || patch.stationFilter.some(e => typeof e !== 'string')) {
+            return { error: 'settings.stationFilter must be an array of strings.' };
+        }
+        const v = patch.stationFilter.map(e => e.trim()).filter(e => e !== '');
+        const current = Array.isArray(block.stationFilter) ? block.stationFilter : [];
+        if (JSON.stringify(v) !== JSON.stringify(current)) {
+            if (v.length === 0) {
+                delete next.stationFilter;
+            }
+            else {
+                next.stationFilter = v;
+            }
+            changed.push('stationFilter');
+        }
+    }
+    if ('embedNameUpdateMinIntervalMinutes' in patch) {
+        const v = patch.embedNameUpdateMinIntervalMinutes;
+        if (v === null) {
+            if ('embedNameUpdateMinIntervalMinutes' in block) {
+                delete next.embedNameUpdateMinIntervalMinutes;
+                changed.push('embedNameUpdateMinIntervalMinutes');
+            }
+        }
+        else if (typeof v !== 'number' || !Number.isFinite(v) || v < 0) {
+            return { error: 'settings.embedNameUpdateMinIntervalMinutes must be a non-negative number (or null to reset).' };
+        }
+        else if (v !== block.embedNameUpdateMinIntervalMinutes) {
+            next.embedNameUpdateMinIntervalMinutes = v;
+            changed.push('embedNameUpdateMinIntervalMinutes');
+        }
+    }
+    for (const key of ['apiKey', 'applicationKey']) {
+        if (!(key in patch)) {
+            continue; // unchanged: the stored secret passes through untouched
+        }
+        const intent = patch[key];
+        if (!intent || typeof intent !== 'object' || Array.isArray(intent)) {
+            return { error: `settings.${key} must be { set: <value> } or { clear: true }.` };
+        }
+        const { set, clear, ...rest } = intent;
+        if (Object.keys(rest).length > 0 || (set !== undefined && clear !== undefined)) {
+            return { error: `settings.${key} must carry exactly one of set / clear.` };
+        }
+        if (clear !== undefined) {
+            if (clear !== true) {
+                return { error: `settings.${key}.clear must be literally true.` };
+            }
+            if (key in block) {
+                delete next[key];
+                changed.push(key);
+            }
+        }
+        else if (set !== undefined) {
+            if (typeof set !== 'string' || set.trim() === '') {
+                return { error: `settings.${key}.set must be a non-empty string.` };
+            }
+            // Deliberately marked changed even when the value equals the
+            // stored one: comparing would create an equality oracle on a
+            // secret.
+            next[key] = set.trim();
+            changed.push(key);
+        }
+        else {
+            return { error: `settings.${key} must carry exactly one of set / clear.` };
+        }
+    }
+    return { block: next, changed };
+}
 async function runSavePipeline(deps, p) {
     // ---- 1. Authoritative on-disk config (never the client's copy).
     if (!deps.configPath) {
@@ -193,6 +306,17 @@ async function runSavePipeline(deps, p) {
     if (shapeErr !== undefined) {
         return { ok: false, error: { code: 'sensor-map-shape', message: shapeErr } };
     }
+    // ---- 3c. SETTINGS PATCH (beta.17, GA #56): applied to a copy of
+    //          the on-disk block inside this transaction, fail-closed on
+    //          any malformed value. Compose consumes the PATCHED block;
+    //          the base digest and the settings-form drift gate keep
+    //          judging the on-disk one.
+    const settingsOutcome = applySettingsPatch(block, p.settings);
+    if ('error' in settingsOutcome) {
+        return { ok: false, error: { code: 'invalid-settings', message: `${settingsOutcome.error} Nothing was written.` } };
+    }
+    const effectiveBlock = settingsOutcome.block;
+    const settingsChanged = settingsOutcome.changed;
     // ---- 4. Proposal shape. On a LEGACY config with NO proposal, the
     //         save is a pure migration: the proposal is seeded from the
     //         compat translation of the on-disk block (§5's "reads
@@ -322,7 +446,7 @@ async function runSavePipeline(deps, p) {
     }
     return {
         ok: true,
-        ctx: { block, modeResult, proposal, stations, discovery, uiState, effectiveMap, canonical },
+        ctx: { block, effectiveBlock, settingsChanged, modeResult, proposal, stations, discovery, uiState, effectiveMap, canonical },
     };
 }
 /**
@@ -355,7 +479,7 @@ async function composeSaveInternal(deps, payload, persist) {
     if (!r.ok) {
         return r;
     }
-    const { block, modeResult, effectiveMap, canonical } = r.ctx;
+    const { block, effectiveBlock, settingsChanged, modeResult, effectiveMap, canonical } = r.ctx;
     // ---- 7b2. V2-FLAG GATE (review #45 P1-1): saving converts the
     //           configuration to v2, and a v2 config with the flag OFF
     //           is exactly the dangerous state the rollback docs warn
@@ -460,7 +584,7 @@ async function composeSaveInternal(deps, payload, persist) {
     }
     // ---- 8. Compose. detectConfigMode's verdict is passed explicitly
     //         (it is the single authority on "legacy").
-    const composed = composeV2ConfigSave(block, canonical, effectiveMap, modeResult.mode);
+    const composed = composeV2ConfigSave(effectiveBlock, canonical, effectiveMap, modeResult.mode);
     // ---- 9a. Prospective pre-conversion-record outcome, READ-ONLY in
     //          BOTH phases: every refusable record problem (corrupt
     //          snapshot, unreadable journal) surfaces before anything
@@ -532,6 +656,7 @@ async function composeSaveInternal(deps, payload, persist) {
         return {
             ok: true,
             nextConfig: composed.nextConfig,
+            settingsChanged,
             nextConfigDigest,
             validationToken,
             snapshot,
@@ -607,6 +732,7 @@ async function composeSaveInternal(deps, payload, persist) {
     return {
         ok: true,
         nextConfig: composed.nextConfig,
+        settingsChanged,
         nextConfigDigest,
         validationToken,
         snapshot,
@@ -648,6 +774,7 @@ export async function handlePreviewSave(deps, payload) {
     return {
         ok: true,
         canonicalSensorMap: canonical,
+        settingsChanged: r.ctx.settingsChanged,
         rows: consequences.proposedRows,
         changes: consequences.changes,
         configOnly: consequences.configOnly,
@@ -834,6 +961,20 @@ export function computeSaveConsequences(ctx) {
  * SAYS so — those are states the editor must render, not transport
  * failures.
  */
+function settingsDtoFor(block) {
+    return {
+        name: typeof block.name === 'string' ? block.name : '',
+        dataSource: block.dataSource === 'realtime' ? 'realtime' : 'polling',
+        stationFilter: Array.isArray(block.stationFilter)
+            ? block.stationFilter.filter((e) => typeof e === 'string')
+            : [],
+        ...(typeof block.embedNameUpdateMinIntervalMinutes === 'number'
+            ? { embedNameUpdateMinIntervalMinutes: block.embedNameUpdateMinIntervalMinutes }
+            : {}),
+        apiKeySet: typeof block.apiKey === 'string' && block.apiKey.length > 0,
+        applicationKeySet: typeof block.applicationKey === 'string' && block.applicationKey.length > 0,
+    };
+}
 export async function handleGetEditorState(deps, payload) {
     const p = (payload ?? {});
     if (!deps.configPath) {
@@ -874,15 +1015,16 @@ export async function handleGetEditorState(deps, payload) {
         warnings.push({
             severity: 'warning',
             code: 'v2-flag-off',
-            message: 'The sensor-map v2 flag is off: the table below is a preview and saving is disabled. To edit for '
-                + 'real, enable "Advanced (v2.0 preview) → Enable sensor-map v2 live path" in the settings form and '
-                + 'restart Homebridge.',
+            message: 'This installation explicitly opts out of the sensor-map runtime, so the table below is a preview '
+                + 'and saving is disabled. Remove the opt-out (_sensorMapV2: false or SENSOR_MAP_V2=0) and restart '
+                + 'Homebridge to edit for real.',
         });
     }
     if (modeResult.mode === 'safe-mode') {
         return {
             configMode: 'safe-mode',
             v2FlagEnabled,
+            settings: settingsDtoFor(block),
             editorAvailable: false,
             baseDigest: blockDigest(block),
             blockIndex: 0,
@@ -909,6 +1051,7 @@ export async function handleGetEditorState(deps, payload) {
         return {
             configMode: modeResult.mode,
             v2FlagEnabled,
+            settings: settingsDtoFor(block),
             editorAvailable: false,
             baseDigest: blockDigest(block),
             blockIndex: 0,
@@ -973,6 +1116,10 @@ export async function handleGetEditorState(deps, payload) {
     return {
         configMode: modeResult.mode,
         v2FlagEnabled,
+        // Live settings for the Connection section (beta.17, GA #56).
+        // Constructed explicitly, never spread from the block: credential
+        // values must not reach this DTO — only presence booleans.
+        settings: settingsDtoFor(block),
         // PR C: save path live, gated on the v2 opt-in (review #45 P1-1).
         // Multi-block configs stay read-only until a multi-Home editor
         // exists (review #47 P1-2) — the save pipeline refuses them too.
