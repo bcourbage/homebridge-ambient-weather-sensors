@@ -8,24 +8,8 @@ import { DEVICE } from './types.js';
  * shared module directly.
  */
 export declare const hapClean: typeof sharedHapClean;
-/**
- * Normalize a string the user might have typed in their config for
- * matching against sensor identifiers. Trims whitespace and lowercases.
- * Empty / non-string values normalize to the empty string, which the
- * caller is expected to filter out.
- *
- * Exported for test coverage.
- */
-export declare function normalizeMatchKey(s: unknown): string;
-/**
- * Build a Set of normalized matchers from a config-supplied array. Used
- * for both `excludeSensors` and `includeOnly`; the same matching rules
- * apply to both (case-insensitive, whitespace-trimmed, non-string and
- * blank entries dropped).
- *
- * Exported for test coverage.
- */
-export declare function toMatcherSet(raw: unknown): Set<string>;
+import { normalizeMatchKey, toMatcherSet } from './sensorMap/stationMatch.js';
+export { normalizeMatchKey, toMatcherSet };
 /**
  * Common shape for the per-accessory wrapper instances the platform
  * tracks. Each wrapper exposes a single push-style `setValue` entry
@@ -268,9 +252,8 @@ export declare class AmbientWeatherSensorsPlatform implements DynamicPlatformPlu
     private initV2Persistence;
     /**
      * Feed every post-filter (station, dataPoint) pair into the discovery
-     * tracker and kick a throttled flush. Called at discovery and on each
-     * v2 poll tick — the same cadence the shadow observer used, so
-     * discovery.json keeps accumulating under the live path.
+     * tracker and kick a throttled flush. Called at discovery and on
+     * each v2 poll tick, so discovery.json keeps accumulating.
      */
     private observeV2Stations;
     /**

@@ -31,6 +31,7 @@ import {
 } from '../dist/sensorMap/legacyMirror.js';
 import { sensorMapShapeError, type EffectiveMapConfig } from '../dist/sensorMap/platformEffectiveMap.js';
 import { NON_TRIGGERING_MEASUREMENTS, STATION_MAC_REGEX } from '../dist/sensorMap/validation.js';
+import { filterStationInventory } from '../dist/sensorMap/stationMatch.js';
 import { v2ConstructionEnabled } from '../dist/sensorMap/v2Flag.js';
 import {
   loadDiscoveryStore,
@@ -386,6 +387,8 @@ export interface ComposeSavePayload {
  */
 interface SavePipelineContext {
   block: Record<string, unknown>;
+  /** The assembled inventory through the ON-DISK block's stationFilter (the before-world). */
+  stationsBefore: StationInventory;
   /** The block with the settings patch applied — what compose consumes. */
   effectiveBlock: Record<string, unknown>;
   /** Settings keys the patch changed (credential VALUES never appear). */
@@ -672,20 +675,35 @@ async function runSavePipeline(
       ],
     });
   let proposal: SensorMapOverride[];
-  let stations: StationInventory;
+  let assembled: StationInventory;
   if (p.proposal === undefined) {
-    stations = assemble([]);
-    proposal = compatToOverrides(block as LegacyConfig, stations);
-    stations = assemble(proposal);
+    // Compat seeding reads the CURRENT config's semantics, so it uses
+    // the current filter's view of the inventory.
+    proposal = compatToOverrides(
+      block as LegacyConfig,
+      filterStationInventory(assemble([]), (block as Record<string, unknown>).stationFilter),
+    );
+    assembled = assemble(proposal);
   } else {
     proposal = p.proposal as SensorMapOverride[];
-    stations = assemble(proposal);
+    assembled = assemble(proposal);
   }
+  // The runtime applies stationFilter BEFORE reconciliation, so the
+  // preview must see the same worlds (PR #60 review F1): the
+  // before-side through the ON-DISK filter, the after-side through the
+  // PATCHED one. A filter narrowed by this save therefore previews the
+  // excluded station's accessories as removals, and the confirmation
+  // digest certifies that operation. The availability gate below stays
+  // on the UNFILTERED inventory: a deliberately non-matching filter
+  // (the documented accessory-wipe trick) is a valid save, not a
+  // missing-inventory condition.
+  const stationsBefore = filterStationInventory(assembled, (block as Record<string, unknown>).stationFilter);
+  const stations = filterStationInventory(assembled, effectiveBlock.stationFilter);
   const legacyEnablesSensors = LEGACY_CATEGORY_TOGGLES.some(k => block[k] === true);
   const wouldConfigure = legacyEnablesSensors
     || proposal.length > 0
     || (Array.isArray(block.sensorMap) && block.sensorMap.length > 0);
-  if (stations.length === 0 && wouldConfigure) {
+  if (assembled.length === 0 && wouldConfigure) {
     return {
       ok: false,
       error: {
@@ -774,7 +792,7 @@ async function runSavePipeline(
 
   return {
     ok: true,
-    ctx: { block, effectiveBlock, settingsChanged, modeResult, proposal, stations, discovery, uiState, effectiveMap, canonical },
+    ctx: { block, effectiveBlock, settingsChanged, modeResult, proposal, stations, stationsBefore, discovery, uiState, effectiveMap, canonical },
   };
 }
 
@@ -1168,7 +1186,7 @@ export interface SaveConsequences {
  * digest verification in PR C.
  */
 export function computeSaveConsequences(ctx: SavePipelineContext): SaveConsequences {
-  const { block, modeResult, proposal, stations, discovery, uiState, effectiveMap, canonical } = ctx;
+  const { block, modeResult, proposal, stations, stationsBefore, discovery, uiState, effectiveMap, canonical } = ctx;
 
   // CURRENT effective state from the on-disk block over the SAME
   // inventory: a legacy config's current state is its compat
@@ -1176,13 +1194,16 @@ export function computeSaveConsequences(ctx: SavePipelineContext): SaveConsequen
   // sensorMap. Same-inventory comparison keeps the diff about the
   // PROPOSAL, never about station drift.
   const currentOverrides: ReadonlyArray<unknown> = modeResult.mode === 'legacy'
-    ? compatToOverrides(block as LegacyConfig, stations)
+    ? compatToOverrides(block as LegacyConfig, stationsBefore)
     : (Array.isArray(block.sensorMap) ? block.sensorMap : []);
   const currentMap = buildEffectiveSensorMap({
     userOverrides: currentOverrides,
     discovery,
     uiState,
-    stations,
+    // The before-world sees the ON-DISK filter (PR #60 review F1); a
+    // save that narrows the filter diffs against what the runtime
+    // currently exposes, so the exclusions surface as removals.
+    stations: stationsBefore,
     configMode: 'v2',
   });
   const currentLayers = acceptedOverrideLayers(currentOverrides, currentMap.errors);

@@ -100,39 +100,11 @@ import { DEVICE } from './types.js';
  */
 export const hapClean = sharedHapClean;
 
-/**
- * Normalize a string the user might have typed in their config for
- * matching against sensor identifiers. Trims whitespace and lowercases.
- * Empty / non-string values normalize to the empty string, which the
- * caller is expected to filter out.
- *
- * Exported for test coverage.
- */
-export function normalizeMatchKey(s: unknown): string {
-  return typeof s === 'string' ? s.trim().toLowerCase() : '';
-}
-
-/**
- * Build a Set of normalized matchers from a config-supplied array. Used
- * for both `excludeSensors` and `includeOnly`; the same matching rules
- * apply to both (case-insensitive, whitespace-trimmed, non-string and
- * blank entries dropped).
- *
- * Exported for test coverage.
- */
-export function toMatcherSet(raw: unknown): Set<string> {
-  const out = new Set<string>();
-  if (!Array.isArray(raw)) {
-    return out;
-  }
-  for (const entry of raw) {
-    const k = normalizeMatchKey(entry);
-    if (k.length > 0) {
-      out.add(k);
-    }
-  }
-  return out;
-}
+// normalizeMatchKey / toMatcherSet moved to sensorMap/stationMatch.ts
+// (shared with the editor save pipeline since beta.17); re-exported
+// here so existing importers and tests keep working.
+import { normalizeMatchKey, toMatcherSet } from './sensorMap/stationMatch.js';
+export { normalizeMatchKey, toMatcherSet };
 
 // Polling cadence for the AWN REST API. AWN's documented rate limit is
 // 1 req/sec per apiKey, so any cadence above that is safe; 2 minutes
@@ -307,10 +279,8 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
   // can't be inferred are kept, not unregistered, and announced once.
   private readonly loggedPreservedAccessories = new Set<string>();
 
-  // Discovery tracker for the live v2 path (review P1-4): the platform
-  // now OWNS the plugin's discovery registry — the shadow observer that
-  // used to feed it is retired when the flag selects the live path.
-  // Observes every post-filter (station, dataPoint) pair at discovery
+  // Discovery tracker for the v2 path (review P1-4): the platform
+  // owns the plugin's discovery registry. Observes every post-filter (station, dataPoint) pair at discovery
   // and on each poll tick, throttles lastSeen-only writes internally,
   // and is force-flushed from the shutdown handler. Created lazily by
   // initV2Persistence(); never created in safe mode or flag-off.
@@ -418,8 +388,7 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
         this.pollTimer = undefined;
       }
       // Force-flush any pending discovery writes before Homebridge
-      // finishes tearing down — the live v2 tracker and (legacy) the
-      // shadow observer's tracker respectively.
+      // finishes tearing down.
       this.v2Tracker?.flush(true).catch(e =>
         this.log.warn(`[sensor-map v2] shutdown discovery flush failed: ${(e as Error).message}`),
       );
@@ -1181,10 +1150,11 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
       }
 
       // Apply stationFilter at the station level BEFORE building the
-      // inventory — v1 parity (parseDevices filters stations first, and
-      // the shadow observer received the post-filter inventory). Without
-      // this, a multi-Home child-bridge setup would register EVERY
-      // station's accessories on each instance.
+      // inventory — v1 parity (parseDevices filters stations first).
+      // Without this, a multi-Home child-bridge setup would register
+      // EVERY station's accessories on each instance. The editor's
+      // save pipeline mirrors this exact ordering when it computes
+      // preview consequences (stationMatch.filterStationInventory).
       const rawStations = this.applyStationFilterV2(fetched);
 
       // Station inventory (post-filter). isMultiStation drives the
@@ -1718,9 +1688,8 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
 
   /**
    * Feed every post-filter (station, dataPoint) pair into the discovery
-   * tracker and kick a throttled flush. Called at discovery and on each
-   * v2 poll tick — the same cadence the shadow observer used, so
-   * discovery.json keeps accumulating under the live path.
+   * tracker and kick a throttled flush. Called at discovery and on
+   * each v2 poll tick, so discovery.json keeps accumulating.
    */
   private observeV2Stations(stations: ReadonlyArray<RawStation>): void {
     if (!this.v2Tracker) {

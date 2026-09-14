@@ -97,16 +97,13 @@ theme switches.
 With `configVersion: 2` and the v2 flag on, the settings form hides
 the legacy controls the runtime no longer reads (sensor category
 toggles, extended-sensor thresholds, display units): the plugin
-maintains a dynamic form schema reflecting the configuration mode,
-applied on the next full Homebridge restart after a mode change.
-Those legacy config fields still exist in config.json - the rollback
-mirror maintains them for 1.7.x downgrades.
+Legacy config fields still exist in config.json after a conversion -
+the rollback mirror maintains them for 1.7.x downgrades; the page
+never renders controls for them.
 
-The v2 opt-in switch lives in the form below the panels: **Advanced
-(v2.0 preview) → Enable sensor-map v2 live path**, which selects the
-live v2 pipeline and populates the discovery and sensor-map panels.
-Saving from the editor requires the flag: with it off the table is a
-preview only, and the page says so.
+The v2 pipeline is on by default. An installation that explicitly
+opts out (`_sensorMapV2: false` or `SENSOR_MAP_V2=0`) sees the table
+as a preview only, with saving disabled and a banner saying so.
 Hand-authoring `configVersion: 2` and a `sensorMap` array in
 `config.json` remains possible (the table renders it, and validation
 problems surface as banners), but the editor is the recommended path.

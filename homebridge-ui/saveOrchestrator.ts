@@ -39,7 +39,8 @@ export interface OrchestratorDeps {
    * the clear-then-set persistence. Called BEFORE the first
    * getPluginConfig() read; unfreezeSettingsForm runs in `finally`.
    * In the real page this disables HB UI X's Save button ONLY — the
-   * schema form must never be hidden mid-save: HB UI X binds the form
+   * schema form (RETIRED at beta.17 — never rendered; the rules below
+   * remain as defense in depth) must never be hidden mid-save: HB UI X binds the form
    * two-way into pluginConfig[0], and destroying the form writes
    * undefined through that binding, zeroing the session's config
    * (measured on production). Form EDITS during the save are caught
@@ -215,7 +216,8 @@ async function unfreezeQuietly(deps: OrchestratorDeps): Promise<boolean> {
  *     graph on every call — so a naive mid-save re-check would compare
  *     that array against itself and always pass. The deep clone makes
  *     each read independent.
- *   - The settings modal's schema form binds TWO-WAY into
+ *   - (Historical, pre-beta.17; kept as defense) the settings
+ *     modal's schema form binds TWO-WAY into
  *     pluginConfig[0] and replaces the block with the form VALUE,
  *     which carries only schema properties — `platform` is not one, so
  *     every session block arrives WITHOUT its platform key and the

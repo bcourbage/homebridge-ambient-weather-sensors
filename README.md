@@ -25,7 +25,7 @@
 </SPAN>
 
 
-## Sensor-map v2.0 (beta, opt-in)
+## Sensor-map v2.0 (on by default since beta.17)
 
 The v2.0 line runs the sensor-map architecture that unifies which
 sensors expose, how they're named, and which HomeKit types they use.
@@ -36,10 +36,15 @@ thresholds, proven by a full HAP-graph equivalence gate — and nothing
 is written to your configuration until you save in the plugin's
 settings page.
 
-Opting OUT (the rollback lever, no config edit needed): set the
-environment variable `SENSOR_MAP_V2=0` on the Homebridge process, or
-set `_sensorMapV2: false` in the plugin's config block, and restart.
-Either forces the v1.7.0 pipeline.
+Opting OUT: set the environment variable `SENSOR_MAP_V2=0` on the
+Homebridge process, or set `_sensorMapV2: false` in the plugin's
+config block, and restart. Either forces the v1.7.0 pipeline —
+**but the opt-out ALONE is safe only for a configuration that was
+never converted** (no `configVersion: 2` / `sensorMap` in the block).
+The v1.7.0 pipeline cannot read a converted configuration and can
+DEREGISTER its accessories; once you have saved in the sensor-map
+editor, follow the rollback recipes below instead of flipping the
+opt-out by itself.
 
 Applying configuration changes needs a restart: Homebridge's
 **Restart Child Bridge** action for this plugin is sufficient (it
@@ -50,11 +55,8 @@ configuration; a full Homebridge restart also works.
 **What the v2 pipeline does:** accessory registration, naming, and
 value routing are driven by the v2 sensor map, and the plugin may
 re-register an accessory when its structure changes; each such
-change is recorded as a notice, visible on the plugin's page in
-Homebridge Config UI X. (In beta.0 through beta.7 the same flag ran
-a compare-only "shadow mode" that logged divergences without ever
-touching registration; that observer has been retired in favor of
-the real thing.)
+change is recorded and shown in the "Recent structural changes"
+disclosure on the plugin's settings page in Homebridge Config UI X.
 
 **Saving from the editor converts your configuration.** The
 sensor-map editor's first save rewrites the plugin's config block to

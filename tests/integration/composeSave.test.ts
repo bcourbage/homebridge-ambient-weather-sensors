@@ -2001,11 +2001,24 @@ describe('consolidated-page settings through the guarded save (beta.17, GA #56)'
   it('every moved setting round-trips: name, dataSource, stationFilter, embed interval', async () => {
     const rig = makeRig(BLOCK);
     discoveryStore(rig);
-    const result = await commitSettings(rig, {
+    const settings = {
       name: 'Renamed Platform',
       dataSource: 'realtime',
       stationFilter: ['Backyard WS-2000'],
       embedNameUpdateMinIntervalMinutes: 5,
+    };
+    // The narrowed station filter is a structural change (review F1),
+    // so the save needs the previewed confirmation like any other.
+    const preview = await handlePreviewSave(rig.deps, { base: BLOCK, proposal: BLOCK.sensorMap, settings });
+    expect(preview.ok).toBe(true);
+    const payload = {
+      base: BLOCK, proposal: BLOCK.sensorMap, settings,
+      confirmDigest: preview.ok ? preview.digest : undefined,
+    };
+    const validated0 = await handleComposeSave(rig.deps, payload);
+    expect(validated0.ok).toBe(true);
+    const result = !validated0.ok ? validated0 : await handleCommitSave(rig.deps, {
+      ...payload, validationToken: validated0.validationToken,
     });
     expect(result.ok).toBe(true);
     if (result.ok) {
@@ -2129,5 +2142,106 @@ describe('consolidated-page settings through the guarded save (beta.17, GA #56)'
         expect(entry, f).not.toContain('secret-app-key-value');
       }
     }
+  });
+});
+
+describe('stationFilter consequences (PR #60 review F1)', () => {
+  const TWO_STATION_BLOCK = {
+    platform: 'AmbientWeatherSensors',
+    name: 'Test Station',
+    apiKey: 'k', applicationKey: 'a',
+    configVersion: 2,
+    sensorMap: [],
+  };
+  const MAC_B = 'AA:BB:CC:DD:EE:02';
+
+  function twoStationDiscovery(rig: Rig): void {
+    writeFileSync(path.join(rig.persistDir, 'discovery.json'), JSON.stringify({
+      schemaVersion: 1,
+      entries: [
+        { stationMac: MAC, stationName: 'Backyard', dataPoint: 'tempf', firstSeen: '2026-01-01T00:00:00Z', lastSeen: '2026-01-02T00:00:00Z' },
+        { stationMac: MAC_B, stationName: 'Roof', dataPoint: 'tempf', firstSeen: '2026-01-01T00:00:00Z', lastSeen: '2026-01-02T00:00:00Z' },
+      ],
+    }));
+  }
+
+  it('narrowing the filter previews the excluded station as STRUCTURAL removals and gates on confirmation', async () => {
+    const rig = makeRig(TWO_STATION_BLOCK);
+    twoStationDiscovery(rig);
+    const payload = {
+      base: TWO_STATION_BLOCK,
+      proposal: [],
+      settings: { stationFilter: ['Backyard'] },
+    };
+    const preview = await handlePreviewSave(rig.deps, payload);
+    expect(preview.ok).toBe(true);
+    if (!preview.ok) {
+      return;
+    }
+    const removedB = preview.changes.filter(c => c.stationMac === MAC_B && c.change === 'removed');
+    expect(removedB.length).toBeGreaterThan(0);
+    expect(removedB.every(c => c.structural)).toBe(true);
+    // Station A untouched.
+    expect(preview.changes.filter(c => c.stationMac === MAC)).toEqual([]);
+    expect(preview.structuralChangeCount).toBeGreaterThan(0);
+
+    // The structural removal demands confirmation like any other.
+    const unconfirmed = await handleComposeSave(rig.deps, payload);
+    expect(unconfirmed.ok).toBe(false);
+    if (!unconfirmed.ok) {
+      expect(unconfirmed.error.code).toBe('confirmation-required');
+    }
+    const confirmed = await handleComposeSave(rig.deps, { ...payload, confirmDigest: preview.digest });
+    expect(confirmed.ok).toBe(true);
+  });
+
+  it('widening (clearing) the filter previews the returning station as additions', async () => {
+    const rig = makeRig({ ...TWO_STATION_BLOCK, stationFilter: ['Backyard'] });
+    twoStationDiscovery(rig);
+    const preview = await handlePreviewSave(rig.deps, {
+      base: { ...TWO_STATION_BLOCK, stationFilter: ['Backyard'] },
+      proposal: [],
+      settings: { stationFilter: [] },
+    });
+    expect(preview.ok).toBe(true);
+    if (!preview.ok) {
+      return;
+    }
+    const addedB = preview.changes.filter(c => c.stationMac === MAC_B && c.change === 'added');
+    expect(addedB.length).toBeGreaterThan(0);
+    expect(addedB.every(c => c.structural)).toBe(true);
+    expect(preview.changes.filter(c => c.stationMac === MAC)).toEqual([]);
+  });
+
+  it('the preview filter matches with the runtime rules: MAC form, case-insensitive, trimmed', async () => {
+    const rig = makeRig(TWO_STATION_BLOCK);
+    twoStationDiscovery(rig);
+    const preview = await handlePreviewSave(rig.deps, {
+      base: TWO_STATION_BLOCK,
+      proposal: [],
+      settings: { stationFilter: ['  aa:bb:cc:dd:ee:01  '] },
+    });
+    expect(preview.ok).toBe(true);
+    if (!preview.ok) {
+      return;
+    }
+    expect(preview.changes.some(c => c.stationMac === MAC_B && c.change === 'removed')).toBe(true);
+    expect(preview.changes.filter(c => c.stationMac === MAC)).toEqual([]);
+  });
+
+  it('a deliberately non-matching filter (the documented wipe) previews EVERYTHING as removals rather than refusing', async () => {
+    const rig = makeRig(TWO_STATION_BLOCK);
+    twoStationDiscovery(rig);
+    const preview = await handlePreviewSave(rig.deps, {
+      base: TWO_STATION_BLOCK,
+      proposal: [],
+      settings: { stationFilter: ['CLEAR'] },
+    });
+    expect(preview.ok).toBe(true);
+    if (!preview.ok) {
+      return;
+    }
+    expect(preview.changes.length).toBeGreaterThan(0);
+    expect(preview.changes.every(c => c.change === 'removed' && c.structural)).toBe(true);
   });
 });

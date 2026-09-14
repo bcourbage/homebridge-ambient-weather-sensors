@@ -111,7 +111,8 @@ async function unfreezeQuietly(deps) {
  *     graph on every call — so a naive mid-save re-check would compare
  *     that array against itself and always pass. The deep clone makes
  *     each read independent.
- *   - The settings modal's schema form binds TWO-WAY into
+ *   - (Historical, pre-beta.17; kept as defense) the settings
+ *     modal's schema form binds TWO-WAY into
  *     pluginConfig[0] and replaces the block with the form VALUE,
  *     which carries only schema properties — `platform` is not one, so
  *     every session block arrives WITHOUT its platform key and the

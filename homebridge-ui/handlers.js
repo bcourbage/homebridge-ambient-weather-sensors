@@ -22,6 +22,7 @@ import { detectConfigMode } from '../dist/sensorMap/configMode.js';
 import { composeV2ConfigSave, journalConversionBaseline, verifyConversionJournalReadable, recognizeMirror, verifyLegacySnapshot, writeLegacySnapshot, } from '../dist/sensorMap/legacyMirror.js';
 import { sensorMapShapeError } from '../dist/sensorMap/platformEffectiveMap.js';
 import { NON_TRIGGERING_MEASUREMENTS, STATION_MAC_REGEX } from '../dist/sensorMap/validation.js';
+import { filterStationInventory } from '../dist/sensorMap/stationMatch.js';
 import { v2ConstructionEnabled } from '../dist/sensorMap/v2Flag.js';
 import { loadDiscoveryStore, } from '../dist/sensorMap/persistence/discoveryStore.js';
 import { loadNoticeStore, } from '../dist/sensorMap/persistence/noticesStore.js';
@@ -347,21 +348,33 @@ async function runSavePipeline(deps, p) {
         ],
     });
     let proposal;
-    let stations;
+    let assembled;
     if (p.proposal === undefined) {
-        stations = assemble([]);
-        proposal = compatToOverrides(block, stations);
-        stations = assemble(proposal);
+        // Compat seeding reads the CURRENT config's semantics, so it uses
+        // the current filter's view of the inventory.
+        proposal = compatToOverrides(block, filterStationInventory(assemble([]), block.stationFilter));
+        assembled = assemble(proposal);
     }
     else {
         proposal = p.proposal;
-        stations = assemble(proposal);
+        assembled = assemble(proposal);
     }
+    // The runtime applies stationFilter BEFORE reconciliation, so the
+    // preview must see the same worlds (PR #60 review F1): the
+    // before-side through the ON-DISK filter, the after-side through the
+    // PATCHED one. A filter narrowed by this save therefore previews the
+    // excluded station's accessories as removals, and the confirmation
+    // digest certifies that operation. The availability gate below stays
+    // on the UNFILTERED inventory: a deliberately non-matching filter
+    // (the documented accessory-wipe trick) is a valid save, not a
+    // missing-inventory condition.
+    const stationsBefore = filterStationInventory(assembled, block.stationFilter);
+    const stations = filterStationInventory(assembled, effectiveBlock.stationFilter);
     const legacyEnablesSensors = LEGACY_CATEGORY_TOGGLES.some(k => block[k] === true);
     const wouldConfigure = legacyEnablesSensors
         || proposal.length > 0
         || (Array.isArray(block.sensorMap) && block.sensorMap.length > 0);
-    if (stations.length === 0 && wouldConfigure) {
+    if (assembled.length === 0 && wouldConfigure) {
         return {
             ok: false,
             error: {
@@ -446,7 +459,7 @@ async function runSavePipeline(deps, p) {
     }
     return {
         ok: true,
-        ctx: { block, effectiveBlock, settingsChanged, modeResult, proposal, stations, discovery, uiState, effectiveMap, canonical },
+        ctx: { block, effectiveBlock, settingsChanged, modeResult, proposal, stations, stationsBefore, discovery, uiState, effectiveMap, canonical },
     };
 }
 /**
@@ -797,20 +810,23 @@ export async function handlePreviewSave(deps, payload) {
  * digest verification in PR C.
  */
 export function computeSaveConsequences(ctx) {
-    const { block, modeResult, proposal, stations, discovery, uiState, effectiveMap, canonical } = ctx;
+    const { block, modeResult, proposal, stations, stationsBefore, discovery, uiState, effectiveMap, canonical } = ctx;
     // CURRENT effective state from the on-disk block over the SAME
     // inventory: a legacy config's current state is its compat
     // translation (what a migration preserves), a v2 config's is its
     // sensorMap. Same-inventory comparison keeps the diff about the
     // PROPOSAL, never about station drift.
     const currentOverrides = modeResult.mode === 'legacy'
-        ? compatToOverrides(block, stations)
+        ? compatToOverrides(block, stationsBefore)
         : (Array.isArray(block.sensorMap) ? block.sensorMap : []);
     const currentMap = buildEffectiveSensorMap({
         userOverrides: currentOverrides,
         discovery,
         uiState,
-        stations,
+        // The before-world sees the ON-DISK filter (PR #60 review F1); a
+        // save that narrows the filter diffs against what the runtime
+        // currently exposes, so the exclusions surface as removals.
+        stations: stationsBefore,
         configMode: 'v2',
     });
     const currentLayers = acceptedOverrideLayers(currentOverrides, currentMap.errors);
