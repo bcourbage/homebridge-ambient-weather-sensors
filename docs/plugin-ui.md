@@ -1,38 +1,56 @@
-# The plugin page (sensor-map v2 preview)
+# The plugin settings page
 
-Opening the plugin's settings in Homebridge Config UI X shows two
-areas: the v2 preview panels described here, and below them the
-standard settings form (Name, API keys, sensor category toggles).
-The form is unchanged from the 1.x line apart from the "Advanced
-(v2.0 preview)" fieldset that holds the v2 opt-in flag. This page
-documents the panels above the form.
+Opening the plugin's settings in Homebridge Config UI X shows ONE
+page: the sensor-map editor with its Connection section. Since
+2.0.0-beta.17 the schema-generated settings form is retired — every
+editable setting lives on this page — and the preview-era panels
+(status table, discovered-datapoints dump, notices panel) are gone.
 
-## What the panels show
+## One save path
 
-### Status
+The page's **Save** is the only functional save path. It runs the
+guarded two-phase transaction: server-side validation against the
+on-disk configuration, a structural confirmation for changes that
+register or deregister accessories, the durable legacy
+snapshot/journal record, and a verbatim write of the composed block.
+The native Homebridge Save button at the bottom of the window is
+disabled from the moment the page loads and never enabled: the Config
+UI X SDK offers no way to hide it (an SDK addition is requested
+upstream), so it remains visible but inert. Close never saves.
 
-The plugin version, the configuration mode (`legacy` for a normal
-1.x-style config, `v2` once the config carries `configVersion: 2`
-and a `sensorMap`, or `safe-mode` when the config cannot be
-interpreted safely), and whether the sensor-map v2 flag is on,
-including where it was set (config field or the `SENSOR_MAP_V2`
-environment variable).
+## Connection & polling
 
-### Discovered stations & datapoints
+A collapsed section above the editor holds the plugin's live
+settings: platform name, data source (polling or realtime), API key,
+application key, the station filter, and the embed-name update
+interval. Edits here count as drafts, appear in previews, and save
+through the same guarded transaction as sensor-map edits.
 
-Every station and sensor field the plugin has observed in AWN
-payloads. Populated by the first successful v2 discovery or poll
-with the v2 flag on; empty until then.
+Credentials are handled as secrets. The key fields are always blank:
+a blank field means the stored value is unchanged; typing a value
+replaces it; clearing requires the explicit checkbox (checking it
+blanks and locks the text field, so conflicting intents cannot be
+entered). Stored values never appear on the page, in previews, in
+logs, or in the snapshot/journal records — the page shows only
+whether a key is set.
 
-### Notices
+## Applying a save
 
-A record of structural changes: whenever the v2 path re-registers an
-accessory because its structure changed (for example a battery
-sub-service was added or removed), the event is recorded here.
-Expected when the flag is on and the configuration changes. Existing
-notices remain visible after the flag is turned off.
+Configuration changes take effect on the next restart of this
+plugin's bridge. Homebridge's **Restart Child Bridge** action is
+sufficient — it re-reads the plugin's configuration from disk before
+the bridge comes back (verified on Homebridge 2.4.0). The page cannot
+trigger the restart itself; the saved banner names the action.
+Killing the child process by hand does NOT re-read the configuration;
+a full Homebridge restart also works.
 
-### Sensor map
+## Structural-change history
+
+Re-registrations caused by structural changes are recorded and shown
+in a collapsed "Recent structural changes" disclosure at the bottom
+of the page.
+
+## Sensor map
 
 A table of every sensor row the plugin resolves for each station,
 grouped by station:
@@ -54,16 +72,13 @@ configuration comes from:
   (for example a display-unit choice).
 - **blue dot (station)**: an exception scoped to one station's MAC
   address.
-- Unrecognized fields (a `?` in the Kind column) are shown for
-  visibility; they register nothing.
+- Unrecognized fields (a `?` in the Kind column) offer **Assign** —
+  see "Assigning unrecognized fields" below.
 
-Opening a row's editor shows the demoted facts in full: kind,
-measurement, battery field, and layer.
-
-On a **legacy** configuration the table is a *migration preview*: it
-shows the exact sensor map a conversion to the v2 format would
-produce from your current settings, translated by the same machinery
-the migration itself will use. Nothing is converted by viewing it.
+On a **legacy** configuration the table renders the compat
+translation of your current settings — the exact sensor map the
+first save will write. Nothing is converted by viewing it; the
+conversion happens only when you save.
 
 Warnings, row-validation errors, and ownership notes (for example a
 disabled sensor that owns a battery field other rows reference)

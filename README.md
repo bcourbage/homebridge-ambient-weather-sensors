@@ -27,26 +27,28 @@
 
 ## Sensor-map v2.0 (beta, opt-in)
 
-The v2.0 betas ship a new sensor-map architecture that unifies which
+The v2.0 line runs the sensor-map architecture that unifies which
 sensors expose, how they're named, and which HomeKit types they use.
-**The new pipeline is OFF by default; for legacy-compatible configs,
-leaving the flag off preserves v1.7.0 runtime behavior.**
+**Since v2.0.0-beta.17 the v2 pipeline is ON by default.** A legacy
+(1.x-style) configuration runs unchanged through the built-in
+compatibility translation — the same accessories, names, units, and
+thresholds, proven by a full HAP-graph equivalence gate — and nothing
+is written to your configuration until you save in the plugin's
+settings page.
 
-Opt in one of two ways:
+Opting OUT (the rollback lever, no config edit needed): set the
+environment variable `SENSOR_MAP_V2=0` on the Homebridge process, or
+set `_sensorMapV2: false` in the plugin's config block, and restart.
+Either forces the v1.7.0 pipeline.
 
-- Set environment variable `SENSOR_MAP_V2=1` on the Homebridge
-  process, OR
-- Enable `_sensorMapV2` under the "Advanced (v2.0 preview)"
-  fieldset in the plugin's config UI.
+Applying configuration changes needs a restart: Homebridge's
+**Restart Child Bridge** action for this plugin is sufficient (it
+re-reads the plugin's configuration from disk; verified on Homebridge
+2.4.0). Killing the child-bridge process by hand does NOT re-read the
+configuration; a full Homebridge restart also works.
 
-Then restart Homebridge. (Here and in the rollback steps below, a
-full Homebridge restart is required — restarting only this plugin's
-child bridge reuses the configuration the main Homebridge process
-read at its own startup and will not pick up config.json changes.)
-
-**What the flag does (since v2.0.0-beta.8):** it selects the LIVE v2
-reconciliation path. Accessory registration, naming, and value
-routing are driven by the v2 sensor map, and the plugin may
+**What the v2 pipeline does:** accessory registration, naming, and
+value routing are driven by the v2 sensor map, and the plugin may
 re-register an accessory when its structure changes; each such
 change is recorded as a notice, visible on the plugin's page in
 Homebridge Config UI X. (In beta.0 through beta.7 the same flag ran
@@ -92,9 +94,9 @@ paths, from fastest to most thorough:
   legacy configuration and deregister accessories. With the verified
   indicator shown: in the plugin's config block, delete exactly three
   things — `sensorMap`, `configVersion`, and `_legacyMirror` — keep
-  everything else, ALSO disable `_sensorMapV2` in the block and unset
-  the `SENSOR_MAP_V2` environment variable if you use it, then run
-  1.7.x (or 2.x with the flag off) and restart. If the page shows any
+  everything else, ALSO set `_sensorMapV2: false` in the block (or
+  set `SENSOR_MAP_V2=0` in the environment), then run 1.7.x (or 2.x
+  with the opt-out active) and restart. If the page shows any
   other mirror status (absent, stale, or invalid): do NOT delete the
   markers — freeze on current 1.7.x, restore the snapshot (next
   path), or upgrade back to 2.x and re-save in the editor to
@@ -115,9 +117,8 @@ paths, from fastest to most thorough:
   `thresholds`, `units`, `excludeSensors`, `includeOnly`), copy in
   the snapshot's `legacy` fields as the replacement — the snapshot
   is sparse, so replace rather than overlay — delete `sensorMap`,
-  `configVersion`, and `_legacyMirror`, disable `_sensorMapV2`, and
-  unset the `SENSOR_MAP_V2` environment variable if you use it.
-  Restart.
+  `configVersion`, and `_legacyMirror`, and set
+  `_sensorMapV2: false` (or `SENSOR_MAP_V2=0`). Restart.
 - **Rollback to a JOURNALED (post-rollback) baseline:** if you rolled
   back and later reconverted, the settings you rolled back to are in
   the `legacy-conversion-journal` folder (same directory as the
@@ -129,8 +130,7 @@ paths, from fastest to most thorough:
   sensor-configuration field, copy in the entry's `legacy` fields as
   the replacement (entries are sparse, so replace rather than
   overlay), delete `sensorMap`, `configVersion`, and `_legacyMirror`,
-  disable `_sensorMapV2`, unset the `SENSOR_MAP_V2` environment
-  variable if you use it, and do a full Homebridge restart.
+  set `_sensorMapV2: false` (or `SENSOR_MAP_V2=0`), and restart.
 - **Custom v2-only sensors** (added through the editor for fields the
   plugin has no built-in definition for): no 1.x release can operate
   or update them. The 1.7.x freeze preserves their cached tiles at
