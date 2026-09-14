@@ -24,9 +24,19 @@
  * attribute them to the specific merge fragment responsible and so
  * the UI can dedupe on `code` + `field` without parsing text.
  */
-import type { DefaultSensorRow, SensorMapOverride } from './types.js';
+import type { DefaultSensorRow, Measurement, SensorMapOverride } from './types.js';
 /** Strict MAC-address regex per §3.3.1. Case-insensitive hex + colon. */
 export declare const STATION_MAC_REGEX: RegExp;
+/**
+ * Measurements that are `kind: motion` but cannot cross a threshold —
+ * their wrappers hardcode `threshold: Infinity`. `validateOverrideBody`
+ * warn-strips threshold / triggerEnabled / triggerDirection on these so
+ * a user-supplied value isn't silently ignored. See finding-#4 review.
+ * Exported so the editor's vocabulary projection can hide the trigger
+ * controls for exactly the measurements this strip governs (PR #57
+ * review F3) — the engine stays the single authority.
+ */
+export declare const NON_TRIGGERING_MEASUREMENTS: ReadonlyArray<Measurement>;
 /**
  * Structured warning — code + optional field + message. `code`
  * identifies the warning class for machine consumers; `field` names

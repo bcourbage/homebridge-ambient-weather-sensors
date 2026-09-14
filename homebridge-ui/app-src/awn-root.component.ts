@@ -631,7 +631,7 @@ interface StationGroup {
                           </select>
                         </label>
                       }
-                      @if (effectiveKind(row) === 'motion') {
+                      @if (showsTriggerControls(row)) {
                         <label>Threshold <input type="number" step="any" formControlName="threshold" /></label>
                         @if (editForm!.get('threshold')?.invalid) {
                           <span class="field-error">Threshold is required for this row. Restore a value or choose Cancel.</span>
@@ -729,6 +729,8 @@ export class AwnRootComponent {
   protected editForm: ReturnType<FormBuilder['group']> | null = null;
   /** The measurement the open assignment form last held, to detect switches that must reset the unit/trigger controls. */
   private lastAssignMeasurement = '';
+  /** The source unit the open assignment form last held; a switch resets the threshold, which is stored in this unit. */
+  private lastAssignSourceUnit = '';
 
   protected readonly draftCount = computed(() => {
     this.draftVersion();
@@ -940,6 +942,35 @@ export class AwnRootComponent {
       return 'unrecognized';
     }
     return this.assignmentFor(this.assignedMeasurement())?.kind ?? 'unrecognized';
+  }
+
+  /**
+   * Whether a measurement's rows can cross a threshold, per the
+   * server's projection of the validator's non-triggering strip
+   * (PR #57 review F3). Unknown measurements default to true — the
+   * server list covers every motion measurement, and the gate below
+   * also requires kind motion.
+   */
+  protected triggeringFor(measurement: string | undefined): boolean {
+    if (!measurement) {
+      return true;
+    }
+    return this.assignmentOptions().find(a => a.measurement === measurement)?.triggering ?? true;
+  }
+
+  /**
+   * The one gate for threshold and trigger controls, row editors and
+   * assignments alike: motion kind AND a triggering measurement.
+   * Direction and timestamp rows are kind motion but hardcode
+   * threshold Infinity; the validator warn-strips trigger fields on
+   * them, so the editor never offers controls the save would nullify.
+   */
+  protected showsTriggerControls(row: EditorRowDto): boolean {
+    if (this.effectiveKind(row) !== 'motion') {
+      return false;
+    }
+    const measurement = row.kind === 'unrecognized' ? this.assignedMeasurement() : row.measurement;
+    return this.triggeringFor(measurement);
   }
 
   /**
@@ -1187,6 +1218,7 @@ export class AwnRootComponent {
     // (measurement chosen, plus a source unit when the measurement is
     // numeric) — the same policy, applied to the assignment.
     this.lastAssignMeasurement = draftedMeasurement;
+    this.lastAssignSourceUnit = typeof current('sourceUnit') === 'string' ? current('sourceUnit') as string : '';
     this.editForm = this.fb.group({
       ...(isAssign ? {
         measurement: [draftedMeasurement],
@@ -1237,6 +1269,18 @@ export class AwnRootComponent {
         };
         this.editForm?.patchValue(reset, { emitEvent: false });
         v = { ...v, ...reset };
+        this.lastAssignSourceUnit = '';
+      } else if (isAssign && v.sourceUnit !== this.lastAssignSourceUnit) {
+        // A source-unit switch REINTERPRETS a threshold: thresholds are
+        // stored in the row's sourceUnit, so 10 with mph and 10 with
+        // km/hr are different physical triggers (PR #57 review F2).
+        // Reset rather than convert; the user re-enters the number in
+        // the unit now shown.
+        this.lastAssignSourceUnit = typeof v.sourceUnit === 'string' ? v.sourceUnit : '';
+        if (typeof v.threshold === 'number') {
+          this.editForm?.patchValue({ threshold: null }, { emitEvent: false });
+          v = { ...v, threshold: null };
+        }
       }
       this.applyEdit(row, v);
       this.editFormInvalid.set(this.editForm?.invalid ?? false);
@@ -1293,7 +1337,7 @@ export class AwnRootComponent {
       sync('name', v.name, undefined, typeof v.name === 'string' && v.name !== '');
       sync('displayUnit', v.displayUnit, undefined,
         typeof v.displayUnit === 'string' && v.displayUnit !== '');
-      if (opt.kind === 'motion') {
+      if (opt.kind === 'motion' && this.triggeringFor(opt.measurement)) {
         sync('threshold', v.threshold, undefined, typeof v.threshold === 'number');
         sync('triggerDirection', v.triggerDirection, this.assignmentDefaultDirection(opt.measurement),
           v.triggerDirection === 'above' || v.triggerDirection === 'below');
@@ -1308,7 +1352,7 @@ export class AwnRootComponent {
     sync('name', v.name, row.name, typeof v.name === 'string' && v.name !== '');
     sync('displayUnit', v.displayUnit, row.displayUnit,
       typeof v.displayUnit === 'string' && v.displayUnit !== '');
-    if (row.kind === 'motion') {
+    if (row.kind === 'motion' && this.triggeringFor(row.measurement)) {
       sync('threshold', v.threshold, row.threshold, typeof v.threshold === 'number');
       sync('triggerDirection', v.triggerDirection, row.triggerDirection,
         v.triggerDirection === 'above' || v.triggerDirection === 'below');

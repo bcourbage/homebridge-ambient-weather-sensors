@@ -28,6 +28,7 @@ import {
 import { buildEffectiveSensorMap } from '../../../src/sensorMap/buildEffectiveMap';
 import { composeV2ConfigSave } from '../../../src/sensorMap/legacyMirror';
 import { MEASUREMENT_LABELS, UNIT_VOCABULARY, unitOptionsFor } from '../../../src/sensorMap/unitVocabulary';
+import { NON_TRIGGERING_MEASUREMENTS } from '../../../src/sensorMap/validation';
 import { WRAPPER_FOR_KIND_AND_MEASUREMENT } from '../../../src/sensorMap/wrappers';
 import type { Measurement } from '../../../src/sensorMap/types';
 
@@ -552,6 +553,24 @@ describe('/vocabulary', () => {
         expect(sources.length).toBeGreaterThan(0);
       }
     }
+  });
+
+  it('assignment triggering flags mirror the validator strip; one kind per measurement (round 1 F3/F4)', () => {
+    const dto = handleGetVocabulary();
+    for (const a of dto.assignments) {
+      const stripGoverned = (NON_TRIGGERING_MEASUREMENTS as readonly string[]).includes(a.measurement);
+      expect(a.triggering, `${a.kind}|${a.measurement}`).toBe(a.kind === 'motion' && !stripGoverned);
+    }
+    expect(dto.assignments.filter(a => a.kind === 'motion' && !a.triggering).map(a => a.measurement).sort())
+      .toEqual(['direction', 'timestamp']);
+    // Uniqueness invariant (round 1 F4): the assignment UI tracks and
+    // resolves choices BY MEASUREMENT ALONE (one select, kind derived).
+    // A second kind for any measurement — e.g. the deferred boolean
+    // wrappers (leak/contact/occupancy) — makes that resolution
+    // ambiguous. This test failing means the UI needs a kind selector
+    // BEFORE the new wrapper-table entry lands.
+    const measurements = dto.assignments.map(a => a.measurement);
+    expect(new Set(measurements).size).toBe(measurements.length);
   });
 
   it('every measurement carries a label (PR E)', () => {

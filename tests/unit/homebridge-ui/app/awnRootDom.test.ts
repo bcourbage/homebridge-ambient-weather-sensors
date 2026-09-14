@@ -57,6 +57,10 @@ const VOCAB: VocabularyDto = {
       customSource: [{ unit: 'mi', label: 'miles' }, { unit: 'km', label: 'km' }],
       extendedDisplay: [{ unit: 'mi', label: 'miles' }, { unit: 'km', label: 'km' }],
     },
+    direction: {
+      customSource: [{ unit: 'degrees', label: '°' }],
+      extendedDisplay: [{ unit: 'degrees', label: '°' }],
+    },
     timestamp: { customSource: [], extendedDisplay: [] },
   },
   families: [
@@ -84,10 +88,11 @@ const VOCAB: VocabularyDto = {
     },
   ],
   assignments: [
-    { measurement: 'temperature', kind: 'temperature', label: 'Temperature' },
-    { measurement: 'wind-speed', kind: 'motion', label: 'Wind speed' },
-    { measurement: 'distance', kind: 'motion', label: 'Distance' },
-    { measurement: 'timestamp', kind: 'motion', label: 'Timestamp' },
+    { measurement: 'temperature', kind: 'temperature', label: 'Temperature', triggering: false },
+    { measurement: 'wind-speed', kind: 'motion', label: 'Wind speed', triggering: true },
+    { measurement: 'distance', kind: 'motion', label: 'Distance', triggering: true },
+    { measurement: 'direction', kind: 'motion', label: 'Direction', triggering: false },
+    { measurement: 'timestamp', kind: 'motion', label: 'Timestamp', triggering: false },
   ],
 };
 
@@ -1856,6 +1861,125 @@ describe('unrecognized-row assignment (PR E)', () => {
       dataPoint: 'xbarnwind', stationMac: MAC,
       kind: 'motion', measurement: 'distance', sourceUnit: 'km',
       enabled: true, name: 'xbarnwind', threshold: 15, triggerDirection: 'above',
+    }]);
+  });
+});
+
+describe('PR #57 round 1: trigger gating and sourceUnit switches', () => {
+  async function settle(fixture: ComponentFixture<AwnRootComponent>): Promise<void> {
+    await new Promise((r) => setTimeout(r, 0));
+    await fixture.whenStable();
+    fixture.detectChanges();
+  }
+  function rowBtn(fixture: ComponentFixture<AwnRootComponent>, dp: string): HTMLButtonElement {
+    const el = fixture.nativeElement as HTMLElement;
+    const tr = [...el.querySelectorAll('tbody tr')]
+      .find(r => r.querySelector('td code')?.textContent === dp)!;
+    return tr.querySelector('button') as HTMLButtonElement;
+  }
+  function choose(select: HTMLSelectElement, value: string): void {
+    select.value = value;
+    select.dispatchEvent(new Event('change'));
+  }
+  function formSelect(el: HTMLElement, control: string): HTMLSelectElement {
+    return el.querySelector(`.editor-form select[formcontrolname="${control}"]`) as HTMLSelectElement;
+  }
+  const numberInput = (el: HTMLElement): HTMLInputElement | null =>
+    el.querySelector('.editor-form input[type="number"]');
+
+  const UNREC: EditorRowDto = {
+    stationMac: MAC, dataPoint: 'xbarnwind', kind: 'unrecognized', enabled: false,
+    batteryField: null, origin: 'unrecognized',
+    firstSeen: '2026-09-01T00:00:00Z', lastSeen: '2026-09-10T00:00:00Z',
+  };
+  const WINDDIR: EditorRowDto = {
+    stationMac: MAC, dataPoint: 'winddir', kind: 'motion', measurement: 'direction',
+    sourceUnit: 'degrees', name: 'Wind Direction', enabled: true, batteryField: null,
+    origin: 'default',
+  };
+  const state = (): EditorStateDto => editorState({ rows: [...editorState().rows, WINDDIR, UNREC] });
+
+  it('a known non-triggering motion row (direction) offers no threshold or trigger controls (F3)', async () => {
+    const fixture = await render(makeIpc(state(), []));
+    const el = fixture.nativeElement as HTMLElement;
+    rowBtn(fixture, 'winddir').click();
+    fixture.detectChanges();
+    expect(numberInput(el)).toBeNull();
+    expect(formSelect(el, 'triggerDirection')).toBeNull();
+    // The gate hides, never over-hides: a triggering motion row keeps
+    // its controls.
+    ([...el.querySelectorAll('.editor-form button')].find(b => b.textContent === 'Cancel') as HTMLButtonElement).click();
+    fixture.detectChanges();
+    rowBtn(fixture, 'windspeedmph').click();
+    fixture.detectChanges();
+    expect(numberInput(el)).not.toBeNull();
+    expect(formSelect(el, 'triggerDirection')).not.toBeNull();
+  });
+
+  it('non-triggering assignments (timestamp, direction) render no trigger controls and author none (F3)', async () => {
+    const ipc = makeIpc(state(), [], {
+      ok: true, canonicalSensorMap: [], rows: [], changes: [], configOnly: [],
+      structuralChangeCount: 0, digest: 'cd'.repeat(32), warnings: [], notes: [],
+    });
+    const fixture = await render(ipc);
+    const el = fixture.nativeElement as HTMLElement;
+    rowBtn(fixture, 'xbarnwind').click();
+    fixture.detectChanges();
+
+    choose(formSelect(el, 'measurement'), 'timestamp');
+    await settle(fixture);
+    expect(numberInput(el)).toBeNull();
+    expect(formSelect(el, 'triggerDirection')).toBeNull();
+
+    choose(formSelect(el, 'measurement'), 'direction');
+    await settle(fixture);
+    choose(formSelect(el, 'sourceUnit'), 'degrees');
+    await settle(fixture);
+    expect(numberInput(el)).toBeNull();
+    expect(formSelect(el, 'triggerDirection')).toBeNull();
+
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement).click();
+    await settle(fixture);
+    const req = ipc.requests.find(r => r.path === '/preview-save');
+    expect((req?.body as { proposal: unknown[] }).proposal).toEqual([{
+      dataPoint: 'xbarnwind', stationMac: MAC,
+      kind: 'motion', measurement: 'direction', sourceUnit: 'degrees',
+      enabled: true, name: 'xbarnwind',
+    }]);
+  });
+
+  it('switching the source unit resets a completed assignment threshold (F2)', async () => {
+    const ipc = makeIpc(state(), [], {
+      ok: true, canonicalSensorMap: [], rows: [], changes: [], configOnly: [],
+      structuralChangeCount: 0, digest: 'cd'.repeat(32), warnings: [], notes: [],
+    });
+    const fixture = await render(ipc);
+    const el = fixture.nativeElement as HTMLElement;
+    rowBtn(fixture, 'xbarnwind').click();
+    fixture.detectChanges();
+
+    choose(formSelect(el, 'measurement'), 'wind-speed');
+    await settle(fixture);
+    choose(formSelect(el, 'sourceUnit'), 'mph');
+    await settle(fixture);
+    const threshold = numberInput(el)!;
+    threshold.value = '10';
+    threshold.dispatchEvent(new Event('input'));
+    await settle(fixture);
+
+    // 10 (mph) and 10 (ft/sec) are different physical triggers; the
+    // switch must not carry the number across units.
+    choose(formSelect(el, 'sourceUnit'), 'fps');
+    await settle(fixture);
+    expect(numberInput(el)!.value).toBe('');
+
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement).click();
+    await settle(fixture);
+    const req = ipc.requests.find(r => r.path === '/preview-save');
+    expect((req?.body as { proposal: unknown[] }).proposal).toEqual([{
+      dataPoint: 'xbarnwind', stationMac: MAC,
+      kind: 'motion', measurement: 'wind-speed', sourceUnit: 'fps',
+      enabled: true, name: 'xbarnwind',
     }]);
   });
 });

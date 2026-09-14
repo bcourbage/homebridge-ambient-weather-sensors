@@ -21,7 +21,7 @@ import { compatToOverrides } from '../dist/sensorMap/compat.js';
 import { detectConfigMode } from '../dist/sensorMap/configMode.js';
 import { composeV2ConfigSave, journalConversionBaseline, verifyConversionJournalReadable, recognizeMirror, verifyLegacySnapshot, writeLegacySnapshot, } from '../dist/sensorMap/legacyMirror.js';
 import { sensorMapShapeError } from '../dist/sensorMap/platformEffectiveMap.js';
-import { STATION_MAC_REGEX } from '../dist/sensorMap/validation.js';
+import { NON_TRIGGERING_MEASUREMENTS, STATION_MAC_REGEX } from '../dist/sensorMap/validation.js';
 import { shadowModeEnabled } from '../dist/sensorMap/shadowMode.js';
 import { loadDiscoveryStore, } from '../dist/sensorMap/persistence/discoveryStore.js';
 import { loadNoticeStore, } from '../dist/sensorMap/persistence/noticesStore.js';
@@ -1029,7 +1029,15 @@ export function handleGetVocabulary() {
         const sep = key.indexOf('|');
         const kind = key.slice(0, sep);
         const measurement = key.slice(sep + 1);
-        return { measurement, kind, label: MEASUREMENT_LABELS[measurement] };
+        return {
+            measurement,
+            kind,
+            label: MEASUREMENT_LABELS[measurement],
+            // Trigger capability comes from the SAME list the validator's
+            // warn-strip uses (PR #57 review F3): controls the strip would
+            // nullify are never rendered.
+            triggering: kind === 'motion' && !NON_TRIGGERING_MEASUREMENTS.includes(measurement),
+        };
     })
         .sort((a, b) => vocabOrder.indexOf(a.measurement) - vocabOrder.indexOf(b.measurement));
     return { measurements, families, assignments };

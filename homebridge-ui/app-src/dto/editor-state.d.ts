@@ -317,6 +317,13 @@ export interface AssignmentOptionDto {
   measurement: string;
   kind: string;
   label: string;
+  /**
+   * Whether rows of this measurement can cross a threshold. False for
+   * the measurements the validator's non-triggering strip governs
+   * (direction, timestamp): the editor renders no threshold or trigger
+   * controls for them, in assignments and row editors alike.
+   */
+  triggering: boolean;
 }
 
 /**
