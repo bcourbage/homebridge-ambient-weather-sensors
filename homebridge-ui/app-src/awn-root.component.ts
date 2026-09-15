@@ -5,13 +5,15 @@
  * remove-override), and dry-runs drafts through the server's
  * /preview-save — the exact save pipeline with zero writes.
  *
- * PERSISTENCE (PR C / finding 5): saving runs EXCLUSIVELY through
- * composeAndPersist — /compose-save validates against the on-disk
- * config, verifies the structural confirmation digest, writes the
- * legacy snapshot FIRST, and only then does the returned config reach
- * updatePluginConfig/savePluginConfig, verbatim. Structural saves
- * demand explicit confirmation in a modal; every refusal produces
- * zero config writes.
+ * PERSISTENCE (PR C / finding 5; confirmation model revised in the
+ * beta.17 RC smoke): saving runs EXCLUSIVELY through composeAndPersist
+ * — /compose-save validates against the on-disk config, verifies the
+ * structural confirmation digest, writes the legacy snapshot FIRST,
+ * and only then does the returned config reach updatePluginConfig/
+ * savePluginConfig, verbatim. The PREVIEW is the confirmation: the
+ * user sees every consequence (Skip available per row) and the Save
+ * click composes with that preview's digest — no second modal. Every
+ * refusal produces zero config writes.
  *
  * Styling deliberately leans on the fragment page's #awn scope: this
  * component renders inside <div id="awn">, so the page's table rules
@@ -46,6 +48,8 @@ interface StationGroup {
   title: string;
   source: string;
   rows: EditorRowDto[];
+  /** Rows removed from view by the hide-no-data filter. */
+  hiddenCount: number;
 }
 
 @Component({
@@ -287,6 +291,7 @@ interface StationGroup {
       border: 1px solid var(--rule); color: var(--fg-empty); white-space: nowrap; vertical-align: 1px;
     }
     .station-action { font-size: 0.72em; font-weight: 400; padding: 2px 9px; margin-left: 10px; vertical-align: 2px; }
+    .hidden-note { margin: 4px 0 0; color: var(--fg-empty); font-size: 0.85rem; font-style: italic; }
     .table-filter {
       display: flex; align-items: center; gap: 6px; margin: 10px 0 0;
       color: var(--fg-sub); font-size: 0.85rem; width: fit-content; cursor: pointer;
@@ -434,6 +439,7 @@ interface StationGroup {
                     (click)="disableNoData(group)">Disable {{ noDataEnabledRows(group).length }} sensor{{ noDataEnabledRows(group).length === 1 ? '' : 's' }} with no data</button>
           }
         </h3>
+        @if (group.rows.length > 0) {
         <div class="table-scroll">
         <table>
           <thead>
@@ -598,7 +604,11 @@ interface StationGroup {
                         <span class="muted row-facts">
                           {{ kindSentence(row) }}
                           @if (row.batteryField) {
-                            The battery level comes from the station's <code>{{ row.batteryField }}</code> field.
+                            @if (row.hasBatterySubService) {
+                              The battery level comes from the station's <code>{{ row.batteryField }}</code> field.
+                            } @else {
+                              References the station's <code>{{ row.batteryField }}</code> battery field; this row shows no battery level of its own.
+                            }
                           }
                           {{ originSentence(row) }}
                         </span>
@@ -625,6 +635,10 @@ interface StationGroup {
           </tbody>
         </table>
         </div>
+        }
+        @if (group.hiddenCount > 0) {
+          <p class="hidden-note">{{ group.hiddenCount }} sensor{{ group.hiddenCount === 1 ? '' : 's' }} with no data hidden.</p>
+        }
       }
 
       <!-- The working footer (beta.17 RC smoke): the page reads top
@@ -719,6 +733,9 @@ interface StationGroup {
               <div class="banner">
                 {{ pr.structuralChangeCount }} accessor{{ pr.structuralChangeCount === 1 ? 'y' : 'ies' }} would register, deregister, or re-register on save
                 (a re-registered accessory may need its HomeKit room assignment redone; a deregistered one leaves HomeKit).
+                @if (removedNeverReported(pr) > 0) {
+                  {{ removedNeverReported(pr) }} of the removed rows {{ removedNeverReported(pr) === 1 ? 'is a sensor' : 'are sensors' }} the station has never reported: no accessory exists for {{ removedNeverReported(pr) === 1 ? 'it' : 'them' }} today, so nothing visible changes there.
+                }
                 This preview wrote nothing.
               </div>
             } @else {
@@ -832,7 +849,8 @@ interface StationGroup {
                 <ol>
                   <li>In the Homebridge UI, open the JSON config editor and find this plugin's block.</li>
                   <li>Delete three entries: <code>sensorMap</code>, <code>configVersion</code>, and <code>_legacyMirror</code>.</li>
-                  <li>Add <code>"_sensorMapV2": false</code> to the block.</li>
+                  <li>Set <code>"_sensorMapV2": false</code> in the block (add the key if it is absent; replace its value if it is present).</li>
+                  <li>If the <code>SENSOR_MAP_V2</code> environment variable is set for Homebridge, remove it or set it to <code>0</code>: a value of <code>1</code> overrides the config entry.</li>
                   <li>Install plugin version 1.7.3 and restart Homebridge.</li>
                 </ol>
                 <p>Do this only while this line says verified. To return to the settings you had before v2.0.0 instead, see the Rollback section of the <a href="https://github.com/bcourbage/homebridge-ambient-weather-sensors#rollback" target="_blank" rel="noopener">README</a>.</p>
@@ -1167,18 +1185,28 @@ export class AwnRootComponent {
     }
     // /editor-state rows arrive sorted by (stationMac, dataPoint), so
     // group order and in-group order are already deterministic.
+    // Load-bearing rows stay visible under the filter (review P2-3):
+    // a row with pending drafts, an open editor, or an attached note
+    // must never disappear while its state still drives the page.
     const hide = this.hideNoData();
+    this.draftVersion();
+    this.expandedKey();
+    const hidable = (r: EditorRowDto): boolean =>
+      this.neverReported(r) && !this.store.isRowDirty(r) && !this.isExpanded(r)
+      && this.rowNotes(r).length === 0;
     return [...byMac.entries()]
       .map(([mac, rows]) => {
         const station = stationByMac.get(mac);
+        const visible = hide ? rows.filter(r => !hidable(r)) : rows;
         return {
           mac,
           title: station?.name || 'Station',
           source: station?.source ?? 'override',
-          rows: hide ? rows.filter(r => !this.neverReported(r)) : rows,
+          rows: visible,
+          hiddenCount: rows.length - visible.length,
         };
       })
-      .filter(g => g.rows.length > 0);
+      .filter(g => g.rows.length > 0 || g.hiddenCount > 0);
   });
 
   /** Display filter: hide never-reported rows from the tables. A
@@ -1874,11 +1902,13 @@ export class AwnRootComponent {
         : f.layer === 'station' && f.stationMacKey === stationMac.toUpperCase()));
   }
 
-  /** A recognized row this station has NEVER reported: it creates no
-   * accessory even when enabled (the reconciler registers reported
-   * fields only), and discovery has no observation of it. */
+  /** A recognized row this station is POSITIVELY known to have never
+   * reported (review P1): the server sets everReported false only when
+   * discovery HAS observed the station and neither an observation nor
+   * a cached accessory exists for the field. Unknown history (fresh
+   * upgrade, no discovery yet) renders no no-data affordances. */
   protected neverReported(row: EditorRowDto): boolean {
-    return row.kind !== 'unrecognized' && row.firstSeen === undefined;
+    return row.kind !== 'unrecognized' && row.everReported === false;
   }
 
   /** The enabled never-reported rows the station action would disable
@@ -1896,6 +1926,19 @@ export class AwnRootComponent {
    * way to turn off everything the station does not deliver). Drafts
    * only; preview and save decide.
    */
+  /** Removed changes whose row the station never reported: previewed
+   * as structural removals by the consequence model, but no runtime
+   * accessory exists (recorded debt; the banner qualifies the claim). */
+  protected removedNeverReported(pr: Extract<PreviewResultDto, { ok: true }>): number {
+    const state = this.state();
+    if (!state) {
+      return 0;
+    }
+    return pr.changes.filter(c => c.change === 'removed'
+      && state.rows.some(r => r.stationMac.toUpperCase() === c.stationMac.toUpperCase()
+        && r.dataPoint === c.dataPoint && this.neverReported(r))).length;
+  }
+
   protected noDataTip(group: StationGroup): string {
     return this.noDataEnabledRows(group).length === 1
       ? 'This sensor has no data: the station has never reported it, so it creates no HomeKit '
@@ -1908,6 +1951,17 @@ export class AwnRootComponent {
 
   protected disableNoData(group: StationGroup): void {
     for (const row of this.noDataEnabledRows(group)) {
+      // A station exception on a CUSTOM row must re-declare the
+      // identity or the save boundary refuses it as an invalid
+      // partial fragment (review P2-2; same rule as preview Skip).
+      if (row.identityScope !== undefined && row.identityScope !== 'known') {
+        const r = row as unknown as Record<string, unknown>;
+        for (const idField of ['kind', 'measurement', 'sourceUnit'] as const) {
+          if (r[idField] !== undefined) {
+            this.store.setFieldFor(row.stationMac, row.dataPoint, idField, r[idField]);
+          }
+        }
+      }
       this.store.setFieldFor(row.stationMac, row.dataPoint, 'enabled', false);
     }
     // An open editor could sit on an affected row showing a stale
@@ -2153,6 +2207,9 @@ export class AwnRootComponent {
   }
 
   private async doSave(confirmDigest: string): Promise<void> {
+    if (this.saving()) {
+      return; // one save transaction at a time (review P2-8)
+    }
     this.saving.set(true);
     this.saveResult.set(null);
     this.postSaveDrift.set(false);
@@ -2277,13 +2334,16 @@ export class AwnRootComponent {
     return `Creates a ${label} accessory in Apple Home${reading}.`;
   }
 
-  /** Plain-language settings-scope sentence for the facts line. */
+  /** Plain-language settings-scope sentence for the facts line. A
+   * row's origin names the WINNING layer, not the only one (review
+   * P2-6): a station-origin row can still inherit all-stations
+   * settings, so the wording claims precedence, never exclusivity. */
   protected originSentence(row: EditorRowDto): string {
     return row.origin === 'global'
-      ? 'These settings apply to all stations.'
+      ? 'This row has settings saved for all stations.'
       : row.origin === 'station'
-        ? 'These settings apply to this station only.'
-        : 'These settings are the plugin defaults.';
+        ? 'This row has settings saved for this station; they win over any saved for all stations.'
+        : 'This row uses the plugin defaults; nothing is saved for it.';
   }
 
   protected kindTitle(row: EditorRowDto): string {

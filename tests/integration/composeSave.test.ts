@@ -1620,6 +1620,41 @@ describe('family unit choice becomes a GLOBAL template future stations inherit (
   });
 });
 
+describe('station disable of a custom row re-declares its identity (review P2-2)', () => {
+  it('the identity-carrying station exception passes the save boundary; the bare one refuses', async () => {
+    const V2_BLOCK = {
+      platform: 'AmbientWeatherSensors', name: 'Test Station',
+      apiKey: 'k', applicationKey: 'a', _sensorMapV2: true, configVersion: 2,
+      sensorMap: [{ dataPoint: 'custom_wind', kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph', name: 'Custom Wind' }],
+    };
+    const rig = makeRig(V2_BLOCK);
+    discoveryStore(rig);
+    const globalFrag = V2_BLOCK.sensorMap[0];
+
+    // What disableNoData composes for a custom-global row: the station
+    // exception RE-DECLARES the identity.
+    const withIdentity = await handlePreviewSave(rig.deps, {
+      base: V2_BLOCK,
+      proposal: [globalFrag, {
+        dataPoint: 'custom_wind', stationMac: MAC,
+        kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph', enabled: false,
+      }],
+    });
+    expect(withIdentity.ok).toBe(true);
+
+    // The reviewer's reproduction: a bare station {enabled:false} on a
+    // custom row is an invalid partial fragment and must refuse.
+    const bare = await handlePreviewSave(rig.deps, {
+      base: V2_BLOCK,
+      proposal: [globalFrag, { dataPoint: 'custom_wind', stationMac: MAC, enabled: false }],
+    });
+    expect(bare.ok).toBe(false);
+    if (!bare.ok) {
+      expect(bare.error.code).toBe('invalid-rows');
+    }
+  });
+});
+
 describe('preview notes attach to their change rows (beta.17 RC smoke)', () => {
   const CUSTOM_A = {
     dataPoint: 'custom_a', kind: 'temperature', measurement: 'temperature',

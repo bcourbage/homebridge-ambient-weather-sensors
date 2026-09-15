@@ -1012,7 +1012,7 @@ State passes through five persistence surfaces (§8). No direct IPC.
 - Grouped-row sensor-map table (defaults collapsed, edited/disabled/additional/needs-attention visible)
 - Row expansion for editing
 - Kind + measurement + unit dropdowns (dropdown options driven by §3.5/§3.8 rules)
-- Structural-change confirmation modal (blocks save on kind/measurement change that alters signature)
+- Structural-change confirmation via the preview (superseded 2026-09-14, see decision log: the mandatory preview lists every registration consequence with per-row Skip, and the Save gesture composes with that preview's digest; the earlier separate confirmation modal is retired)
 - Row-level failure surfacing in "needs attention" group
 - Enable/Disable / Remove override / Forget discovered field
 - Persistent notice banner (`notices \ dismissedNoticeIds`)
@@ -1646,9 +1646,10 @@ Tests: for every non-motion kind, submit an override with each of these fields; 
   echoes a usable digest — /preview-save is the only source, forcing
   the confirmation UX), and ANY provided digest that mismatches the
   recomputation refuses as `stale-confirmation`, structural or not.
-  The client shows a confirmation modal listing the structural
-  changes before a structural save; in-place saves go direct, always
-  carrying the previewed digest. `sensorMapEditorAvailable` and
+  The client's confirmation is the PREVIEW itself (revised 2026-09-14):
+  structural and in-place saves alike compose directly with the digest
+  of the preview on screen, whose change list names every registration
+  consequence before the Save gesture. `sensorMapEditorAvailable` and
   `editorAvailable` flip true (safe mode and the sensorMap-shape hard
   stop stay false, and the client gates every save control on the
   server's flag). The pure-migration first save remains digest-free
@@ -1730,4 +1731,5 @@ Tests: for every non-motion kind, submit an override with each of these fields; 
   - Canonical ordering for byte-stable `sensorMap` serialization across all writes, not just migration
   - Explicit validation of inapplicable fields (threshold / triggerEnabled / triggerDirection / embedName) on non-motion kinds
   - Also added: §3.7 validation table entries for `threshold`/`triggerEnabled`/`embedName` on non-motion kinds
+- **2026-09-14**: beta.17 RC smoke (user decision). The separate structural-change confirmation modal is RETIRED: the user has already previewed every consequence (with per-row Skip) and clicked Save; a second confirmation added nothing. The confirmation contract is unchanged underneath — /compose-save still refuses a structural save whose digest does not match its recomputation, and /preview-save remains the only digest source — so the preview + Save gesture IS the confirmation UX the digest forces. Recorded debt from the same smoke round: the preview's consequence model includes enabled rows the station has never reported, so bulk-disabling them previews as structural removals although the runtime never registered them (a conservative overclaim; the preview banner qualifies the claim rather than reopening the cleared consequence engine in this beta).
 - Status: **APPROVED FOR IMPLEMENTATION**. Beta cycle can begin.

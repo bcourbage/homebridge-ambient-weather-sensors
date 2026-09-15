@@ -1718,13 +1718,41 @@ export async function handleGetEditorState(
     defaultsByKey.set(`${d.stationMac.toUpperCase()}|${d.dataPoint}`, dto);
   }
 
+  // POSITIVE reported-evidence sets (review P1: "never reported" must
+  // not be inferred from missing history alone). Cached accessories
+  // prove a field produced an accessory even when discovery.json does
+  // not exist yet (fresh upgrade); a station with NO discovery entries
+  // has never been observed, so absence proves nothing there.
+  const cachedKeys = new Set<string>();
+  if (Array.isArray(p.cachedAccessoryUniqueIds)) {
+    for (const id of p.cachedAccessoryUniqueIds) {
+      if (typeof id !== 'string') {
+        continue;
+      }
+      const m = /^([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})-(.+)$/.exec(id);
+      if (m) {
+        cachedKeys.add(`${m[1].toUpperCase()}|${m[2]}`);
+      }
+    }
+  }
+  const observedStations = new Set<string>();
+  for (const entry of discovery.entries) {
+    observedStations.add(entry.stationMac.toUpperCase());
+  }
+
   const rows = effectiveMap.rows
     .map(row => {
       const dto = toEditorRowDto(row, layers);
-      const defaults = defaultsByKey.get(`${row.stationMac.toUpperCase()}|${row.dataPoint}`);
+      const key = `${row.stationMac.toUpperCase()}|${row.dataPoint}`;
+      const defaults = defaultsByKey.get(key);
       if (defaults !== undefined && row.kind !== 'unrecognized') {
         dto.defaults = defaults;
       }
+      if (dto.firstSeen !== undefined || cachedKeys.has(key)) {
+        dto.everReported = true;
+      } else if (observedStations.has(row.stationMac.toUpperCase())) {
+        dto.everReported = false;
+      } // else: unknown — leave undefined.
       return dto;
     })
     .sort((a, b) => a.stationMac === b.stationMac

@@ -10,9 +10,11 @@ editable setting lives on this page — and the preview-era panels
 
 The page's **Save** is the only functional save path. It runs the
 guarded two-phase transaction: server-side validation against the
-on-disk configuration, a structural confirmation for changes that
-register or deregister accessories, the durable legacy
-snapshot/journal record, and a verbatim write of the composed block.
+on-disk configuration, verification that the save matches the
+consequences the preview showed (the preview, with its per-row Skip,
+is the confirmation; there is no separate confirmation step), the
+durable legacy snapshot/journal record, and a verbatim write of the
+composed block.
 The native Homebridge Save button at the bottom of the window is
 disabled from the moment the page loads and never enabled: the Config
 UI X SDK offers no way to hide it (an SDK addition is requested

@@ -84,6 +84,22 @@ export interface EditorAuthoredFragmentDto {
 export interface EditorRowDto {
   /** Pure-default values for this row; see EditorRowDefaultsDto. */
   defaults?: EditorRowDefaultsDto;
+  /**
+   * Whether the station is known to have reported this field, from
+   * POSITIVE evidence only (review P1: absence of history is not
+   * absence of the sensor):
+   *   true      — a discovery observation exists, or a cached
+   *               accessory for this (station, dataPoint) exists (an
+   *               upgrade can have live accessories and no
+   *               discovery.json yet).
+   *   false     — the discovery tracker HAS observed this station's
+   *               payload and this field has never appeared, and no
+   *               cached accessory exists for it.
+   *   undefined — unknown: no discovery history for this station, so
+   *               nothing may be inferred (the no-data affordances
+   *               must not render).
+   */
+  everReported?: boolean;
   stationMac: string;
   dataPoint: string;
   /** 'unrecognized' rows carry observational metadata only. */

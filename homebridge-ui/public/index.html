@@ -134,7 +134,7 @@
     </p>
   </div>
   <!-- awn-app:assets:begin -->
-  <script type="module" src="app/main-AVJORGBB.js"></script>
+  <script type="module" src="app/main-6XQW7GY5.js"></script>
   <!-- awn-app:assets:end -->
 
   <script>
@@ -175,7 +175,11 @@
           return;
         }
         modal.querySelectorAll('[title]').forEach(function (el) {
-          if (el.getAttribute('aria-label') || el.tagName === 'BUTTON') {
+          // Only when a NON-EMPTY aria-label replaces it: removing a
+          // title that is an element's only explanation would cost
+          // its hover help and accessible name (review P2-4).
+          var label = el.getAttribute('aria-label');
+          if (typeof label === 'string' && label.trim() !== '') {
             el.removeAttribute('title');
           }
         });
