@@ -370,6 +370,35 @@ describe('AwnRootComponent (TestBed, jsdom)', () => {
     expect(noteBanner).toBeDefined();
   });
 
+  it('a row-scoped note renders inline under its table row, not in the top Notes section', async () => {
+    const ipc = makeIpc(editorState({
+      notes: [
+        {
+          severity: 'note', code: 'orphan-battery-field', source: 'override',
+          stationMac: MAC, dataPoint: 'tempf',
+          message: "'tempf' is disabled; battery field 'battout' loses its battery level.",
+        },
+        {
+          severity: 'note', code: 'plugin-health', source: 'default-map',
+          message: 'A page-wide note without a row.',
+        },
+      ],
+    }));
+    const fixture = await render(ipc);
+    const el = fixture.nativeElement as HTMLElement;
+    // The row-scoped note sits in a table note row...
+    const inline = [...el.querySelectorAll('tr.note-tr .inline-note')]
+      .find(n => n.textContent!.includes('battout'));
+    expect(inline).toBeDefined();
+    // ...in the same table as its row.
+    const table = inline!.closest('table')!;
+    expect([...table.querySelectorAll('code')].some(c => c.textContent === 'tempf')).toBe(true);
+    // The top section holds ONLY the unmatched note.
+    const banners = [...el.querySelectorAll('.banner.info')].map(b => b.textContent!);
+    expect(banners.some(t => t.includes('A page-wide note without a row.'))).toBe(true);
+    expect(banners.some(t => t.includes('battout'))).toBe(false);
+  });
+
   it('renders a load-failure banner when the bridge request rejects', async () => {
     const ipc: HomebridgeIpc = {
       getPluginConfig: async () => [{}],

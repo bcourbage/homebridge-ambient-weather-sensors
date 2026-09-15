@@ -28,6 +28,7 @@ import { composeAndPersist } from '../saveOrchestrator';
 import type {
   AssignmentOptionDto,
   EditorAuthoredFragmentDto,
+  EditorDiagnosticDto,
   EditorSettingsDto,
   DisplayFamilyChoiceDto,
   DisplayFamilyDto,
@@ -144,7 +145,12 @@ interface StationGroup {
       background: var(--warn-bg); color: var(--warn-fg);
     }
     .change-row { padding: 4px 0; border-bottom: 1px solid var(--row-rule); font-size: 0.88rem; }
-    .inline-note { margin: 4px 0 2px 12px; padding-left: 8px; border-left: 3px solid var(--info-fg); color: var(--fg-sub); font-size: 0.85rem; }
+    .inline-note { margin: 4px 0 2px 12px; padding-left: 8px; border-left: 3px solid var(--info-fg); color: var(--fg-sub); font-size: 0.85rem; line-height: 1.45; }
+    /* Notes must WRAP inside the scrollable table (its cells are
+       nowrap-ellipsis by default) at a capped measure, or a long note
+       widens the table and clips. */
+    .table-scroll .note-tr td { padding-top: 0; white-space: normal; overflow: visible; }
+    .note-tr .inline-note { max-width: 76ch; }
     .app-tip {
       position: fixed; z-index: 60; max-width: 340px;
       background: var(--panel-bg); color: var(--fg);
@@ -289,9 +295,13 @@ interface StationGroup {
       @for (e of state()!.errors; track $index) {
         <div class="banner safe-mode">{{ e.message }}</div>
       }
-      @if (state()!.notes.length > 0) {
+      @if (residualStateNotes().length > 0) {
+        <!-- Only notes matching no row on the page: a note that
+             concerns one row renders inline under that row in its
+             station table instead (beta.17 RC smoke, same rule as
+             preview notes). -->
         <h3>Notes</h3>
-        @for (n of state()!.notes; track $index) {
+        @for (n of residualStateNotes(); track $index) {
           <div class="banner info">{{ n.message }}</div>
         }
       }
@@ -485,6 +495,9 @@ interface StationGroup {
                   }
                 </td>
               </tr>
+              @for (note of rowNotes(row); track $index) {
+                <tr class="note-tr"><td></td><td colspan="5"><div class="inline-note">{{ note }}</div></td></tr>
+              }
               @if (isExpanded(row)) {
                 <tr>
                   <td colspan="6" class="editor-form" (mousedown)="formPointerDown($event)">
@@ -1384,6 +1397,37 @@ export class AwnRootComponent {
     }
     return out;
   });
+
+  /**
+   * Current-state notes that concern THIS row (matched by station +
+   * data point), rendered inline under it in the station table
+   * (beta.17 RC smoke: same rule as preview notes). Deduplicated:
+   * identical messages for the same row collapse to one.
+   */
+  protected rowNotes(row: EditorRowDto): string[] {
+    const out: string[] = [];
+    for (const n of this.state()?.notes ?? []) {
+      if (n.stationMac !== undefined && n.dataPoint !== undefined
+        && n.stationMac.toUpperCase() === row.stationMac.toUpperCase()
+        && n.dataPoint === row.dataPoint
+        && !out.includes(n.message)) {
+        out.push(n.message);
+      }
+    }
+    return out;
+  }
+
+  /** Current-state notes matching NO row on the page (top section). */
+  protected residualStateNotes(): EditorDiagnosticDto[] {
+    const state = this.state();
+    if (!state) {
+      return [];
+    }
+    return state.notes.filter(n =>
+      n.stationMac === undefined || n.dataPoint === undefined
+      || !state.rows.some(r =>
+        r.stationMac.toUpperCase() === n.stationMac!.toUpperCase() && r.dataPoint === n.dataPoint));
+  }
 
   private rowInFamily(row: EditorRowDto, family: DisplayFamilyDto): boolean {
     return row.kind !== 'unrecognized' && row.measurement !== undefined
