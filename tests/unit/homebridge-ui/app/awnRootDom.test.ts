@@ -1586,6 +1586,57 @@ describe('draft editing + preview (PR B — no persistence)', () => {
     expect(ipc.requests.filter(r => r.path === '/compose-save')).toHaveLength(1);
   });
 
+  it('a FAILED cached-accessories read sends NO cache key to the server (review round-2 P1)', async () => {
+    // The real chain: service failure must reach the handler as the
+    // ABSENCE of a snapshot, never as an empty (complete) one.
+    const requests: Array<{ path: string; body: unknown }> = [];
+    const ipc: HomebridgeIpc & { requests: typeof requests } = {
+      requests,
+      getPluginConfig: async () => [{ platform: 'AmbientWeatherSensors' }],
+      getCachedAccessories: async () => {
+        throw new Error('cache handler unavailable');
+      },
+      request: async (path: string, body?: unknown) => {
+        requests.push({ path, body });
+        if (path === '/editor-state') {
+          return editorState();
+        }
+        if (path === '/vocabulary') {
+          return VOCAB;
+        }
+        return { notices: [] };
+      },
+    };
+    const fixture = await render(ipc);
+    expect(fixture.nativeElement.textContent).toContain('tempf'); // page still renders
+    const req = requests.find(r => r.path === '/editor-state');
+    expect(Object.keys(req!.body as object)).not.toContain('cachedAccessoryUniqueIds');
+  });
+
+  it('a pending FAMILY unit draft keeps a default-origin no-data row visible (review round-2 P2)', async () => {
+    const base = editorState();
+    const gustRow = {
+      stationMac: MAC, dataPoint: 'windgustmph', kind: 'motion' as const, measurement: 'wind-speed',
+      sourceUnit: 'mph', displayUnit: 'mph', name: 'Wind Gust', enabled: true, batteryField: null,
+      origin: 'default' as const, everReported: false,
+    };
+    const ipc = makeIpc(editorState({ rows: [...base.rows, gustRow] }), [], PREVIEW_OK);
+    const fixture = await render(ipc);
+    const el = fixture.nativeElement as HTMLElement;
+    // The family choice drafts under the GLOBAL key; the row's own
+    // draft key is station-scoped — the filter must consider both.
+    const windSel = ([...el.querySelectorAll('.unit-families label')] as HTMLElement[])
+      .find(l => l.textContent!.includes('Wind Speed'))!.querySelector('select')!;
+    windSel.value = 'fps';
+    windSel.dispatchEvent(new Event('change'));
+    await settle(fixture);
+    (el.querySelector('.table-filter input') as HTMLInputElement).click();
+    await settle(fixture);
+    expect([...el.querySelectorAll('tbody code')].map(c => c.textContent!)).toContain('windgustmph');
+    (el.querySelector('.table-filter input') as HTMLInputElement).click();
+    await settle(fixture);
+  });
+
   it('a stale in-flight preview never overwrites a newer draft (review #43 P2-4)', async () => {
     let resolvePreview!: (v: PreviewResultDto) => void;
     const requests: Array<{ path: string; body: unknown }> = [];

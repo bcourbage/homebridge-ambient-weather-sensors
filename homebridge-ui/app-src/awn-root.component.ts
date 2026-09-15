@@ -1191,8 +1191,13 @@ export class AwnRootComponent {
     const hide = this.hideNoData();
     this.draftVersion();
     this.expandedKey();
+    // Proposal-affecting means EITHER layer (review round-2 P2): a
+    // family unit choice drafts under the global key while a
+    // default-origin row's own edits draft station-scoped.
     const hidable = (r: EditorRowDto): boolean =>
-      this.neverReported(r) && !this.store.isRowDirty(r) && !this.isExpanded(r)
+      this.neverReported(r) && !this.isExpanded(r)
+      && !this.store.hasDraftFor(undefined, r.dataPoint)
+      && !this.store.hasDraftFor(r.stationMac, r.dataPoint)
       && this.rowNotes(r).length === 0;
     return [...byMac.entries()]
       .map(([mac, rows]) => {
@@ -1250,7 +1255,10 @@ export class AwnRootComponent {
     try {
       const cachedAccessoryUniqueIds = await this.hb.cachedAccessoryUniqueIds();
       const [state, vocab] = await Promise.all([
-        this.hb.request<EditorStateDto>('/editor-state', { cachedAccessoryUniqueIds }),
+        // A failed cache read sends NO key (review round-2 P1): the
+        // server takes a missing snapshot as unknown, never as empty.
+        this.hb.request<EditorStateDto>('/editor-state',
+          cachedAccessoryUniqueIds !== undefined ? { cachedAccessoryUniqueIds } : {}),
         this.hb.request<VocabularyDto>('/vocabulary'),
       ]);
       this.state.set(state);
@@ -2163,7 +2171,7 @@ export class AwnRootComponent {
         baseDigest: this.state()?.baseDigest,
         proposal: this.store.proposal(),
         settings: this.settingsPatch(),
-        cachedAccessoryUniqueIds,
+        ...(cachedAccessoryUniqueIds !== undefined ? { cachedAccessoryUniqueIds } : {}),
       });
       if (this.draftVersion() === draftVersionAtStart && this.settingsVersion() === settingsVersionAtStart) {
         this.previewResult.set(result);
@@ -2189,7 +2197,6 @@ export class AwnRootComponent {
     }
   }
 
-  /** The structural subset of the current preview, for the modal. */
   /**
    * Save entry point (PR C / finding 5): the preview IS the
    * confirmation — the user saw every consequence, could Skip rows,

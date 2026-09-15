@@ -1303,6 +1303,10 @@ export async function handleGetEditorState(deps, payload) {
     // prove a field produced an accessory even when discovery.json does
     // not exist yet (fresh upgrade); a station with NO discovery entries
     // has never been observed, so absence proves nothing there.
+    // A MISSING cache snapshot is not an empty one (review round-2 P1):
+    // the client sends no key when the cache read failed or timed out,
+    // and without a complete read a missing accessory proves nothing.
+    const cacheKnown = Array.isArray(p.cachedAccessoryUniqueIds);
     const cachedKeys = new Set();
     if (Array.isArray(p.cachedAccessoryUniqueIds)) {
         for (const id of p.cachedAccessoryUniqueIds) {
@@ -1330,7 +1334,7 @@ export async function handleGetEditorState(deps, payload) {
         if (dto.firstSeen !== undefined || cachedKeys.has(key)) {
             dto.everReported = true;
         }
-        else if (observedStations.has(row.stationMac.toUpperCase())) {
+        else if (cacheKnown && observedStations.has(row.stationMac.toUpperCase())) {
             dto.everReported = false;
         } // else: unknown — leave undefined.
         return dto;

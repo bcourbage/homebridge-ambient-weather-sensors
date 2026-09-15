@@ -172,12 +172,13 @@ describe('/editor-state — v2 configuration', () => {
     expect(byDp.get('weirdfield9')!.defaults).toBeUndefined();
   });
 
-  it('everReported is tri-state from POSITIVE evidence only (review P1)', async () => {
-    // (a) Discovery HAS observed the station: seen rows true, unseen
-    //     recognized rows false.
+  it('everReported is tri-state from POSITIVE evidence only (review P1, both rounds)', async () => {
+    // (a) Discovery HAS observed the station AND a COMPLETE cache read
+    //     exists (an empty array is a successful read): seen rows
+    //     true, unseen recognized rows false.
     const rig = makeRig([V2_BLOCK]);
     discoveryStore(rig, [{ mac: MAC, dataPoint: 'tempf' }]);
-    const dto = await handleGetEditorState(rig.deps, {});
+    const dto = await handleGetEditorState(rig.deps, { cachedAccessoryUniqueIds: [] });
     const byDp = new Map(dto.rows.filter(r => r.stationMac === MAC).map(r => [r.dataPoint, r]));
     expect(byDp.get('tempf')!.everReported).toBe(true);
     expect(byDp.get('windspeedmph')!.everReported).toBe(false);
@@ -192,6 +193,18 @@ describe('/editor-state — v2 configuration', () => {
     const byDp2 = new Map(dto2.rows.filter(r => r.stationMac === MAC).map(r => [r.dataPoint, r]));
     expect(byDp2.get('windspeedmph')!.everReported).toBe(true);
     expect(byDp2.get('tempf')!.everReported).toBeUndefined();
+
+    // (c) Discovery observed the station but the cache read FAILED
+    //     (no key sent): a cached 1.x accessory could exist for any
+    //     unseen field, so absence proves nothing — never false
+    //     (review round-2 P1: the failure mode that deregistered a
+    //     restored accessory).
+    const rig3 = makeRig([V2_BLOCK]);
+    discoveryStore(rig3, [{ mac: MAC, dataPoint: 'tempf' }]);
+    const dto3 = await handleGetEditorState(rig3.deps, {});
+    const byDp3 = new Map(dto3.rows.filter(r => r.stationMac === MAC).map(r => [r.dataPoint, r]));
+    expect(byDp3.get('tempf')!.everReported).toBe(true);
+    expect(byDp3.get('windspeedmph')!.everReported).toBeUndefined();
   });
 
   it('rows are sorted by stationMac then dataPoint', async () => {

@@ -219,13 +219,16 @@ export class HomebridgeService {
   /**
    * Cached-accessory uniqueIds for §8.7 inventory (review #32 F1) —
    * the SAME extraction the save orchestrator uses, so /editor-state
-   * and /compose-save see identical station inventories. Returns []
-   * when the API is unavailable or errors: inventory degrades to the
-   * server-side sources rather than failing the page.
+   * and /compose-save see identical station inventories. Returns
+   * UNDEFINED when the API is unavailable, errors, times out, or
+   * answers with a non-array (review round-2 P1): a failed read is
+   * the ABSENCE of a cache snapshot, never an empty one — the server
+   * must not take a missing key as evidence that no accessory exists.
+   * Inventory still degrades to the server-side sources.
    */
-  async cachedAccessoryUniqueIds(): Promise<string[]> {
+  async cachedAccessoryUniqueIds(): Promise<string[] | undefined> {
     if (!this.ipc?.getCachedAccessories) {
-      return [];
+      return undefined;
     }
     try {
       // Short leash: HB UI X's cached-accessories handler swallows its
@@ -239,11 +242,14 @@ export class HomebridgeService {
           e => { clearTimeout(timer); reject(e); },
         );
       });
-      return (Array.isArray(cached) ? cached : [])
+      if (!Array.isArray(cached)) {
+        return undefined;
+      }
+      return cached
         .map(a => (a as { context?: { device?: { uniqueId?: unknown } } })?.context?.device?.uniqueId)
         .filter((u): u is string => typeof u === 'string');
     } catch {
-      return [];
+      return undefined;
     }
   }
 }

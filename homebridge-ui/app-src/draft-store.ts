@@ -317,6 +317,12 @@ export class DraftStore {
     return this.drafts.get(keyFor(stationMac, dataPoint))?.remove ?? false;
   }
 
+  /** Does ANY live draft target this layer key? */
+  hasDraftFor(stationMac: string | undefined, dataPoint: string): boolean {
+    const e = this.drafts.get(keyFor(stationMac, dataPoint));
+    return !!e && (e.remove || e.patches.size > 0 || e.fieldRemovals.size > 0);
+  }
+
   /**
    * The station macs whose authored fragments set `field` for this
    * dataPoint — the exceptions a family choice must strip (review F1).
