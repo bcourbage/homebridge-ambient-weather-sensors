@@ -9,6 +9,26 @@ entries short and user-facing.
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/
 
+## [2.0.0-beta.17] — 2026-09-15
+
+### Changed
+
+- **The sensor map is on by default.** The `_sensorMapV2` opt-in is retired: every installation now runs the v2 sensor-map runtime and editor without any flag. A legacy 1.x configuration keeps producing exactly the accessories it produced before — the conversion happens only when you save from the editor, and your original settings are preserved in a snapshot first. To opt out, set `_sensorMapV2: false` in the plugin's config block or `SENSOR_MAP_V2=0` in Homebridge's environment.
+- **One settings page, one Save.** Everything editable now lives on the plugin's settings page: platform name, data source, API keys, station filter, tile-name update interval, display units, and the sensor map. The page's own Save is the only functional save path and runs the guarded, previewed transaction; the standard Homebridge Save button below it is disabled by design (the Homebridge UI offers no way to hide it).
+- **The preview is the confirmation.** Preview lists every consequence of a save — each accessory that would register, deregister, or re-register, with per-row Skip — and Save applies exactly what was previewed. The separate confirmation step is gone.
+- **API keys are handled as secrets.** Stored keys display as dots and never leave the server: type over the dots to replace a key, delete them and leave the field empty to clear it, and leave them untouched to keep the stored key. Sensor-map saves never touch credentials.
+- **Notes appear where they apply.** A note about one sensor (battery ownership, for example) renders under that row in its table and in the preview on the change it concerns, instead of in a block at the top of the page.
+
+### Added
+
+- **See what your station actually reports.** Sensors the station has never reported carry a "no data" chip — they create no HomeKit accessories even while enabled — with a per-station action to disable them all and a "Hide sensors with no data" filter that remembers your choice. Both appear only when the plugin has real observation history to base them on.
+- **Use defaults shows the defaults.** The row editor's Use defaults button now sets the form to what the row returns to — the plugin defaults plus your page-level unit choices — instead of just clearing the override behind a closed form. A category unit chosen in the Units panel is never undone by a row-level reset.
+- **Rollback status.** A disclosure at the bottom of the page states whether the manual rollback to 1.7.3 is currently safe and gives the exact steps, including the environment-variable case.
+
+### Removed
+
+- **The preview-era chrome is gone.** The read-only status panel, the "Discovered stations & datapoints" dump, and the reduced legacy settings form no longer render; the dynamic-schema mechanism that hid legacy form controls is retired, and the plugin removes its stale schema file at startup.
+
 ## [2.0.0-beta.16] — 2026-09-13
 
 ### Added
