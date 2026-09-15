@@ -516,7 +516,7 @@ describe('draft editing + preview (PR B — no persistence)', () => {
     // 'added' registers — never a blanket "re-registers".
     expect(el.querySelector('.structural-chip')?.textContent).toBe('registers');
     expect(el.textContent).toContain('1 accessory would register, deregister, or re-register on save');
-    expect(el.textContent).toContain('This preview wrote nothing; saving will ask for confirmation first.');
+    expect(el.textContent).toContain('This preview wrote nothing.');
   });
 
   it('renders a structured refusal', async () => {
@@ -1458,6 +1458,32 @@ describe('draft editing + preview (PR B — no persistence)', () => {
     expect(proposal.filter(f => f.dataPoint === 'co2_in' && f.stationMac === MAC)).toEqual([]);
   });
 
+  it('the hide-no-data filter removes never-reported rows from the tables but never the station action', async () => {
+    const base = editorState();
+    const unseen = { stationMac: MAC, dataPoint: 'co2', kind: 'temperature' as const, measurement: 'temperature',
+      sourceUnit: 'fahrenheit', name: 'CO2', enabled: true, batteryField: null, origin: 'default' as const };
+    const ipc = makeIpc(editorState({ rows: [...base.rows, unseen] }), [], PREVIEW_OK);
+    const fixture = await render(ipc);
+    const el = fixture.nativeElement as HTMLElement;
+
+    const rowCodes = (): string[] => [...el.querySelectorAll('tbody code')].map(c => c.textContent!);
+    expect(rowCodes()).toContain('co2');
+
+    const filter = el.querySelector('.table-filter input') as HTMLInputElement;
+    expect(filter).toBeDefined();
+    filter.click();
+    await settle(fixture);
+    expect(rowCodes()).not.toContain('co2');
+    expect(rowCodes()).toContain('tempf'); // reported rows stay
+    // The bulk action still shows, counted from the UNFILTERED rows.
+    const action = [...el.querySelectorAll('button.station-action')].find(b => b.textContent!.includes('with no data'));
+    expect(action?.textContent).toContain('Disable 1 sensor with no data');
+
+    filter.click();
+    await settle(fixture);
+    expect(rowCodes()).toContain('co2');
+  });
+
   it('a stale in-flight preview never overwrites a newer draft (review #43 P2-4)', async () => {
     let resolvePreview!: (v: PreviewResultDto) => void;
     const requests: Array<{ path: string; body: unknown }> = [];
@@ -1666,46 +1692,25 @@ describe('save flow (PR C / finding 5 — the ONE route is composeAndPersist)', 
     expect(el.textContent).toContain('does not exactly match');
   });
 
-  it('a structural save opens the confirmation card; Cancel persists NOTHING', async () => {
+  it('a structural save saves DIRECTLY with the preview digest: the preview is the confirmation (beta.17 RC smoke)', async () => {
     const ipc = makeIpc(editorState(), [], STRUCTURAL_PREVIEW, COMPOSE_OK);
     const fixture = await render(ipc);
     const el = await draftAndPreview(fixture);
+    // The registration consequences are stated ON the preview, before
+    // any save gesture: the user confirms by clicking Save.
+    expect(el.textContent).toContain('would register, deregister, or re-register on save');
+    expect(el.textContent).toContain('Saving applies the');
+    expect(el.textContent).not.toContain('ask for confirmation');
 
     btn(el, 'Save changes')!.click();
     await settle(fixture);
-    expect(el.querySelector('.confirm-card')).not.toBeNull();
-    // In flow, not a fixed overlay (beta.14 smoke #4), and the other
-    // controls lock while the confirmation is open. The class name
-    // must stay out of Bootstrap's namespace: HB UI X mirrors its
-    // stylesheets into the iframe and Bootstrap's .modal rule is
-    // display:none (beta.14 smoke #6) - bootstrapNamespace.test.ts
-    // pins every class this app uses against that inventory.
-    expect(el.querySelector('.modal')).toBeNull();
-    expect(el.querySelector('.modal-backdrop')).toBeNull();
-    expect((btn(el, 'Preview changes') as HTMLButtonElement).disabled).toBe(true);
-    expect(el.textContent).toContain('Confirm registration changes');
-
-    const card = el.querySelector('.confirm-card') as HTMLElement;
-    ([...card.querySelectorAll('button')].find(b => b.textContent === 'Cancel') as HTMLButtonElement).click();
-    await settle(fixture);
+    // No second confirmation step exists...
     expect(el.querySelector('.confirm-card')).toBeNull();
-    expect(ipc.requests.some(r => r.path === '/compose-save')).toBe(false);
-    expect(ipc.persisted.filter(p => p.event === 'update' || p.event === 'save')).toEqual([]);
-  });
-
-  it('Confirm save sends the digest and persists', async () => {
-    const ipc = makeIpc(editorState(), [], STRUCTURAL_PREVIEW, COMPOSE_OK);
-    const fixture = await render(ipc);
-    const el = await draftAndPreview(fixture);
-    btn(el, 'Save changes')!.click();
-    await settle(fixture);
-    btn(el, 'Confirm save')!.click();
-    await settle(fixture);
-
+    expect(el.textContent).not.toContain('Confirm registration changes');
+    // ...and the save ran with the digest of the previewed consequences.
     const compose = ipc.requests.find(r => r.path === '/compose-save');
     expect((compose?.body as { confirmDigest?: string }).confirmDigest).toBe('ef'.repeat(32));
     expect(ipc.persisted.map(p => p.event).filter(e => e === 'update' || e === 'save')).toEqual(['update', 'save']);
-    expect(el.querySelector('.confirm-card')).toBeNull();
   });
 
   it('a compose refusal persists NOTHING and renders the structured refusal', async () => {
