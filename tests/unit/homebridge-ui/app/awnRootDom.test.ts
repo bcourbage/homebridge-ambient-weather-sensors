@@ -329,9 +329,20 @@ describe('AwnRootComponent (TestBed, jsdom)', () => {
     });
   });
 
-  it('shows the POSITIVE rollback-mirror indicator when the mirror is recognized (review #45 round 4)', async () => {
-    const verified = await render(makeIpc(editorState()));
-    expect((verified.nativeElement as HTMLElement).textContent).toContain('Rollback mirror: verified');
+  it('shows the POSITIVE rollback-mirror indicator inside the notices disclosure (review #45 round 4; demoted beta.17 RC smoke)', async () => {
+    const fixture = await render(makeIpc(editorState()));
+    const el = fixture.nativeElement as HTMLElement;
+    // Not a top-of-page banner any more...
+    expect([...el.querySelectorAll('.banner')].some(b => b.textContent!.includes('Rollback mirror'))).toBe(false);
+    // ...but available where a rollback would be looked up.
+    const toggle = [...el.querySelectorAll('button.conn-summary')]
+      .find(b => b.textContent!.includes('Rollback status') || b.textContent!.includes('Recent structural changes')) as HTMLButtonElement;
+    expect(toggle).toBeDefined();
+    toggle.click();
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
+    expect(el.textContent).toContain('Rollback mirror: verified');
   });
 
   it('warns against the marker-deletion rollback for any non-recognized mirror state', async () => {

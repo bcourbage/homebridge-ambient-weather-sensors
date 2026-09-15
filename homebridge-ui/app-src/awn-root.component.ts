@@ -282,6 +282,7 @@ interface StationGroup {
     }
     .notices-block { margin-top: 16px; }
     .notices-list { margin: 0; padding: 4px 12px 12px 28px; color: var(--fg-sub); }
+    .rollback-line { margin: 0; padding: 4px 12px 12px; color: var(--fg-sub); font-size: 0.85rem; line-height: 1.45; }
   `,
   template: `
     @if (!available) {
@@ -310,16 +311,14 @@ interface StationGroup {
           <div class="banner info">{{ n.message }}</div>
         }
       }
-      <!-- Positive rollback-mirror indicator (review #45 round 4):
-           the manual current-state rollback documented in the README
-           is authorized ONLY by 'verified' here — 'absent' produces
-           no warning banner anywhere, so silence is not a signal. -->
-      @if (state()!.configMode === 'v2') {
-        @if (state()!.mirrorState === 'recognized') {
-          <div class="banner info">Rollback mirror: verified. The documented current-state manual rollback (deleting the three v2 markers) is available for this configuration.</div>
-        } @else {
-          <div class="banner">Rollback mirror: {{ state()!.mirrorState }}. Do NOT use the marker-deletion rollback. Freeze on the current 1.7.x, restore the snapshot, or save here again to regenerate the mirror.</div>
-        }
+      <!-- Rollback-mirror indicator (review #45 round 4): the manual
+           current-state rollback documented in the README is
+           authorized ONLY by 'verified'. Warning states stay
+           prominent here; the verified-positive line lives in the
+           notices disclosure at the bottom (beta.17 RC smoke), where
+           someone contemplating a rollback looks it up. -->
+      @if (state()!.configMode === 'v2' && state()!.mirrorState !== 'recognized') {
+        <div class="banner">Rollback mirror: {{ state()!.mirrorState }}. Do NOT use the marker-deletion rollback. Freeze on the current 1.7.x, restore the snapshot, or save here again to regenerate the mirror.</div>
       }
 
       <!-- Connection settings (beta.17, GA #56): the schema form is
@@ -809,18 +808,23 @@ interface StationGroup {
 
       <!-- Structural-change history, demoted from a permanent panel to
            a collapsed disclosure (beta.17, GA #56). -->
-      @if (notices().length > 0) {
+      @if (notices().length > 0 || mirrorVerified()) {
         <div class="connection notices-block">
           <button type="button" class="conn-summary" (click)="noticesOpen.set(!noticesOpen())" [attr.aria-expanded]="noticesOpen()">
             <span class="conn-caret">{{ noticesOpen() ? '\u25be' : '\u25b8' }}</span>
-            Recent structural changes ({{ notices().length }})
+            {{ notices().length > 0 ? 'Recent structural changes (' + notices().length + ')' : 'Rollback status' }}
           </button>
           @if (noticesOpen()) {
-            <ul class="notices-list">
-              @for (n of notices(); track n.id) {
-                <li><code>{{ n.dataPoint }}</code> re-registered {{ n.occurredAt.slice(0, 10) }} (structure changed)</li>
-              }
-            </ul>
+            @if (notices().length > 0) {
+              <ul class="notices-list">
+                @for (n of notices(); track n.id) {
+                  <li><code>{{ n.dataPoint }}</code> re-registered {{ n.occurredAt.slice(0, 10) }} (structure changed)</li>
+                }
+              </ul>
+            }
+            @if (mirrorVerified()) {
+              <p class="rollback-line">Rollback mirror: verified. The documented current-state manual rollback (deleting the three v2 markers) is available for this configuration.</p>
+            }
           }
         </div>
       }
@@ -1432,6 +1436,12 @@ export class AwnRootComponent {
       n.stationMac === undefined || n.dataPoint === undefined
       || !state.rows.some(r =>
         r.stationMac.toUpperCase() === n.stationMac!.toUpperCase() && r.dataPoint === n.dataPoint));
+  }
+
+  /** The verified-positive rollback state (the notices disclosure line). */
+  protected mirrorVerified(): boolean {
+    const st = this.state();
+    return !!st && st.configMode === 'v2' && st.mirrorState === 'recognized';
   }
 
   private rowInFamily(row: EditorRowDto, family: DisplayFamilyDto): boolean {
