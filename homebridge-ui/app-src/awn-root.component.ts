@@ -207,6 +207,10 @@ interface StationGroup {
     .unit-converted {
       color: var(--info-fg); background: var(--info-bg);
       padding: 0 5px; border-radius: 4px;
+      /* The chip's own padding pushed its text right of the plain
+         units; pull the box left so every unit's TEXT shares one
+         left edge (the chip bleeds into the cell padding instead). */
+      margin-left: -5px;
     }
     /* Sized for border-box: the host mirrors its stylesheets (global
        border-box included) into the iframe, so the cell width must
