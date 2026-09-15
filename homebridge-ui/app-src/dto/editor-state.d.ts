@@ -248,6 +248,13 @@ export interface PreviewChangeDto {
    * re-registration.
    */
   displayName?: { before: string; after: string };
+  /**
+   * Note messages that concern THIS row (matched by station + data
+   * point), shown inline with the change instead of in a detached
+   * list (beta.17 RC smoke). Notes matching no previewed change stay
+   * in the top-level `notes`.
+   */
+  notes?: string[];
 }
 
 /**
@@ -269,6 +276,8 @@ export interface ConfigOnlyChangeDto {
   change: 'added' | 'removed' | 'modified';
   before?: EditorRowDto;
   after?: EditorRowDto;
+  /** Same inline note attachment as PreviewChangeDto.notes. */
+  notes?: string[];
 }
 
 /**

@@ -404,10 +404,11 @@ export function buildEffectiveSensorMap(input) {
                 overrideIndex: attribution,
                 dataPoint: loser.dataPoint,
                 stationMac: loser.stationMac,
-                message: `Row '${loser.dataPoint}' on ${loser.stationMac} declares batteryField `
-                    + `'${loser.batteryField}', but '${winner.dataPoint}' owns that field's Battery `
-                    + 'sub-service on this station (earliest-authored fragment wins). '
-                    + `'${loser.dataPoint}' will report the battery value but not host the HAP BatteryService.`,
+                message: `'${loser.dataPoint}' and '${winner.dataPoint}' on ${loser.stationMac} both use `
+                    + `battery field '${loser.batteryField}'. Only one accessory can show that field as a `
+                    + `HomeKit battery level, and it stays with '${winner.dataPoint}' (the earlier entry in `
+                    + `the saved configuration). '${loser.dataPoint}' keeps working normally; it just shows `
+                    + 'no battery level of its own.',
             });
         }
     }
@@ -457,18 +458,18 @@ export function buildEffectiveSensorMap(input) {
                 .reduce((min, e) => (min === undefined || e.index < min ? e.index : min), undefined);
             const attribution = (ownerDisabled ? disabledBy : undefined) ?? (ownerRebound ? reboundBy : undefined);
             const reboundPhrase = owner.batteryField === null
-                ? 'had its batteryField suppressed (batteryField: null)'
-                : `was rebound to batteryField '${owner.batteryField}'`;
+                ? 'had its battery field cleared (batteryField: null)'
+                : `now uses battery field '${owner.batteryField}' instead`;
             const cause = ownerDisabled && ownerRebound
-                ? `is disabled AND ${reboundPhrase}`
+                ? `is disabled and ${reboundPhrase}`
                 : ownerDisabled
                     ? 'is disabled'
                     : reboundPhrase;
             const remedy = ownerDisabled && ownerRebound
-                ? `until '${ownerDp}' is re-enabled and restored to '${field}'`
+                ? `until '${ownerDp}' is enabled again and set back to '${field}'`
                 : ownerDisabled
-                    ? `until '${ownerDp}' is re-enabled`
-                    : `until '${ownerDp}' is restored to '${field}'`;
+                    ? `until '${ownerDp}' is enabled again`
+                    : `until '${ownerDp}' is set back to '${field}'`;
             // Cache-consequence wording (reviews R13-3 + R14-1 + R15-1 +
             // R16-1), stated precisely: ownership of the RESERVED field never
             // rolls, so no other row REFERENCING THAT FIELD changes signature.
@@ -484,8 +485,8 @@ export function buildEffectiveSensorMap(input) {
                 && owner.batteryField !== null
                 && !RESERVED_BATTERY_FIELDS.has(owner.batteryField);
             const reboundCollisionClause = entersClaims
-                ? ` Claimants on '${String(owner.batteryField)}' may change ownership or signature under `
-                    + 'collision ordering now that the owner competes there.'
+                ? ` Rows using '${String(owner.batteryField)}' may switch which one shows its battery `
+                    + `level, and may re-register, now that '${ownerDp}' competes for that field.`
                 : '';
             notes.push({
                 code: 'orphan-battery-field',
@@ -493,13 +494,12 @@ export function buildEffectiveSensorMap(input) {
                 overrideIndex: attribution,
                 dataPoint: ownerDp,
                 stationMac: mac,
-                message: `'${ownerDp}' on ${mac} ${cause}, but it is the reserved owner of batteryField `
-                    + `'${field}', which ${referencing.length} enabled row(s) still reference `
-                    + `(${referencing.map(r => `'${r.dataPoint}'`).join(', ')}). The field has no HAP Battery `
-                    + `sub-service on this station ${remedy} — ownership of '${field}' never rolls to another `
-                    + `row, so no other row referencing '${field}' changes structural signature; '${ownerDp}' `
-                    + 'itself may re-register if its own Battery sub-service was added or removed by this '
-                    + `change.${reboundCollisionClause}`,
+                message: `'${ownerDp}' on ${mac} ${cause}. '${ownerDp}' is the only row that can show `
+                    + `battery field '${field}' as a HomeKit battery level, so that battery level is gone `
+                    + `on this station ${remedy}. ${referencing.length} enabled row(s) still read the field `
+                    + `(${referencing.map(r => `'${r.dataPoint}'`).join(', ')}); none of them takes over the `
+                    + `battery level, and none of them re-registers in HomeKit. '${ownerDp}' itself may `
+                    + `re-register if this change added or removed its own battery level.${reboundCollisionClause}`,
             });
         }
     }

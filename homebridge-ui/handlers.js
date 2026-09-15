@@ -821,17 +821,45 @@ export async function handlePreviewSave(deps, payload) {
     }
     const { effectiveMap, canonical } = r.ctx;
     const consequences = computeSaveConsequences(r.ctx);
+    // Notes that concern a previewed change attach to that row (beta.17
+    // RC smoke: detached note boxes read as page-wide alarms); only
+    // notes matching no change stay in the residual list. Presentation
+    // only — the digest was computed above, before this attachment, and
+    // /compose-save recomputes the same unattached projection.
+    const noteDtos = effectiveMap.notes.map(n => toDiagnosticDto('note', n));
+    const changeKeys = new Set([...consequences.changes, ...consequences.configOnly]
+        .map(c => `${c.stationMac.toUpperCase()}|${c.dataPoint}`));
+    const residualNotes = [];
+    const inlineNotes = new Map();
+    for (const n of noteDtos) {
+        const key = n.stationMac !== undefined && n.dataPoint !== undefined
+            ? `${n.stationMac.toUpperCase()}|${n.dataPoint}` : undefined;
+        if (key !== undefined && changeKeys.has(key)) {
+            const list = inlineNotes.get(key) ?? [];
+            if (!list.includes(n.message)) {
+                list.push(n.message);
+            }
+            inlineNotes.set(key, list);
+        }
+        else {
+            residualNotes.push(n);
+        }
+    }
+    const attach = (c) => {
+        const list = inlineNotes.get(`${c.stationMac.toUpperCase()}|${c.dataPoint}`);
+        return list !== undefined ? { ...c, notes: list } : c;
+    };
     return {
         ok: true,
         canonicalSensorMap: canonical,
         settingsChanged: r.ctx.settingsChanged,
         rows: consequences.proposedRows,
-        changes: consequences.changes,
-        configOnly: consequences.configOnly,
+        changes: consequences.changes.map(attach),
+        configOnly: consequences.configOnly.map(attach),
         structuralChangeCount: consequences.structuralChangeCount,
         digest: consequences.digest,
         warnings: effectiveMap.warnings.map(w => toDiagnosticDto('warning', w)),
-        notes: effectiveMap.notes.map(n => toDiagnosticDto('note', n)),
+        notes: residualNotes,
     };
 }
 /**

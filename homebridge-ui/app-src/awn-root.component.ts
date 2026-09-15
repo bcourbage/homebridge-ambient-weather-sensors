@@ -27,6 +27,7 @@ import { KIND_HELP, KIND_SUPPORT } from './kind-support';
 import { composeAndPersist } from '../saveOrchestrator';
 import type {
   AssignmentOptionDto,
+  EditorAuthoredFragmentDto,
   EditorSettingsDto,
   DisplayFamilyChoiceDto,
   DisplayFamilyDto,
@@ -143,6 +144,7 @@ interface StationGroup {
       background: var(--warn-bg); color: var(--warn-fg);
     }
     .change-row { padding: 4px 0; border-bottom: 1px solid var(--row-rule); font-size: 0.88rem; }
+    .inline-note { margin: 4px 0 2px 12px; padding-left: 8px; border-left: 3px solid var(--info-fg); color: var(--fg-sub); font-size: 0.85rem; }
     .app-tip {
       position: fixed; z-index: 60; max-width: 340px;
       background: var(--panel-bg); color: var(--fg);
@@ -550,7 +552,7 @@ interface StationGroup {
                            the row's authored settings (previewable
                            and savable like any edit). -->
                       <div class="editor-footer">
-                        @if (row.origin === 'global' || row.origin === 'station') {
+                        @if (useDefaultsAvailable(row)) {
                           <button type="button" (click)="useDefaults(row)" [disabled]="saving() || confirmOpen() || reloadRequired()">Use defaults</button>
                         }
                         <span class="grow"></span>
@@ -618,6 +620,9 @@ interface StationGroup {
                             (click)="excludeChange(c)">Skip</button>
                   }
                 }
+                @for (note of c.notes ?? []; track $index) {
+                  <div class="inline-note">{{ note }}</div>
+                }
               </div>
             }
             @if (pr.structuralChangeCount > 0) {
@@ -648,6 +653,9 @@ interface StationGroup {
                           [disabled]="previewPending() || saving() || confirmOpen() || reloadRequired()"
                           (click)="excludeChange(c)">Skip</button>
                 }
+                @for (note of c.notes ?? []; track $index) {
+                  <div class="inline-note">{{ note }}</div>
+                }
               </div>
             }
           }
@@ -655,7 +663,10 @@ interface StationGroup {
             <div class="banner">{{ w.message }}</div>
           }
           @if (pr.notes.length > 0) {
-            <h3>Preview notes</h3>
+            <!-- Notes matching no previewed change (row-scoped notes
+                 render inline on their change rows instead,
+                 beta.17 RC smoke). -->
+            <h3>Worth checking before saving</h3>
             @for (n of pr.notes; track $index) {
               <div class="banner info">{{ n.message }}</div>
             }
@@ -1700,8 +1711,70 @@ export class AwnRootComponent {
     this.bump();
   }
 
+  /**
+   * Authored fragments for one layer key of a row, drafts excluded.
+   */
+  private authoredFragmentsAt(stationMac: string | undefined, dataPoint: string): EditorAuthoredFragmentDto[] {
+    return (this.state()?.authored ?? []).filter(f =>
+      f.dataPoint === dataPoint
+      && (stationMac === undefined
+        ? f.layer === 'global'
+        : f.layer === 'station' && f.stationMacKey === stationMac.toUpperCase()));
+  }
+
+  /** Whether a display family manages this row's display unit at the page level. */
+  private familyManagesRow(row: EditorRowDto): boolean {
+    return (this.vocab()?.families ?? []).some(f => this.rowInFamily(row, f));
+  }
+
+  /**
+   * The fields Use Defaults would remove — station-scoped fragments
+   * always; global fragments too, EXCEPT a family-managed displayUnit
+   * template, which belongs to the Units panel (beta.17 RC smoke:
+   * Use Defaults returns the row to what the PAGE-LEVEL settings
+   * dictate, never silently changing a whole category's unit).
+   * Empty means the button has nothing row-scoped to remove.
+   */
+  protected useDefaultsScope(row: EditorRowDto): { station: boolean; globalAll: boolean; globalFields: DraftableField[] } {
+    const station = this.authoredFragmentsAt(row.stationMac, row.dataPoint).length > 0;
+    const globals = this.authoredFragmentsAt(undefined, row.dataPoint);
+    if (globals.length === 0) {
+      return { station, globalAll: false, globalFields: [] };
+    }
+    const globalFieldSet = new Set<string>();
+    for (const f of globals) {
+      for (const k of Object.keys(f.fields)) {
+        globalFieldSet.add(k);
+      }
+    }
+    // The keep-template path never applies to a fragment that authors
+    // its own identity (a custom sensor): stripping around displayUnit
+    // would leave an invalid kind-less fragment. Use Defaults on a
+    // custom row deletes the custom sensor, as before.
+    if (this.familyManagesRow(row) && globalFieldSet.has('displayUnit') && !globalFieldSet.has('kind')) {
+      globalFieldSet.delete('displayUnit');
+      return { station, globalAll: false, globalFields: [...globalFieldSet] as DraftableField[] };
+    }
+    return { station, globalAll: true, globalFields: [] };
+  }
+
+  protected useDefaultsAvailable(row: EditorRowDto): boolean {
+    const scope = this.useDefaultsScope(row);
+    return scope.station || scope.globalAll || scope.globalFields.length > 0;
+  }
+
   protected useDefaults(row: EditorRowDto): void {
-    this.store.removeOverride(row);
+    const scope = this.useDefaultsScope(row);
+    if (scope.station) {
+      this.store.removeOverrideAt(row.stationMac, row.dataPoint);
+    }
+    if (scope.globalAll) {
+      this.store.removeOverrideAt(undefined, row.dataPoint);
+    } else {
+      for (const field of scope.globalFields) {
+        this.store.removeFieldAt(undefined, row.dataPoint, field);
+      }
+    }
     // Close the form: its controls show pre-removal values, and a
     // later form event would resurrect the override as patches.
     this.expandedKey.set(null);

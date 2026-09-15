@@ -1620,6 +1620,71 @@ describe('family unit choice becomes a GLOBAL template future stations inherit (
   });
 });
 
+describe('preview notes attach to their change rows (beta.17 RC smoke)', () => {
+  const CUSTOM_A = {
+    dataPoint: 'custom_a', kind: 'temperature', measurement: 'temperature',
+    sourceUnit: 'fahrenheit', batteryField: 'shared_batt', name: 'Probe A',
+  };
+  const CUSTOM_B = {
+    dataPoint: 'custom_b', kind: 'humidity', measurement: 'humidity',
+    sourceUnit: 'percent', batteryField: 'shared_batt', name: 'Probe B',
+  };
+
+  it('a note about a CHANGING row rides that change, not the residual list', async () => {
+    const V2_BLOCK = {
+      platform: 'AmbientWeatherSensors', name: 'Test Station',
+      apiKey: 'k', applicationKey: 'a', _sensorMapV2: true, configVersion: 2,
+      sensorMap: [],
+    };
+    const rig = makeRig(V2_BLOCK);
+    discoveryStore(rig);
+    // The proposal ADDS two custom rows sharing a battery field: the
+    // engine emits duplicate-battery-owner for the loser, and the
+    // loser is itself an 'added' change — so the note renders inline
+    // on that change row.
+    const preview = await handlePreviewSave(rig.deps, {
+      base: V2_BLOCK, proposal: [CUSTOM_A, CUSTOM_B],
+    });
+    expect(preview.ok).toBe(true);
+    if (!preview.ok) {
+      return;
+    }
+    const loser = preview.changes.find(c => c.dataPoint === 'custom_b');
+    expect(loser).toBeDefined();
+    expect(loser!.notes?.some(n => n.includes("battery field 'shared_batt'"))).toBe(true);
+    // ...and it is NOT duplicated in the residual list.
+    expect(preview.notes.some(n => n.code === 'duplicate-battery-owner')).toBe(false);
+  });
+
+  it('a note about a row the save does NOT change stays in the residual list', async () => {
+    const V2_BLOCK = {
+      platform: 'AmbientWeatherSensors', name: 'Test Station',
+      apiKey: 'k', applicationKey: 'a', _sensorMapV2: true, configVersion: 2,
+      // The duplicate already exists on disk; the save touches an
+      // unrelated row.
+      sensorMap: [CUSTOM_A, CUSTOM_B],
+    };
+    const rig = makeRig(V2_BLOCK);
+    discoveryStore(rig);
+    const state = await handleGetEditorState(rig.deps, {});
+    const store = new DraftStore();
+    store.reset(state.authored);
+    store.setFieldFor(MAC, 'windspeedmph', 'name', 'Roof Wind');
+    const preview = await handlePreviewSave(rig.deps, {
+      base: V2_BLOCK, proposal: store.proposal(),
+    });
+    expect(preview.ok).toBe(true);
+    if (!preview.ok) {
+      return;
+    }
+    expect(preview.changes.some(c => c.dataPoint === 'custom_b')).toBe(false);
+    expect(preview.notes.some(n => n.code === 'duplicate-battery-owner')).toBe(true);
+    // The unrelated change carries no notes.
+    const rename = preview.changes.find(c => c.dataPoint === 'windspeedmph');
+    expect(rename?.notes).toBeUndefined();
+  });
+});
+
 describe('family unit choice keeps station-only custom rows station-scoped (PR #53 round 2 F1)', () => {
   it('a station-only custom wind row gets a station unit patch, never a bare global custom fragment', async () => {
     const MAC_B = 'AA:BB:CC:DD:EE:02';

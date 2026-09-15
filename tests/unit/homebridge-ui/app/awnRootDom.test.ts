@@ -1174,7 +1174,15 @@ describe('draft editing + preview (PR B — no persistence)', () => {
   });
 
   it('Use defaults drafts removal of the authored settings and closes the form; default-origin rows do not offer it', async () => {
-    const ipc = makeIpc(editorState(), [], PREVIEW_OK);
+    // The gate inspects AUTHORED fragments (beta.17 RC smoke: Use
+    // Defaults returns the row to the page-level settings), so the
+    // fixture carries the station fragment the row's origin implies.
+    const ipc = makeIpc(editorState({
+      authored: [{
+        index: 0, layer: 'station', stationMac: MAC, stationMacKey: MAC, dataPoint: 'windspeedmph',
+        fields: { displayUnit: 'fps', name: 'Wind', enabled: false, threshold: 10, triggerEnabled: true, triggerDirection: 'above' },
+      }],
+    }), [], PREVIEW_OK);
     const fixture = await render(ipc);
     // origin 'station' → authored settings exist → button offered
     const el = openEditor(fixture, 'windspeedmph');
@@ -1192,6 +1200,95 @@ describe('draft editing + preview (PR B — no persistence)', () => {
     // origin 'default' → nothing authored → no Use defaults button
     openEditor(fixture, 'tempinf');
     expect([...el.querySelectorAll('button')].some(b => b.textContent === 'Use defaults')).toBe(false);
+  });
+
+  it('Use defaults keeps a family-managed global unit template and strips the other authored fields', async () => {
+    // Bruno's beta.17 RC finding: row-level Use Defaults must return
+    // the row to what the PAGE-LEVEL settings dictate — the family's
+    // displayUnit template survives; only the row-specific fields go.
+    const base = editorState();
+    const rainRow = {
+      stationMac: MAC, dataPoint: 'hourlyrainin', kind: 'motion', measurement: 'rain-rate',
+      sourceUnit: 'in_per_hr', displayUnit: 'mm_per_hr', name: 'My Rain', enabled: true,
+      batteryField: null, origin: 'global' as const,
+    };
+    const ipc = makeIpc(editorState({
+      rows: [...base.rows, rainRow],
+      authored: [{ index: 0, layer: 'global' as const, dataPoint: 'hourlyrainin', fields: { displayUnit: 'mm_per_hr', name: 'My Rain' } }],
+    }), [], PREVIEW_OK);
+    const fixture = await render(ipc);
+    const el = openEditor(fixture, 'hourlyrainin');
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Use defaults') as HTMLButtonElement).click();
+    await settle(fixture);
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement).click();
+    await settle(fixture);
+    const proposal = (ipc.requests.filter(r => r.path === '/preview-save').at(-1)!
+      .body as { proposal: Array<Record<string, unknown>> }).proposal;
+    const frag = proposal.find(f => f.dataPoint === 'hourlyrainin');
+    expect(frag).toEqual({ dataPoint: 'hourlyrainin', displayUnit: 'mm_per_hr' });
+  });
+
+  it('Use defaults is not offered when the only authored state is a family-managed unit template', async () => {
+    const base = editorState();
+    const rainRow = {
+      stationMac: MAC, dataPoint: 'hourlyrainin', kind: 'motion', measurement: 'rain-rate',
+      sourceUnit: 'in_per_hr', displayUnit: 'mm_per_hr', name: 'Hourly Rain Rate', enabled: true,
+      batteryField: null, origin: 'global' as const,
+    };
+    const ipc = makeIpc(editorState({
+      rows: [...base.rows, rainRow],
+      authored: [{ index: 0, layer: 'global' as const, dataPoint: 'hourlyrainin', fields: { displayUnit: 'mm_per_hr' } }],
+    }), [], PREVIEW_OK);
+    const fixture = await render(ipc);
+    const el = openEditor(fixture, 'hourlyrainin');
+    expect([...el.querySelectorAll('button')].some(b => b.textContent === 'Use defaults')).toBe(false);
+  });
+
+  it('Use defaults on a family-covered CUSTOM row still removes the whole fragment (identity is not strippable)', async () => {
+    const base = editorState();
+    const customRow = {
+      stationMac: MAC, dataPoint: 'custom_wind', kind: 'motion', measurement: 'wind-speed',
+      sourceUnit: 'mph', displayUnit: 'fps', name: 'Custom Wind', enabled: true,
+      batteryField: null, origin: 'global' as const, identityScope: 'custom-global' as const,
+    };
+    const ipc = makeIpc(editorState({
+      rows: [...base.rows, customRow],
+      authored: [{
+        index: 0, layer: 'global' as const, dataPoint: 'custom_wind',
+        fields: { kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph', displayUnit: 'fps', name: 'Custom Wind' },
+      }],
+    }), [], PREVIEW_OK);
+    const fixture = await render(ipc);
+    const el = openEditor(fixture, 'custom_wind');
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Use defaults') as HTMLButtonElement).click();
+    await settle(fixture);
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement).click();
+    await settle(fixture);
+    const proposal = (ipc.requests.filter(r => r.path === '/preview-save').at(-1)!
+      .body as { proposal: Array<Record<string, unknown>> }).proposal;
+    expect(proposal.some(f => f.dataPoint === 'custom_wind')).toBe(false);
+  });
+
+  it('renders row-scoped notes inline on their change rows (beta.17 RC smoke)', async () => {
+    const withInline: PreviewResultDto = {
+      ...PREVIEW_OK,
+      changes: [
+        { ...PREVIEW_OK.ok ? PREVIEW_OK.changes[0] : ({} as never), notes: ['This sensor shares its battery field with another row.'] },
+        ...(PREVIEW_OK.ok ? PREVIEW_OK.changes.slice(1) : []),
+      ],
+    };
+    const ipc = makeIpc(editorState(), [], withInline);
+    const fixture = await render(ipc);
+    const el = openEditor(fixture, 'tempinf');
+    typeInto(el.querySelector('.editor-form input[type="text"]') as HTMLInputElement, 'Patio Temp');
+    await settle(fixture);
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement).click();
+    await settle(fixture);
+    const note = el.querySelector('.change-row .inline-note');
+    expect(note).not.toBeNull();
+    expect(note!.textContent).toContain('shares its battery field');
+    // No residual section: every note is attached to its row.
+    expect([...el.querySelectorAll('h3')].map(h => h.textContent!.trim())).not.toContain('Worth checking before saving');
   });
 
   it('a stale in-flight preview never overwrites a newer draft (review #43 P2-4)', async () => {
@@ -1249,7 +1346,7 @@ describe('draft editing + preview (PR B — no persistence)', () => {
     await settle(fixture);
 
     const headings = [...el.querySelectorAll('h3')].map(h => h.textContent!.trim());
-    expect(headings).toContain('Preview notes');
+    expect(headings).toContain('Worth checking before saving');
     expect([...el.querySelectorAll('.banner.info')].some(b => b.textContent!.includes('batt_co2'))).toBe(true);
   });
 

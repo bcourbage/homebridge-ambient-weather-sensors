@@ -200,13 +200,30 @@ export class DraftStore {
     if (row.origin !== 'global' && row.origin !== 'station') {
       return; // defaults have no override to remove
     }
-    const key = row.origin === 'global'
-      ? keyFor(undefined, row.dataPoint)
-      : keyFor(row.stationMac, row.dataPoint);
-    const e = this.entry(key);
+    this.removeOverrideAt(row.origin === 'global' ? undefined : row.stationMac, row.dataPoint);
+  }
+
+  /**
+   * Remove the override at an EXPLICIT layer key (beta.17 RC smoke:
+   * Use Defaults scopes its removals per layer instead of nuking the
+   * row's origin key wholesale).
+   */
+  removeOverrideAt(stationMac: string | undefined, dataPoint: string): void {
+    const e = this.entry(keyFor(stationMac, dataPoint));
     e.patches.clear();
     e.fieldRemovals.clear();
     e.remove = true;
+  }
+
+  /**
+   * Draft the DELETION of one field from every authored fragment of
+   * an explicit layer key — the global-layer sibling of
+   * removeFieldFor().
+   */
+  removeFieldAt(stationMac: string | undefined, dataPoint: string, field: DraftableField): void {
+    const e = this.entry(keyFor(stationMac, dataPoint));
+    e.patches.delete(field);
+    e.fieldRemovals.add(field);
   }
 
   /** Discard the draft for one row. */

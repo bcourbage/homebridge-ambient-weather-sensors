@@ -1171,7 +1171,7 @@ describe('buildEffectiveSensorMap — orphan note covers a REBOUND owner (review
     expect(orphans[0].stationMac).toBe(MAC1);
     expect(orphans[0].source).toBe('override');
     expect(orphans[0].overrideIndex).toBe(0);      // the rebinding fragment
-    expect(orphans[0].message).toContain('rebound');
+    expect(orphans[0].message).toContain("now uses battery field 'new_temp_batt' instead");
     expect(orphans[0].message).toContain('battout');
     // battout truly has no host (reserved: nothing else may claim it)...
     const battoutHosts = result.rows.filter(r =>
@@ -1264,15 +1264,15 @@ describe('buildEffectiveSensorMap — compound orphan state (review R13-2)', () 
     expect(note.overrideIndex).toBe(0);
     // Compound cause + FULL remedy: re-enabling alone would leave the
     // field rebound and still hostless.
-    expect(note.message).toContain('disabled AND was rebound');
-    expect(note.message).toContain("re-enabled and restored to 'battout'");
+    expect(note.message).toContain('is disabled and now uses battery field');
+    expect(note.message).toContain("enabled again and set back to 'battout'");
     // Honest cache wording (R13-3 + R14-1): rows referencing the
     // RESERVED field untouched; the owner itself may re-register.
-    expect(note.message).toContain("no other row referencing 'battout' changes structural signature");
+    expect(note.message).toContain('none of them takes over the battery level, and none of them re-registers');
     expect(note.message).toContain('may re-register');
     // R16-1: a DISABLED owner never competes, wherever it is rebound —
     // no collision caveat, and the enabled claimant keeps the field.
-    expect(note.message).not.toContain('Claimants on');
+    expect(note.message).not.toContain('competes for that field');
     const customA = result.rows.find(r => r.dataPoint === 'custom_a');
     expect(customA && customA.kind !== 'unrecognized' ? customA.hasBatterySubService : null).toBe(true);
     expect(customA && customA.kind !== 'unrecognized' ? customA.structuralSignature : '').toContain('battery:1');
@@ -1299,8 +1299,9 @@ describe('buildEffectiveSensorMap — compound orphan state (review R13-2)', () 
     expect(orphan).toBeDefined();
     // Narrowed claim: scoped to the reserved field, with the explicit
     // new-field collision caveat.
-    expect(orphan!.message).toContain("no other row referencing 'battout'");
-    expect(orphan!.message).toContain("Claimants on 'new_temp_batt' may change ownership or signature");
+    expect(orphan!.message).toContain("battery field 'battout'");
+    expect(orphan!.message).toContain('none of them takes over the battery level');
+    expect(orphan!.message).toContain("Rows using 'new_temp_batt' may switch which one shows its battery level");
     // And the collision itself is separately surfaced.
     expect(result.notes.some(n => n.code === 'duplicate-battery-owner' && n.dataPoint === 'custom_a')).toBe(true);
   });
@@ -1353,9 +1354,9 @@ describe('buildEffectiveSensorMap — collision caveat gating (review R15-1)', (
     });
     const orphan = result.notes.find(n => n.code === 'orphan-battery-field');
     expect(orphan).toBeDefined();
-    // A null field claims nothing — no "Claimants on 'null'" nonsense.
-    expect(orphan!.message).not.toContain('Claimants on');
-    expect(orphan!.message).toContain('suppressed (batteryField: null)');
+    // A null field claims nothing — no collision caveat for a null field.
+    expect(orphan!.message).not.toContain('competes for that field');
+    expect(orphan!.message).toContain('cleared (batteryField: null)');
   });
 
   it('a rebind to ANOTHER reserved field carries NO collision caveat (reserved fields reject claimants)', () => {
@@ -1368,7 +1369,7 @@ describe('buildEffectiveSensorMap — collision caveat gating (review R15-1)', (
     });
     const orphan = result.notes.find(n => n.code === 'orphan-battery-field' && n.dataPoint === 'tempf');
     expect(orphan).toBeDefined();
-    expect(orphan!.message).not.toContain('Claimants on');
+    expect(orphan!.message).not.toContain('competes for that field');
     // And the rebound owner did NOT gain a sub-service on the reserved field.
     const tempf = result.rows.find(r => r.dataPoint === 'tempf');
     expect(tempf && tempf.kind !== 'unrecognized' ? tempf.hasBatterySubService : null).toBe(false);
