@@ -248,10 +248,21 @@ interface StationGroup {
     }
     .status-chip.ok { border-color: var(--info-edge); background: var(--info-bg); color: var(--info-fg); }
     .status-chip.bad { border-color: var(--error-edge); background: var(--error-bg); color: var(--error-fg); }
-    .conn-hint { color: var(--fg-sub); font-size: 0.82em; font-weight: 400; }
+    /* Hints are FULL-WIDTH grid rows under their field row (beta.17
+       RC smoke: column-trapped hints wrapped into tall slivers), with
+       pinned line metrics: the host mirrors its stylesheets into this
+       iframe, so inherited typography varies by HB UI X version. */
+    .conn-hint {
+      grid-column: 1 / -1; color: var(--fg-sub);
+      font-size: 0.8rem; font-weight: 400; line-height: 1.45;
+      margin: -4px 0 2px; max-width: 76ch;
+    }
     .conn-grid {
-      display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+      display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 10px 16px; padding: 4px 12px 12px;
+    }
+    @media (max-width: 540px) {
+      .conn-grid { grid-template-columns: 1fr; }
     }
     .conn-grid label { display: flex; flex-direction: column; gap: 4px; color: var(--fg-sub); font-size: 0.9em; }
     .conn-grid input, .conn-grid select, .conn-grid textarea {
@@ -314,7 +325,6 @@ interface StationGroup {
           <form [formGroup]="settingsForm" class="conn-grid">
             <label>Platform name
               <input type="text" formControlName="name" />
-              <span class="conn-hint">Shown in Homebridge logs and the Homebridge UI. Station names come from your AmbientWeather.net account and cannot be changed here.</span>
             </label>
             <label>Data source
               <select formControlName="dataSource">
@@ -322,25 +332,26 @@ interface StationGroup {
                 <option value="realtime">Realtime</option>
               </select>
             </label>
+            <span class="conn-hint">The platform name is shown in Homebridge logs and the Homebridge UI. Station names come from your AmbientWeather.net account and cannot be changed here.</span>
             <label>API key
               <input type="password" autocomplete="off" formControlName="apiKey"
                 (focus)="selectPristineMask($event)"
                 [attr.placeholder]="state()!.settings.apiKeySet ? null : 'not set'" />
-              <span class="conn-hint">The stored key shows as dots. Type over it to replace it; delete the dots and leave the field empty to clear it.</span>
             </label>
             <label>Application key
               <input type="password" autocomplete="off" formControlName="applicationKey"
                 (focus)="selectPristineMask($event)"
                 [attr.placeholder]="state()!.settings.applicationKeySet ? null : 'not set'" />
             </label>
+            <span class="conn-hint">Stored keys show as dots. Type over one to replace it; delete the dots and leave the field empty to clear it.</span>
             <label>Station filter (one entry per line)
               <textarea rows="2" formControlName="stationFilter" placeholder="All stations"></textarea>
-              <span class="conn-hint">Only stations listed here (by name or MAC address) get accessories from this plugin instance; leave empty for all stations. Mainly for multi-Home setups, one platform instance per Home.</span>
             </label>
             <label>Embed-name update interval (minutes)
               <input type="number" min="0" step="1" formControlName="embedInterval" placeholder="2" />
-              <span class="conn-hint">Applies only when tile names embed live values: the minimum time between tile-name rewrites. Larger values reduce HomeKit notification volume on paired phones.</span>
             </label>
+            <span class="conn-hint">Station filter: only stations listed here (by name or MAC address) get accessories from this plugin instance; leave it empty for all stations. Mainly for multi-Home setups, one platform instance per Home.</span>
+            <span class="conn-hint">Embed-name update interval: applies only when tile names embed live values, as the minimum time between tile-name rewrites. Larger values reduce HomeKit notification volume on paired phones.</span>
             @if (settingsError()) {
               <span class="field-error">{{ settingsError() }}</span>
             }

@@ -37,6 +37,9 @@
       --btn-bg: #fff; --btn-fg: #1a1a1a; --btn-edge: #bbb; --btn-hover: #f0f0f0;
       --page-bg: #FFFFFF;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      /* Pinned: the host mirrors its stylesheets into this iframe, so
+         inherited line metrics depend on the HB UI X version. */
+      line-height: 1.45;
       color: var(--fg);
     }
     body.dark-mode #awn {
@@ -85,6 +88,11 @@
       background: var(--btn-bg); color: var(--btn-fg); border: 1px solid var(--btn-edge);
     }
     #awn button:hover { background: var(--btn-hover); }
+    /* Disabled must LOOK disabled (beta.17 RC smoke): the buttons are
+       custom-styled, so the browser's default disabled look never
+       applies. */
+    #awn button:disabled { opacity: 0.45; cursor: default; }
+    #awn button:disabled:hover { background: var(--btn-bg); }
     /* Not named ".row": HB UI X mirrors its stylesheets (Bootstrap
        included) into this iframe, and Bootstrap's grid ".row"/".row > *"
        rules would fight this layout. Class names here must stay out
@@ -123,7 +131,7 @@
     </p>
   </div>
   <!-- awn-app:assets:begin -->
-  <script type="module" src="app/main-DIAXMDMV.js"></script>
+  <script type="module" src="app/main-B3ELXQIW.js"></script>
   <!-- awn-app:assets:end -->
 
   <script>
@@ -148,6 +156,33 @@
     // The schema form is never shown (beta.17): every editable setting
     // lives in the app, and rendering the form would recreate the
     // second-writer hazard the guarded save exists to prevent.
+
+    // The settings modal's header buttons carry title attributes
+    // ("Plugin Config" etc.), and the browser's native tooltip for
+    // them floats over this page's content (beta.17 RC smoke). Each
+    // one duplicates its text in an aria-label, so dropping the title
+    // loses nothing for assistive tech. The iframe is same-origin
+    // with the host page; if a host version changes that, the sweep
+    // does nothing.
+    function dropParentTitleTooltips() {
+      try {
+        var pdoc = window.parent.document;
+        var modal = pdoc.querySelector('.modal');
+        if (!modal) {
+          return;
+        }
+        modal.querySelectorAll('[title]').forEach(function (el) {
+          if (el.getAttribute('aria-label') || el.tagName === 'BUTTON') {
+            el.removeAttribute('title');
+          }
+        });
+      } catch (e) { /* cross-origin or standalone: nothing to sweep */ }
+    }
+    dropParentTitleTooltips();
+    // The modal header finishes rendering after this iframe loads, and
+    // a host language switch can re-apply the attribute.
+    setTimeout(dropParentTitleTooltips, 1000);
+    window.addEventListener('focus', dropParentTitleTooltips);
   </script>
 </body>
 </html>
