@@ -67,6 +67,7 @@ data directory (`<homebridge storage>/plugin-data/ambient-weather/`).
 The saved block also carries a synchronized 1.7.x mirror of the
 legacy fields, kept up to date on every save.
 
+<a id="rollback"></a>
 **Rollback before any editor save (legacy config, flag on):** the
 plugin never converts your configuration on its own, so turning the
 flag off and restarting cleanly returns you to v1.7 behavior.

@@ -232,7 +232,12 @@ interface StationGroup {
       width: 84px;
     }
     th.actions { background: var(--panel-bg); }
-    td.actions button { padding: 3px 0; width: 62px; text-align: center; }
+    /* Uniform width sized for the widest label ("Assign") PLUS the
+       page's 12px button paddings (the #awn button rule outranks any
+       padding here) under border-box, which the host's mirrored reset
+       applies. 62px left a 36px content box and the label overflowed
+       rightward, reading as off-center. */
+    td.actions button { width: 72px; box-sizing: border-box; text-align: center; }
     .connection { border: 1px solid var(--rule); border-radius: 6px; margin: 10px 0; }
     .conn-summary {
       display: flex; align-items: baseline; gap: 8px; width: 100%;
@@ -410,7 +415,7 @@ interface StationGroup {
       }
       @if (anyNeverReported()) {
         <label class="table-filter">
-          <input type="checkbox" [checked]="hideNoData()" (change)="hideNoData.set($any($event.target).checked)" />
+          <input type="checkbox" [checked]="hideNoData()" (change)="setHideNoData($any($event.target).checked)" />
           Hide sensors with no data
         </label>
       }
@@ -589,7 +594,7 @@ interface StationGroup {
                         <span class="muted row-facts">
                           {{ kindSentence(row) }}
                           @if (row.batteryField) {
-                            Battery level from the station's <code>{{ row.batteryField }}</code> field.
+                            The battery level comes from the station's <code>{{ row.batteryField }}</code> field.
                           }
                           {{ originSentence(row) }}
                         </span>
@@ -826,7 +831,7 @@ interface StationGroup {
                   <li>Add <code>"_sensorMapV2": false</code> to the block.</li>
                   <li>Install plugin version 1.7.3 and restart Homebridge.</li>
                 </ol>
-                <p>Do this only while this line says verified. To return to the settings you had before v2.0.0 instead, see the Rollback section of the <a href="https://github.com/bcourbage/homebridge-ambient-weather-sensors#sensor-map-v20-on-by-default-since-beta17" target="_blank" rel="noopener">README</a>.</p>
+                <p>Do this only while this line says verified. To return to the settings you had before v2.0.0 instead, see the Rollback section of the <a href="https://github.com/bcourbage/homebridge-ambient-weather-sensors#rollback" target="_blank" rel="noopener">README</a>.</p>
               </div>
             }
           }
@@ -1172,8 +1177,24 @@ export class AwnRootComponent {
       .filter(g => g.rows.length > 0);
   });
 
-  /** Display filter: hide never-reported rows from the tables. */
-  protected readonly hideNoData = signal(false);
+  /** Display filter: hide never-reported rows from the tables. A
+   * per-viewer preference, restored across page loads and saves;
+   * storage can be absent (private window, blocked site data), so
+   * both sides fail soft. */
+  protected readonly hideNoData = signal<boolean>((() => {
+    try {
+      return localStorage.getItem('awn.hideNoData') === '1';
+    } catch {
+      return false;
+    }
+  })());
+
+  protected setHideNoData(checked: boolean): void {
+    this.hideNoData.set(checked);
+    try {
+      localStorage.setItem('awn.hideNoData', checked ? '1' : '0');
+    } catch { /* per-viewer convenience only */ }
+  }
 
   /** Whether the filter checkbox has anything to act on. */
   protected readonly anyNeverReported = computed<boolean>(() =>

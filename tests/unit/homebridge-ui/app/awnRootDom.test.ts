@@ -270,7 +270,7 @@ describe('AwnRootComponent (TestBed, jsdom)', () => {
     fixture.detectChanges();
     const facts = el.querySelector('.row-facts')!.textContent!;
     expect(facts).toContain('Creates a temperature accessory in Apple Home.');
-    expect(facts).toContain("Battery level from the station's battout field.");
+    expect(facts).toContain("The battery level comes from the station's battout field.");
     expect(facts).toContain('These settings apply to all stations.');
     expect(ipc.requests.map(r => r.path).sort()).toEqual(['/editor-state', '/notices', '/vocabulary']);
   });
