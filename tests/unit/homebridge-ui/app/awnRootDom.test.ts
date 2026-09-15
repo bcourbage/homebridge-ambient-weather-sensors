@@ -1291,6 +1291,44 @@ describe('draft editing + preview (PR B — no persistence)', () => {
     expect([...el.querySelectorAll('h3')].map(h => h.textContent!.trim())).not.toContain('Worth checking before saving');
   });
 
+  it('Use defaults never wipes a PENDING family unit choice (delta review P2-1)', async () => {
+    // The Units panel's family choice is a PATCH at the global key,
+    // not an authored fragment. Use Defaults must strip authored
+    // fields around it, never clear the key's patches.
+    const base = editorState();
+    const rainRow = {
+      stationMac: MAC, dataPoint: 'hourlyrainin', kind: 'motion', measurement: 'rain-rate',
+      sourceUnit: 'in_per_hr', displayUnit: 'in_per_hr', name: 'My Rain', enabled: true,
+      batteryField: null, origin: 'global' as const,
+    };
+    const ipc = makeIpc(editorState({
+      rows: [...base.rows, rainRow],
+      // Authored global fragment WITHOUT displayUnit: the family
+      // template exists only as the pending draft below.
+      authored: [{ index: 0, layer: 'global' as const, dataPoint: 'hourlyrainin', fields: { name: 'My Rain' } }],
+    }), [], PREVIEW_OK);
+    const fixture = await render(ipc);
+    const el = fixture.nativeElement as HTMLElement;
+
+    // Pick the family unit first (pending draft on the global key)...
+    const rainSelect = ([...el.querySelectorAll('.unit-families label')] as HTMLElement[])
+      .find(l => l.textContent!.includes('Rainfall'))!.querySelector('select')!;
+    rainSelect.value = 'metric';
+    rainSelect.dispatchEvent(new Event('change'));
+    await settle(fixture);
+
+    // ...then Use Defaults on the row.
+    openEditor(fixture, 'hourlyrainin');
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Use defaults') as HTMLButtonElement).click();
+    await settle(fixture);
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement).click();
+    await settle(fixture);
+    const proposal = (ipc.requests.filter(r => r.path === '/preview-save').at(-1)!
+      .body as { proposal: Array<Record<string, unknown>> }).proposal;
+    // The pending family unit survives; the authored name is gone.
+    expect(proposal.find(f => f.dataPoint === 'hourlyrainin')).toEqual({ dataPoint: 'hourlyrainin', displayUnit: 'mm_per_hr' });
+  });
+
   it('a stale in-flight preview never overwrites a newer draft (review #43 P2-4)', async () => {
     let resolvePreview!: (v: PreviewResultDto) => void;
     const requests: Array<{ path: string; body: unknown }> = [];
@@ -2170,6 +2208,24 @@ describe('Connection settings (beta.17, GA #56)', () => {
     typeInto(control(el, 'applicationKey'), MASK);
     await settle(fixture);
     expect(el.textContent).toContain('No draft changes yet.');
+  });
+
+  it('focusing a pristine masked credential selects the mask, so typing replaces it (delta review P2-2)', async () => {
+    const ipc = makeIpc(editorState(), [], PREVIEW);
+    const fixture = await render(ipc);
+    const el = openConnection(fixture);
+    const input = control(el, 'apiKey');
+    input.focus();
+    input.dispatchEvent(new Event('focus'));
+    expect(input.selectionStart).toBe(0);
+    expect(input.selectionEnd).toBe('\u2022'.repeat(8).length);
+
+    // A field the user already retyped is NOT re-selected on refocus.
+    typeInto(input, 'typed-key');
+    input.setSelectionRange(3, 3);
+    input.dispatchEvent(new Event('focus'));
+    expect(input.selectionStart).toBe(3);
+    expect(input.selectionEnd).toBe(3);
   });
 
   it('an untouched form previews with NO settings field (sensor-only save)', async () => {

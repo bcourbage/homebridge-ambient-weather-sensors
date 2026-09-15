@@ -324,11 +324,13 @@ interface StationGroup {
             </label>
             <label>API key
               <input type="password" autocomplete="off" formControlName="apiKey"
+                (focus)="selectPristineMask($event)"
                 [attr.placeholder]="state()!.settings.apiKeySet ? null : 'not set'" />
               <span class="conn-hint">The stored key shows as dots. Type over it to replace it; delete the dots and leave the field empty to clear it.</span>
             </label>
             <label>Application key
               <input type="password" autocomplete="off" formControlName="applicationKey"
+                (focus)="selectPristineMask($event)"
                 [attr.placeholder]="state()!.settings.applicationKeySet ? null : 'not set'" />
             </label>
             <label>Station filter (one entry per line)
@@ -592,6 +594,12 @@ interface StationGroup {
           <h3>Preview</h3>
           @if ((pr.settingsChanged ?? []).length > 0) {
             <div class="banner info">{{ settingsChangedLabel(pr.settingsChanged ?? []) }}</div>
+          }
+          @if (pr.changes.length === 0 && pr.configOnly.length === 0 && (pr.settingsChanged ?? []).length === 0) {
+            <!-- A no-op draft (e.g. a removal of something never
+                 authored) previews to nothing; say so instead of a
+                 bare heading over the Save bar (delta review). -->
+            <div class="banner info">These drafts match the saved configuration; saving would change nothing.</div>
           }
           @if (pr.changes.length > 0) {
             @for (c of pr.changes; track c.stationMac + '|' + c.dataPoint + '|' + c.change) {
@@ -1027,6 +1035,20 @@ export class AwnRootComponent {
    */
   protected static readonly CREDENTIAL_MASK = '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022';
 
+  /**
+   * Focusing a credential field that still shows the pristine mask
+   * selects it whole, so typing REPLACES the mask instead of
+   * appending invisible bullets to it (delta review P2-2: an appended
+   * key would save literal mask characters and fail AWN auth
+   * silently). Blurring without typing keeps the mask = unchanged.
+   */
+  protected selectPristineMask(event: FocusEvent): void {
+    const input = event.target as HTMLInputElement;
+    if (input.value === AwnRootComponent.CREDENTIAL_MASK) {
+      input.select();
+    }
+  }
+
   private buildSettingsForm(): void {
     const st = this.state()?.settings;
     if (!st) {
@@ -1055,9 +1077,8 @@ export class AwnRootComponent {
 
   /**
    * Reactive forms override attribute-level disabling, so control
-   * state is driven here: the whole form locks on read-only pages and
-   * during saves, and a credential's text input locks while its clear
-   * checkbox is on.
+   * state is driven here: the whole form locks on read-only pages
+   * and during saves.
    */
   protected syncSettingsControlState(): void {
     const f = this.settingsForm;
@@ -1735,7 +1756,7 @@ export class AwnRootComponent {
    * dictate, never silently changing a whole category's unit).
    * Empty means the button has nothing row-scoped to remove.
    */
-  protected useDefaultsScope(row: EditorRowDto): { station: boolean; globalAll: boolean; globalFields: DraftableField[] } {
+  protected useDefaultsScope(row: EditorRowDto): { station: boolean; globalAll: boolean; globalFields: string[] } {
     const station = this.authoredFragmentsAt(row.stationMac, row.dataPoint).length > 0;
     const globals = this.authoredFragmentsAt(undefined, row.dataPoint);
     if (globals.length === 0) {
@@ -1747,13 +1768,18 @@ export class AwnRootComponent {
         globalFieldSet.add(k);
       }
     }
-    // The keep-template path never applies to a fragment that authors
-    // its own identity (a custom sensor): stripping around displayUnit
-    // would leave an invalid kind-less fragment. Use Defaults on a
-    // custom row deletes the custom sensor, as before.
-    if (this.familyManagesRow(row) && globalFieldSet.has('displayUnit') && !globalFieldSet.has('kind')) {
+    // A family-covered row NEVER takes the whole-fragment branch
+    // (delta review P2-1): removeOverrideAt clears the key's pending
+    // patches, and the Units panel's pending family choice is exactly
+    // such a patch — field-wise stripping leaves it intact whether the
+    // template is authored or still a draft. The keep-template path
+    // does not apply to a fragment that authors its own identity (a
+    // custom sensor): stripping around displayUnit would leave an
+    // invalid kind-less fragment, so Use Defaults deletes the custom
+    // sensor, as before.
+    if (this.familyManagesRow(row) && !globalFieldSet.has('kind')) {
       globalFieldSet.delete('displayUnit');
-      return { station, globalAll: false, globalFields: [...globalFieldSet] as DraftableField[] };
+      return { station, globalAll: false, globalFields: [...globalFieldSet] };
     }
     return { station, globalAll: true, globalFields: [] };
   }

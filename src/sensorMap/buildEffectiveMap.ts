@@ -591,7 +591,7 @@ export function buildEffectiveSensorMap(input: BuildInput): EffectiveSensorMap {
           + `battery field '${field}' as a HomeKit battery level, so that battery level is gone `
           + `on this station ${remedy}. ${referencing.length} enabled row(s) still read the field `
           + `(${referencing.map(r => `'${r.dataPoint}'`).join(', ')}); none of them takes over the `
-          + `battery level, and none of them re-registers in HomeKit. '${ownerDp}' itself may `
+          + `battery level, and none of them re-registers in HomeKit because of this change. '${ownerDp}' itself may `
           + `re-register if this change added or removed its own battery level.${reboundCollisionClause}`,
       });
     }
