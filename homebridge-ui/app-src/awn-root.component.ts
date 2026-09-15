@@ -221,7 +221,12 @@ interface StationGroup {
       color: var(--info-fg); background: var(--info-bg);
       padding: 0 5px; border-radius: 4px;
     }
-    th.state, td.state { width: 22px; padding-right: 2px; }
+    /* Sized for border-box: the host mirrors its stylesheets (global
+       border-box included) into the iframe, so the cell width must
+       cover the 14px icon PLUS the page's 10px cell paddings (the
+       #awn td padding rule outranks any override here) or the icon
+       clips on the right. */
+    th.state, td.state { width: 34px; }
     .state-icon { width: 14px; height: 14px; vertical-align: -2px; }
     .state-icon.on  { color: var(--on-fg); }
     .state-icon.off { color: var(--fg-empty); }
