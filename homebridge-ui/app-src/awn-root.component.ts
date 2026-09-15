@@ -587,7 +587,11 @@ interface StationGroup {
                         </span>
                       } @else {
                         <span class="muted row-facts">
-                          {{ kindTitle(row) }}@if (row.batteryField) {, battery <code>{{ row.batteryField }}</code>}, {{ row.origin }} layer
+                          {{ kindSentence(row) }}
+                          @if (row.batteryField) {
+                            Battery level from the station's <code>{{ row.batteryField }}</code> field.
+                          }
+                          {{ originSentence(row) }}
                         </span>
                       }
                       <!-- Dialog-shaped footer (Bruno's row-editor
@@ -2232,6 +2236,31 @@ export class AwnRootComponent {
   }
 
   /** Tooltip + accessible label for the Kind icon or badge. */
+  /** Plain-language accessory sentence for the row-editor facts line. */
+  protected kindSentence(row: EditorRowDto): string {
+    if (row.kind === 'unrecognized') {
+      return 'Creates no Apple Home accessory until it is assigned.';
+    }
+    const entry = KIND_SUPPORT[row.kind as keyof typeof KIND_SUPPORT];
+    const label = entry?.label ?? row.kind;
+    if (entry !== undefined && !entry.supported) {
+      return `Creates no Apple Home accessory yet: the ${label} kind is reserved for future support.`;
+    }
+    const reading = row.measurement !== undefined && row.measurement !== row.kind
+      ? ` from the ${row.measurement.replace(/-/g, ' ')} reading`
+      : '';
+    return `Creates a ${label} accessory in Apple Home${reading}.`;
+  }
+
+  /** Plain-language settings-scope sentence for the facts line. */
+  protected originSentence(row: EditorRowDto): string {
+    return row.origin === 'global'
+      ? 'These settings apply to all stations.'
+      : row.origin === 'station'
+        ? 'These settings apply to this station only.'
+        : 'These settings are the plugin defaults.';
+  }
+
   protected kindTitle(row: EditorRowDto): string {
     if (row.kind === 'unrecognized') {
       return 'unrecognized field';
