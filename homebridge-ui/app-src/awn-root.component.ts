@@ -282,7 +282,12 @@ interface StationGroup {
     }
     .notices-block { margin-top: 16px; }
     .notices-list { margin: 0; padding: 4px 12px 12px 28px; color: var(--fg-sub); }
-    .rollback-line { margin: 0; padding: 4px 12px 12px; color: var(--fg-sub); font-size: 0.85rem; line-height: 1.45; }
+    .rollback-line { margin: 0; padding: 4px 12px 12px; color: var(--fg-sub); font-size: 0.85rem; line-height: 1.45; max-width: 76ch; }
+    .nodata-chip {
+      font-size: 0.72em; border-radius: 8px; padding: 1px 7px; margin-left: 6px;
+      border: 1px solid var(--rule); color: var(--fg-empty); white-space: nowrap; vertical-align: 1px;
+    }
+    .station-action { font-size: 0.72em; font-weight: 400; padding: 2px 9px; margin-left: 10px; vertical-align: 2px; }
   `,
   template: `
     @if (!available) {
@@ -413,6 +418,12 @@ interface StationGroup {
         <h3>
           {{ group.title }}
           <span class="station-meta"><code [attr.data-tip]="'station learned from: ' + group.source">{{ group.mac }}</code></span>
+          @if (noDataEnabledRows(group).length > 0) {
+            <button type="button" class="station-action"
+                    data-tip="This station has never reported these fields, so they create no HomeKit accessories even while enabled. Disabling keeps them off if the station ever starts reporting them. Nothing saves until you preview and save."
+                    [disabled]="saving() || confirmOpen() || reloadRequired()"
+                    (click)="disableNoData(group)">Disable {{ noDataEnabledRows(group).length }} sensor{{ noDataEnabledRows(group).length === 1 ? '' : 's' }} with no data</button>
+          }
         </h3>
         <div class="table-scroll">
         <table>
@@ -458,7 +469,11 @@ interface StationGroup {
                     <span class="layer-dot {{ row.origin }}" [attr.data-tip]="row.origin + ' layer'"></span>
                   }
                 </td>
-                <td>{{ row.name ?? '' }}</td>
+                <td>{{ row.name ?? '' }}
+                  @if (neverReported(row)) {
+                    <span class="nodata-chip" data-tip="This station has never reported this field, so it creates no HomeKit accessory even when enabled.">no data</span>
+                  }
+                </td>
                 <td class="kind" [attr.data-tip]="kindTitle(row)">
                   @switch (row.kind) {
                     @case ('temperature') {
@@ -823,7 +838,7 @@ interface StationGroup {
               </ul>
             }
             @if (mirrorVerified()) {
-              <p class="rollback-line">Rollback mirror: verified. The documented current-state manual rollback (deleting the three v2 markers) is available for this configuration.</p>
+              <p class="rollback-line">Rollback mirror: verified. Rolling back keeps the current settings: in the Homebridge JSON config editor, delete <code>sensorMap</code>, <code>configVersion</code>, and <code>_legacyMirror</code> from this plugin's block, set <code>_sensorMapV2: false</code>, then install v1.7.3 (or stay on 2.x with the opt-out) and restart Homebridge. Only do this while this line shows verified. The README's Rollback section covers restoring the original pre-conversion settings instead.</p>
             }
           }
         </div>
@@ -1835,6 +1850,38 @@ export class AwnRootComponent {
       && (stationMac === undefined
         ? f.layer === 'global'
         : f.layer === 'station' && f.stationMacKey === stationMac.toUpperCase()));
+  }
+
+  /** A recognized row this station has NEVER reported: it creates no
+   * accessory even when enabled (the reconciler registers reported
+   * fields only), and discovery has no observation of it. */
+  protected neverReported(row: EditorRowDto): boolean {
+    return row.kind !== 'unrecognized' && row.firstSeen === undefined;
+  }
+
+  /** The enabled never-reported rows the station action would disable
+   * (rows already draft-disabled drop out). */
+  protected noDataEnabledRows(group: StationGroup): EditorRowDto[] {
+    return group.rows.filter(row => this.neverReported(row) && row.enabled
+      && this.store.draftedValueFor(row.stationMac, row.dataPoint, 'enabled') !== false);
+  }
+
+  /**
+   * Draft station-scoped disables for every enabled sensor this
+   * station has never reported (Bruno's beta.17 RC smoke: an explicit
+   * way to turn off everything the station does not deliver). Drafts
+   * only; preview and save decide.
+   */
+  protected disableNoData(group: StationGroup): void {
+    for (const row of this.noDataEnabledRows(group)) {
+      this.store.setFieldFor(row.stationMac, row.dataPoint, 'enabled', false);
+    }
+    // An open editor could sit on an affected row showing a stale
+    // Enabled control: close it (same policy as a family choice).
+    this.expandedKey.set(null);
+    this.editForm = null;
+    this.editFormInvalid.set(false);
+    this.bump();
   }
 
   /** Whether a display family manages this row's display unit at the page level. */

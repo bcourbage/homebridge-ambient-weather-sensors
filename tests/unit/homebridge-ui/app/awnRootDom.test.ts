@@ -122,16 +122,18 @@ function editorState(overrides: Partial<EditorStateDto> = {}): EditorStateDto {
       {
         stationMac: MAC, dataPoint: 'tempf', kind: 'temperature', measurement: 'temperature',
         sourceUnit: 'fahrenheit', name: 'Outdoor Temp', enabled: true, batteryField: 'battout',
-        origin: 'global',
+        origin: 'global', firstSeen: '2026-01-01T00:00:00Z',
       },
       {
         stationMac: MAC, dataPoint: 'windspeedmph', kind: 'motion', measurement: 'wind-speed',
         sourceUnit: 'mph', displayUnit: 'fps', name: 'Wind', enabled: false, batteryField: null,
         origin: 'station', threshold: 10, triggerEnabled: true, triggerDirection: 'above',
+        firstSeen: '2026-01-01T00:00:00Z',
       },
       {
         stationMac: OTHER_MAC, dataPoint: 'tempinf', kind: 'temperature', measurement: 'temperature',
         sourceUnit: 'celsius', name: 'Indoor', enabled: true, batteryField: null, origin: 'default',
+        firstSeen: '2026-01-01T00:00:00Z',
       },
     ],
     errors: [],
@@ -1412,6 +1414,48 @@ describe('draft editing + preview (PR B — no persistence)', () => {
       .body as { proposal: Array<Record<string, unknown>> }).proposal;
     // The pending family unit survives; the authored name is gone.
     expect(proposal.find(f => f.dataPoint === 'hourlyrainin')).toEqual({ dataPoint: 'hourlyrainin', displayUnit: 'mm_per_hr' });
+  });
+
+  it('never-reported rows show the no-data chip and the station action drafts their disables', async () => {
+    const base = editorState();
+    // Two enabled rows the station has never reported (no firstSeen),
+    // one reported enabled row, one never-reported but already
+    // disabled row.
+    const unseen1 = { stationMac: MAC, dataPoint: 'co2', kind: 'temperature' as const, measurement: 'temperature',
+      sourceUnit: 'fahrenheit', name: 'CO2', enabled: true, batteryField: null, origin: 'default' as const };
+    const unseen2 = { stationMac: MAC, dataPoint: 'dewPoint4', kind: 'temperature' as const, measurement: 'temperature',
+      sourceUnit: 'fahrenheit', name: 'Dew Point 4', enabled: true, batteryField: null, origin: 'default' as const };
+    const unseenOff = { stationMac: MAC, dataPoint: 'co2_in', kind: 'temperature' as const, measurement: 'temperature',
+      sourceUnit: 'fahrenheit', name: 'Indoor CO2', enabled: false, batteryField: null, origin: 'global' as const };
+    const ipc = makeIpc(editorState({ rows: [...base.rows, unseen1, unseen2, unseenOff] }), [], PREVIEW_OK);
+    const fixture = await render(ipc);
+    const el = fixture.nativeElement as HTMLElement;
+
+    // Chips on every never-reported recognized row, none on reported ones.
+    const chipRows = [...el.querySelectorAll('.nodata-chip')].map(c =>
+      c.closest('tr')!.querySelector('code')!.textContent);
+    expect(chipRows.sort()).toEqual(['co2', 'co2_in', 'dewPoint4']);
+
+    // The station action names the ENABLED never-reported count only.
+    const action = [...el.querySelectorAll('button.station-action')].find(b =>
+      b.textContent!.includes('with no data')) as HTMLButtonElement;
+    expect(action).toBeDefined();
+    expect(action.textContent).toContain('Disable 2 sensors with no data');
+
+    action.click();
+    await settle(fixture);
+    // Drafted, and the action disappears (nothing left to disable).
+    expect(el.textContent).toContain('2 draft changes, not saved yet.');
+    expect([...el.querySelectorAll('button.station-action')].some(b => b.textContent!.includes('with no data'))).toBe(false);
+
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement).click();
+    await settle(fixture);
+    const proposal = (ipc.requests.filter(r => r.path === '/preview-save').at(-1)!
+      .body as { proposal: Array<Record<string, unknown>> }).proposal;
+    expect(proposal).toContainEqual({ dataPoint: 'co2', stationMac: MAC, enabled: false });
+    expect(proposal).toContainEqual({ dataPoint: 'dewPoint4', stationMac: MAC, enabled: false });
+    // The already-disabled row is untouched.
+    expect(proposal.filter(f => f.dataPoint === 'co2_in' && f.stationMac === MAC)).toEqual([]);
   });
 
   it('a stale in-flight preview never overwrites a newer draft (review #43 P2-4)', async () => {
