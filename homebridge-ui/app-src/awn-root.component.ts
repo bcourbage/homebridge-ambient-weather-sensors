@@ -239,14 +239,19 @@ interface StationGroup {
       background: none; border: none; color: var(--fg);
       padding: 8px 12px; cursor: pointer; text-align: left; font-weight: 600;
     }
-    .conn-caret { color: var(--fg-sub); font-size: 0.8em; }
-    .conn-meta { color: var(--fg-sub); font-weight: 400; font-size: 0.9em; }
+    .conn-caret { color: var(--fg-sub); font-size: 1.05em; line-height: 1; }
+    .status-chip {
+      font-size: 0.78em; font-weight: 600; border-radius: 10px; padding: 2px 9px;
+      border: 1px solid var(--rule); color: var(--fg-sub); white-space: nowrap;
+    }
+    .status-chip.ok { border-color: var(--info-edge); background: var(--info-bg); color: var(--info-fg); }
+    .status-chip.bad { border-color: var(--error-edge); background: var(--error-bg); color: var(--error-fg); }
+    .conn-hint { color: var(--fg-sub); font-size: 0.82em; font-weight: 400; }
     .conn-grid {
       display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
       gap: 10px 16px; padding: 4px 12px 12px;
     }
     .conn-grid label { display: flex; flex-direction: column; gap: 4px; color: var(--fg-sub); font-size: 0.9em; }
-    .conn-grid label.conn-clear { flex-direction: row; align-items: center; align-self: end; }
     .conn-grid input, .conn-grid select, .conn-grid textarea {
       font: inherit; color: var(--fg); background: var(--panel-bg);
       border: 1px solid var(--rule); border-radius: 4px; padding: 4px 8px;
@@ -297,14 +302,17 @@ interface StationGroup {
            the explicit checkbox. -->
       <div class="connection">
         <button type="button" class="conn-summary" (click)="connectionOpen.set(!connectionOpen())" [attr.aria-expanded]="connectionOpen()">
-          <span class="conn-caret">{{ connectionOpen() ? '\u25be' : '\u25b8' }}</span>
+          <span class="conn-caret">{{ connectionOpen() ? '\u25bc' : '\u25b6' }}</span>
           Connection &amp; polling
-          <span class="conn-meta">{{ connectionSummary() }}</span>
+          @for (chip of connectionChips(); track chip.label) {
+            <span class="status-chip {{ chip.tone }}">{{ chip.label }}</span>
+          }
         </button>
         @if (connectionOpen() && settingsForm) {
           <form [formGroup]="settingsForm" class="conn-grid">
-            <label>Name
+            <label>Platform name
               <input type="text" formControlName="name" />
+              <span class="conn-hint">Shown in Homebridge logs and the Homebridge UI. Station names come from your AmbientWeather.net account and cannot be changed here.</span>
             </label>
             <label>Data source
               <select formControlName="dataSource">
@@ -314,27 +322,20 @@ interface StationGroup {
             </label>
             <label>API key
               <input type="password" autocomplete="off" formControlName="apiKey"
-                [attr.placeholder]="state()!.settings.apiKeySet ? 'unchanged' : 'not set'"
-                />
-            </label>
-            <label class="conn-clear">
-              <input type="checkbox" formControlName="apiKeyClear" />
-              Clear the stored API key
+                [attr.placeholder]="state()!.settings.apiKeySet ? null : 'not set'" />
+              <span class="conn-hint">The stored key shows as dots. Type over it to replace it; delete the dots and leave the field empty to clear it.</span>
             </label>
             <label>Application key
               <input type="password" autocomplete="off" formControlName="applicationKey"
-                [attr.placeholder]="state()!.settings.applicationKeySet ? 'unchanged' : 'not set'"
-                />
-            </label>
-            <label class="conn-clear">
-              <input type="checkbox" formControlName="applicationKeyClear" />
-              Clear the stored application key
+                [attr.placeholder]="state()!.settings.applicationKeySet ? null : 'not set'" />
             </label>
             <label>Station filter (one entry per line)
               <textarea rows="2" formControlName="stationFilter" placeholder="All stations"></textarea>
+              <span class="conn-hint">Only stations listed here (by name or MAC address) get accessories from this plugin instance; leave empty for all stations. Mainly for multi-Home setups, one platform instance per Home.</span>
             </label>
             <label>Embed-name update interval (minutes)
               <input type="number" min="0" step="1" formControlName="embedInterval" placeholder="2" />
+              <span class="conn-hint">Applies only when tile names embed live values: the minimum time between tile-name rewrites. Larger values reduce HomeKit notification volume on paired phones.</span>
             </label>
             @if (settingsError()) {
               <span class="field-error">{{ settingsError() }}</span>
@@ -342,21 +343,6 @@ interface StationGroup {
           </form>
         }
       </div>
-
-      <!-- Always rendered while the editor is usable: appearing only
-           on the first draft shifted the whole page down mid-edit
-           (beta.13 smoke F3). -->
-      @if (state()!.rows.length > 0) {
-        <div class="draft-bar">
-          @if (draftCount() > 0) {
-            <span class="grow"><strong>{{ draftCount() }}</strong> draft {{ draftCount() === 1 ? 'change' : 'changes' }}, not saved yet.</span>
-          } @else {
-            <span class="grow">No draft changes yet.</span>
-          }
-          <button type="button" (click)="preview()" [disabled]="draftCount() === 0 || previewPending() || editFormInvalid() || saving() || confirmOpen() || reloadRequired()">Preview changes</button>
-          <button type="button" (click)="discardAll()" [disabled]="draftCount() === 0 || saving() || confirmOpen() || reloadRequired()">Discard drafts</button>
-        </div>
-      }
 
       <!-- Family display units (GA task #70's editor layer): one
            selector per display family from the server's canonical
@@ -391,183 +377,6 @@ interface StationGroup {
       @if (previewPending() && !previewResult()) {
         <p class="empty">Previewing…</p>
       }
-      @if (previewResult(); as pr) {
-        <div class="preview-block" [class.previewing]="previewPending()">
-        @if (pr.ok) {
-          <h3>Preview</h3>
-          @if ((pr.settingsChanged ?? []).length > 0) {
-            <div class="banner info">{{ settingsChangedLabel(pr.settingsChanged ?? []) }}</div>
-          }
-          @if (pr.changes.length === 0) {
-            <div class="banner info">No accessory changes: nothing registers, deregisters, or updates. (Edits to disabled rows still save and take effect when the row is enabled.)</div>
-          } @else {
-            @for (c of pr.changes; track c.stationMac + '|' + c.dataPoint + '|' + c.change) {
-              <div class="change-row">
-                <span class="change-kind {{ c.change }}">{{ c.change }}</span>
-                @if (c.displayName) {
-                  <span class="rename-note">tile name "{{ c.displayName.before }}" becomes "{{ c.displayName.after }}"</span>
-                }
-                @if (c.structural) {
-                  <span class="structural-chip">{{ structuralVerb(c.change) }}</span>
-                }
-                <code>{{ c.dataPoint }}</code>
-                <span class="station-meta">{{ c.stationMac }}</span>
-                @if (c.change === 'modified') {
-                  <span class="muted"> {{ changeSummary(c.before!, c.after!) }}</span>
-                  <!-- Opt one row OUT of a broader change (Bruno's
-                       beta.15 RC request): pins this row's changed
-                       fields to their current values as a
-                       station-scoped draft, then re-previews. Not
-                       rendered when nothing is representably
-                       pinnable (an indirect battery-ownership
-                       re-registration, for example). -->
-                  @if (skippableFields(c).length > 0) {
-                    <button type="button" class="exclude-change" data-tip="This row keeps its current settings; everything else still changes."
-                            [disabled]="previewPending() || saving() || confirmOpen() || reloadRequired()"
-                            (click)="excludeChange(c)">Skip</button>
-                  }
-                }
-              </div>
-            }
-            @if (pr.structuralChangeCount > 0) {
-              <div class="banner">
-                {{ pr.structuralChangeCount }} accessor{{ pr.structuralChangeCount === 1 ? 'y' : 'ies' }} would register, deregister, or re-register on save
-                (a re-registered accessory may need its HomeKit room assignment redone; a deregistered one leaves HomeKit).
-                This preview wrote nothing; saving will ask for confirmation first.
-              </div>
-            } @else {
-              <div class="banner info">All changes apply in place; no accessory registers, deregisters, or re-registers. This preview wrote nothing.</div>
-            }
-          }
-          @if (pr.configOnly.length > 0) {
-            <!-- Saved-configuration changes with no accessory effect
-                 right now, listed so the draft count and the preview
-                 visibly add up (Bruno's beta.15 RC feedback). -->
-            @for (c of pr.configOnly; track c.stationMac + '|' + c.dataPoint + '|' + c.change) {
-              <div class="change-row">
-                <span class="change-kind {{ c.change }}">{{ c.change }}</span>
-                <span class="change-kind chip-disabled" data-tip="This row is disabled, so no accessory changes now. The saved settings still change and take effect when the row is enabled.">disabled</span>
-                <code>{{ c.dataPoint }}</code>
-                <span class="station-meta">{{ c.stationMac }}</span>
-                @if (c.change === 'modified') {
-                  <span class="muted"> {{ changeSummary(c.before!, c.after!) }}</span>
-                }
-                @if (skippableFields(c).length > 0) {
-                  <button type="button" class="exclude-change" data-tip="This row keeps its current settings; everything else still changes."
-                          [disabled]="previewPending() || saving() || confirmOpen() || reloadRequired()"
-                          (click)="excludeChange(c)">Skip</button>
-                }
-              </div>
-            }
-          }
-          @for (w of pr.warnings; track $index) {
-            <div class="banner">{{ w.message }}</div>
-          }
-          @if (pr.notes.length > 0) {
-            <h3>Preview notes</h3>
-            @for (n of pr.notes; track $index) {
-              <div class="banner info">{{ n.message }}</div>
-            }
-          }
-          @if (state()!.editorAvailable && pr.changes.length >= 0) {
-            <div class="draft-bar">
-              <span class="grow">
-                @if (pr.structuralChangeCount > 0) {
-                  Saving will ask for confirmation of the {{ pr.structuralChangeCount }} registration {{ pr.structuralChangeCount === 1 ? 'change' : 'changes' }} above.
-                } @else {
-                  Saving applies these changes without registering or deregistering any accessory.
-                }
-              </span>
-              <button type="button" (click)="saveClicked(pr)" [disabled]="saving() || confirmOpen() || reloadRequired()">Save changes</button>
-            </div>
-          }
-        } @else {
-          <div class="banner safe-mode">Preview refused ({{ pr.error.code }}): {{ pr.error.message }}</div>
-        }
-        </div>
-      }
-      <!-- The app's own tooltip (beta.15 RC feedback): native title
-           tooltips are unusable inside HB UI X's settings modal - the
-           modal's own title attribute competes and replaces them, they
-           appear late, and their box cannot be styled. Any element
-           with data-tip shows this instead, instantly, on hover or
-           keyboard focus. position:fixed shares the viewport
-           coordinate space with getBoundingClientRect, so anchoring
-           is exact and no scroll container can clip it. aria-hidden:
-           assistive tech already gets these texts from aria
-           attributes on the anchors. -->
-      @if (tip(); as t) {
-        <div class="app-tip" aria-hidden="true" [style.left.px]="t.x" [style.top.px]="t.y">{{ t.text }}</div>
-      }
-      <div #saveOutcome>
-      @if (saving()) {
-        <p class="empty">Saving…</p>
-      }
-      @if (saveResult(); as sr) {
-        @if (sr.ok) {
-          <div class="banner info">
-            Saved.
-            @if (sr.snapshot === 'written') {
-              Your original legacy settings were preserved first in
-              <code>legacy-config-snapshot.json</code> (plugin data directory).
-            } @else if (sr.snapshot === 'exists') {
-              The existing legacy snapshot was verified before writing.
-            } @else if (sr.snapshot === 'journaled') {
-              Your pre-conversion settings were recorded in the
-              <code>legacy-conversion-journal</code> folder; the
-              original legacy snapshot is untouched.
-            }
-            Changes apply when the plugin restarts. Use Homebridge's
-            Restart Child Bridge action for this plugin, or restart
-            Homebridge. This page cannot trigger the restart itself.
-          </div>
-        } @else {
-          <div class="banner safe-mode">Save failed ({{ sr.code }}): {{ sr.message }}</div>
-        }
-      }
-      @if (postSaveDrift()) {
-        <div class="banner safe-mode">The configuration on disk does not exactly match what was saved. Review the plugin configuration before editing further.</div>
-      }
-      @if (settingsRestoreFailed()) {
-        <div class="banner">
-          The page could not re-assert its save controls after the save. The save result shown here stands; reload the plugin settings page.
-          <button type="button" (click)="reloadPage()">Reload now</button>
-        </div>
-      }
-      </div>
-      @if (reloadRequired()) {
-        <div class="banner">
-          <span>Editing is locked until this page is reloaded: the saved state is uncertain, so drafts and previews here may no longer match the configuration on disk. Reload, inspect the configuration, and only then retry.</span>
-          <button type="button" (click)="reloadPage()">Reload now</button>
-        </div>
-      }
-      <!-- Rendered IN FLOW, not as a fixed overlay: inside HB UI X's
-           content-height iframe, position:fixed centers on the FULL
-           iframe box, which put the panel far outside the visible
-           window (beta.14 smoke #4 - the user saw only the grey
-           backdrop). The panel appears where the user just clicked
-           Save and scrolls itself into view; every other control
-           disables while it is open. -->
-      @if (confirmOpen() && previewResult()?.ok) {
-          <div class="confirm-card" #confirmPanel>
-            <h3>Confirm registration changes</h3>
-            <p>These accessories will register, deregister, or re-register when saved. A re-registered accessory may need its HomeKit room assignment redone; a deregistered one leaves HomeKit.</p>
-            @for (c of structuralChanges(); track $index) {
-              <div class="change-row">
-                <span class="change-kind {{ c.change }}">{{ c.change }}</span>
-                <span class="structural-chip">{{ structuralVerb(c.change) }}</span>
-                <code>{{ c.dataPoint }}</code>
-                <span class="station-meta">{{ c.stationMac }}</span>
-              </div>
-            }
-            <div class="draft-bar">
-              <span class="grow"></span>
-              <button type="button" (click)="confirmSave()" [disabled]="saving()">{{ saving() ? 'Saving…' : 'Confirm save' }}</button>
-              <button type="button" (click)="confirmOpen.set(false)">Cancel</button>
-            </div>
-          </div>
-      }
-
       @if (groups().length === 0) {
         <p class="empty">No stations or sensor rows to show yet.</p>
       }
@@ -758,6 +567,198 @@ interface StationGroup {
         </div>
       }
 
+      <!-- The working footer (beta.17 RC smoke): the page reads top
+           to bottom — settings, units, tables — and ends here where
+           the work completes: draft count, preview, and save. Always
+           rendered while the editor is usable (appearing on the first
+           draft shifted the page mid-edit, beta.13 smoke F3). -->
+      @if (state()!.rows.length > 0) {
+        <div class="draft-bar">
+          @if (draftCount() > 0) {
+            <span class="grow"><strong>{{ draftCount() }}</strong> draft {{ draftCount() === 1 ? 'change' : 'changes' }}, not saved yet.</span>
+          } @else {
+            <span class="grow">No draft changes yet.</span>
+          }
+          <button type="button" (click)="preview()" [disabled]="draftCount() === 0 || previewPending() || editFormInvalid() || saving() || confirmOpen() || reloadRequired()">Preview changes</button>
+          <button type="button" (click)="discardAll()" [disabled]="draftCount() === 0 || saving() || confirmOpen() || reloadRequired()">Discard drafts</button>
+        </div>
+      }
+
+      @if (previewResult(); as pr) {
+        <div class="preview-block" [class.previewing]="previewPending()">
+        @if (pr.ok) {
+          <h3>Preview</h3>
+          @if ((pr.settingsChanged ?? []).length > 0) {
+            <div class="banner info">{{ settingsChangedLabel(pr.settingsChanged ?? []) }}</div>
+          }
+          @if (pr.changes.length > 0) {
+            @for (c of pr.changes; track c.stationMac + '|' + c.dataPoint + '|' + c.change) {
+              <div class="change-row">
+                <span class="change-kind {{ c.change }}">{{ c.change }}</span>
+                @if (c.displayName) {
+                  <span class="rename-note">tile name "{{ c.displayName.before }}" becomes "{{ c.displayName.after }}"</span>
+                }
+                @if (c.structural) {
+                  <span class="structural-chip">{{ structuralVerb(c.change) }}</span>
+                }
+                <code>{{ c.dataPoint }}</code>
+                <span class="station-meta">{{ c.stationMac }}</span>
+                @if (c.change === 'modified') {
+                  <span class="muted"> {{ changeSummary(c.before!, c.after!) }}</span>
+                  <!-- Opt one row OUT of a broader change (Bruno's
+                       beta.15 RC request): pins this row's changed
+                       fields to their current values as a
+                       station-scoped draft, then re-previews. Not
+                       rendered when nothing is representably
+                       pinnable (an indirect battery-ownership
+                       re-registration, for example). -->
+                  @if (skippableFields(c).length > 0) {
+                    <button type="button" class="exclude-change" data-tip="This row keeps its current settings; everything else still changes."
+                            [disabled]="previewPending() || saving() || confirmOpen() || reloadRequired()"
+                            (click)="excludeChange(c)">Skip</button>
+                  }
+                }
+              </div>
+            }
+            @if (pr.structuralChangeCount > 0) {
+              <div class="banner">
+                {{ pr.structuralChangeCount }} accessor{{ pr.structuralChangeCount === 1 ? 'y' : 'ies' }} would register, deregister, or re-register on save
+                (a re-registered accessory may need its HomeKit room assignment redone; a deregistered one leaves HomeKit).
+                This preview wrote nothing; saving will ask for confirmation first.
+              </div>
+            } @else {
+              <div class="banner info">All changes apply in place; no accessory registers, deregisters, or re-registers. This preview wrote nothing.</div>
+            }
+          }
+          @if (pr.configOnly.length > 0) {
+            <!-- Saved-configuration changes with no accessory effect
+                 right now, listed so the draft count and the preview
+                 visibly add up (Bruno's beta.15 RC feedback). -->
+            @for (c of pr.configOnly; track c.stationMac + '|' + c.dataPoint + '|' + c.change) {
+              <div class="change-row">
+                <span class="change-kind {{ c.change }}">{{ c.change }}</span>
+                <span class="change-kind chip-disabled" data-tip="This row is disabled, so no accessory changes now. The saved settings still change and take effect when the row is enabled.">disabled</span>
+                <code>{{ c.dataPoint }}</code>
+                <span class="station-meta">{{ c.stationMac }}</span>
+                @if (c.change === 'modified') {
+                  <span class="muted"> {{ changeSummary(c.before!, c.after!) }}</span>
+                }
+                @if (skippableFields(c).length > 0) {
+                  <button type="button" class="exclude-change" data-tip="This row keeps its current settings; everything else still changes."
+                          [disabled]="previewPending() || saving() || confirmOpen() || reloadRequired()"
+                          (click)="excludeChange(c)">Skip</button>
+                }
+              </div>
+            }
+          }
+          @for (w of pr.warnings; track $index) {
+            <div class="banner">{{ w.message }}</div>
+          }
+          @if (pr.notes.length > 0) {
+            <h3>Preview notes</h3>
+            @for (n of pr.notes; track $index) {
+              <div class="banner info">{{ n.message }}</div>
+            }
+          }
+          @if (state()!.editorAvailable && pr.changes.length >= 0) {
+            <div class="draft-bar">
+              <span class="grow">
+                @if (pr.structuralChangeCount > 0) {
+                  Saving will ask for confirmation of the {{ pr.structuralChangeCount }} registration {{ pr.structuralChangeCount === 1 ? 'change' : 'changes' }} above.
+                } @else {
+                  Saving applies these changes without registering or deregistering any accessory.
+                }
+              </span>
+              <button type="button" (click)="saveClicked(pr)" [disabled]="saving() || confirmOpen() || reloadRequired()">Save changes</button>
+            </div>
+          }
+        } @else {
+          <div class="banner safe-mode">Preview refused ({{ pr.error.code }}): {{ pr.error.message }}</div>
+        }
+        </div>
+      }
+      <!-- The app's own tooltip (beta.15 RC feedback): native title
+           tooltips are unusable inside HB UI X's settings modal - the
+           modal's own title attribute competes and replaces them, they
+           appear late, and their box cannot be styled. Any element
+           with data-tip shows this instead, instantly, on hover or
+           keyboard focus. position:fixed shares the viewport
+           coordinate space with getBoundingClientRect, so anchoring
+           is exact and no scroll container can clip it. aria-hidden:
+           assistive tech already gets these texts from aria
+           attributes on the anchors. -->
+      @if (tip(); as t) {
+        <div class="app-tip" aria-hidden="true" [style.left.px]="t.x" [style.top.px]="t.y">{{ t.text }}</div>
+      }
+      <div #saveOutcome>
+      @if (saving()) {
+        <p class="empty">Saving…</p>
+      }
+      @if (saveResult(); as sr) {
+        @if (sr.ok) {
+          <div class="banner info">
+            Saved.
+            @if (sr.snapshot === 'written') {
+              Your original legacy settings were preserved first in
+              <code>legacy-config-snapshot.json</code> (plugin data directory).
+            } @else if (sr.snapshot === 'exists') {
+              The existing legacy snapshot was verified before writing.
+            } @else if (sr.snapshot === 'journaled') {
+              Your pre-conversion settings were recorded in the
+              <code>legacy-conversion-journal</code> folder; the
+              original legacy snapshot is untouched.
+            }
+            Changes apply when the plugin restarts. Use Homebridge's
+            Restart Child Bridge action for this plugin, or restart
+            Homebridge. This page cannot trigger the restart itself.
+          </div>
+        } @else {
+          <div class="banner safe-mode">Save failed ({{ sr.code }}): {{ sr.message }}</div>
+        }
+      }
+      @if (postSaveDrift()) {
+        <div class="banner safe-mode">The configuration on disk does not exactly match what was saved. Review the plugin configuration before editing further.</div>
+      }
+      @if (settingsRestoreFailed()) {
+        <div class="banner">
+          The page could not re-assert its save controls after the save. The save result shown here stands; reload the plugin settings page.
+          <button type="button" (click)="reloadPage()">Reload now</button>
+        </div>
+      }
+      </div>
+      @if (reloadRequired()) {
+        <div class="banner">
+          <span>Editing is locked until this page is reloaded: the saved state is uncertain, so drafts and previews here may no longer match the configuration on disk. Reload, inspect the configuration, and only then retry.</span>
+          <button type="button" (click)="reloadPage()">Reload now</button>
+        </div>
+      }
+      <!-- Rendered IN FLOW, not as a fixed overlay: inside HB UI X's
+           content-height iframe, position:fixed centers on the FULL
+           iframe box, which put the panel far outside the visible
+           window (beta.14 smoke #4 - the user saw only the grey
+           backdrop). The panel appears where the user just clicked
+           Save and scrolls itself into view; every other control
+           disables while it is open. -->
+      @if (confirmOpen() && previewResult()?.ok) {
+          <div class="confirm-card" #confirmPanel>
+            <h3>Confirm registration changes</h3>
+            <p>These accessories will register, deregister, or re-register when saved. A re-registered accessory may need its HomeKit room assignment redone; a deregistered one leaves HomeKit.</p>
+            @for (c of structuralChanges(); track $index) {
+              <div class="change-row">
+                <span class="change-kind {{ c.change }}">{{ c.change }}</span>
+                <span class="structural-chip">{{ structuralVerb(c.change) }}</span>
+                <code>{{ c.dataPoint }}</code>
+                <span class="station-meta">{{ c.stationMac }}</span>
+              </div>
+            }
+            <div class="draft-bar">
+              <span class="grow"></span>
+              <button type="button" (click)="confirmSave()" [disabled]="saving()">{{ saving() ? 'Saving…' : 'Confirm save' }}</button>
+              <button type="button" (click)="confirmOpen.set(false)">Cancel</button>
+            </div>
+          </div>
+      }
+
       <!-- Structural-change history, demoted from a permanent panel to
            a collapsed disclosure (beta.17, GA #56). -->
       @if (notices().length > 0) {
@@ -863,14 +864,10 @@ export class AwnRootComponent {
         keys.push('dataSource');
       }
     }
-    if (typeof v.apiKey === 'string' && v.apiKey.trim() !== '') {
-      keys.push('apiKey');
-    } else if (v.apiKeyClear === true) {
+    if (this.credentialIntent(v.apiKey, b.apiKeySet) !== null) {
       keys.push('apiKey');
     }
-    if (typeof v.applicationKey === 'string' && v.applicationKey.trim() !== '') {
-      keys.push('applicationKey');
-    } else if (v.applicationKeyClear === true) {
+    if (this.credentialIntent(v.applicationKey, b.applicationKeySet) !== null) {
       keys.push('applicationKey');
     }
     const filter = this.parseStationFilter(v.stationFilter);
@@ -915,10 +912,10 @@ export class AwnRootComponent {
       patch.dataSource = v.dataSource;
     }
     if (keys.includes('apiKey')) {
-      patch.apiKey = v.apiKeyClear === true ? { clear: true } : { set: (v.apiKey as string).trim() };
+      patch.apiKey = this.credentialIntent(v.apiKey, this.settingsBaseline!.apiKeySet)!;
     }
     if (keys.includes('applicationKey')) {
-      patch.applicationKey = v.applicationKeyClear === true ? { clear: true } : { set: (v.applicationKey as string).trim() };
+      patch.applicationKey = this.credentialIntent(v.applicationKey, this.settingsBaseline!.applicationKeySet)!;
     }
     if (keys.includes('stationFilter')) {
       patch.stationFilter = this.parseStationFilter(v.stationFilter);
@@ -929,6 +926,52 @@ export class AwnRootComponent {
         (interval === null || interval === '' || interval === undefined) ? null : interval;
     }
     return patch;
+  }
+
+  /**
+   * The credential intent a field's current text expresses, or null
+   * for unchanged: the untouched mask (stored key) or untouched empty
+   * (no stored key) is unchanged; empty over a stored key clears;
+   * anything else replaces.
+   */
+  private credentialIntent(raw: unknown, isSet: boolean): { set: string } | { clear: true } | null {
+    const text = typeof raw === 'string' ? raw.trim() : '';
+    if (isSet) {
+      if (text === AwnRootComponent.CREDENTIAL_MASK) {
+        return null;
+      }
+      if (text === '') {
+        return { clear: true };
+      }
+      return { set: text };
+    }
+    return text === '' ? null : { set: text };
+  }
+
+  /** Status chips for the Connection summary row. */
+  protected connectionChips(): Array<{ label: string; tone: 'ok' | 'bad' | 'plain' }> {
+    const st = this.state()?.settings;
+    if (!st) {
+      return [];
+    }
+    const chips: Array<{ label: string; tone: 'ok' | 'bad' | 'plain' }> = [
+      { label: st.dataSource === 'realtime' ? 'Realtime' : 'Polling', tone: 'plain' },
+      st.apiKeySet
+        ? { label: 'API key set', tone: 'ok' }
+        : { label: 'API key missing', tone: 'bad' },
+      st.applicationKeySet
+        ? { label: 'Application key set', tone: 'ok' }
+        : { label: 'Application key missing', tone: 'bad' },
+    ];
+    if (st.stationFilter.length > 0) {
+      chips.push({
+        label: st.stationFilter.length === 1
+          ? 'Filtered to 1 station entry'
+          : `Filtered to ${st.stationFilter.length} station entries`,
+        tone: 'plain',
+      });
+    }
+    return chips;
   }
 
   /** Inline validation message for the Connection form; non-null blocks Preview. */
@@ -942,12 +985,6 @@ export class AwnRootComponent {
     if (typeof v.name === 'string' && v.name.trim() === '' && this.settingsBaseline.name !== '') {
       return 'Name cannot be blank. Restore a value.';
     }
-    if (typeof v.apiKey === 'string' && v.apiKey.trim() !== '' && v.apiKeyClear === true) {
-      return 'Choose one for the API key: a replacement value or the clear checkbox.';
-    }
-    if (typeof v.applicationKey === 'string' && v.applicationKey.trim() !== '' && v.applicationKeyClear === true) {
-      return 'Choose one for the application key: a replacement value or the clear checkbox.';
-    }
     const interval = v.embedInterval;
     if (interval !== null && interval !== '' && interval !== undefined
       && (typeof interval !== 'number' || !Number.isFinite(interval) || interval < 0)) {
@@ -958,16 +995,6 @@ export class AwnRootComponent {
 
   protected settingsLocked(): boolean {
     return !(this.state()?.editorAvailable ?? false) || this.saving() || this.confirmOpen() || this.reloadRequired();
-  }
-
-  protected connectionSummary(): string {
-    const st = this.state()?.settings;
-    if (!st) {
-      return '';
-    }
-    const key = st.apiKeySet ? 'API key set' : 'API key missing';
-    const filter = st.stationFilter.length > 0 ? `${st.stationFilter.length} station filter ${st.stationFilter.length === 1 ? 'entry' : 'entries'}` : 'all stations';
-    return `${st.dataSource} \u00b7 ${key} \u00b7 ${filter}`;
   }
 
   protected settingsChangedLabel(keys: string[]): string {
@@ -982,19 +1009,25 @@ export class AwnRootComponent {
     return 'Settings saved with this change: ' + keys.map(k => labels[k] ?? k).join(', ') + '.';
   }
 
+  /**
+   * The mask a STORED credential renders as (never the real value).
+   * Field semantics (beta.17 RC smoke): untouched mask = unchanged;
+   * emptied = explicit clear; any other text = replacement.
+   */
+  protected static readonly CREDENTIAL_MASK = '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022';
+
   private buildSettingsForm(): void {
     const st = this.state()?.settings;
     if (!st) {
       return;
     }
     this.settingsBaseline = st;
+    const MASK = AwnRootComponent.CREDENTIAL_MASK;
     this.settingsForm = this.fb.group({
       name: [st.name],
       dataSource: [st.dataSource],
-      apiKey: [''],
-      apiKeyClear: [false],
-      applicationKey: [''],
-      applicationKeyClear: [false],
+      apiKey: [st.apiKeySet ? MASK : ''],
+      applicationKey: [st.applicationKeySet ? MASK : ''],
       stationFilter: [st.stationFilter.join('\n')],
       embedInterval: [st.embedNameUpdateMinIntervalMinutes ?? null],
     });
@@ -1029,21 +1062,6 @@ export class AwnRootComponent {
     if (f.disabled) {
       f.enable({ emitEvent: false });
     }
-    const v = f.value as Record<string, unknown>;
-    const syncCred = (text: string, clear: unknown): void => {
-      const ctl = f.get(text);
-      if (!ctl) {
-        return;
-      }
-      if (clear === true && ctl.enabled) {
-        ctl.setValue('', { emitEvent: false });
-        ctl.disable({ emitEvent: false });
-      } else if (clear !== true && ctl.disabled) {
-        ctl.enable({ emitEvent: false });
-      }
-    };
-    syncCred('apiKey', v.apiKeyClear);
-    syncCred('applicationKey', v.applicationKeyClear);
   }
 
   /** Flat unit-code → display-label map across all measurements (#70). */

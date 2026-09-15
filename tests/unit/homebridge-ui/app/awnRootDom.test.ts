@@ -1421,7 +1421,8 @@ describe('save flow (PR C / finding 5 — the ONE route is composeAndPersist)', 
     expect((btn(el, 'Preview changes') as HTMLButtonElement).disabled).toBe(true);
     expect(el.textContent).toContain('Confirm registration changes');
 
-    btn(el, 'Cancel')!.click();
+    const card = el.querySelector('.confirm-card') as HTMLElement;
+    ([...card.querySelectorAll('button')].find(b => b.textContent === 'Cancel') as HTMLButtonElement).click();
     await settle(fixture);
     expect(el.querySelector('.confirm-card')).toBeNull();
     expect(ipc.requests.some(r => r.path === '/compose-save')).toBe(false);
@@ -2043,15 +2044,19 @@ describe('Connection settings (beta.17, GA #56)', () => {
     expect(el.textContent).toContain('Settings saved with this change: name.');
   });
 
-  it('credential intents from the form: typed value = set, checkbox = clear, both = blocked', async () => {
+  it('credential intents from the mask field: untouched = unchanged, typed = set, emptied = clear', async () => {
     const ipc = makeIpc(editorState(), [], PREVIEW);
     const fixture = await render(ipc);
     const el = openConnection(fixture);
 
+    // Stored keys render as the mask, never as values or placeholders.
+    const MASK = '\u2022'.repeat(8);
+    expect(control(el, 'apiKey').value).toBe(MASK);
+    expect(control(el, 'applicationKey').value).toBe(MASK);
+
+    // Type over one, empty the other: set + clear.
     typeInto(control(el, 'apiKey'), 'new-key-value');
-    const appClear = control(el, 'applicationKeyClear');
-    appClear.checked = true;
-    appClear.dispatchEvent(new Event('change'));
+    typeInto(control(el, 'applicationKey'), '');
     await settle(fixture);
     expect(el.textContent).toContain('2 draft changes, not saved yet.');
 
@@ -2063,22 +2068,11 @@ describe('Connection settings (beta.17, GA #56)', () => {
       applicationKey: { clear: true },
     });
 
-    // Checking clear after typing: mutually exclusive BY CONSTRUCTION —
-    // the typed value is wiped and the text input locks, so the intent
-    // flips to {clear:true} and a conflicting payload cannot be built.
-    const apiClear = control(el, 'apiKeyClear');
-    apiClear.checked = true;
-    apiClear.dispatchEvent(new Event('change'));
+    // Restoring the mask returns both fields to unchanged.
+    typeInto(control(el, 'apiKey'), MASK);
+    typeInto(control(el, 'applicationKey'), MASK);
     await settle(fixture);
-    expect(control(el, 'apiKey').value).toBe('');
-    expect(control(el, 'apiKey').disabled).toBe(true);
-    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement).click();
-    await settle(fixture);
-    const req2 = ipc.requests.filter(r => r.path === '/preview-save').pop();
-    expect((req2?.body as { settings?: unknown }).settings).toEqual({
-      apiKey: { clear: true },
-      applicationKey: { clear: true },
-    });
+    expect(el.textContent).toContain('No draft changes yet.');
   });
 
   it('an untouched form previews with NO settings field (sensor-only save)', async () => {
