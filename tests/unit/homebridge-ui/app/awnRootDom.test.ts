@@ -1213,11 +1213,16 @@ describe('draft editing + preview (PR B — no persistence)', () => {
     expect(openTr.querySelector('td.actions button')?.textContent).toBe('Edit');
   });
 
-  it('Use defaults drafts removal of the authored settings and closes the form; default-origin rows do not offer it', async () => {
-    // The gate inspects AUTHORED fragments (beta.17 RC smoke: Use
-    // Defaults returns the row to the page-level settings), so the
-    // fixture carries the station fragment the row's origin implies.
+  it('Use defaults stages removal AND shows the default values in the open form; default-origin rows do not offer it', async () => {
+    // Bruno's beta.17 RC direction: Use defaults should SET the form
+    // to the defaults, not stage an invisible removal — a disabled
+    // row whose default is enabled shows Enabled checked.
+    const base = editorState();
+    const windRow = { ...base.rows[1], defaults: {
+      enabled: true, name: 'Wind Speed', sourceUnit: 'mph', displayUnit: 'mph', triggerDirection: 'above' as const,
+    } };
     const ipc = makeIpc(editorState({
+      rows: [base.rows[0], windRow, base.rows[2]],
       authored: [{
         index: 0, layer: 'station', stationMac: MAC, stationMacKey: MAC, dataPoint: 'windspeedmph',
         fields: { displayUnit: 'fps', name: 'Wind', enabled: false, threshold: 10, triggerEnabled: true, triggerDirection: 'above' },
@@ -1230,7 +1235,10 @@ describe('draft editing + preview (PR B — no persistence)', () => {
     expect(useDefaults).toBeDefined();
     useDefaults.click();
     await settle(fixture);
-    expect(el.querySelector('.editor-form')).toBeNull(); // closed
+    const form = el.querySelector('.editor-form');
+    expect(form).not.toBeNull(); // stays open, showing the defaults
+    expect((form!.querySelector('input[type="checkbox"]') as HTMLInputElement).checked).toBe(true);
+    expect((form!.querySelector('input[type="text"]') as HTMLInputElement).value).toBe('Wind Speed');
     expect(el.textContent).toContain('1 draft change, not saved yet.'); // the removal is a draft
 
     // Cancel-equivalent cleanup for the next assertion set.
@@ -1242,6 +1250,37 @@ describe('draft editing + preview (PR B — no persistence)', () => {
     expect([...el.querySelectorAll('button')].some(b => b.textContent === 'Use defaults')).toBe(false);
   });
 
+  it('editing the reseeded form after Use defaults re-authors the field explicitly (form always matches proposal)', async () => {
+    const base = editorState();
+    const windRow = { ...base.rows[1], defaults: {
+      enabled: true, name: 'Wind Speed', sourceUnit: 'mph', displayUnit: 'mph', triggerDirection: 'above' as const,
+    } };
+    const ipc = makeIpc(editorState({
+      rows: [base.rows[0], windRow, base.rows[2]],
+      authored: [{
+        index: 0, layer: 'station', stationMac: MAC, stationMacKey: MAC, dataPoint: 'windspeedmph',
+        fields: { displayUnit: 'fps', name: 'Wind', enabled: false },
+      }],
+    }), [], PREVIEW_OK);
+    const fixture = await render(ipc);
+    const el = openEditor(fixture, 'windspeedmph');
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Use defaults') as HTMLButtonElement).click();
+    await settle(fixture);
+    // Uncheck Enabled in the reseeded form: equal to the SAVED value,
+    // but under the staged removal it must be re-authored explicitly,
+    // or the equal-looking control would silently yield the default.
+    const enabled = el.querySelector('.editor-form input[type="checkbox"]') as HTMLInputElement;
+    enabled.click();
+    await settle(fixture);
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement).click();
+    await settle(fixture);
+    const proposal = (ipc.requests.filter(r => r.path === '/preview-save').at(-1)!
+      .body as { proposal: Array<Record<string, unknown>> }).proposal;
+    const frag = proposal.find(f => f.dataPoint === 'windspeedmph' && f.stationMac === MAC);
+    expect(frag).toBeDefined();
+    expect(frag!.enabled).toBe(false);
+  });
+
   it('Use defaults keeps a family-managed global unit template and strips the other authored fields', async () => {
     // Bruno's beta.17 RC finding: row-level Use Defaults must return
     // the row to what the PAGE-LEVEL settings dictate — the family's
@@ -1251,6 +1290,7 @@ describe('draft editing + preview (PR B — no persistence)', () => {
       stationMac: MAC, dataPoint: 'hourlyrainin', kind: 'motion', measurement: 'rain-rate',
       sourceUnit: 'in_per_hr', displayUnit: 'mm_per_hr', name: 'My Rain', enabled: true,
       batteryField: null, origin: 'global' as const,
+      defaults: { enabled: true, name: 'Hourly Rain Rate', sourceUnit: 'in_per_hr', displayUnit: 'in_per_hr' },
     };
     const ipc = makeIpc(editorState({
       rows: [...base.rows, rainRow],
@@ -1260,6 +1300,11 @@ describe('draft editing + preview (PR B — no persistence)', () => {
     const el = openEditor(fixture, 'hourlyrainin');
     ([...el.querySelectorAll('button')].find(b => b.textContent === 'Use defaults') as HTMLButtonElement).click();
     await settle(fixture);
+    // The reseeded form shows the PAGE-LEVEL template unit (kept), and
+    // the name back at its default.
+    const form = el.querySelector('.editor-form')!;
+    expect((form.querySelector('input[type="text"]') as HTMLInputElement).value).toBe('Hourly Rain Rate');
+    expect(([...form.querySelectorAll('select')] as HTMLSelectElement[]).some(sel => sel.value === 'mm_per_hr')).toBe(true);
     ([...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement).click();
     await settle(fixture);
     const proposal = (ipc.requests.filter(r => r.path === '/preview-save').at(-1)!

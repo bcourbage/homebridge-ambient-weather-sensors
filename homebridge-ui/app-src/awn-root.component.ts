@@ -811,7 +811,7 @@ interface StationGroup {
       @if (notices().length > 0 || mirrorVerified()) {
         <div class="connection notices-block">
           <button type="button" class="conn-summary" (click)="noticesOpen.set(!noticesOpen())" [attr.aria-expanded]="noticesOpen()">
-            <span class="conn-caret">{{ noticesOpen() ? '\u25be' : '\u25b8' }}</span>
+            <span class="conn-caret">{{ noticesOpen() ? '\u25bc' : '\u25b6' }}</span>
             {{ notices().length > 0 ? 'Recent structural changes (' + notices().length + ')' : 'Rollback status' }}
           </button>
           @if (noticesOpen()) {
@@ -1644,8 +1644,17 @@ export class AwnRootComponent {
       this.editFormInvalid.set(false);
       return;
     }
-    const current = (field: DraftableField): unknown =>
-      this.store.draftedValue(row, field) ?? (row as unknown as Record<string, unknown>)[field];
+    this.openRowEditor(row, (field: DraftableField): unknown =>
+      this.store.draftedValue(row, field) ?? (row as unknown as Record<string, unknown>)[field]);
+  }
+
+  /**
+   * Build (or rebuild) the row editor seeded by `current`. toggleEdit
+   * seeds drafts-over-row; Use Defaults reseeds the OPEN editor with
+   * the default view so the form shows what the staged removals
+   * produce (beta.17 RC smoke).
+   */
+  private openRowEditor(row: EditorRowDto, current: (field: DraftableField) => unknown): void {
     const isAssign = row.kind === 'unrecognized';
     const draftedMeasurement = typeof current('measurement') === 'string' ? current('measurement') as string : '';
     // Blank-control policy (review #43 round 2): a blanked required
@@ -1790,13 +1799,28 @@ export class AwnRootComponent {
       this.bump();
       return;
     }
-    sync('enabled', v.enabled === true, row.enabled, true);
-    sync('name', v.name, row.name, typeof v.name === 'string' && v.name !== '');
-    sync('displayUnit', v.displayUnit, row.displayUnit,
+    // Under a staged Use Defaults removal the row's saved values are
+    // no longer the baseline: a form value equal to the SAVED value
+    // must still be re-authored explicitly, or the equal-looking
+    // control would silently yield the removal's outcome instead of
+    // what the form displays. Canonicalization prunes any re-authored
+    // value that equals the default at save.
+    const scopeMac = row.origin === 'global' ? undefined : row.stationMac;
+    const keyRemoved = this.store.keyRemovedFor(scopeMac, row.dataPoint);
+    const syncR = (field: DraftableField, formValue: unknown, original: unknown, valid: boolean): void => {
+      if (valid && (keyRemoved || this.store.fieldRemovedFor(scopeMac, row.dataPoint, field))) {
+        this.store.setField(row, field, formValue);
+        return;
+      }
+      sync(field, formValue, original, valid);
+    };
+    syncR('enabled', v.enabled === true, row.enabled, true);
+    syncR('name', v.name, row.name, typeof v.name === 'string' && v.name !== '');
+    syncR('displayUnit', v.displayUnit, row.displayUnit,
       typeof v.displayUnit === 'string' && v.displayUnit !== '');
     if (row.kind === 'motion' && this.triggeringFor(row.measurement)) {
-      sync('threshold', v.threshold, row.threshold, typeof v.threshold === 'number');
-      sync('triggerDirection', v.triggerDirection, row.triggerDirection,
+      syncR('threshold', v.threshold, row.threshold, typeof v.threshold === 'number');
+      syncR('triggerDirection', v.triggerDirection, row.triggerDirection,
         v.triggerDirection === 'above' || v.triggerDirection === 'below');
     }
     this.bump();
@@ -1871,12 +1895,40 @@ export class AwnRootComponent {
         this.store.removeFieldAt(undefined, row.dataPoint, field);
       }
     }
-    // Close the form: its controls show pre-removal values, and a
-    // later form event would resurrect the override as patches.
-    this.expandedKey.set(null);
-    this.editForm = null;
-    this.editFormInvalid.set(false);
+    if (row.defaults === undefined || row.kind === 'unrecognized') {
+      // A custom or unrecognized row's default is nonexistence: close
+      // the form; the staged removal deletes the row.
+      this.expandedKey.set(null);
+      this.editForm = null;
+      this.editFormInvalid.set(false);
+      this.bump();
+      return;
+    }
+    // Reseed the OPEN editor with the values the staged removals
+    // produce (Bruno's beta.17 RC smoke: Use defaults SHOWS the
+    // defaults, page-level unit settings included), keeping the
+    // normal sync wiring live for further edits.
+    this.openRowEditor(row, (field: DraftableField): unknown => this.defaultViewValue(row, field));
     this.bump();
+  }
+
+  /**
+   * The value a field returns to under Use Defaults: the pure default,
+   * except displayUnit on a family-managed row, which the page-level
+   * template dictates (pending Units-panel draft first, then the
+   * authored template).
+   */
+  private defaultViewValue(row: EditorRowDto, field: DraftableField): unknown {
+    const d = row.defaults;
+    if (d === undefined) {
+      return undefined;
+    }
+    if (field === 'displayUnit' && this.familyManagesRow(row)) {
+      const pending = this.store.draftedValueFor(undefined, row.dataPoint, 'displayUnit');
+      const authored = this.store.authoredValueFor(undefined, row.dataPoint, 'displayUnit');
+      return pending ?? authored ?? d.displayUnit;
+    }
+    return (d as unknown as Record<string, unknown>)[field];
   }
 
   protected cancelRow(row: EditorRowDto): void {

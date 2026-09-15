@@ -149,6 +149,29 @@ describe('/editor-state — v2 configuration', () => {
     expect(wire).not.toContain('wrapperId');
   });
 
+  it('recognized rows carry their pure-default values; custom and unrecognized rows do not', async () => {
+    const rig = makeRig([V2_BLOCK]);
+    discoveryStore(rig, [
+      { mac: MAC, dataPoint: 'windspeedmph' },
+      { mac: MAC, dataPoint: 'weirdfield9' },
+    ]);
+    const dto = await handleGetEditorState(rig.deps, {});
+    const byDp = new Map(dto.rows.filter(r => r.stationMac === MAC).map(r => [r.dataPoint, r]));
+
+    // The station-disabled wind row: its DEFAULT is enabled — what Use
+    // Defaults returns it to (beta.17 RC smoke).
+    const wind = byDp.get('windspeedmph')!;
+    expect(wind.enabled).toBe(false);
+    expect(wind.defaults).toBeDefined();
+    expect(wind.defaults!.enabled).toBe(true);
+    expect(typeof wind.defaults!.name).toBe('string');
+    expect(wind.defaults!.displayUnit).toBeDefined();
+
+    // Custom and unrecognized rows have no default row to return to.
+    expect(byDp.get('customtemp1')!.defaults).toBeUndefined();
+    expect(byDp.get('weirdfield9')!.defaults).toBeUndefined();
+  });
+
   it('rows are sorted by stationMac then dataPoint', async () => {
     const rig = makeRig([{
       ...V2_BLOCK,

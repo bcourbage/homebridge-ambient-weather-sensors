@@ -63,6 +63,7 @@ import type {
 import type {
   EditorAuthoredFragmentDto,
   EditorDiagnosticDto,
+  EditorRowDefaultsDto,
   EditorRowDto,
   EditorStateDto,
   EditorStationDto,
@@ -1678,8 +1679,54 @@ export async function handleGetEditorState(
 
   const layers = acceptedOverrideLayers(overrides, effectiveMap.errors);
 
+  // Pure-defaults resolution over the SAME inventory: the values Use
+  // Defaults returns a row to (beta.17 RC smoke — the editor shows
+  // them instead of staging an invisible removal). Family displayUnit
+  // templates are overrides and deliberately absent here; the client
+  // overlays them.
+  const defaultsMap = buildEffectiveSensorMap({
+    userOverrides: [],
+    discovery,
+    uiState,
+    stations,
+    configMode: 'v2',
+  });
+  const defaultsByKey = new Map<string, EditorRowDefaultsDto>();
+  for (const d of defaultsMap.rows) {
+    if (d.kind === 'unrecognized') {
+      continue;
+    }
+    const dto: EditorRowDefaultsDto = { enabled: d.enabled };
+    if (d.name !== undefined) {
+      dto.name = d.name;
+    }
+    if (d.sourceUnit !== undefined) {
+      dto.sourceUnit = d.sourceUnit;
+    }
+    if (d.displayUnit !== undefined) {
+      dto.displayUnit = d.displayUnit;
+    }
+    if (typeof d.threshold === 'number') {
+      dto.threshold = d.threshold;
+    }
+    if (d.triggerEnabled !== undefined) {
+      dto.triggerEnabled = d.triggerEnabled;
+    }
+    if (d.triggerDirection === 'above' || d.triggerDirection === 'below') {
+      dto.triggerDirection = d.triggerDirection;
+    }
+    defaultsByKey.set(`${d.stationMac.toUpperCase()}|${d.dataPoint}`, dto);
+  }
+
   const rows = effectiveMap.rows
-    .map(row => toEditorRowDto(row, layers))
+    .map(row => {
+      const dto = toEditorRowDto(row, layers);
+      const defaults = defaultsByKey.get(`${row.stationMac.toUpperCase()}|${row.dataPoint}`);
+      if (defaults !== undefined && row.kind !== 'unrecognized') {
+        dto.defaults = defaults;
+      }
+      return dto;
+    })
     .sort((a, b) => a.stationMac === b.stationMac
       ? (a.dataPoint < b.dataPoint ? -1 : a.dataPoint > b.dataPoint ? 1 : 0)
       : (a.stationMac < b.stationMac ? -1 : 1));

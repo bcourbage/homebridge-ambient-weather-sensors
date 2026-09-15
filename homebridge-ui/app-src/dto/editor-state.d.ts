@@ -82,6 +82,8 @@ export interface EditorAuthoredFragmentDto {
 
 /** One effective sensor row, resolved by the server, for preview. */
 export interface EditorRowDto {
+  /** Pure-default values for this row; see EditorRowDefaultsDto. */
+  defaults?: EditorRowDefaultsDto;
   stationMac: string;
   dataPoint: string;
   /** 'unrecognized' rows carry observational metadata only. */
@@ -131,6 +133,23 @@ export interface EditorRowDto {
  * so the needs-attention UI can associate a problem with its authored
  * fragment and field without parsing human-facing messages.
  */
+/**
+ * The values a row returns to when nothing is authored for it — the
+ * pure-defaults resolution over the same station inventory. Absent on
+ * unrecognized and custom rows (their default is nonexistence). The
+ * client overlays family displayUnit templates: they are overrides,
+ * deliberately not part of this projection.
+ */
+export interface EditorRowDefaultsDto {
+  enabled: boolean;
+  name?: string;
+  sourceUnit?: string;
+  displayUnit?: string;
+  threshold?: number;
+  triggerEnabled?: boolean;
+  triggerDirection?: 'above' | 'below';
+}
+
 export interface EditorDiagnosticDto {
   severity: 'error' | 'warning' | 'note';
   /** Stable machine-readable identifier for the diagnostic class. */

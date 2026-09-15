@@ -307,8 +307,8 @@ export class DraftStore {
     this.dropIfEmpty(key);
   }
 
-  /** Is this field drafted for deletion at the station-scoped key? */
-  fieldRemovedFor(stationMac: string, dataPoint: string, field: DraftableField): boolean {
+  /** Is this field drafted for deletion at the given layer key? */
+  fieldRemovedFor(stationMac: string | undefined, dataPoint: string, field: DraftableField): boolean {
     return this.drafts.get(keyFor(stationMac, dataPoint))?.fieldRemovals.has(field) ?? false;
   }
 
