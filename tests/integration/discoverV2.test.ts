@@ -106,9 +106,10 @@ afterEach(() => {
 });
 
 describe('discoverDevicesV2 — flag OFF stays on the v1.7 path', () => {
-  it('does not build a v2 routing map, keeps the v1 wrappers map + shadow off', async () => {
-    // No _sensorMapV2 → the v1.6.0 discoverDevices path runs unchanged.
-    const { platform } = makePlatform({ temperatureSensors: true });
+  it('does not build a v2 routing map, keeps the v1 wrappers map (explicit opt-out)', async () => {
+    // Post-flip (GA #65) the v1.6.0 path is reachable only through the
+    // explicit opt-out.
+    const { platform } = makePlatform({ temperatureSensors: true, _sensorMapV2: false });
     cacheAccessory(platform, `${MAC}-tempf`, 'Temperature', 'Outdoor Temperature', tempWithBattery);
     mockFetch([{ macAddress: MAC, info: { name: 'Home' }, lastData: { tempf: 68 } }]);
     stubTimer();
@@ -479,8 +480,8 @@ describe('discoverDevicesV2 — discovery tracker ownership (review P1-4)', () =
   });
 
   it('flag-off and safe mode never create the tracker', async () => {
-    // Flag off: v1 path.
-    const off = makePlatform({ temperatureSensors: true });
+    // Explicit opt-out: v1 path (post-flip the bare config is v2).
+    const off = makePlatform({ temperatureSensors: true, _sensorMapV2: false });
     mockFetch([{ macAddress: MAC, info: { name: 'Home' }, lastData: { tempf: 68 } }]);
     stubTimer();
     await reconcile(off.platform, 'legacy');

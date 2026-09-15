@@ -86,8 +86,8 @@ class UiServer extends HomebridgePluginUiServer {
     const storage = this.homebridgeStoragePath ?? process.cwd();
     this.deps = {
       persistDir: path.join(storage, 'plugin-data', 'ambient-weather'),
-      // Lets the unsaved-settings gate judge the form against the
-      // dynamic schema when one governs (v2-live mode).
+      // Homebridge storage root, for handlers that resolve
+      // plugin-relative paths.
       storagePath: storage,
       log: bridgeLog,
       version: PLUGIN_VERSION,
@@ -103,8 +103,8 @@ class UiServer extends HomebridgePluginUiServer {
     // The GUARDED write boundary (GA task #67 / finding 5), split into
     // two phases (review #47 round 4): /compose-save runs every gate
     // and the full composition WITHOUT writing anything; the client
-    // re-checks its frozen settings form, then /commit-save re-runs
-    // the same pipeline from disk and durably writes the snapshot or
+    // re-samples its in-memory configuration copy, then /commit-save
+    // re-runs the same pipeline from disk and durably writes the snapshot or
     // journal entry immediately before returning the persistable
     // config — an attempt abandoned between the phases consumes
     // nothing. The row editor (#69) is the caller; refusals are

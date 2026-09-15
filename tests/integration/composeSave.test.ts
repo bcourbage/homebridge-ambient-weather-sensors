@@ -235,13 +235,12 @@ describe('structural confirmation digest (PR C / finding 5)', () => {
 });
 
 describe('v2-flag gate on saves (review #45 P1-1)', () => {
-  it('a save with the flag OFF is refused — the preview still works', async () => {
-    const flagOff = { ...LEGACY_BLOCK } as Record<string, unknown>;
-    delete flagOff._sensorMapV2;
+  it('a save with an EXPLICIT opt-out is refused — the preview still works (post-flip: absent flag saves fine)', async () => {
+    const flagOff = { ...LEGACY_BLOCK, _sensorMapV2: false } as Record<string, unknown>;
     const rig = makeRig(flagOff);
     discoveryStore(rig);
     const preview = await handlePreviewSave(rig.deps, { base: flagOff });
-    expect(preview.ok).toBe(true); // dry runs are how users decide to opt in
+    expect(preview.ok).toBe(true); // dry runs are how users decide to remove the opt-out
     const save = await handleComposeSave(rig.deps, { base: flagOff });
     expect(save.ok).toBe(false);
     if (!save.ok) {
@@ -1253,7 +1252,7 @@ describe('freeze failure safety (review #47 round 4)', () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error.code).toBe('unsaved-settings-changes');
-      expect(result.error.message).toContain('could not be frozen');
+      expect(result.error.message).toContain('could not be locked');
     }
     // A partial freeze is restored before refusing; nothing was
     // requested or written.
@@ -1621,6 +1620,106 @@ describe('family unit choice becomes a GLOBAL template future stations inherit (
   });
 });
 
+describe('station disable of a custom row re-declares its identity (review P2-2)', () => {
+  it('the identity-carrying station exception passes the save boundary; the bare one refuses', async () => {
+    const V2_BLOCK = {
+      platform: 'AmbientWeatherSensors', name: 'Test Station',
+      apiKey: 'k', applicationKey: 'a', _sensorMapV2: true, configVersion: 2,
+      sensorMap: [{ dataPoint: 'custom_wind', kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph', name: 'Custom Wind' }],
+    };
+    const rig = makeRig(V2_BLOCK);
+    discoveryStore(rig);
+    const globalFrag = V2_BLOCK.sensorMap[0];
+
+    // What disableNoData composes for a custom-global row: the station
+    // exception RE-DECLARES the identity.
+    const withIdentity = await handlePreviewSave(rig.deps, {
+      base: V2_BLOCK,
+      proposal: [globalFrag, {
+        dataPoint: 'custom_wind', stationMac: MAC,
+        kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph', enabled: false,
+      }],
+    });
+    expect(withIdentity.ok).toBe(true);
+
+    // The reviewer's reproduction: a bare station {enabled:false} on a
+    // custom row is an invalid partial fragment and must refuse.
+    const bare = await handlePreviewSave(rig.deps, {
+      base: V2_BLOCK,
+      proposal: [globalFrag, { dataPoint: 'custom_wind', stationMac: MAC, enabled: false }],
+    });
+    expect(bare.ok).toBe(false);
+    if (!bare.ok) {
+      expect(bare.error.code).toBe('invalid-rows');
+    }
+  });
+});
+
+describe('preview notes attach to their change rows (beta.17 RC smoke)', () => {
+  const CUSTOM_A = {
+    dataPoint: 'custom_a', kind: 'temperature', measurement: 'temperature',
+    sourceUnit: 'fahrenheit', batteryField: 'shared_batt', name: 'Probe A',
+  };
+  const CUSTOM_B = {
+    dataPoint: 'custom_b', kind: 'humidity', measurement: 'humidity',
+    sourceUnit: 'percent', batteryField: 'shared_batt', name: 'Probe B',
+  };
+
+  it('a note about a CHANGING row rides that change, not the residual list', async () => {
+    const V2_BLOCK = {
+      platform: 'AmbientWeatherSensors', name: 'Test Station',
+      apiKey: 'k', applicationKey: 'a', _sensorMapV2: true, configVersion: 2,
+      sensorMap: [],
+    };
+    const rig = makeRig(V2_BLOCK);
+    discoveryStore(rig);
+    // The proposal ADDS two custom rows sharing a battery field: the
+    // engine emits duplicate-battery-owner for the loser, and the
+    // loser is itself an 'added' change — so the note renders inline
+    // on that change row.
+    const preview = await handlePreviewSave(rig.deps, {
+      base: V2_BLOCK, proposal: [CUSTOM_A, CUSTOM_B],
+    });
+    expect(preview.ok).toBe(true);
+    if (!preview.ok) {
+      return;
+    }
+    const loser = preview.changes.find(c => c.dataPoint === 'custom_b');
+    expect(loser).toBeDefined();
+    expect(loser!.notes?.some(n => n.includes("battery field 'shared_batt'"))).toBe(true);
+    // ...and it is NOT duplicated in the residual list.
+    expect(preview.notes.some(n => n.code === 'duplicate-battery-owner')).toBe(false);
+  });
+
+  it('a note about a row the save does NOT change stays in the residual list', async () => {
+    const V2_BLOCK = {
+      platform: 'AmbientWeatherSensors', name: 'Test Station',
+      apiKey: 'k', applicationKey: 'a', _sensorMapV2: true, configVersion: 2,
+      // The duplicate already exists on disk; the save touches an
+      // unrelated row.
+      sensorMap: [CUSTOM_A, CUSTOM_B],
+    };
+    const rig = makeRig(V2_BLOCK);
+    discoveryStore(rig);
+    const state = await handleGetEditorState(rig.deps, {});
+    const store = new DraftStore();
+    store.reset(state.authored);
+    store.setFieldFor(MAC, 'windspeedmph', 'name', 'Roof Wind');
+    const preview = await handlePreviewSave(rig.deps, {
+      base: V2_BLOCK, proposal: store.proposal(),
+    });
+    expect(preview.ok).toBe(true);
+    if (!preview.ok) {
+      return;
+    }
+    expect(preview.changes.some(c => c.dataPoint === 'custom_b')).toBe(false);
+    expect(preview.notes.some(n => n.code === 'duplicate-battery-owner')).toBe(true);
+    // The unrelated change carries no notes.
+    const rename = preview.changes.find(c => c.dataPoint === 'windspeedmph');
+    expect(rename?.notes).toBeUndefined();
+  });
+});
+
 describe('family unit choice keeps station-only custom rows station-scoped (PR #53 round 2 F1)', () => {
   it('a station-only custom wind row gets a station unit patch, never a bare global custom fragment', async () => {
     const MAC_B = 'AA:BB:CC:DD:EE:02';
@@ -1973,6 +2072,536 @@ describe('unrecognized-field assignment saves as a new custom sensor (PR E)', ()
       expect(entry).toHaveProperty('kind', 'motion');
       expect(entry).toHaveProperty('measurement', 'timestamp');
       expect(entry).not.toHaveProperty('sourceUnit');
+    }
+  });
+});
+
+describe('consolidated-page settings through the guarded save (beta.17, GA #56)', () => {
+  const BLOCK = {
+    platform: 'AmbientWeatherSensors',
+    name: 'Test Station',
+    apiKey: 'secret-api-key-value', applicationKey: 'secret-app-key-value',
+    configVersion: 2,
+    sensorMap: [{ dataPoint: 'windspeedmph', displayUnit: 'kph' }],
+  };
+
+  async function commitSettings(rig: Rig, settings: unknown, proposal?: unknown[]) {
+    const payload = {
+      base: BLOCK,
+      proposal: proposal ?? BLOCK.sensorMap,
+      settings,
+    };
+    const validated = await handleComposeSave(rig.deps, payload);
+    if (!validated.ok) {
+      return validated;
+    }
+    return handleCommitSave(rig.deps, { ...payload, validationToken: validated.validationToken });
+  }
+
+  it('every moved setting round-trips: name, dataSource, stationFilter, embed interval', async () => {
+    const rig = makeRig(BLOCK);
+    discoveryStore(rig);
+    const settings = {
+      name: 'Renamed Platform',
+      dataSource: 'realtime',
+      stationFilter: ['Backyard WS-2000'],
+      embedNameUpdateMinIntervalMinutes: 5,
+    };
+    // The narrowed station filter is a structural change (review F1),
+    // so the save needs the previewed confirmation like any other.
+    const preview = await handlePreviewSave(rig.deps, { base: BLOCK, proposal: BLOCK.sensorMap, settings });
+    expect(preview.ok).toBe(true);
+    const payload = {
+      base: BLOCK, proposal: BLOCK.sensorMap, settings,
+      confirmDigest: preview.ok ? preview.digest : undefined,
+    };
+    const validated0 = await handleComposeSave(rig.deps, payload);
+    expect(validated0.ok).toBe(true);
+    const result = !validated0.ok ? validated0 : await handleCommitSave(rig.deps, {
+      ...payload, validationToken: validated0.validationToken,
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.settingsChanged.sort()).toEqual(
+        ['dataSource', 'embedNameUpdateMinIntervalMinutes', 'name', 'stationFilter']);
+      expect(result.nextConfig.name).toBe('Renamed Platform');
+      expect(result.nextConfig.dataSource).toBe('realtime');
+      expect(result.nextConfig.stationFilter).toEqual(['Backyard WS-2000']);
+      expect(result.nextConfig.embedNameUpdateMinIntervalMinutes).toBe(5);
+      // Untouched credentials pass through byte-for-byte.
+      expect(result.nextConfig.apiKey).toBe('secret-api-key-value');
+      expect(result.nextConfig.applicationKey).toBe('secret-app-key-value');
+    }
+  });
+
+  it('a sensor-only save (no settings field) preserves credentials byte-for-byte', async () => {
+    const rig = makeRig(BLOCK);
+    discoveryStore(rig);
+    const result = await commitSettings(rig, undefined,
+      [{ dataPoint: 'windspeedmph', displayUnit: 'mph' }]);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.settingsChanged).toEqual([]);
+      expect(result.nextConfig.apiKey).toBe('secret-api-key-value');
+      expect(result.nextConfig.applicationKey).toBe('secret-app-key-value');
+    }
+  });
+
+  it('credential intents: absent = unchanged, {set} replaces, {clear} removes', async () => {
+    const rig = makeRig(BLOCK);
+    discoveryStore(rig);
+    const result = await commitSettings(rig, {
+      apiKey: { set: 'new-api-key' },
+      applicationKey: { clear: true },
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.settingsChanged.sort()).toEqual(['apiKey', 'applicationKey']);
+      expect(result.nextConfig.apiKey).toBe('new-api-key');
+      expect('applicationKey' in result.nextConfig).toBe(false);
+    }
+  });
+
+  it('setting a credential to its existing value still reports changed (no equality oracle on secrets)', async () => {
+    const rig = makeRig(BLOCK);
+    discoveryStore(rig);
+    const result = await commitSettings(rig, { apiKey: { set: 'secret-api-key-value' } });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.settingsChanged).toEqual(['apiKey']);
+    }
+  });
+
+  it('malformed settings refuse fail-closed with nothing written', async () => {
+    const rig = makeRig(BLOCK);
+    discoveryStore(rig);
+    const before = readFileSync(rig.configPath, 'utf8');
+    for (const bad of [
+      { zzUnknown: 1 },
+      { dataSource: 'websocket' },
+      { name: '' },
+      { apiKey: { set: 'x', clear: true } },
+      { apiKey: 'plain-string' },
+      { apiKey: { set: '' } },
+      { stationFilter: 'not-an-array' },
+      { embedNameUpdateMinIntervalMinutes: -1 },
+    ]) {
+      const result = await commitSettings(rig, bad);
+      expect(result.ok, JSON.stringify(bad)).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code, JSON.stringify(bad)).toBe('invalid-settings');
+      }
+    }
+    expect(readFileSync(rig.configPath, 'utf8')).toBe(before);
+  });
+
+  it('no secret leaks across DTOs, previews, snapshots, or the journal', async () => {
+    const LEGACY_WITH_SECRETS = {
+      platform: 'AmbientWeatherSensors',
+      name: 'Test Station',
+      apiKey: 'secret-api-key-value', applicationKey: 'secret-app-key-value',
+      temperatureSensors: true,
+    };
+    const rig = makeRig(LEGACY_WITH_SECRETS);
+    discoveryStore(rig);
+
+    // /editor-state carries presence booleans, never values.
+    const state = await handleGetEditorState(rig.deps, {});
+    expect(state.settings.apiKeySet).toBe(true);
+    expect(state.settings.applicationKeySet).toBe(true);
+    expect(JSON.stringify(state)).not.toContain('secret-api-key-value');
+    expect(JSON.stringify(state)).not.toContain('secret-app-key-value');
+
+    // A preview result never carries the values either.
+    const preview = await handlePreviewSave(rig.deps, { base: LEGACY_WITH_SECRETS });
+    expect(preview.ok).toBe(true);
+    expect(JSON.stringify(preview)).not.toContain('secret-api-key-value');
+
+    // A legacy CONVERSION (which snapshots + journals) writes no
+    // secret into either record.
+    const payload = { base: LEGACY_WITH_SECRETS };
+    const digest = await digestFor(rig, payload);
+    const validated = await handleComposeSave(rig.deps, { ...payload, confirmDigest: digest });
+    expect(validated.ok).toBe(true);
+    if (validated.ok) {
+      const committed = await handleCommitSave(rig.deps, {
+        ...payload, confirmDigest: digest, validationToken: validated.validationToken,
+      });
+      expect(committed.ok).toBe(true);
+    }
+    const snapshot = readFileSync(path.join(rig.persistDir, 'legacy-config-snapshot.json'), 'utf8');
+    expect(snapshot).not.toContain('secret-api-key-value');
+    expect(snapshot).not.toContain('secret-app-key-value');
+    // The journal starts on the first RE-conversion (the immutable
+    // snapshot covers the first); sweep it when present.
+    const journalDir = path.join(rig.persistDir, 'legacy-conversion-journal');
+    if (existsSync(journalDir)) {
+      for (const f of readdirSync(journalDir)) {
+        const entry = readFileSync(path.join(journalDir, f), 'utf8');
+        expect(entry, f).not.toContain('secret-api-key-value');
+        expect(entry, f).not.toContain('secret-app-key-value');
+      }
+    }
+  });
+});
+
+describe('stationFilter consequences (PR #60 review F1)', () => {
+  const TWO_STATION_BLOCK = {
+    platform: 'AmbientWeatherSensors',
+    name: 'Test Station',
+    apiKey: 'k', applicationKey: 'a',
+    configVersion: 2,
+    sensorMap: [],
+  };
+  const MAC_B = 'AA:BB:CC:DD:EE:02';
+
+  function twoStationDiscovery(rig: Rig): void {
+    writeFileSync(path.join(rig.persistDir, 'discovery.json'), JSON.stringify({
+      schemaVersion: 1,
+      entries: [
+        { stationMac: MAC, stationName: 'Backyard', dataPoint: 'tempf', firstSeen: '2026-01-01T00:00:00Z', lastSeen: '2026-01-02T00:00:00Z' },
+        { stationMac: MAC_B, stationName: 'Roof', dataPoint: 'tempf', firstSeen: '2026-01-01T00:00:00Z', lastSeen: '2026-01-02T00:00:00Z' },
+      ],
+    }));
+  }
+
+  it('narrowing the filter previews the excluded station as STRUCTURAL removals and gates on confirmation', async () => {
+    const rig = makeRig(TWO_STATION_BLOCK);
+    twoStationDiscovery(rig);
+    const payload = {
+      base: TWO_STATION_BLOCK,
+      proposal: [],
+      settings: { stationFilter: ['Backyard'] },
+    };
+    const preview = await handlePreviewSave(rig.deps, payload);
+    expect(preview.ok).toBe(true);
+    if (!preview.ok) {
+      return;
+    }
+    const removedB = preview.changes.filter(c => c.stationMac === MAC_B && c.change === 'removed');
+    expect(removedB.length).toBeGreaterThan(0);
+    expect(removedB.every(c => c.structural)).toBe(true);
+    // Station A: crossing the 2->1 boundary renames every retained row
+    // in place (round 2 P2) — modified, non-structural, displayName set.
+    const aChanges = preview.changes.filter(c => c.stationMac === MAC);
+    expect(aChanges.length).toBeGreaterThan(0);
+    expect(aChanges.every(c => c.change === 'modified' && !c.structural && c.displayName !== undefined)).toBe(true);
+    expect(preview.structuralChangeCount).toBeGreaterThan(0);
+
+    // The structural removal demands confirmation like any other.
+    const unconfirmed = await handleComposeSave(rig.deps, payload);
+    expect(unconfirmed.ok).toBe(false);
+    if (!unconfirmed.ok) {
+      expect(unconfirmed.error.code).toBe('confirmation-required');
+    }
+    const confirmed = await handleComposeSave(rig.deps, { ...payload, confirmDigest: preview.digest });
+    expect(confirmed.ok).toBe(true);
+  });
+
+  it('widening (clearing) the filter previews the returning station as additions', async () => {
+    const rig = makeRig({ ...TWO_STATION_BLOCK, stationFilter: ['Backyard'] });
+    twoStationDiscovery(rig);
+    const preview = await handlePreviewSave(rig.deps, {
+      base: { ...TWO_STATION_BLOCK, stationFilter: ['Backyard'] },
+      proposal: [],
+      settings: { stationFilter: [] },
+    });
+    expect(preview.ok).toBe(true);
+    if (!preview.ok) {
+      return;
+    }
+    const addedB = preview.changes.filter(c => c.stationMac === MAC_B && c.change === 'added');
+    expect(addedB.length).toBeGreaterThan(0);
+    expect(addedB.every(c => c.structural)).toBe(true);
+    // Station A crosses 1->2: retained rows gain the prefix in place.
+    const aChanges = preview.changes.filter(c => c.stationMac === MAC);
+    expect(aChanges.every(c => c.change === 'modified' && !c.structural && c.displayName !== undefined)).toBe(true);
+  });
+
+  it('the preview filter matches with the runtime rules: MAC form, case-insensitive, trimmed', async () => {
+    const rig = makeRig(TWO_STATION_BLOCK);
+    twoStationDiscovery(rig);
+    const preview = await handlePreviewSave(rig.deps, {
+      base: TWO_STATION_BLOCK,
+      proposal: [],
+      settings: { stationFilter: ['  aa:bb:cc:dd:ee:01  '] },
+    });
+    expect(preview.ok).toBe(true);
+    if (!preview.ok) {
+      return;
+    }
+    expect(preview.changes.some(c => c.stationMac === MAC_B && c.change === 'removed')).toBe(true);
+    expect(preview.changes.filter(c => c.stationMac === MAC)
+      .every(c => c.change === 'modified' && c.displayName !== undefined)).toBe(true);
+  });
+
+  it('a deliberately non-matching filter (the documented wipe) previews EVERYTHING as removals rather than refusing', async () => {
+    const rig = makeRig(TWO_STATION_BLOCK);
+    twoStationDiscovery(rig);
+    const preview = await handlePreviewSave(rig.deps, {
+      base: TWO_STATION_BLOCK,
+      proposal: [],
+      settings: { stationFilter: ['CLEAR'] },
+    });
+    expect(preview.ok).toBe(true);
+    if (!preview.ok) {
+      return;
+    }
+    expect(preview.changes.length).toBeGreaterThan(0);
+    expect(preview.changes.every(c => c.change === 'removed' && c.structural)).toBe(true);
+  });
+});
+
+describe('stationFilter never shrinks the authored map (PR #60 round 2 P1)', () => {
+  const MAC_B = 'AA:BB:CC:DD:EE:02';
+  const BLOCK_WITH_B_STATE = {
+    platform: 'AmbientWeatherSensors',
+    name: 'Test Station',
+    apiKey: 'k', applicationKey: 'a',
+    configVersion: 2,
+    sensorMap: [
+      // A full station-scoped custom identity on station B...
+      { dataPoint: 'barn_wind', stationMac: MAC_B, kind: 'motion', measurement: 'wind-speed', sourceUnit: 'kph', name: 'Barn Wind' },
+      // ...and an unrelated known-row override on B.
+      { dataPoint: 'tempf', stationMac: MAC_B, name: 'Roof Temp Renamed' },
+    ],
+  };
+
+  function twoStationDiscovery(rig: Rig): void {
+    writeFileSync(path.join(rig.persistDir, 'discovery.json'), JSON.stringify({
+      schemaVersion: 1,
+      entries: [
+        { stationMac: MAC, stationName: 'Backyard', dataPoint: 'tempf', firstSeen: '2026-01-01T00:00:00Z', lastSeen: '2026-01-02T00:00:00Z' },
+        { stationMac: MAC_B, stationName: 'Roof', dataPoint: 'tempf', firstSeen: '2026-01-01T00:00:00Z', lastSeen: '2026-01-02T00:00:00Z' },
+        { stationMac: MAC_B, stationName: 'Roof', dataPoint: 'barn_wind', firstSeen: '2026-01-01T00:00:00Z', lastSeen: '2026-01-02T00:00:00Z' },
+      ],
+    }));
+  }
+
+  async function commitFiltered(rig: Rig, filter: string[], base: Record<string, unknown>) {
+    const payload = {
+      base,
+      proposal: (base.sensorMap as unknown[]) ?? [],
+      settings: { stationFilter: filter },
+    };
+    const preview = await handlePreviewSave(rig.deps, payload);
+    expect(preview.ok).toBe(true);
+    const withDigest = { ...payload, confirmDigest: preview.ok ? preview.digest : undefined };
+    const validated = await handleComposeSave(rig.deps, withDigest);
+    expect(validated.ok).toBe(true);
+    if (!validated.ok) {
+      throw new Error('validate refused');
+    }
+    const committed = await handleCommitSave(rig.deps, { ...withDigest, validationToken: validated.validationToken });
+    expect(committed.ok).toBe(true);
+    return { preview, committed } as { preview: typeof preview; committed: typeof committed };
+  }
+
+  it('narrowing to A previews B as removals but preserves B custom identity + override in the saved map and mirror', async () => {
+    const rig = makeRig(BLOCK_WITH_B_STATE);
+    twoStationDiscovery(rig);
+    const { preview, committed } = await commitFiltered(rig, ['Backyard'], BLOCK_WITH_B_STATE);
+    if (!preview.ok || !committed.ok) {
+      return;
+    }
+    expect(preview.changes.some(c => c.stationMac === MAC_B && c.change === 'removed')).toBe(true);
+
+    const map = committed.nextConfig.sensorMap as Array<Record<string, unknown>>;
+    const custom = map.find(e => e.dataPoint === 'barn_wind' && e.stationMac === MAC_B);
+    expect(custom).toMatchObject({ kind: 'motion', measurement: 'wind-speed', sourceUnit: 'kph', name: 'Barn Wind' });
+    expect(map.find(e => e.dataPoint === 'tempf' && e.stationMac === MAC_B))
+      .toMatchObject({ name: 'Roof Temp Renamed' });
+    // The rollback mirror describes the FULL map: B's custom exclusions
+    // must still be present (custom rows are the downgrade-loss
+    // boundary and are excluded by dataPoint on 1.7).
+    const mirror = committed.nextConfig.excludeSensors as string[] | undefined;
+    expect(mirror ?? []).toContain('barn_wind');
+
+    // Widen back: B returns with the SAME resolved identity/settings.
+    const narrowed = committed.nextConfig as Record<string, unknown>;
+    // Sync disk to the committed state (the orchestrator persists it;
+    // here the rig writes it directly).
+    writeFileSync(rig.configPath, JSON.stringify({ platforms: [narrowed] }, null, 4));
+    const second = await commitFiltered(rig, [], narrowed);
+    if (!second.preview.ok || !second.committed.ok) {
+      return;
+    }
+    expect(second.preview.changes.some(c => c.stationMac === MAC_B && c.change === 'added')).toBe(true);
+    const map2 = second.committed.nextConfig.sensorMap as Array<Record<string, unknown>>;
+    expect(map2.find(e => e.dataPoint === 'barn_wind' && e.stationMac === MAC_B))
+      .toMatchObject({ kind: 'motion', measurement: 'wind-speed', sourceUnit: 'kph', name: 'Barn Wind' });
+  });
+
+  it('the deliberately non-matching filter removes every runtime accessory yet preserves the entire authored map', async () => {
+    const rig = makeRig(BLOCK_WITH_B_STATE);
+    twoStationDiscovery(rig);
+    const { preview, committed } = await commitFiltered(rig, ['CLEAR'], BLOCK_WITH_B_STATE);
+    if (!preview.ok || !committed.ok) {
+      return;
+    }
+    expect(preview.changes.length).toBeGreaterThan(0);
+    expect(preview.changes.every(c => c.change === 'removed')).toBe(true);
+    const map = committed.nextConfig.sensorMap as Array<Record<string, unknown>>;
+    expect(map.find(e => e.dataPoint === 'barn_wind' && e.stationMac === MAC_B)).toBeDefined();
+    expect(map.find(e => e.dataPoint === 'tempf' && e.stationMac === MAC_B)).toBeDefined();
+  });
+
+  it('crossing the one-station boundary previews the retained station as in-place renames (round 2 P2)', async () => {
+    const rig = makeRig(BLOCK_WITH_B_STATE);
+    twoStationDiscovery(rig);
+    // 2 -> 1: retained station A rows switch from prefixed to bare names.
+    const preview = await handlePreviewSave(rig.deps, {
+      base: BLOCK_WITH_B_STATE,
+      proposal: BLOCK_WITH_B_STATE.sensorMap,
+      settings: { stationFilter: ['Backyard'] },
+    });
+    expect(preview.ok).toBe(true);
+    if (!preview.ok) {
+      return;
+    }
+    const renamesA = preview.changes.filter(c => c.stationMac === MAC && c.change === 'modified' && c.displayName);
+    expect(renamesA.length).toBeGreaterThan(0);
+    for (const r of renamesA) {
+      expect(r.structural, `${r.dataPoint} rename is in-place`).toBe(false);
+      expect(r.displayName!.before).toContain('Backyard');
+      expect(r.displayName!.after.startsWith('Backyard')).toBe(false);
+    }
+
+    // 1 -> 2: from a filtered config, widening previews the prefixed forms.
+    const narrowedBlock = { ...BLOCK_WITH_B_STATE, stationFilter: ['Backyard'] };
+    const rig2 = makeRig(narrowedBlock);
+    twoStationDiscovery(rig2);
+    const widen = await handlePreviewSave(rig2.deps, {
+      base: narrowedBlock,
+      proposal: narrowedBlock.sensorMap,
+      settings: { stationFilter: [] },
+    });
+    expect(widen.ok).toBe(true);
+    if (!widen.ok) {
+      return;
+    }
+    const renames2 = widen.changes.filter(c => c.stationMac === MAC && c.change === 'modified' && c.displayName);
+    expect(renames2.length).toBeGreaterThan(0);
+    for (const r of renames2) {
+      expect(r.displayName!.before.startsWith('Backyard')).toBe(false);
+      expect(r.displayName!.after).toContain('Backyard');
+    }
+  });
+});
+
+describe('indeterminate station-filter membership fails closed (PR #60 round 3 P1)', () => {
+  const BLOCK = {
+    platform: 'AmbientWeatherSensors',
+    name: 'Test Station',
+    apiKey: 'k', applicationKey: 'a',
+    configVersion: 2,
+    sensorMap: [],
+    stationFilter: ['Backyard'],
+  };
+
+  it('a cached-only station under a NAME filter refuses preview and save with the remedies', async () => {
+    const rig = makeRig(BLOCK);
+    // NO discovery store: the station is known only from cached
+    // accessories, so its name is unknown to the assembled inventory —
+    // the PR-A journey (fresh 1.7.x upgrade, no discovery.json yet).
+    const payload = {
+      base: BLOCK,
+      proposal: [{ dataPoint: 'tempf', stationMac: MAC, enabled: false }],
+      cachedAccessoryUniqueIds: [`${MAC}-tempf`],
+    };
+    const preview = await handlePreviewSave(rig.deps, payload);
+    expect(preview.ok).toBe(false);
+    if (!preview.ok) {
+      expect(preview.error.code).toBe('indeterminate-station-filter');
+      expect(preview.error.message).toContain(MAC);
+      expect(preview.error.message).toContain('MAC form');
+    }
+    const save = await handleComposeSave(rig.deps, payload);
+    expect(save.ok).toBe(false);
+    if (!save.ok) {
+      expect(save.error.code).toBe('indeterminate-station-filter');
+    }
+  });
+
+  it('the SAME journey with a MAC-form filter is determinate and previews the structural consequence', async () => {
+    const macBlock = { ...BLOCK, stationFilter: [MAC] };
+    const rig = makeRig(macBlock);
+    const preview = await handlePreviewSave(rig.deps, {
+      base: macBlock,
+      proposal: [{ dataPoint: 'tempf', stationMac: MAC, enabled: false }],
+      cachedAccessoryUniqueIds: [`${MAC}-tempf`],
+    });
+    expect(preview.ok).toBe(true);
+    if (preview.ok) {
+      expect(preview.changes.some(c => c.dataPoint === 'tempf' && c.change === 'removed' && c.structural)).toBe(true);
+    }
+  });
+
+  it('a name filter with discovery-supplied names stays fully usable', async () => {
+    const rig = makeRig(BLOCK);
+    discoveryStore(rig); // discovery names the station
+    const preview = await handlePreviewSave(rig.deps, {
+      base: BLOCK,
+      proposal: [{ dataPoint: 'tempf', stationMac: MAC, enabled: false }],
+    });
+    // 'Backyard' does not match discovery's 'Home' station name; the
+    // membership is determinate (excluded), so this previews cleanly.
+    expect(preview.ok).toBe(true);
+  });
+});
+
+describe('the confirmation digest binds every visible consequence (PR #60 round 3 P2)', () => {
+  const MAC_B = 'AA:BB:CC:DD:EE:02';
+  const BLOCK = {
+    platform: 'AmbientWeatherSensors',
+    name: 'Test Station',
+    apiKey: 'k', applicationKey: 'a',
+    configVersion: 2,
+    sensorMap: [],
+  };
+
+  function namedDiscovery(rig: Rig, nameA: string): void {
+    writeFileSync(path.join(rig.persistDir, 'discovery.json'), JSON.stringify({
+      schemaVersion: 1,
+      entries: [
+        { stationMac: MAC, stationName: nameA, dataPoint: 'tempf', firstSeen: '2026-01-01T00:00:00Z', lastSeen: '2026-01-02T00:00:00Z' },
+        { stationMac: MAC_B, stationName: 'Roof', dataPoint: 'tempf', firstSeen: '2026-01-01T00:00:00Z', lastSeen: '2026-01-02T00:00:00Z' },
+      ],
+    }));
+  }
+
+  it('a discovery station-name change between preview and commit stales the digest (the rename it showed changed)', async () => {
+    const rig = makeRig(BLOCK);
+    namedDiscovery(rig, 'Backyard');
+    const payload = {
+      base: BLOCK,
+      proposal: [],
+      settings: { stationFilter: [MAC] }, // narrows 2 -> 1: renames station A's rows in place
+    };
+    const preview = await handlePreviewSave(rig.deps, payload);
+    expect(preview.ok).toBe(true);
+    if (!preview.ok) {
+      return;
+    }
+    // The preview showed renames composed from the name 'Backyard'.
+    expect(preview.changes.some(c => c.displayName?.before.startsWith('Backyard'))).toBe(true);
+
+    // The station is renamed in discovery before the commit: the same
+    // MACs, the same structural signatures — only the shown rename
+    // differs. The old digest must refuse.
+    namedDiscovery(rig, 'Garden');
+    const refused = await handleComposeSave(rig.deps, { ...payload, confirmDigest: preview.digest });
+    expect(refused.ok).toBe(false);
+    if (!refused.ok) {
+      expect(refused.error.code).toBe('stale-confirmation');
+    }
+
+    // A fresh preview over the new name proceeds.
+    const fresh = await handlePreviewSave(rig.deps, payload);
+    expect(fresh.ok).toBe(true);
+    if (fresh.ok) {
+      expect(fresh.digest).not.toBe(preview.digest);
+      expect(fresh.changes.some(c => c.displayName?.before.startsWith('Garden'))).toBe(true);
     }
   });
 });

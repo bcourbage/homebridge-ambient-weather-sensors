@@ -6,7 +6,7 @@
  * flag-gated `discoverDevicesV2` builds this routing map at reconcile
  * time and both the polling and realtime paths fan values out through
  * `distributeViaRouting` (via `distributeViaV2Routing`). With the
- * `_sensorMapV2` flag OFF (default) the v1.6.0 `createSensorWrapper` +
+ * `_sensorMapV2` opted out (non-default) the v1.6.0 `createSensorWrapper` +
  * uniqueId-lookup path still drives everything and this module is
  * dormant.
  *

@@ -1,5 +1,5 @@
 import * as path from 'path';
-import { fileURLToPath } from 'node:url';
+import { promises as fs } from 'node:fs';
 
 import { API, Characteristic, DynamicPlatformPlugin, Logger, PlatformAccessory, PlatformConfig, Service } from 'homebridge';
 
@@ -40,7 +40,6 @@ import {
 } from './extendedSensors/windAccessory.js';
 import { HumidityAccessory } from './humidityAccessory.js';
 import { RealtimeSource } from './realtimeSource.js';
-import { syncDynamicSchema } from './sensorMap/dynamicSchema.js';
 import { bindSafeMode, type SafeModeBinding } from './safeModeBinding.js';
 import { inferForCachedAccessory } from './sensorMap/bootstrap.js';
 import { coerceValue } from './sensorMap/coerceValue.js';
@@ -76,7 +75,7 @@ import {
   type StationPayload,
 } from './sensorMap/routing.js';
 import { resolveBatteryField } from './sensorMap/resolveBatteryField.js';
-import { createShadowMode, shadowModeEnabled, type ShadowMode } from './sensorMap/shadowMode.js';
+import { v2ConstructionEnabled } from './sensorMap/v2Flag.js';
 import { computeStructuralSignature } from './sensorMap/structuralSignature.js';
 import type {
   DiscoveryStore,
@@ -101,39 +100,11 @@ import { DEVICE } from './types.js';
  */
 export const hapClean = sharedHapClean;
 
-/**
- * Normalize a string the user might have typed in their config for
- * matching against sensor identifiers. Trims whitespace and lowercases.
- * Empty / non-string values normalize to the empty string, which the
- * caller is expected to filter out.
- *
- * Exported for test coverage.
- */
-export function normalizeMatchKey(s: unknown): string {
-  return typeof s === 'string' ? s.trim().toLowerCase() : '';
-}
-
-/**
- * Build a Set of normalized matchers from a config-supplied array. Used
- * for both `excludeSensors` and `includeOnly`; the same matching rules
- * apply to both (case-insensitive, whitespace-trimmed, non-string and
- * blank entries dropped).
- *
- * Exported for test coverage.
- */
-export function toMatcherSet(raw: unknown): Set<string> {
-  const out = new Set<string>();
-  if (!Array.isArray(raw)) {
-    return out;
-  }
-  for (const entry of raw) {
-    const k = normalizeMatchKey(entry);
-    if (k.length > 0) {
-      out.add(k);
-    }
-  }
-  return out;
-}
+// normalizeMatchKey / toMatcherSet moved to sensorMap/stationMatch.ts
+// (shared with the editor save pipeline since beta.17); re-exported
+// here so existing importers and tests keep working.
+import { normalizeMatchKey, toMatcherSet } from './sensorMap/stationMatch.js';
+export { normalizeMatchKey, toMatcherSet };
 
 // Polling cadence for the AWN REST API. AWN's documented rate limit is
 // 1 req/sec per apiKey, so any cadence above that is safe; 2 minutes
@@ -282,24 +253,11 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
   // uppercased). See src/safeModeBinding.ts for the mapping.
   private readonly safeModeBindings = new Map<string, SafeModeBinding>();
 
-  // Sensor-map v2.0 shadow-mode observer. Undefined unless the user
-  // opts in via env `SENSOR_MAP_V2=1` or hidden config `_sensorMapV2`.
-  // When present, runs the v2 pipeline in parallel and logs divergence
-  // vs. the v1.6.0 code path. Never writes to Homebridge state.
-  // See src/sensorMap/shadowMode.ts.
-  //
-  // Superseded by the LIVE v2 path: when `sensorMapV2` is on we run real
-  // v2 reconciliation (`discoverDevicesV2`) instead of the compare-only
-  // observer, so the two never run together (handoff: "do not run both
-  // observer and live reconciliation"). With the flag off the observer
-  // was never created either, so this is effectively always undefined
-  // now — the module + its unit tests remain until GA task #65.
-  private readonly shadow: ShadowMode | undefined;
-
-  // Sensor-map v2.0 LIVE flag. Set once at construction from the same
-  // `_sensorMapV2` / `SENSOR_MAP_V2` signal. When true, `discoverDevices`
-  // routes to the flag-gated `discoverDevicesV2` reconciler (row-driven
-  // construction + routing); when false, behaviour is byte-identical to
+  // Sensor-map v2 construction gate (GA #65, DEFAULT ON since
+  // 2.0.0-beta.17). When true, `discoverDevices` routes to the
+  // `discoverDevicesV2` reconciler (row-driven construction + routing);
+  // when explicitly opted out (`_sensorMapV2: false` or env
+  // `SENSOR_MAP_V2=0`), behaviour is byte-identical to
   // v1.7.0. Default OFF.
   private readonly sensorMapV2: boolean;
 
@@ -321,10 +279,8 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
   // can't be inferred are kept, not unregistered, and announced once.
   private readonly loggedPreservedAccessories = new Set<string>();
 
-  // Discovery tracker for the live v2 path (review P1-4): the platform
-  // now OWNS the plugin's discovery registry — the shadow observer that
-  // used to feed it is retired when the flag selects the live path.
-  // Observes every post-filter (station, dataPoint) pair at discovery
+  // Discovery tracker for the v2 path (review P1-4): the platform
+  // owns the plugin's discovery registry. Observes every post-filter (station, dataPoint) pair at discovery
   // and on each poll tick, throttles lastSeen-only writes internally,
   // and is force-flushed from the shutdown handler. Created lazily by
   // initV2Persistence(); never created in safe mode or flag-off.
@@ -335,11 +291,11 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
   // runs:
   //
   //   'legacy' / 'v2' — normal operation via `discoverDevices()`.
-  //                     With `_sensorMapV2` OFF (default) the v1.6.0
-  //                     code path drives everything; with it ON the
-  //                     flag-gated `discoverDevicesV2` reconciler runs
-  //                     the row-driven construction + routing pipeline
-  //                     instead (finding-#4 Stage 4).
+  //                     By default (GA #65) the `discoverDevicesV2`
+  //                     reconciler runs the row-driven construction +
+  //                     routing pipeline; an explicit opt-out
+  //                     (_sensorMapV2: false / SENSOR_MAP_V2=0) keeps
+  //                     the v1.6.0 code path (finding-#4 Stage 4).
   //   'safe-mode'    — safe mode is contractually reconciliation-free
   //                     per sensor-map.md §17.2. `discoverDevices()`
   //                     is NOT called; `safeModeStart()` runs the
@@ -366,25 +322,11 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
 
     this.log.debug('Finished initializing platform:', this.config.platform);
 
-    // Detect the sensor-map v2 opt-in once. When on, the live v2 path
-    // (discoverDevicesV2) runs and the compare-only shadow observer is
-    // NOT instantiated — the two must not run together. When off, the
-    // shadow observer wouldn't be created anyway (createShadowMode
-    // returns undefined), so the flag-off path stays byte-identical.
-    this.sensorMapV2 = shadowModeEnabled({
+    // Resolve the v2 construction gate once (default ON; explicit
+    // config/env opt-outs honored — see v2Flag.ts).
+    this.sensorMapV2 = v2ConstructionEnabled({
       config: this.config as unknown as Record<string, unknown>,
     });
-
-    // Instantiate the sensor-map shadow observer only when the live v2
-    // path is NOT active. Returns undefined when the flag is off, and
-    // platform.ts uses `?.` everywhere.
-    this.shadow = this.sensorMapV2
-      ? undefined
-      : createShadowMode({
-        log: this.log,
-        config: this.config as unknown as Parameters<typeof createShadowMode>[0]['config'],
-        api: this.api,
-      });
 
     this.api.on('didFinishLaunching', () => {
       log.debug('Executed didFinishLaunching callback');
@@ -406,29 +348,16 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
       // Load persisted discovery state + log detected config mode.
       // Non-blocking: swallow errors so a broken persistence store
       // never prevents the plugin from starting.
-      this.shadow?.initialize().catch(e =>
-        this.log.warn(`[sensor-map v2 shadow] initialize failed: ${(e as Error).message}`),
-      );
 
-      // Keep the settings form truthful: in v2-live mode a dynamic
-      // schema hides the legacy controls the runtime ignores; in any
-      // other mode the file is removed so the packaged full legacy
-      // form governs. Non-blocking and never fatal (the UI falls back
-      // to the packaged schema).
-      // The verdict comes from the COMPLETE config.json, not this
-      // instance's block: multi-Home instances all converge on the
-      // same file content regardless of startup order. Hosts without
-      // the path accessors (harnesses, unusual setups) skip the sync;
-      // the packaged schema then governs, which is safe everywhere.
-      if (typeof this.api.user?.storagePath === 'function' && typeof this.api.user?.configPath === 'function') {
-        void syncDynamicSchema({
-          storagePath: this.api.user.storagePath(),
-          pluginName: PLUGIN_NAME,
-          packagedSchemaPath: path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'config.schema.json'),
-          configPath: this.api.user.configPath(),
-          env: process.env,
-          log: this.log,
-        });
+      // The dynamic-schema mechanism retired with the schema form
+      // (beta.17, GA #56): the settings page never renders the form,
+      // so no reduced schema is maintained. Remove any file a
+      // pre-beta.17 install left behind — stale reduced schemas would
+      // otherwise silently govern the unsaved-settings gate's
+      // tolerance forever.
+      if (typeof this.api.user?.storagePath === 'function') {
+        const staleDynamicSchema = path.join(this.api.user.storagePath(), `.${PLUGIN_NAME}-v1.schema.json`);
+        fs.rm(staleDynamicSchema, { force: true }).catch(() => { /* never fatal */ });
       }
 
       if (this.configMode === 'safe-mode') {
@@ -459,13 +388,9 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
         this.pollTimer = undefined;
       }
       // Force-flush any pending discovery writes before Homebridge
-      // finishes tearing down — the live v2 tracker and (legacy) the
-      // shadow observer's tracker respectively.
+      // finishes tearing down.
       this.v2Tracker?.flush(true).catch(e =>
         this.log.warn(`[sensor-map v2] shutdown discovery flush failed: ${(e as Error).message}`),
-      );
-      this.shadow?.shutdown().catch(e =>
-        this.log.warn(`[sensor-map v2 shadow] shutdown flush failed: ${(e as Error).message}`),
       );
     });
   }
@@ -474,10 +399,6 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
     this.log.info('Loading accessory from cache:', accessory.displayName);
 
     this.accessories.push(accessory);
-    // Shadow-mode: log what the v2 sensor-map layer would infer for
-    // this cached accessory. No context mutation — v1.6.0 code still
-    // owns registration.
-    this.shadow?.onConfigureAccessory(accessory);
   }
 
   determineSensorType(sensor: string) {
@@ -734,16 +655,6 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
   parseDevices(json) {
     const Devices:DEVICE[] = [];
 
-    // Shadow-mode accumulators. Populated only when this.shadow is set.
-    // `shadowObserved` collects EVERY (station, dataPoint) pair AWN
-    // reported this tick — including battery fields and any keys
-    // determineSensorType skipped. `shadowV1Decisions` accumulates
-    // only the pairs the v1.6.0 code path actually registered. The
-    // diff of the two, plus the sensor-map's own decisions, is what
-    // ShadowMode.onParseTick compares.
-    const shadowObserved: Array<{ stationMac: string; stationName: string; dataPoint: string }> = [];
-    const shadowV1Decisions: Array<{ stationMac: string; dataPoint: string; type: string }> = [];
-
     // Build matcher sets once per call. Matching is intentionally
     // forgiving — case-insensitive and whitespace-trimmed — so that a
     // user typing "Indoor Temperature" or "indoor temperature " (with
@@ -839,16 +750,6 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
       stations.forEach( (obj) => {
         Object.entries(obj.lastData).forEach( (device) => {
           const sensorKey = device[0];
-          // Shadow-mode: record EVERY key AWN reported for this station,
-          // even the ones determineSensorType skips (battery fields,
-          // unknown extras). The tracker uses this to build discovery.json.
-          if (this.shadow) {
-            shadowObserved.push({
-              stationMac: obj.macAddress,
-              stationName: obj.info?.name ?? '',
-              dataPoint: sensorKey,
-            });
-          }
           const type = this.determineSensorType(sensorKey);
           if (type === 'NOT_SUPPORTED') {
             return;
@@ -951,30 +852,7 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
             value,
             batteryLow,
           });
-          // Shadow-mode: record the v1.6.0 code path's decision for
-          // this (station, dataPoint) pair. The shadow observer diffs
-          // it against the sensor-map layer's own decision.
-          if (this.shadow) {
-            shadowV1Decisions.push({
-              stationMac: obj.macAddress,
-              dataPoint: sensorKey,
-              type: String(type),
-            });
-          }
         });
-      });
-    }
-
-    // Shadow-mode dispatch. Fire-and-forget compared to the return
-    // path — the observer never blocks accessory registration.
-    if (this.shadow) {
-      this.shadow.onParseTick({
-        stations: stations.map(s => ({
-          macAddress: s.macAddress,
-          name: s.info?.name ?? '',
-        })),
-        observed: shadowObserved,
-        v1Decisions: shadowV1Decisions,
       });
     }
 
@@ -1048,7 +926,8 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
 
   async discoverDevices() {
     // Flag-gated v2 reconciler. Row-driven construction + routing,
-    // default OFF. See discoverDevicesV2 for the full contract.
+    // default ON since beta.17 (GA #65); explicit opt-outs keep the
+    // v1.6.0 path. See discoverDevicesV2 for the full contract.
     if (this.sensorMapV2) {
       await this.discoverDevicesV2();
       return;
@@ -1208,7 +1087,8 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
   /**
    * Flag-gated v2 reconciler (finding-#4 Stage 4, first commit). Runs in
    * place of the v1.6.0 discoverDevices path when `sensorMapV2` is on
-   * (default OFF, so shipping behaviour is unchanged).
+   * (default ON since beta.17; the explicit opt-out selects the
+   * v1.6.0 path).
    *
    * Pipeline:
    *   1. Fetch the raw AWN station payloads; apply stationFilter.
@@ -1272,10 +1152,11 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
       }
 
       // Apply stationFilter at the station level BEFORE building the
-      // inventory — v1 parity (parseDevices filters stations first, and
-      // the shadow observer received the post-filter inventory). Without
-      // this, a multi-Home child-bridge setup would register EVERY
-      // station's accessories on each instance.
+      // inventory — v1 parity (parseDevices filters stations first).
+      // Without this, a multi-Home child-bridge setup would register
+      // EVERY station's accessories on each instance. The editor's
+      // save pipeline mirrors this exact ordering when it computes
+      // preview consequences (stationMatch.filterStationInventory).
       const rawStations = this.applyStationFilterV2(fetched);
 
       // Station inventory (post-filter). isMultiStation drives the
@@ -1809,9 +1690,8 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
 
   /**
    * Feed every post-filter (station, dataPoint) pair into the discovery
-   * tracker and kick a throttled flush. Called at discovery and on each
-   * v2 poll tick — the same cadence the shadow observer used, so
-   * discovery.json keeps accumulating under the live path.
+   * tracker and kick a throttled flush. Called at discovery and on
+   * each v2 poll tick, so discovery.json keeps accumulating.
    */
   private observeV2Stations(stations: ReadonlyArray<RawStation>): void {
     if (!this.v2Tracker) {
@@ -2018,8 +1898,7 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
    *     characteristic via `updateCharacteristic`);
    *   - call `registerPlatformAccessories` / `unregisterPlatformAccessories`;
    *   - call `updatePlatformAccessories` (no displayName rewrites);
-   *   - write to any plugin persistence file (the shadowMode observer
-   *     has its own safe-mode short-circuit for its persist tree);
+   *   - write to any plugin persistence file;
    *   - reconcile against `parseDevices`'s "orphan" set;
    *   - run realtime — transport is polling ONLY (realtime would
    *     require interpreting apiKey/applicationKey semantics from the

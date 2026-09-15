@@ -191,7 +191,7 @@ export class HomebridgeService {
     // config (measured on production — every later read saw zero
     // blocks). Mid-save form EDITS are handled by the orchestrator's
     // re-read refusal instead.
-    if (!ipc.disableSaveButton || !ipc.enableSaveButton) {
+    if (!ipc.disableSaveButton) {
       throw new Error('This Homebridge UI does not expose the Save button controls; saving is unavailable.');
     }
     return {
@@ -199,11 +199,16 @@ export class HomebridgeService {
       getPluginConfig: () => ipc.getPluginConfig() as Promise<Array<Record<string, unknown>>>,
       updatePluginConfig: (config) => ipc.updatePluginConfig!(config),
       savePluginConfig: () => ipc.savePluginConfig!(),
+      // Since beta.17 the native footer Save is PERMANENTLY disabled
+      // (index.html disables it before anything else runs, and the
+      // page never enables it). Freeze re-asserts the disable;
+      // unfreeze deliberately does NOT enable — there is exactly one
+      // functional save path, the page's own guarded Save.
       freezeSettingsForm: () => {
         ipc.disableSaveButton!();
       },
       unfreezeSettingsForm: () => {
-        ipc.enableSaveButton!();
+        ipc.disableSaveButton!();
       },
       ...(ipc.getCachedAccessories
         ? { getCachedAccessories: () => ipc.getCachedAccessories!() }
@@ -214,13 +219,16 @@ export class HomebridgeService {
   /**
    * Cached-accessory uniqueIds for §8.7 inventory (review #32 F1) —
    * the SAME extraction the save orchestrator uses, so /editor-state
-   * and /compose-save see identical station inventories. Returns []
-   * when the API is unavailable or errors: inventory degrades to the
-   * server-side sources rather than failing the page.
+   * and /compose-save see identical station inventories. Returns
+   * UNDEFINED when the API is unavailable, errors, times out, or
+   * answers with a non-array (review round-2 P1): a failed read is
+   * the ABSENCE of a cache snapshot, never an empty one — the server
+   * must not take a missing key as evidence that no accessory exists.
+   * Inventory still degrades to the server-side sources.
    */
-  async cachedAccessoryUniqueIds(): Promise<string[]> {
+  async cachedAccessoryUniqueIds(): Promise<string[] | undefined> {
     if (!this.ipc?.getCachedAccessories) {
-      return [];
+      return undefined;
     }
     try {
       // Short leash: HB UI X's cached-accessories handler swallows its
@@ -234,11 +242,14 @@ export class HomebridgeService {
           e => { clearTimeout(timer); reject(e); },
         );
       });
-      return (Array.isArray(cached) ? cached : [])
+      if (!Array.isArray(cached)) {
+        return undefined;
+      }
+      return cached
         .map(a => (a as { context?: { device?: { uniqueId?: unknown } } })?.context?.device?.uniqueId)
         .filter((u): u is string => typeof u === 'string');
     } catch {
-      return [];
+      return undefined;
     }
   }
 }

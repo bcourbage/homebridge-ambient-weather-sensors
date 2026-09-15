@@ -186,24 +186,32 @@ describe('downgrade journeys: editor-generated v2 config + v2-written cache', ()
     }));
     vi.spyOn(global, 'setInterval').mockImplementation(() => 0 as unknown as ReturnType<typeof setInterval>);
 
-    // The FULL lifecycle: didFinishLaunching detects the (now marker-
-    // free) config as 'legacy' and runs the flag-off pipeline — the
-    // same route a real restart takes after the manual rollback.
+    // The FULL lifecycle. POST-FLIP (GA #65): a marker-free config on
+    // HEAD runs the DEFAULT-ON v2 pipeline via the compat layer — the
+    // rollback selects 1.7 semantics only on an actual 1.7 install
+    // (tests/regression/downgradeReal173.test.ts). On HEAD, the
+    // no-churn invariant governs instead.
     api.emit('didFinishLaunching');
     await vi.waitFor(() => {
       expect(api.updated).toContain(tempf);
     });
 
     // Every representable known accessory survives with ZERO
-    // unregister calls; the custom cache is the only loss.
-    expect(api.unregistered).toEqual([custom]);
+    // unregister calls — INCLUDING the custom cache: its context
+    // carries an inferable kind/measurement, so bootstrap
+    // reconciliation keeps it alive rather than churning it (real
+    // 1.7.3 drops it; that loss boundary is pinned in
+    // downgradeReal173).
+    expect(api.unregistered).toEqual([]);
+    expect(platform.accessories).toContain(custom);
     expect(platform.accessories).toContain(tempf);
     expect(platform.accessories).toContain(pressure);
     expect(platform.accessories).toContain(humidityIn);
     // v2-disabled humidity stays gone: the mirror's exclusion prevents
     // (re-)registration even though AWN reports it.
     expect(api.registered.some(a => (a.context.device as { uniqueId?: string }).uniqueId === `${MAC}-humidity`)).toBe(false);
-    // The custom dataPoint is NEVER misregistered as a wrong-wrapper
+    // The custom dataPoint is never REGISTERED anew either (the cache
+    // was preserved, not rebuilt) — and never as a wrong-wrapper
     // accessory despite barn_temp.includes('temp') and
     // temperatureSensors: true in the mirror.
     expect(api.registered.some(a => (a.context.device as { uniqueId?: string }).uniqueId === `${MAC}-barn_temp`)).toBe(false);
@@ -216,10 +224,11 @@ describe('downgrade journeys: editor-generated v2 config + v2-written cache', ()
     vi.restoreAllMocks();
   });
 
-  it('DOCUMENTED current-state rollback from the ENVIRONMENT-FLAG save path: SENSOR_MAP_V2 must be unset for the legacy lifecycle', async () => {
-    // Variant: the opt-in came from the environment, so the config
-    // never carried _sensorMapV2 — the rollback is the three marker
-    // deletions plus UNSETTING the environment variable.
+  it('SENSOR_MAP_V2=0 is the operator opt-out: forces the legacy lifecycle on a marker-free config', async () => {
+    // Post-flip the env variable is a rollback LEVER, not an opt-in:
+    // a marker-free config runs v2 by default, and setting
+    // SENSOR_MAP_V2=0 forces the v1.6.0 lifecycle without any config
+    // edit.
     const sensorMap = [{ dataPoint: 'humidity', enabled: false }];
     const v2Map = buildEffectiveSensorMap({
       userOverrides: sensorMap,
@@ -238,18 +247,11 @@ describe('downgrade journeys: editor-generated v2 config + v2-written cache', ()
     delete rolledBack.configVersion;
     delete rolledBack._legacyMirror;
 
-    // The environment-enabled installation is REAL in this test
-    // (review #45 round 5): SENSOR_MAP_V2 is set, the v2 path is
-    // positively proven enabled, and only the documented UNSET flips
-    // the platform back to the legacy path — omit the unset and the
-    // lifecycle enters the v2 reconciler, failing the v2Routing
-    // discriminator below (mutation-verified).
     const envBefore = process.env.SENSOR_MAP_V2;
-    process.env.SENSOR_MAP_V2 = '1';
+    delete process.env.SENSOR_MAP_V2;
     try {
-      // Positive proof the env flag drives the v2 path: a platform
-      // constructed NOW (env set) has the live v2 opt-in even though
-      // the rolled-back config carries no _sensorMapV2.
+      // Positive probe of the post-flip default: with NO env variable
+      // and no config flag, the platform runs v2.
       const probe = new AmbientWeatherSensorsPlatform(
         new MockLogger() as never,
         { platform: 'AmbientWeatherSensors', ...rolledBack } as never,
@@ -257,9 +259,11 @@ describe('downgrade journeys: editor-generated v2 config + v2-written cache', ()
       );
       expect((probe as unknown as { sensorMapV2: boolean }).sensorMapV2).toBe(true);
 
-      // The documented rollback step: UNSET the environment variable
-      // BEFORE the legacy platform starts.
-      delete process.env.SENSOR_MAP_V2;
+      // The operator lever: SENSOR_MAP_V2=0 forces the legacy
+      // lifecycle for the platform constructed below — omit it and
+      // didFinishLaunching enters the v2 reconciler, failing the
+      // v2Routing discriminator (mutation-verified pre-flip).
+      process.env.SENSOR_MAP_V2 = '0';
 
       const api = new MockAPI();
       const platform = new AmbientWeatherSensorsPlatform(

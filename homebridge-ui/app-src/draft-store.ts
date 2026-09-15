@@ -32,6 +32,15 @@ export type DraftableField =
   | 'enabled' | 'name' | 'displayUnit' | 'threshold' | 'triggerEnabled' | 'triggerDirection'
   | 'kind' | 'measurement' | 'sourceUnit';
 
+const DRAFTABLE_FIELDS: ReadonlySet<string> = new Set<DraftableField>([
+  'enabled', 'name', 'displayUnit', 'threshold', 'triggerEnabled', 'triggerDirection',
+  'kind', 'measurement', 'sourceUnit',
+]);
+
+function isDraftableField(field: string): field is DraftableField {
+  return DRAFTABLE_FIELDS.has(field);
+}
+
 /** Draft key: global fragments under '*', station fragments under the MAC key. */
 function keyFor(scope: string | undefined, dataPoint: string): string {
   return `${scope ?? '*'}|${dataPoint}`;
@@ -61,9 +70,11 @@ interface DraftEntry {
   /**
    * Delete these fields from every authored fragment of this key
    * (PR #53 review F1: a family unit choice strips displayUnit from
-   * station exceptions so the global template governs).
+   * station exceptions so the global template governs). Keys beyond
+   * DraftableField are legal: Use Defaults strips EVERY authored
+   * field of a fragment (batteryField, embedName, ...).
    */
-  fieldRemovals: Set<DraftableField>;
+  fieldRemovals: Set<string>;
 }
 
 export class DraftStore {
@@ -200,13 +211,43 @@ export class DraftStore {
     if (row.origin !== 'global' && row.origin !== 'station') {
       return; // defaults have no override to remove
     }
-    const key = row.origin === 'global'
-      ? keyFor(undefined, row.dataPoint)
-      : keyFor(row.stationMac, row.dataPoint);
-    const e = this.entry(key);
+    this.removeOverrideAt(row.origin === 'global' ? undefined : row.stationMac, row.dataPoint);
+  }
+
+  /**
+   * Remove the override at an EXPLICIT layer key (beta.17 RC smoke:
+   * Use Defaults scopes its removals per layer instead of nuking the
+   * row's origin key wholesale).
+   */
+  removeOverrideAt(stationMac: string | undefined, dataPoint: string): void {
+    const e = this.entry(keyFor(stationMac, dataPoint));
     e.patches.clear();
     e.fieldRemovals.clear();
     e.remove = true;
+  }
+
+  /**
+   * Draft the DELETION of one field from every authored fragment of
+   * an explicit layer key — the global-layer sibling of
+   * removeFieldFor(), with the same guards: a never-authored field is
+   * a no-op (no phantom draft) and a whole-key removal stands. Takes
+   * any authored override key, not just DraftableField — Use Defaults
+   * strips every non-template field of a fragment.
+   */
+  removeFieldAt(stationMac: string | undefined, dataPoint: string, field: string): void {
+    const key = keyFor(stationMac, dataPoint);
+    if (!(field in this.authoredBaseline(key))) {
+      return;
+    }
+    const e = this.entry(key);
+    if (e.remove) {
+      return;
+    }
+    if (isDraftableField(field)) {
+      e.patches.delete(field);
+    }
+    e.fieldRemovals.add(field);
+    this.prune(key);
   }
 
   /** Discard the draft for one row. */
@@ -266,14 +307,20 @@ export class DraftStore {
     this.dropIfEmpty(key);
   }
 
-  /** Is this field drafted for deletion at the station-scoped key? */
-  fieldRemovedFor(stationMac: string, dataPoint: string, field: DraftableField): boolean {
+  /** Is this field drafted for deletion at the given layer key? */
+  fieldRemovedFor(stationMac: string | undefined, dataPoint: string, field: DraftableField): boolean {
     return this.drafts.get(keyFor(stationMac, dataPoint))?.fieldRemovals.has(field) ?? false;
   }
 
   /** Is the whole key drafted for removal? */
   keyRemovedFor(stationMac: string | undefined, dataPoint: string): boolean {
     return this.drafts.get(keyFor(stationMac, dataPoint))?.remove ?? false;
+  }
+
+  /** Does ANY live draft target this layer key? */
+  hasDraftFor(stationMac: string | undefined, dataPoint: string): boolean {
+    const e = this.drafts.get(keyFor(stationMac, dataPoint));
+    return !!e && (e.remove || e.patches.size > 0 || e.fieldRemovals.size > 0);
   }
 
   /**

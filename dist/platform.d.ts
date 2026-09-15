@@ -8,24 +8,8 @@ import { DEVICE } from './types.js';
  * shared module directly.
  */
 export declare const hapClean: typeof sharedHapClean;
-/**
- * Normalize a string the user might have typed in their config for
- * matching against sensor identifiers. Trims whitespace and lowercases.
- * Empty / non-string values normalize to the empty string, which the
- * caller is expected to filter out.
- *
- * Exported for test coverage.
- */
-export declare function normalizeMatchKey(s: unknown): string;
-/**
- * Build a Set of normalized matchers from a config-supplied array. Used
- * for both `excludeSensors` and `includeOnly`; the same matching rules
- * apply to both (case-insensitive, whitespace-trimmed, non-string and
- * blank entries dropped).
- *
- * Exported for test coverage.
- */
-export declare function toMatcherSet(raw: unknown): Set<string>;
+import { normalizeMatchKey, toMatcherSet } from './sensorMap/stationMatch.js';
+export { normalizeMatchKey, toMatcherSet };
 /**
  * Common shape for the per-accessory wrapper instances the platform
  * tracks. Each wrapper exposes a single push-style `setValue` entry
@@ -65,7 +49,6 @@ export declare class AmbientWeatherSensorsPlatform implements DynamicPlatformPlu
     private pollTimer;
     private realtimeSource;
     private readonly safeModeBindings;
-    private readonly shadow;
     private readonly sensorMapV2;
     private v2Routing;
     private v2EffectiveMap;
@@ -183,7 +166,8 @@ export declare class AmbientWeatherSensorsPlatform implements DynamicPlatformPlu
     /**
      * Flag-gated v2 reconciler (finding-#4 Stage 4, first commit). Runs in
      * place of the v1.6.0 discoverDevices path when `sensorMapV2` is on
-     * (default OFF, so shipping behaviour is unchanged).
+     * (default ON since beta.17; the explicit opt-out selects the
+     * v1.6.0 path).
      *
      * Pipeline:
      *   1. Fetch the raw AWN station payloads; apply stationFilter.
@@ -269,9 +253,8 @@ export declare class AmbientWeatherSensorsPlatform implements DynamicPlatformPlu
     private initV2Persistence;
     /**
      * Feed every post-filter (station, dataPoint) pair into the discovery
-     * tracker and kick a throttled flush. Called at discovery and on each
-     * v2 poll tick — the same cadence the shadow observer used, so
-     * discovery.json keeps accumulating under the live path.
+     * tracker and kick a throttled flush. Called at discovery and on
+     * each v2 poll tick, so discovery.json keeps accumulating.
      */
     private observeV2Stations;
     /**
@@ -349,8 +332,7 @@ export declare class AmbientWeatherSensorsPlatform implements DynamicPlatformPlu
      *     characteristic via `updateCharacteristic`);
      *   - call `registerPlatformAccessories` / `unregisterPlatformAccessories`;
      *   - call `updatePlatformAccessories` (no displayName rewrites);
-     *   - write to any plugin persistence file (the shadowMode observer
-     *     has its own safe-mode short-circuit for its persist tree);
+     *   - write to any plugin persistence file;
      *   - reconcile against `parseDevices`'s "orphan" set;
      *   - run realtime — transport is polling ONLY (realtime would
      *     require interpreting apiKey/applicationKey semantics from the

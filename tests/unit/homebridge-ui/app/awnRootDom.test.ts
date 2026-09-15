@@ -100,6 +100,13 @@ function editorState(overrides: Partial<EditorStateDto> = {}): EditorStateDto {
   return {
     configMode: 'v2',
     v2FlagEnabled: true,
+    settings: {
+      name: 'Test AWN',
+      dataSource: 'polling',
+      stationFilter: [],
+      apiKeySet: true,
+      applicationKeySet: true,
+    },
     editorAvailable: true,
     baseDigest: 'digest-live',
     blockIndex: 0,
@@ -115,16 +122,18 @@ function editorState(overrides: Partial<EditorStateDto> = {}): EditorStateDto {
       {
         stationMac: MAC, dataPoint: 'tempf', kind: 'temperature', measurement: 'temperature',
         sourceUnit: 'fahrenheit', name: 'Outdoor Temp', enabled: true, batteryField: 'battout',
-        origin: 'global',
+        origin: 'global', firstSeen: '2026-01-01T00:00:00Z', everReported: true, hasBatterySubService: true,
       },
       {
         stationMac: MAC, dataPoint: 'windspeedmph', kind: 'motion', measurement: 'wind-speed',
         sourceUnit: 'mph', displayUnit: 'fps', name: 'Wind', enabled: false, batteryField: null,
         origin: 'station', threshold: 10, triggerEnabled: true, triggerDirection: 'above',
+        firstSeen: '2026-01-01T00:00:00Z', everReported: true,
       },
       {
         stationMac: OTHER_MAC, dataPoint: 'tempinf', kind: 'temperature', measurement: 'temperature',
         sourceUnit: 'celsius', name: 'Indoor', enabled: true, batteryField: null, origin: 'default',
+        firstSeen: '2026-01-01T00:00:00Z', everReported: true,
       },
     ],
     errors: [],
@@ -184,6 +193,9 @@ function makeIpc(
       }
       if (path === '/vocabulary') {
         return VOCAB;
+      }
+      if (path === '/notices') {
+        return { schemaVersion: 1, notices: [] };
       }
       if (path === '/preview-save' && previewResult !== undefined) {
         return previewResult;
@@ -256,9 +268,11 @@ describe('AwnRootComponent (TestBed, jsdom)', () => {
     const openBtn = [...el.querySelectorAll('tr')].find(tr => tr.textContent!.includes('tempf'))!.querySelector('button') as HTMLButtonElement;
     openBtn.click();
     fixture.detectChanges();
-    expect(el.querySelector('.row-facts')!.textContent).toContain('battery battout');
-    expect(el.querySelector('.row-facts')!.textContent).toContain('global layer');
-    expect(ipc.requests.map(r => r.path).sort()).toEqual(['/editor-state', '/vocabulary']);
+    const facts = el.querySelector('.row-facts')!.textContent!;
+    expect(facts).toContain('Creates a temperature accessory in Apple Home.');
+    expect(facts).toContain("The battery level comes from the station's battout field.");
+    expect(facts).toContain('This row has settings saved for all stations.');
+    expect(ipc.requests.map(r => r.path).sort()).toEqual(['/editor-state', '/notices', '/vocabulary']);
   });
 
   it('the Kind header shows a ? glyph with a native title tooltip and screen-reader description (issue #50)', async () => {
@@ -319,9 +333,20 @@ describe('AwnRootComponent (TestBed, jsdom)', () => {
     });
   });
 
-  it('shows the POSITIVE rollback-mirror indicator when the mirror is recognized (review #45 round 4)', async () => {
-    const verified = await render(makeIpc(editorState()));
-    expect((verified.nativeElement as HTMLElement).textContent).toContain('Rollback mirror: verified');
+  it('shows the POSITIVE rollback-mirror indicator inside the notices disclosure (review #45 round 4; demoted beta.17 RC smoke)', async () => {
+    const fixture = await render(makeIpc(editorState()));
+    const el = fixture.nativeElement as HTMLElement;
+    // Not a top-of-page banner any more...
+    expect([...el.querySelectorAll('.banner')].some(b => b.textContent!.includes('Rollback mirror'))).toBe(false);
+    // ...but available where a rollback would be looked up.
+    const toggle = [...el.querySelectorAll('button.conn-summary')]
+      .find(b => b.textContent!.includes('Rollback status') || b.textContent!.includes('Recent structural changes')) as HTMLButtonElement;
+    expect(toggle).toBeDefined();
+    toggle.click();
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
+    expect(el.textContent).toContain('Rollback mirror: verified');
   });
 
   it('warns against the marker-deletion rollback for any non-recognized mirror state', async () => {
@@ -358,6 +383,35 @@ describe('AwnRootComponent (TestBed, jsdom)', () => {
     const noteBanner = [...el.querySelectorAll('.banner.info')]
       .find(b => b.textContent!.includes('batt_co2'));
     expect(noteBanner).toBeDefined();
+  });
+
+  it('a row-scoped note renders inline under its table row, not in the top Notes section', async () => {
+    const ipc = makeIpc(editorState({
+      notes: [
+        {
+          severity: 'note', code: 'orphan-battery-field', source: 'override',
+          stationMac: MAC, dataPoint: 'tempf',
+          message: "'tempf' is disabled; battery field 'battout' loses its battery level.",
+        },
+        {
+          severity: 'note', code: 'plugin-health', source: 'default-map',
+          message: 'A page-wide note without a row.',
+        },
+      ],
+    }));
+    const fixture = await render(ipc);
+    const el = fixture.nativeElement as HTMLElement;
+    // The row-scoped note sits in a table note row...
+    const inline = [...el.querySelectorAll('tr.note-tr .inline-note')]
+      .find(n => n.textContent!.includes('battout'));
+    expect(inline).toBeDefined();
+    // ...in the same table as its row.
+    const table = inline!.closest('table')!;
+    expect([...table.querySelectorAll('code')].some(c => c.textContent === 'tempf')).toBe(true);
+    // The top section holds ONLY the unmatched note.
+    const banners = [...el.querySelectorAll('.banner.info')].map(b => b.textContent!);
+    expect(banners.some(t => t.includes('A page-wide note without a row.'))).toBe(true);
+    expect(banners.some(t => t.includes('battout'))).toBe(false);
   });
 
   it('renders a load-failure banner when the bridge request rejects', async () => {
@@ -464,7 +518,7 @@ describe('draft editing + preview (PR B — no persistence)', () => {
     // 'added' registers — never a blanket "re-registers".
     expect(el.querySelector('.structural-chip')?.textContent).toBe('registers');
     expect(el.textContent).toContain('1 accessory would register, deregister, or re-register on save');
-    expect(el.textContent).toContain('This preview wrote nothing; saving will ask for confirmation first.');
+    expect(el.textContent).toContain('This preview wrote nothing.');
   });
 
   it('renders a structured refusal', async () => {
@@ -1163,8 +1217,21 @@ describe('draft editing + preview (PR B — no persistence)', () => {
     expect(openTr.querySelector('td.actions button')?.textContent).toBe('Edit');
   });
 
-  it('Use defaults drafts removal of the authored settings and closes the form; default-origin rows do not offer it', async () => {
-    const ipc = makeIpc(editorState(), [], PREVIEW_OK);
+  it('Use defaults stages removal AND shows the default values in the open form; default-origin rows do not offer it', async () => {
+    // Bruno's beta.17 RC direction: Use defaults should SET the form
+    // to the defaults, not stage an invisible removal — a disabled
+    // row whose default is enabled shows Enabled checked.
+    const base = editorState();
+    const windRow = { ...base.rows[1], defaults: {
+      enabled: true, name: 'Wind Speed', sourceUnit: 'mph', displayUnit: 'mph', triggerDirection: 'above' as const,
+    } };
+    const ipc = makeIpc(editorState({
+      rows: [base.rows[0], windRow, base.rows[2]],
+      authored: [{
+        index: 0, layer: 'station', stationMac: MAC, stationMacKey: MAC, dataPoint: 'windspeedmph',
+        fields: { displayUnit: 'fps', name: 'Wind', enabled: false, threshold: 10, triggerEnabled: true, triggerDirection: 'above' },
+      }],
+    }), [], PREVIEW_OK);
     const fixture = await render(ipc);
     // origin 'station' → authored settings exist → button offered
     const el = openEditor(fixture, 'windspeedmph');
@@ -1172,7 +1239,10 @@ describe('draft editing + preview (PR B — no persistence)', () => {
     expect(useDefaults).toBeDefined();
     useDefaults.click();
     await settle(fixture);
-    expect(el.querySelector('.editor-form')).toBeNull(); // closed
+    const form = el.querySelector('.editor-form');
+    expect(form).not.toBeNull(); // stays open, showing the defaults
+    expect((form!.querySelector('input[type="checkbox"]') as HTMLInputElement).checked).toBe(true);
+    expect((form!.querySelector('input[type="text"]') as HTMLInputElement).value).toBe('Wind Speed');
     expect(el.textContent).toContain('1 draft change, not saved yet.'); // the removal is a draft
 
     // Cancel-equivalent cleanup for the next assertion set.
@@ -1182,6 +1252,389 @@ describe('draft editing + preview (PR B — no persistence)', () => {
     // origin 'default' → nothing authored → no Use defaults button
     openEditor(fixture, 'tempinf');
     expect([...el.querySelectorAll('button')].some(b => b.textContent === 'Use defaults')).toBe(false);
+  });
+
+  it('editing the reseeded form after Use defaults re-authors the field explicitly (form always matches proposal)', async () => {
+    const base = editorState();
+    const windRow = { ...base.rows[1], defaults: {
+      enabled: true, name: 'Wind Speed', sourceUnit: 'mph', displayUnit: 'mph', triggerDirection: 'above' as const,
+    } };
+    const ipc = makeIpc(editorState({
+      rows: [base.rows[0], windRow, base.rows[2]],
+      authored: [{
+        index: 0, layer: 'station', stationMac: MAC, stationMacKey: MAC, dataPoint: 'windspeedmph',
+        fields: { displayUnit: 'fps', name: 'Wind', enabled: false },
+      }],
+    }), [], PREVIEW_OK);
+    const fixture = await render(ipc);
+    const el = openEditor(fixture, 'windspeedmph');
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Use defaults') as HTMLButtonElement).click();
+    await settle(fixture);
+    // Uncheck Enabled in the reseeded form: equal to the SAVED value,
+    // but under the staged removal it must be re-authored explicitly,
+    // or the equal-looking control would silently yield the default.
+    const enabled = el.querySelector('.editor-form input[type="checkbox"]') as HTMLInputElement;
+    enabled.click();
+    await settle(fixture);
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement).click();
+    await settle(fixture);
+    const proposal = (ipc.requests.filter(r => r.path === '/preview-save').at(-1)!
+      .body as { proposal: Array<Record<string, unknown>> }).proposal;
+    const frag = proposal.find(f => f.dataPoint === 'windspeedmph' && f.stationMac === MAC);
+    expect(frag).toBeDefined();
+    expect(frag!.enabled).toBe(false);
+  });
+
+  it('Use defaults keeps a family-managed global unit template and strips the other authored fields', async () => {
+    // Bruno's beta.17 RC finding: row-level Use Defaults must return
+    // the row to what the PAGE-LEVEL settings dictate — the family's
+    // displayUnit template survives; only the row-specific fields go.
+    const base = editorState();
+    const rainRow = {
+      stationMac: MAC, dataPoint: 'hourlyrainin', kind: 'motion', measurement: 'rain-rate',
+      sourceUnit: 'in_per_hr', displayUnit: 'mm_per_hr', name: 'My Rain', enabled: true,
+      batteryField: null, origin: 'global' as const,
+      defaults: { enabled: true, name: 'Hourly Rain Rate', sourceUnit: 'in_per_hr', displayUnit: 'in_per_hr' },
+    };
+    const ipc = makeIpc(editorState({
+      rows: [...base.rows, rainRow],
+      authored: [{ index: 0, layer: 'global' as const, dataPoint: 'hourlyrainin', fields: { displayUnit: 'mm_per_hr', name: 'My Rain' } }],
+    }), [], PREVIEW_OK);
+    const fixture = await render(ipc);
+    const el = openEditor(fixture, 'hourlyrainin');
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Use defaults') as HTMLButtonElement).click();
+    await settle(fixture);
+    // The reseeded form shows the PAGE-LEVEL template unit (kept), and
+    // the name back at its default.
+    const form = el.querySelector('.editor-form')!;
+    expect((form.querySelector('input[type="text"]') as HTMLInputElement).value).toBe('Hourly Rain Rate');
+    expect(([...form.querySelectorAll('select')] as HTMLSelectElement[]).some(sel => sel.value === 'mm_per_hr')).toBe(true);
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement).click();
+    await settle(fixture);
+    const proposal = (ipc.requests.filter(r => r.path === '/preview-save').at(-1)!
+      .body as { proposal: Array<Record<string, unknown>> }).proposal;
+    const frag = proposal.find(f => f.dataPoint === 'hourlyrainin');
+    expect(frag).toEqual({ dataPoint: 'hourlyrainin', displayUnit: 'mm_per_hr' });
+  });
+
+  it('Use defaults is not offered when the only authored state is a family-managed unit template', async () => {
+    const base = editorState();
+    const rainRow = {
+      stationMac: MAC, dataPoint: 'hourlyrainin', kind: 'motion', measurement: 'rain-rate',
+      sourceUnit: 'in_per_hr', displayUnit: 'mm_per_hr', name: 'Hourly Rain Rate', enabled: true,
+      batteryField: null, origin: 'global' as const,
+    };
+    const ipc = makeIpc(editorState({
+      rows: [...base.rows, rainRow],
+      authored: [{ index: 0, layer: 'global' as const, dataPoint: 'hourlyrainin', fields: { displayUnit: 'mm_per_hr' } }],
+    }), [], PREVIEW_OK);
+    const fixture = await render(ipc);
+    const el = openEditor(fixture, 'hourlyrainin');
+    expect([...el.querySelectorAll('button')].some(b => b.textContent === 'Use defaults')).toBe(false);
+  });
+
+  it('Use defaults on a family-covered CUSTOM row still removes the whole fragment (identity is not strippable)', async () => {
+    const base = editorState();
+    const customRow = {
+      stationMac: MAC, dataPoint: 'custom_wind', kind: 'motion', measurement: 'wind-speed',
+      sourceUnit: 'mph', displayUnit: 'fps', name: 'Custom Wind', enabled: true,
+      batteryField: null, origin: 'global' as const, identityScope: 'custom-global' as const,
+    };
+    const ipc = makeIpc(editorState({
+      rows: [...base.rows, customRow],
+      authored: [{
+        index: 0, layer: 'global' as const, dataPoint: 'custom_wind',
+        fields: { kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph', displayUnit: 'fps', name: 'Custom Wind' },
+      }],
+    }), [], PREVIEW_OK);
+    const fixture = await render(ipc);
+    const el = openEditor(fixture, 'custom_wind');
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Use defaults') as HTMLButtonElement).click();
+    await settle(fixture);
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement).click();
+    await settle(fixture);
+    const proposal = (ipc.requests.filter(r => r.path === '/preview-save').at(-1)!
+      .body as { proposal: Array<Record<string, unknown>> }).proposal;
+    expect(proposal.some(f => f.dataPoint === 'custom_wind')).toBe(false);
+  });
+
+  it('renders row-scoped notes inline on their change rows (beta.17 RC smoke)', async () => {
+    const withInline: PreviewResultDto = {
+      ...PREVIEW_OK,
+      changes: [
+        { ...PREVIEW_OK.ok ? PREVIEW_OK.changes[0] : ({} as never), notes: ['This sensor shares its battery field with another row.'] },
+        ...(PREVIEW_OK.ok ? PREVIEW_OK.changes.slice(1) : []),
+      ],
+    };
+    const ipc = makeIpc(editorState(), [], withInline);
+    const fixture = await render(ipc);
+    const el = openEditor(fixture, 'tempinf');
+    typeInto(el.querySelector('.editor-form input[type="text"]') as HTMLInputElement, 'Patio Temp');
+    await settle(fixture);
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement).click();
+    await settle(fixture);
+    const note = el.querySelector('.change-row .inline-note');
+    expect(note).not.toBeNull();
+    expect(note!.textContent).toContain('shares its battery field');
+    // No residual section: every note is attached to its row.
+    expect([...el.querySelectorAll('h3')].map(h => h.textContent!.trim())).not.toContain('Worth checking before saving');
+  });
+
+  it('Use defaults never wipes a PENDING family unit choice (delta review P2-1)', async () => {
+    // The Units panel's family choice is a PATCH at the global key,
+    // not an authored fragment. Use Defaults must strip authored
+    // fields around it, never clear the key's patches.
+    const base = editorState();
+    const rainRow = {
+      stationMac: MAC, dataPoint: 'hourlyrainin', kind: 'motion', measurement: 'rain-rate',
+      sourceUnit: 'in_per_hr', displayUnit: 'in_per_hr', name: 'My Rain', enabled: true,
+      batteryField: null, origin: 'global' as const,
+    };
+    const ipc = makeIpc(editorState({
+      rows: [...base.rows, rainRow],
+      // Authored global fragment WITHOUT displayUnit: the family
+      // template exists only as the pending draft below.
+      authored: [{ index: 0, layer: 'global' as const, dataPoint: 'hourlyrainin', fields: { name: 'My Rain' } }],
+    }), [], PREVIEW_OK);
+    const fixture = await render(ipc);
+    const el = fixture.nativeElement as HTMLElement;
+
+    // Pick the family unit first (pending draft on the global key)...
+    const rainSelect = ([...el.querySelectorAll('.unit-families label')] as HTMLElement[])
+      .find(l => l.textContent!.includes('Rainfall'))!.querySelector('select')!;
+    rainSelect.value = 'metric';
+    rainSelect.dispatchEvent(new Event('change'));
+    await settle(fixture);
+
+    // ...then Use Defaults on the row.
+    openEditor(fixture, 'hourlyrainin');
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Use defaults') as HTMLButtonElement).click();
+    await settle(fixture);
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement).click();
+    await settle(fixture);
+    const proposal = (ipc.requests.filter(r => r.path === '/preview-save').at(-1)!
+      .body as { proposal: Array<Record<string, unknown>> }).proposal;
+    // The pending family unit survives; the authored name is gone.
+    expect(proposal.find(f => f.dataPoint === 'hourlyrainin')).toEqual({ dataPoint: 'hourlyrainin', displayUnit: 'mm_per_hr' });
+  });
+
+  it('never-reported rows show the no-data chip and the station action drafts their disables', async () => {
+    const base = editorState();
+    // Two enabled rows the station has never reported (no firstSeen),
+    // one reported enabled row, one never-reported but already
+    // disabled row.
+    const unseen1 = { stationMac: MAC, dataPoint: 'co2', kind: 'temperature' as const, measurement: 'temperature',
+      sourceUnit: 'fahrenheit', name: 'CO2', enabled: true, batteryField: null, origin: 'default' as const, everReported: false };
+    const unseen2 = { stationMac: MAC, dataPoint: 'dewPoint4', kind: 'temperature' as const, measurement: 'temperature',
+      sourceUnit: 'fahrenheit', name: 'Dew Point 4', enabled: true, batteryField: null, origin: 'default' as const, everReported: false };
+    const unseenOff = { stationMac: MAC, dataPoint: 'co2_in', kind: 'temperature' as const, measurement: 'temperature',
+      sourceUnit: 'fahrenheit', name: 'Indoor CO2', enabled: false, batteryField: null, origin: 'global' as const, everReported: false };
+    const ipc = makeIpc(editorState({ rows: [...base.rows, unseen1, unseen2, unseenOff] }), [], PREVIEW_OK);
+    const fixture = await render(ipc);
+    const el = fixture.nativeElement as HTMLElement;
+
+    // Chips on every never-reported recognized row, none on reported ones.
+    const chipRows = [...el.querySelectorAll('.nodata-chip')].map(c =>
+      c.closest('tr')!.querySelector('code')!.textContent);
+    expect(chipRows.sort()).toEqual(['co2', 'co2_in', 'dewPoint4']);
+
+    // The station action names the ENABLED never-reported count only.
+    const action = [...el.querySelectorAll('button.station-action')].find(b =>
+      b.textContent!.includes('with no data')) as HTMLButtonElement;
+    expect(action).toBeDefined();
+    expect(action.textContent).toContain('Disable 2 sensors with no data');
+
+    action.click();
+    await settle(fixture);
+    // Drafted, and the action disappears (nothing left to disable).
+    expect(el.textContent).toContain('2 draft changes, not saved yet.');
+    expect([...el.querySelectorAll('button.station-action')].some(b => b.textContent!.includes('with no data'))).toBe(false);
+
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement).click();
+    await settle(fixture);
+    const proposal = (ipc.requests.filter(r => r.path === '/preview-save').at(-1)!
+      .body as { proposal: Array<Record<string, unknown>> }).proposal;
+    expect(proposal).toContainEqual({ dataPoint: 'co2', stationMac: MAC, enabled: false });
+    expect(proposal).toContainEqual({ dataPoint: 'dewPoint4', stationMac: MAC, enabled: false });
+    // The already-disabled row is untouched.
+    expect(proposal.filter(f => f.dataPoint === 'co2_in' && f.stationMac === MAC)).toEqual([]);
+  });
+
+  it('the hide-no-data filter removes never-reported rows from the tables but never the station action', async () => {
+    const base = editorState();
+    const unseen = { stationMac: MAC, dataPoint: 'co2', kind: 'temperature' as const, measurement: 'temperature',
+      sourceUnit: 'fahrenheit', name: 'CO2', enabled: true, batteryField: null, origin: 'default' as const, everReported: false };
+    const ipc = makeIpc(editorState({ rows: [...base.rows, unseen] }), [], PREVIEW_OK);
+    const fixture = await render(ipc);
+    const el = fixture.nativeElement as HTMLElement;
+
+    const rowCodes = (): string[] => [...el.querySelectorAll('tbody code')].map(c => c.textContent!);
+    expect(rowCodes()).toContain('co2');
+
+    const filter = el.querySelector('.table-filter input') as HTMLInputElement;
+    expect(filter).toBeDefined();
+    filter.click();
+    await settle(fixture);
+    expect(rowCodes()).not.toContain('co2');
+    expect(rowCodes()).toContain('tempf'); // reported rows stay
+    // The bulk action still shows, counted from the UNFILTERED rows.
+    const action = [...el.querySelectorAll('button.station-action')].find(b => b.textContent!.includes('with no data'));
+    expect(action?.textContent).toContain('Disable 1 sensor with no data');
+
+    filter.click();
+    await settle(fixture);
+    expect(rowCodes()).toContain('co2');
+  });
+
+  it('UNKNOWN reporting history renders no no-data affordances (review P1)', async () => {
+    // A fresh upgrade can have live cached accessories and no
+    // discovery history: everReported is undefined, and nothing may
+    // claim the sensor has no data.
+    const base = editorState();
+    const unknownRow = { stationMac: MAC, dataPoint: 'co2', kind: 'temperature' as const, measurement: 'temperature',
+      sourceUnit: 'fahrenheit', name: 'CO2', enabled: true, batteryField: null, origin: 'default' as const };
+    const ipc = makeIpc(editorState({ rows: [...base.rows, unknownRow] }), [], PREVIEW_OK);
+    const fixture = await render(ipc);
+    const el = fixture.nativeElement as HTMLElement;
+    expect(el.querySelectorAll('.nodata-chip')).toHaveLength(0);
+    expect([...el.querySelectorAll('button.station-action')].some(b => b.textContent!.includes('with no data'))).toBe(false);
+    expect(el.querySelector('.table-filter')).toBeNull();
+  });
+
+  it('bulk-disable re-declares a custom identity in its station exception (review P2-2)', async () => {
+    const base = editorState();
+    const customUnseen = {
+      stationMac: MAC, dataPoint: 'custom_wind', kind: 'motion' as const, measurement: 'wind-speed',
+      sourceUnit: 'mph', name: 'Custom Wind', enabled: true, batteryField: null,
+      origin: 'global' as const, identityScope: 'custom-global' as const, everReported: false,
+    };
+    const ipc = makeIpc(editorState({ rows: [...base.rows, customUnseen] }), [], PREVIEW_OK);
+    const fixture = await render(ipc);
+    const el = fixture.nativeElement as HTMLElement;
+    ([...el.querySelectorAll('button.station-action')].find(b => b.textContent!.includes('with no data')) as HTMLButtonElement).click();
+    await settle(fixture);
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement).click();
+    await settle(fixture);
+    const proposal = (ipc.requests.filter(r => r.path === '/preview-save').at(-1)!
+      .body as { proposal: Array<Record<string, unknown>> }).proposal;
+    expect(proposal).toContainEqual({
+      dataPoint: 'custom_wind', stationMac: MAC,
+      kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph', enabled: false,
+    });
+  });
+
+  it('the no-data filter never hides dirty, expanded, or noted rows, and counts what it hides (review P2-3)', async () => {
+    const base = editorState();
+    const mk = (dp: string, extra: Record<string, unknown> = {}): Record<string, unknown> => ({
+      stationMac: MAC, dataPoint: dp, kind: 'temperature', measurement: 'temperature',
+      sourceUnit: 'fahrenheit', name: dp, enabled: true, batteryField: null,
+      origin: 'default', everReported: false, ...extra,
+    });
+    const ipc = makeIpc(editorState({
+      rows: [...base.rows, mk('co2'), mk('co2_in'), mk('co2_in_aqin')] as never,
+      notes: [{ severity: 'note', code: 'orphan-battery-field', source: 'override',
+        stationMac: MAC, dataPoint: 'co2_in_aqin', message: 'A note about this row.' }],
+    }), [], PREVIEW_OK);
+    const fixture = await render(ipc);
+    const el = fixture.nativeElement as HTMLElement;
+    const rowCodes = (): string[] => [...el.querySelectorAll('tbody code')].map(c => c.textContent!);
+
+    // Draft an edit on co2, open the editor on co2_in.
+    openEditor(fixture, 'co2');
+    typeInto(el.querySelector('.editor-form input[type="text"]') as HTMLInputElement, 'Renamed CO2');
+    await settle(fixture);
+    ([...el.querySelectorAll('.editor-form button')].find(b => b.textContent === 'OK') as HTMLButtonElement).click();
+    await settle(fixture);
+    openEditor(fixture, 'co2_in');
+
+    (el.querySelector('.table-filter input') as HTMLInputElement).click();
+    await settle(fixture);
+    // Dirty, expanded, and noted rows all stay...
+    expect(rowCodes()).toContain('co2');       // dirty
+    expect(rowCodes()).toContain('co2_in');    // expanded
+    expect(rowCodes()).toContain('co2_in_aqin'); // noted
+    // ...and nothing here was actually hidable, so no hidden note.
+    expect(el.querySelector('.hidden-note')).toBeNull();
+
+    // Close the editor and discard: now all three hide, visibly counted.
+    ([...el.querySelectorAll('.editor-form button')].find(b => b.textContent === 'Cancel') as HTMLButtonElement).click();
+    await settle(fixture);
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Discard drafts') as HTMLButtonElement).click();
+    await settle(fixture);
+    expect(rowCodes()).toContain('co2_in_aqin'); // noted rows never hide
+    expect(rowCodes()).not.toContain('co2');
+    expect(rowCodes()).not.toContain('co2_in');
+    expect(el.querySelector('.hidden-note')!.textContent).toContain('2 sensors with no data hidden.');
+    (el.querySelector('.table-filter input') as HTMLInputElement).click();
+    await settle(fixture);
+  });
+
+  it('two same-turn Save activations run ONE save transaction (review P2-8)', async () => {
+    const ipc = makeIpc(editorState(), [], PREVIEW_OK, {
+      ok: true, validationToken: 'tok', nextConfig: [{}], nextConfigDigest: 'digest-live', snapshot: 'exists',
+    });
+    const fixture = await render(ipc);
+    const el = openEditor(fixture, 'tempinf');
+    typeInto(el.querySelector('.editor-form input[type="text"]') as HTMLInputElement, 'Patio Temp');
+    await settle(fixture);
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement).click();
+    await settle(fixture);
+    const save = [...el.querySelectorAll('button')].find(b => b.textContent === 'Save changes') as HTMLButtonElement;
+    save.click();
+    save.click(); // same turn: the disabled binding has not rendered yet
+    await settle(fixture);
+    expect(ipc.requests.filter(r => r.path === '/compose-save')).toHaveLength(1);
+  });
+
+  it('a FAILED cached-accessories read sends NO cache key to the server (review round-2 P1)', async () => {
+    // The real chain: service failure must reach the handler as the
+    // ABSENCE of a snapshot, never as an empty (complete) one.
+    const requests: Array<{ path: string; body: unknown }> = [];
+    const ipc: HomebridgeIpc & { requests: typeof requests } = {
+      requests,
+      getPluginConfig: async () => [{ platform: 'AmbientWeatherSensors' }],
+      getCachedAccessories: async () => {
+        throw new Error('cache handler unavailable');
+      },
+      request: async (path: string, body?: unknown) => {
+        requests.push({ path, body });
+        if (path === '/editor-state') {
+          return editorState();
+        }
+        if (path === '/vocabulary') {
+          return VOCAB;
+        }
+        return { notices: [] };
+      },
+    };
+    const fixture = await render(ipc);
+    expect(fixture.nativeElement.textContent).toContain('tempf'); // page still renders
+    const req = requests.find(r => r.path === '/editor-state');
+    expect(Object.keys(req!.body as object)).not.toContain('cachedAccessoryUniqueIds');
+  });
+
+  it('a pending FAMILY unit draft keeps a default-origin no-data row visible (review round-2 P2)', async () => {
+    const base = editorState();
+    const gustRow = {
+      stationMac: MAC, dataPoint: 'windgustmph', kind: 'motion' as const, measurement: 'wind-speed',
+      sourceUnit: 'mph', displayUnit: 'mph', name: 'Wind Gust', enabled: true, batteryField: null,
+      origin: 'default' as const, everReported: false,
+    };
+    const ipc = makeIpc(editorState({ rows: [...base.rows, gustRow] }), [], PREVIEW_OK);
+    const fixture = await render(ipc);
+    const el = fixture.nativeElement as HTMLElement;
+    // The family choice drafts under the GLOBAL key; the row's own
+    // draft key is station-scoped — the filter must consider both.
+    const windSel = ([...el.querySelectorAll('.unit-families label')] as HTMLElement[])
+      .find(l => l.textContent!.includes('Wind Speed'))!.querySelector('select')!;
+    windSel.value = 'fps';
+    windSel.dispatchEvent(new Event('change'));
+    await settle(fixture);
+    (el.querySelector('.table-filter input') as HTMLInputElement).click();
+    await settle(fixture);
+    expect([...el.querySelectorAll('tbody code')].map(c => c.textContent!)).toContain('windgustmph');
+    (el.querySelector('.table-filter input') as HTMLInputElement).click();
+    await settle(fixture);
   });
 
   it('a stale in-flight preview never overwrites a newer draft (review #43 P2-4)', async () => {
@@ -1239,7 +1692,7 @@ describe('draft editing + preview (PR B — no persistence)', () => {
     await settle(fixture);
 
     const headings = [...el.querySelectorAll('h3')].map(h => h.textContent!.trim());
-    expect(headings).toContain('Preview notes');
+    expect(headings).toContain('Worth checking before saving');
     expect([...el.querySelectorAll('.banner.info')].some(b => b.textContent!.includes('batt_co2'))).toBe(true);
   });
 
@@ -1256,7 +1709,7 @@ describe('draft editing + preview (PR B — no persistence)', () => {
     await settle(fixture);
 
     const paths = new Set(ipc.requests.map(r => r.path));
-    expect([...paths].sort()).toEqual(['/editor-state', '/preview-save', '/vocabulary']);
+    expect([...paths].sort()).toEqual(['/editor-state', '/notices', '/preview-save', '/vocabulary']);
     expect('updatePluginConfig' in ipc).toBe(false);
     expect('savePluginConfig' in ipc).toBe(false);
   });
@@ -1371,8 +1824,10 @@ describe('save flow (PR C / finding 5 — the ONE route is composeAndPersist)', 
     btn(el, 'Save changes')!.click();
     await settle(fixture);
     expect(el.textContent).toContain('Saved.');
-    expect(el.textContent).toContain('its Save button stays off');
-    expect(el.textContent).toContain('Reload the plugin settings page before editing those fields.');
+    // Precise restart claim (beta.17 requirement): the page names the
+    // child-bridge restart and never implies it performed one.
+    expect(el.textContent).toContain("Restart Child Bridge action");
+    expect(el.textContent).toContain('This page cannot trigger the restart itself.');
     // No degraded-page warning: nothing failed.
     expect(el.textContent).not.toContain('could not be restored after the save');
   });
@@ -1390,45 +1845,25 @@ describe('save flow (PR C / finding 5 — the ONE route is composeAndPersist)', 
     expect(el.textContent).toContain('does not exactly match');
   });
 
-  it('a structural save opens the confirmation card; Cancel persists NOTHING', async () => {
+  it('a structural save saves DIRECTLY with the preview digest: the preview is the confirmation (beta.17 RC smoke)', async () => {
     const ipc = makeIpc(editorState(), [], STRUCTURAL_PREVIEW, COMPOSE_OK);
     const fixture = await render(ipc);
     const el = await draftAndPreview(fixture);
+    // The registration consequences are stated ON the preview, before
+    // any save gesture: the user confirms by clicking Save.
+    expect(el.textContent).toContain('would register, deregister, or re-register on save');
+    expect(el.textContent).toContain('Saving applies the');
+    expect(el.textContent).not.toContain('ask for confirmation');
 
     btn(el, 'Save changes')!.click();
     await settle(fixture);
-    expect(el.querySelector('.confirm-card')).not.toBeNull();
-    // In flow, not a fixed overlay (beta.14 smoke #4), and the other
-    // controls lock while the confirmation is open. The class name
-    // must stay out of Bootstrap's namespace: HB UI X mirrors its
-    // stylesheets into the iframe and Bootstrap's .modal rule is
-    // display:none (beta.14 smoke #6) - bootstrapNamespace.test.ts
-    // pins every class this app uses against that inventory.
-    expect(el.querySelector('.modal')).toBeNull();
-    expect(el.querySelector('.modal-backdrop')).toBeNull();
-    expect((btn(el, 'Preview changes') as HTMLButtonElement).disabled).toBe(true);
-    expect(el.textContent).toContain('Confirm registration changes');
-
-    btn(el, 'Cancel')!.click();
-    await settle(fixture);
+    // No second confirmation step exists...
     expect(el.querySelector('.confirm-card')).toBeNull();
-    expect(ipc.requests.some(r => r.path === '/compose-save')).toBe(false);
-    expect(ipc.persisted.filter(p => p.event === 'update' || p.event === 'save')).toEqual([]);
-  });
-
-  it('Confirm save sends the digest and persists', async () => {
-    const ipc = makeIpc(editorState(), [], STRUCTURAL_PREVIEW, COMPOSE_OK);
-    const fixture = await render(ipc);
-    const el = await draftAndPreview(fixture);
-    btn(el, 'Save changes')!.click();
-    await settle(fixture);
-    btn(el, 'Confirm save')!.click();
-    await settle(fixture);
-
+    expect(el.textContent).not.toContain('Confirm registration changes');
+    // ...and the save ran with the digest of the previewed consequences.
     const compose = ipc.requests.find(r => r.path === '/compose-save');
     expect((compose?.body as { confirmDigest?: string }).confirmDigest).toBe('ef'.repeat(32));
     expect(ipc.persisted.map(p => p.event).filter(e => e === 'update' || e === 'save')).toEqual(['update', 'save']);
-    expect(el.querySelector('.confirm-card')).toBeNull();
   });
 
   it('a compose refusal persists NOTHING and renders the structured refusal', async () => {
@@ -1645,14 +2080,19 @@ describe('settings-form freeze contract (review #47 round 4, P1)', () => {
     };
   }
 
-  it('a bridge missing either Save button control cannot save (fail closed)', () => {
-    for (const missing of ['disableSaveButton', 'enableSaveButton'] as const) {
-      TestBed.resetTestingModule();
-      const ipc = fullIpc();
-      delete (ipc as Record<string, unknown>)[missing];
-      const service = serviceWith(ipc);
-      expect(() => service.orchestratorDeps(), missing).toThrow(/Save button controls/);
-    }
+  it('a bridge missing the disable control cannot save (fail closed); enable is no longer required', () => {
+    TestBed.resetTestingModule();
+    const ipc = fullIpc();
+    delete (ipc as Record<string, unknown>).disableSaveButton;
+    const service = serviceWith(ipc);
+    expect(() => service.orchestratorDeps()).toThrow(/Save button controls/);
+    // beta.17 never enables the native Save, so a bridge without
+    // enableSaveButton still saves.
+    TestBed.resetTestingModule();
+    const ipc2 = fullIpc();
+    delete (ipc2 as Record<string, unknown>).enableSaveButton;
+    const service2 = serviceWith(ipc2);
+    expect(() => service2.orchestratorDeps()).not.toThrow();
   });
 
   it('the freeze never touches the schema form (its two-way binding zeroes pluginConfig on destroy)', () => {
@@ -1674,7 +2114,9 @@ describe('settings-form freeze contract (review #47 round 4, P1)', () => {
     const deps = service.orchestratorDeps();
     deps.freezeSettingsForm();
     deps.unfreezeSettingsForm();
-    expect(calls).toEqual(['disableSaveButton', 'enableSaveButton']);
+    // beta.17: the native Save is PERMANENTLY disabled — unfreeze
+    // re-asserts the disable and never enables.
+    expect(calls).toEqual(['disableSaveButton', 'disableSaveButton']);
   });
 });
 
@@ -1981,5 +2423,224 @@ describe('PR #57 round 1: trigger gating and sourceUnit switches', () => {
       kind: 'motion', measurement: 'wind-speed', sourceUnit: 'fps',
       enabled: true, name: 'xbarnwind',
     }]);
+  });
+});
+
+describe('Connection settings (beta.17, GA #56)', () => {
+  async function settle(fixture: ComponentFixture<AwnRootComponent>): Promise<void> {
+    await new Promise((r) => setTimeout(r, 0));
+    await fixture.whenStable();
+    fixture.detectChanges();
+  }
+  function openConnection(fixture: ComponentFixture<AwnRootComponent>): HTMLElement {
+    const el = fixture.nativeElement as HTMLElement;
+    (el.querySelector('.conn-summary') as HTMLButtonElement).click();
+    fixture.detectChanges();
+    return el;
+  }
+  function control(el: HTMLElement, name: string): HTMLInputElement {
+    return el.querySelector(`.conn-grid [formcontrolname="${name}"]`) as HTMLInputElement;
+  }
+  function typeInto(input: HTMLInputElement, value: string): void {
+    input.value = value;
+    input.dispatchEvent(new Event('input'));
+  }
+  const PREVIEW: PreviewResultDto = {
+    ok: true, canonicalSensorMap: [], rows: [], changes: [], configOnly: [],
+    settingsChanged: ['name'], structuralChangeCount: 0,
+    digest: 'ef'.repeat(32), warnings: [], notes: [],
+  };
+
+  it('a name edit counts as a draft, previews with a settings patch, and renders the settings chip', async () => {
+    const ipc = makeIpc(editorState(), [], PREVIEW);
+    const fixture = await render(ipc);
+    const el = openConnection(fixture);
+    typeInto(control(el, 'name'), 'Renamed AWN');
+    await settle(fixture);
+    expect(el.textContent).toContain('1 draft change, not saved yet.');
+
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement).click();
+    await settle(fixture);
+    const req = ipc.requests.find(r => r.path === '/preview-save');
+    expect((req?.body as { settings?: unknown }).settings).toEqual({ name: 'Renamed AWN' });
+    expect(el.textContent).toContain('Settings saved with this change: name.');
+  });
+
+  it('credential intents from the mask field: untouched = unchanged, typed = set, emptied = clear', async () => {
+    const ipc = makeIpc(editorState(), [], PREVIEW);
+    const fixture = await render(ipc);
+    const el = openConnection(fixture);
+
+    // Stored keys render as the mask, never as values or placeholders.
+    const MASK = '\u2022'.repeat(8);
+    expect(control(el, 'apiKey').value).toBe(MASK);
+    expect(control(el, 'applicationKey').value).toBe(MASK);
+
+    // Type over one, empty the other: set + clear.
+    typeInto(control(el, 'apiKey'), 'new-key-value');
+    typeInto(control(el, 'applicationKey'), '');
+    await settle(fixture);
+    expect(el.textContent).toContain('2 draft changes, not saved yet.');
+
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement).click();
+    await settle(fixture);
+    const req = ipc.requests.find(r => r.path === '/preview-save');
+    expect((req?.body as { settings?: unknown }).settings).toEqual({
+      apiKey: { set: 'new-key-value' },
+      applicationKey: { clear: true },
+    });
+
+    // Restoring the mask returns both fields to unchanged.
+    typeInto(control(el, 'apiKey'), MASK);
+    typeInto(control(el, 'applicationKey'), MASK);
+    await settle(fixture);
+    expect(el.textContent).toContain('No draft changes yet.');
+  });
+
+  it('focusing a pristine masked credential selects the mask, so typing replaces it (delta review P2-2)', async () => {
+    const ipc = makeIpc(editorState(), [], PREVIEW);
+    const fixture = await render(ipc);
+    const el = openConnection(fixture);
+    const input = control(el, 'apiKey');
+    input.focus();
+    input.dispatchEvent(new Event('focus'));
+    expect(input.selectionStart).toBe(0);
+    expect(input.selectionEnd).toBe('\u2022'.repeat(8).length);
+
+    // A field the user already retyped is NOT re-selected on refocus.
+    typeInto(input, 'typed-key');
+    input.setSelectionRange(3, 3);
+    input.dispatchEvent(new Event('focus'));
+    expect(input.selectionStart).toBe(3);
+    expect(input.selectionEnd).toBe(3);
+  });
+
+  it('an untouched form previews with NO settings field (sensor-only save)', async () => {
+    const ipc = makeIpc(editorState(), [], PREVIEW);
+    const fixture = await render(ipc);
+    const el = fixture.nativeElement as HTMLElement;
+    // Draft a row change only.
+    const tr = [...el.querySelectorAll('tbody tr')]
+      .find(r => r.querySelector('td code')?.textContent === 'tempinf')!;
+    (tr.querySelector('button') as HTMLButtonElement).click();
+    fixture.detectChanges();
+    const name = el.querySelector('.editor-form input[type="text"]') as HTMLInputElement;
+    typeInto(name, 'Patio Temp');
+    await settle(fixture);
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement).click();
+    await settle(fixture);
+    const req = ipc.requests.find(r => r.path === '/preview-save');
+    expect('settings' in (req!.body as Record<string, unknown>)
+      && (req!.body as Record<string, unknown>).settings !== undefined).toBe(false);
+  });
+
+  it('discard resets the Connection form along with row drafts', async () => {
+    const fixture = await render(makeIpc(editorState(), []));
+    const el = openConnection(fixture);
+    typeInto(control(el, 'name'), 'Renamed AWN');
+    await settle(fixture);
+    expect(el.textContent).toContain('1 draft change, not saved yet.');
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Discard drafts') as HTMLButtonElement).click();
+    await settle(fixture);
+    expect(el.textContent).toContain('No draft changes yet.');
+  });
+
+  it('a read-only page (editor unavailable) renders the Connection form disabled', async () => {
+    const fixture = await render(makeIpc(editorState({ editorAvailable: false }), []));
+    const el = openConnection(fixture);
+    expect(control(el, 'name').hasAttribute('disabled')).toBe(true);
+    expect(control(el, 'apiKey').hasAttribute('disabled')).toBe(true);
+  });
+});
+
+describe('preview race vs Connection edits (PR #60 round 4 P2)', () => {
+  async function settle(fixture: ComponentFixture<AwnRootComponent>): Promise<void> {
+    await new Promise((r) => setTimeout(r, 0));
+    await fixture.whenStable();
+    fixture.detectChanges();
+  }
+
+  it('a Connection edit while a preview is in flight discards the stale response and never re-arms Save', async () => {
+    const PREVIEW: PreviewResultDto = {
+      ok: true, canonicalSensorMap: [], rows: [], changes: [], configOnly: [],
+      settingsChanged: ['name'], structuralChangeCount: 0,
+      digest: 'aa'.repeat(32), warnings: [], notes: [],
+    };
+    const ipc = makeIpc(editorState(), [], PREVIEW);
+    // Defer /preview-save until the test releases it.
+    let releasePreview: (() => void) | null = null;
+    const innerRequest = ipc.request.bind(ipc);
+    ipc.request = async (path: string, body?: unknown) => {
+      if (path === '/preview-save') {
+        await new Promise<void>((r) => { releasePreview = r; });
+      }
+      return innerRequest(path, body);
+    };
+
+    const fixture = await render(ipc);
+    const el = fixture.nativeElement as HTMLElement;
+    (el.querySelector('.conn-summary') as HTMLButtonElement).click();
+    fixture.detectChanges();
+    const name = el.querySelector('.conn-grid [formcontrolname="name"]') as HTMLInputElement;
+    name.value = 'First Name';
+    name.dispatchEvent(new Event('input'));
+    await settle(fixture);
+
+    // Start the preview; it hangs on the deferred request.
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement).click();
+    await settle(fixture);
+    expect(releasePreview).not.toBeNull();
+
+    // Mid-flight: edit a connection setting again.
+    name.value = 'Second Name';
+    name.dispatchEvent(new Event('input'));
+    await settle(fixture);
+
+    // The stale response lands — and must be DISCARDED.
+    releasePreview!();
+    await settle(fixture);
+    expect(el.textContent).not.toContain('Settings saved with this change');
+    expect([...el.querySelectorAll('button')].some(b => b.textContent === 'Save changes')).toBe(false);
+  });
+});
+
+describe('rejected-preview race vs Connection edits (PR #60 round 5)', () => {
+  it('a mid-flight Connection edit also discards an OBSOLETE transport error', async () => {
+    const ipc = makeIpc(editorState(), []);
+    let rejectPreview: ((e: Error) => void) | null = null;
+    const innerRequest = ipc.request.bind(ipc);
+    ipc.request = async (path: string, body?: unknown) => {
+      if (path === '/preview-save') {
+        await new Promise<void>((_r, rej) => { rejectPreview = rej as (e: Error) => void; });
+      }
+      return innerRequest(path, body);
+    };
+
+    const fixture = await render(ipc);
+    const el = fixture.nativeElement as HTMLElement;
+    const settle = async (): Promise<void> => {
+      await new Promise((r) => setTimeout(r, 0));
+      await fixture.whenStable();
+      fixture.detectChanges();
+    };
+    (el.querySelector('.conn-summary') as HTMLButtonElement).click();
+    fixture.detectChanges();
+    const name = el.querySelector('.conn-grid [formcontrolname="name"]') as HTMLInputElement;
+    name.value = 'First Name';
+    name.dispatchEvent(new Event('input'));
+    await settle();
+
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement).click();
+    await settle();
+    expect(rejectPreview).not.toBeNull();
+
+    name.value = 'Second Name';
+    name.dispatchEvent(new Event('input'));
+    await settle();
+
+    rejectPreview!(new Error('bridge exploded mid-flight'));
+    await settle();
+    expect(el.textContent).not.toContain('bridge exploded mid-flight');
+    expect(el.textContent).not.toContain('Preview refused');
   });
 });

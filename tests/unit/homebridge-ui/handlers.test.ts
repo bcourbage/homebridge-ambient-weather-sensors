@@ -41,8 +41,10 @@ describe('handleGetStatus', () => {
   it('returns legacy mode for a bare config', async () => {
     const r = await handleGetStatus(deps(), { config: {} });
     expect(r.configMode).toBe('legacy');
-    expect(r.v2Flag.enabled).toBe(false);
-    expect(r.v2Flag.source).toBe('none');
+    // Post-flip (GA #65): v2 construction is the default even for a
+    // bare legacy config.
+    expect(r.v2Flag.enabled).toBe(true);
+    expect(r.v2Flag.source).toBe('default');
     expect(r.readOnly).toBe(true);
   });
 
@@ -72,7 +74,14 @@ describe('handleGetStatus', () => {
   it('detects the v2 flag from the config field', async () => {
     const r = await handleGetStatus(deps(), { config: { _sensorMapV2: true } });
     expect(r.v2Flag.enabled).toBe(true);
-    expect(r.v2Flag.source).toBe('config');
+    // Post-flip the opt-in form carries no information: enabled-by-default.
+    expect(r.v2Flag.source).toBe('default');
+  });
+
+  it('reports an explicit opt-out', async () => {
+    const r = await handleGetStatus(deps(), { config: { _sensorMapV2: false } });
+    expect(r.v2Flag.enabled).toBe(false);
+    expect(r.v2Flag.source).toBe('opted-out');
   });
 
   it('env source wins when both env and config are set', async () => {

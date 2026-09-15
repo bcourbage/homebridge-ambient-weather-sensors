@@ -82,6 +82,24 @@ export interface EditorAuthoredFragmentDto {
 
 /** One effective sensor row, resolved by the server, for preview. */
 export interface EditorRowDto {
+  /** Pure-default values for this row; see EditorRowDefaultsDto. */
+  defaults?: EditorRowDefaultsDto;
+  /**
+   * Whether the station is known to have reported this field, from
+   * POSITIVE evidence only (review P1: absence of history is not
+   * absence of the sensor):
+   *   true      — a discovery observation exists, or a cached
+   *               accessory for this (station, dataPoint) exists (an
+   *               upgrade can have live accessories and no
+   *               discovery.json yet).
+   *   false     — the discovery tracker HAS observed this station's
+   *               payload and this field has never appeared, and no
+   *               cached accessory exists for it.
+   *   undefined — unknown: no discovery history for this station, so
+   *               nothing may be inferred (the no-data affordances
+   *               must not render).
+   */
+  everReported?: boolean;
   stationMac: string;
   dataPoint: string;
   /** 'unrecognized' rows carry observational metadata only. */
@@ -131,6 +149,23 @@ export interface EditorRowDto {
  * so the needs-attention UI can associate a problem with its authored
  * fragment and field without parsing human-facing messages.
  */
+/**
+ * The values a row returns to when nothing is authored for it — the
+ * pure-defaults resolution over the same station inventory. Absent on
+ * unrecognized and custom rows (their default is nonexistence). The
+ * client overlays family displayUnit templates: they are overrides,
+ * deliberately not part of this projection.
+ */
+export interface EditorRowDefaultsDto {
+  enabled: boolean;
+  name?: string;
+  sourceUnit?: string;
+  displayUnit?: string;
+  threshold?: number;
+  triggerEnabled?: boolean;
+  triggerDirection?: 'above' | 'below';
+}
+
 export interface EditorDiagnosticDto {
   severity: 'error' | 'warning' | 'note';
   /** Stable machine-readable identifier for the diagnostic class. */
@@ -151,9 +186,25 @@ export interface EditorDiagnosticDto {
 }
 
 /** Response of request '/editor-state'. */
+/**
+ * Live plugin settings for the consolidated page (beta.17, GA #56).
+ * Credentials appear ONLY as presence booleans — never as values, on
+ * any DTO surface.
+ */
+export interface EditorSettingsDto {
+  name: string;
+  dataSource: 'polling' | 'realtime';
+  stationFilter: string[];
+  embedNameUpdateMinIntervalMinutes?: number;
+  apiKeySet: boolean;
+  applicationKeySet: boolean;
+}
+
 export interface EditorStateDto {
   configMode: 'legacy' | 'v2' | 'safe-mode';
   v2FlagEnabled: boolean;
+  /** Live settings rendered by the Connection section. */
+  settings: EditorSettingsDto;
   /**
    * True when this server's save path is live (PR C, finding 5) —
    * the client gates every save-capable control on it, so a newer
@@ -224,6 +275,21 @@ export interface PreviewChangeDto {
   structural: boolean;
   before?: EditorRowDto;
   after?: EditorRowDto;
+  /**
+   * Present when the platform-composed HAP display name changes in
+   * place — e.g. a stationFilter change crossing the one-station
+   * boundary switches every retained accessory between prefixed and
+   * bare names (round 2 P2). An in-place rename, not a structural
+   * re-registration.
+   */
+  displayName?: { before: string; after: string };
+  /**
+   * Note messages that concern THIS row (matched by station + data
+   * point), shown inline with the change instead of in a detached
+   * list (beta.17 RC smoke). Notes matching no previewed change stay
+   * in the top-level `notes`.
+   */
+  notes?: string[];
 }
 
 /**
@@ -245,15 +311,16 @@ export interface ConfigOnlyChangeDto {
   change: 'added' | 'removed' | 'modified';
   before?: EditorRowDto;
   after?: EditorRowDto;
+  /** Same inline note attachment as PreviewChangeDto.notes. */
+  notes?: string[];
 }
 
 /**
  * Response of request '/preview-save' — a server-authoritative dry
  * run of the save. NO writes happen; the browser never computes
  * signatures or diffs itself. `digest` is the stateless confirmation
- * token a structural save must present (activated with the save path
- * in a later release; carried here so the preview contract is
- * complete).
+ * token a structural save must present to /compose-save (live since
+ * PR C).
  */
 export type PreviewResultDto =
   | {
@@ -264,11 +331,16 @@ export type PreviewResultDto =
     rows: EditorRowDto[];
     changes: PreviewChangeDto[];
     configOnly: ConfigOnlyChangeDto[];
+    /** Settings keys this save changes (names only; never values). */
+    settingsChanged: string[];
     structuralChangeCount: number;
     /**
-     * sha256 over canonical JSON of (on-disk block, canonical map,
-     * sorted current accessory set, sorted proposed accessory set) —
-     * bound to the previewed CONSEQUENCES, not just the typed inputs.
+     * sha256 over canonical JSON of the previewed CONSEQUENCES: the
+     * on-disk block, the canonical map, both sorted accessory sets,
+     * the normalized changes and configOnly lists (salient row fields
+     * and composed display-name renames; volatile observation
+     * timestamps excluded), and the settingsChanged key list. Every
+     * consequence the user sees is bound.
      */
     digest: string;
     warnings: EditorDiagnosticDto[];

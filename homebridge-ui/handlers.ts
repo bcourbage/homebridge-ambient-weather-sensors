@@ -31,7 +31,9 @@ import {
 } from '../dist/sensorMap/legacyMirror.js';
 import { sensorMapShapeError, type EffectiveMapConfig } from '../dist/sensorMap/platformEffectiveMap.js';
 import { NON_TRIGGERING_MEASUREMENTS, STATION_MAC_REGEX } from '../dist/sensorMap/validation.js';
-import { shadowModeEnabled } from '../dist/sensorMap/shadowMode.js';
+import { filterStationInventory, indeterminateFilterStations } from '../dist/sensorMap/stationMatch.js';
+import { composeRowDisplayName } from '../dist/sensorMap/displayName.js';
+import { v2ConstructionEnabled } from '../dist/sensorMap/v2Flag.js';
 import {
   loadDiscoveryStore,
 } from '../dist/sensorMap/persistence/discoveryStore.js';
@@ -44,7 +46,6 @@ import {
 import { DISPLAY_FAMILIES, MEASUREMENT_LABELS, UNIT_VOCABULARY, unitOptionsFor } from '../dist/sensorMap/unitVocabulary.js';
 import { WRAPPER_FOR_KIND_AND_MEASUREMENT } from '../dist/sensorMap/wrappers.js';
 import { defaultRowFor } from '../dist/sensorMap/defaultMap.js';
-import { dynamicSchemaPath } from '../dist/sensorMap/dynamicSchema.js';
 import { PLUGIN_NAME } from '../dist/settings.js';
 import type { Logger, ReadStoreOptions } from '../dist/sensorMap/persistence/atomicWrite.js';
 import type {
@@ -62,6 +63,7 @@ import type {
 import type {
   EditorAuthoredFragmentDto,
   EditorDiagnosticDto,
+  EditorRowDefaultsDto,
   EditorRowDto,
   EditorStateDto,
   EditorStationDto,
@@ -105,7 +107,7 @@ export interface StatusPayload {
   version: string;
   v2Flag: {
     enabled: boolean;
-    source: 'env' | 'config' | 'none';
+    source: 'env' | 'default' | 'opted-out';
   };
   configMode: 'legacy' | 'v2' | 'safe-mode';
   configWarnings: string[];
@@ -147,7 +149,7 @@ export async function handleGetStatus(deps: HandlerDeps, payload: unknown): Prom
   return {
     version: deps.version,
     v2Flag: {
-      enabled: flagSource !== 'none',
+      enabled: flagSource !== 'opted-out',
       source: flagSource,
     },
     configMode: modeResult.mode,
@@ -184,17 +186,21 @@ function extractConfig(payload: unknown): ConfigInputShape {
   return {};
 }
 
+/**
+ * Post-flip (GA #65): v2 construction is the DEFAULT. The source
+ * distinguishes only the explicit opt-outs — 'default' and 'env' mean
+ * enabled; 'opted-out' means an explicit config/env disable.
+ */
 function detectV2FlagSource(
   config: ConfigInputShape | undefined,
   env: NodeJS.ProcessEnv,
-): 'env' | 'config' | 'none' {
+): 'env' | 'default' | 'opted-out' {
   if (env.SENSOR_MAP_V2 === '1' || env.SENSOR_MAP_V2 === 'true') {
     return 'env';
   }
-  if (shadowModeEnabled({ env: {}, config: (config as Record<string, unknown>) ?? {} })) {
-    return 'config';
-  }
-  return 'none';
+  return v2ConstructionEnabled({ env, config: (config as Record<string, unknown>) ?? {} })
+    ? 'default'
+    : 'opted-out';
 }
 
 // ---- Compose-save boundary (GA task #67 / finding 5) ---------------
@@ -235,13 +241,17 @@ export type ComposeSaveError =
   | { code: 'snapshot-write-failed'; message: string }
   | { code: 'conversion-journal-error'; message: string }
   | { code: 'unsaved-settings-changes'; message: string }
-  | { code: 'commit-without-validation'; message: string };
+  | { code: 'commit-without-validation'; message: string }
+  | { code: 'invalid-settings'; message: string }
+  | { code: 'indeterminate-station-filter'; message: string };
 
 export type ComposeSaveResult =
   | {
     ok: true;
     /** The composed platform block the CLIENT must persist verbatim. */
     nextConfig: Record<string, unknown>;
+    /** Settings keys this save changes (names only; never values). */
+    settingsChanged: string[];
     /**
      * Canonical digest of `nextConfig` — the post-save receipt: after
      * persisting and reloading /editor-state, the session's new
@@ -253,8 +263,9 @@ export type ComposeSaveResult =
     /**
      * Opaque token binding everything the validate phase verified —
      * the authoritative disk block, the canonicalized proposal, the
-     * settings-form state, the inventory-bound consequences, the
-     * composed output, and the prospective record outcome. The COMMIT
+     * page's configuration-copy state, the inventory-bound
+     * consequences, the composed output, and the prospective record
+     * outcome. The COMMIT
      * requires it and recomputes it from current state before writing
      * anything (review #47 round 5): a commit without it, or with any
      * drift since validation, refuses with zero writes.
@@ -291,8 +302,9 @@ export interface ComposeSavePayload {
    * ONLY to locate + staleness-check the on-disk block — never as the
    * authoritative current configuration. Only valid for callers that
    * hold a FAITHFUL copy of the on-disk block; a browser client must
-   * send `baseDigest` instead (HB UI X's getPluginConfig() returns the
-   * schema form's mutated in-memory copy, which never byte-matches).
+   * send `baseDigest` instead (HB UI X's getPluginConfig() returns its
+   * session's IN-MEMORY copy, which is not guaranteed to byte-match
+   * disk).
    */
   base?: unknown;
   /**
@@ -305,6 +317,16 @@ export interface ComposeSavePayload {
   baseDigest?: unknown;
   /** Proposed sensor-map override state from the editor. */
   proposal?: unknown;
+  /**
+   * Live-settings patch from the consolidated page (beta.17, GA #56):
+   * name, dataSource, stationFilter, embedNameUpdateMinIntervalMinutes,
+   * and credential INTENTS ({ set } replaces, { clear: true } removes,
+   * absent means unchanged — a blank field can never clear a secret by
+   * accident). Applied to the on-disk block inside the guarded
+   * transaction, before compose; covered by the validation token
+   * through nextConfigDigest.
+   */
+  settings?: unknown;
   /**
    * Station-inventory contributions the SERVER cannot see (§8.7):
    * cached-accessory uniqueIds (from homebridge.getCachedAccessories())
@@ -324,15 +346,15 @@ export interface ComposeSavePayload {
    */
   confirmDigest?: unknown;
   /**
-   * The settings page's in-memory copy of the block being edited
-   * (from getPluginConfig()), sent by the SAVE flow so the server can
-   * detect UNSAVED settings-form changes (review #47 P1-1): editor
-   * persistence replaces the in-memory config with the disk-derived
-   * composed block, so a form edit the user has not saved would be
-   * silently discarded. The server compares this against the on-disk
-   * block, tolerating only the schema form's measured automatic
-   * materialization (empty arrays for absent keys); any other
-   * difference refuses with `unsaved-settings-changes`.
+   * The page's in-memory copy of the block being edited (from
+   * getPluginConfig()), sent by the SAVE flow so the server can detect
+   * a DIVERGED session copy (review #47 P1-1): persistence replaces
+   * the in-memory config with the disk-derived composed block, so a
+   * divergence would be silently discarded. The server compares this
+   * against the on-disk block, tolerating only the measured automatic
+   * materialization a pre-beta.17 schema-form session left behind
+   * (empty arrays for absent keys); any other difference refuses with
+   * `unsaved-settings-changes`.
    */
   formBlock?: unknown;
   /**
@@ -370,6 +392,14 @@ export interface ComposeSavePayload {
  */
 interface SavePipelineContext {
   block: Record<string, unknown>;
+  /** The assembled inventory through the ON-DISK block's stationFilter (the before runtime world). */
+  stationsBefore: StationInventory;
+  /** The assembled inventory through the PATCHED block's stationFilter (the after runtime world). */
+  stationsAfter: StationInventory;
+  /** The block with the settings patch applied — what compose consumes. */
+  effectiveBlock: Record<string, unknown>;
+  /** Settings keys the patch changed (credential VALUES never appear). */
+  settingsChanged: string[];
   modeResult: ReturnType<typeof detectConfigMode>;
   proposal: SensorMapOverride[];
   stations: StationInventory;
@@ -389,6 +419,131 @@ type SavePipelineResult =
  * shape/seeding, §8.7 inventory, same-machinery validation, canonical
  * serialization, and the hard divergence gate. Performs NO writes.
  */
+type SettingsPatchOutcome =
+  | { block: Record<string, unknown>; changed: string[] }
+  | { error: string };
+
+const SETTINGS_KEYS = new Set([
+  'name', 'dataSource', 'stationFilter', 'embedNameUpdateMinIntervalMinutes', 'apiKey', 'applicationKey',
+]);
+
+/**
+ * Apply the consolidated page's settings patch to a COPY of the
+ * on-disk block. Fail-closed: any unknown key or malformed value
+ * refuses the whole save. Credentials are intent-shaped; a sensor-only
+ * save (no settings field at all) returns the block object UNTOUCHED,
+ * so stored credentials pass through compose byte-for-byte.
+ */
+function applySettingsPatch(block: Record<string, unknown>, raw: unknown): SettingsPatchOutcome {
+  if (raw === undefined) {
+    return { block, changed: [] };
+  }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return { error: 'settings must be an object.' };
+  }
+  const patch = raw as Record<string, unknown>;
+  const unknownKeys = Object.keys(patch).filter(k => !SETTINGS_KEYS.has(k));
+  if (unknownKeys.length > 0) {
+    return { error: `settings contains unsupported keys: ${unknownKeys.join(', ')}.` };
+  }
+  const next: Record<string, unknown> = { ...block };
+  const changed: string[] = [];
+
+  if ('name' in patch) {
+    if (typeof patch.name !== 'string' || patch.name.trim() === '') {
+      return { error: 'settings.name must be a non-empty string.' };
+    }
+    const v = patch.name.trim();
+    if (v !== block.name) {
+      next.name = v;
+      changed.push('name');
+    }
+  }
+
+  if ('dataSource' in patch) {
+    if (patch.dataSource !== 'polling' && patch.dataSource !== 'realtime') {
+      return { error: "settings.dataSource must be 'polling' or 'realtime'." };
+    }
+    const current = block.dataSource === 'realtime' ? 'realtime' : 'polling';
+    if (patch.dataSource !== current) {
+      if (patch.dataSource === 'polling') {
+        delete next.dataSource; // polling is the default; keep the block minimal
+      } else {
+        next.dataSource = 'realtime';
+      }
+      changed.push('dataSource');
+    }
+  }
+
+  if ('stationFilter' in patch) {
+    if (!Array.isArray(patch.stationFilter)
+      || patch.stationFilter.some(e => typeof e !== 'string')) {
+      return { error: 'settings.stationFilter must be an array of strings.' };
+    }
+    const v = (patch.stationFilter as string[]).map(e => e.trim()).filter(e => e !== '');
+    const current = Array.isArray(block.stationFilter) ? block.stationFilter : [];
+    if (JSON.stringify(v) !== JSON.stringify(current)) {
+      if (v.length === 0) {
+        delete next.stationFilter;
+      } else {
+        next.stationFilter = v;
+      }
+      changed.push('stationFilter');
+    }
+  }
+
+  if ('embedNameUpdateMinIntervalMinutes' in patch) {
+    const v = patch.embedNameUpdateMinIntervalMinutes;
+    if (v === null) {
+      if ('embedNameUpdateMinIntervalMinutes' in block) {
+        delete next.embedNameUpdateMinIntervalMinutes;
+        changed.push('embedNameUpdateMinIntervalMinutes');
+      }
+    } else if (typeof v !== 'number' || !Number.isFinite(v) || v < 0) {
+      return { error: 'settings.embedNameUpdateMinIntervalMinutes must be a non-negative number (or null to reset).' };
+    } else if (v !== block.embedNameUpdateMinIntervalMinutes) {
+      next.embedNameUpdateMinIntervalMinutes = v;
+      changed.push('embedNameUpdateMinIntervalMinutes');
+    }
+  }
+
+  for (const key of ['apiKey', 'applicationKey'] as const) {
+    if (!(key in patch)) {
+      continue; // unchanged: the stored secret passes through untouched
+    }
+    const intent = patch[key];
+    if (!intent || typeof intent !== 'object' || Array.isArray(intent)) {
+      return { error: `settings.${key} must be { set: <value> } or { clear: true }.` };
+    }
+    const { set, clear, ...rest } = intent as { set?: unknown; clear?: unknown };
+    if (Object.keys(rest).length > 0 || (set !== undefined && clear !== undefined)) {
+      return { error: `settings.${key} must carry exactly one of set / clear.` };
+    }
+    if (clear !== undefined) {
+      if (clear !== true) {
+        return { error: `settings.${key}.clear must be literally true.` };
+      }
+      if (key in block) {
+        delete next[key];
+        changed.push(key);
+      }
+    } else if (set !== undefined) {
+      if (typeof set !== 'string' || set.trim() === '') {
+        return { error: `settings.${key}.set must be a non-empty string.` };
+      }
+      // Deliberately marked changed even when the value equals the
+      // stored one: comparing would create an equality oracle on a
+      // secret.
+      next[key] = set.trim();
+      changed.push(key);
+    } else {
+      return { error: `settings.${key} must carry exactly one of set / clear.` };
+    }
+  }
+
+  return { block: next, changed };
+}
+
 async function runSavePipeline(
   deps: HandlerDeps,
   p: ComposeSavePayload,
@@ -440,12 +595,11 @@ async function runSavePipeline(
   //         what the client loaded, refuse rather than compose against
   //         a stale view. The PREFERRED token is `baseDigest`, the
   //         canonical digest /editor-state issued for the block it
-  //         rendered: HB UI X's getPluginConfig() hands the client the
-  //         settings page's IN-MEMORY config, which the standard
-  //         schema form mutates (it materializes schema defaults such
-  //         as `includeOnly: []`), so a client-side block copy can
-  //         NEVER be trusted to byte-match disk (beta.13 smoke:
-  //         preview refused stale-base on an untouched config). The
+  //         rendered: HB UI X's getPluginConfig() hands the client its
+  //         session's IN-MEMORY config, which is not guaranteed to
+  //         byte-match disk (pre-beta.17 the schema form materialized
+  //         defaults into it; beta.13 smoke: preview refused
+  //         stale-base on an untouched config). The
   //         digest ties the session to what the EDITOR loaded from
   //         disk instead. A raw `base` block is still accepted for
   //         callers that hold a faithful copy.
@@ -483,6 +637,18 @@ async function runSavePipeline(
     return { ok: false, error: { code: 'sensor-map-shape', message: shapeErr } };
   }
 
+  // ---- 3c. SETTINGS PATCH (beta.17, GA #56): applied to a copy of
+  //          the on-disk block inside this transaction, fail-closed on
+  //          any malformed value. Compose consumes the PATCHED block;
+  //          the base digest and the configuration-copy drift gate
+  //          keep judging the on-disk one.
+  const settingsOutcome = applySettingsPatch(block as Record<string, unknown>, p.settings);
+  if ('error' in settingsOutcome) {
+    return { ok: false, error: { code: 'invalid-settings', message: `${settingsOutcome.error} Nothing was written.` } };
+  }
+  const effectiveBlock = settingsOutcome.block;
+  const settingsChanged = settingsOutcome.changed;
+
   // ---- 4. Proposal shape. On a LEGACY config with NO proposal, the
   //         save is a pure migration: the proposal is seeded from the
   //         compat translation of the on-disk block (§5's "reads
@@ -515,20 +681,66 @@ async function runSavePipeline(
       ],
     });
   let proposal: SensorMapOverride[];
-  let stations: StationInventory;
+  let assembled: StationInventory;
   if (p.proposal === undefined) {
-    stations = assemble([]);
-    proposal = compatToOverrides(block as LegacyConfig, stations);
-    stations = assemble(proposal);
+    // Compat seeding is an AUTHORING concern: it translates the
+    // legacy config's semantics for every station, unfiltered — the
+    // station filter narrows the runtime, never the configuration.
+    proposal = compatToOverrides(block as LegacyConfig, assemble([]));
+    assembled = assemble(proposal);
   } else {
     proposal = p.proposal as SensorMapOverride[];
-    stations = assemble(proposal);
+    assembled = assemble(proposal);
   }
+  // THREE inventory views (PR #60 review rounds 1-2). The runtime
+  // applies stationFilter BEFORE reconciliation, so runtime
+  // CONSEQUENCES are computed per side through that side's filter —
+  // the before-world through the on-disk filter, the after-world
+  // through the patched one. But the filter is a runtime-visibility
+  // concern, never an authoring concern: validation, canonical
+  // serialization, the divergence gate, and the mirror all use the
+  // UNFILTERED inventory, so a filtered-out station's overrides and
+  // custom identities stay byte-present in the saved configuration
+  // (round 2 P1: canonicalize skips entries for stations absent from
+  // its inventory — feeding it a filtered list deletes config). The
+  // availability gate also stays unfiltered: a deliberately
+  // non-matching filter (the documented accessory-wipe trick) is a
+  // valid save, not a missing-inventory condition.
+  // FAIL CLOSED on indeterminate filter membership (round 3 P1): a
+  // name-form filter cannot be evaluated for a station whose name the
+  // assembled inventory does not know (cached-only or override-derived
+  // stations carry no name), while the runtime evaluates the same
+  // filter after fetching, with the real name. Interpreting the
+  // unknown name as excluded could preview ZERO consequences for a
+  // structural operation the runtime will perform. Refuse with the
+  // remedies instead.
+  for (const [label, filt] of [
+    ['current', (block as Record<string, unknown>).stationFilter],
+    ['proposed', effectiveBlock.stationFilter],
+  ] as const) {
+    const indeterminate = indeterminateFilterStations(assembled, filt);
+    if (indeterminate.length > 0) {
+      const macs = indeterminate.map(st => st.macAddress).join(', ');
+      return {
+        ok: false,
+        error: {
+          code: 'indeterminate-station-filter',
+          message: `The ${label} station filter uses station names, but the name of station ${macs} is not known `
+            + 'yet (the station is known only from cached accessories or overrides), so the preview cannot '
+            + 'determine which accessories the filter keeps. Run the plugin until it records the station in its '
+            + 'discovery data, or use the MAC form in the station filter. Nothing was written.',
+        },
+      };
+    }
+  }
+  const stationsBefore = filterStationInventory(assembled, (block as Record<string, unknown>).stationFilter);
+  const stationsAfter = filterStationInventory(assembled, effectiveBlock.stationFilter);
+  const stations = assembled;
   const legacyEnablesSensors = LEGACY_CATEGORY_TOGGLES.some(k => block[k] === true);
   const wouldConfigure = legacyEnablesSensors
     || proposal.length > 0
     || (Array.isArray(block.sensorMap) && block.sensorMap.length > 0);
-  if (stations.length === 0 && wouldConfigure) {
+  if (assembled.length === 0 && wouldConfigure) {
     return {
       ok: false,
       error: {
@@ -617,16 +829,16 @@ async function runSavePipeline(
 
   return {
     ok: true,
-    ctx: { block, modeResult, proposal, stations, discovery, uiState, effectiveMap, canonical },
+    ctx: { block, effectiveBlock, settingsChanged, modeResult, proposal, stations, stationsBefore, stationsAfter, discovery, uiState, effectiveMap, canonical },
   };
 }
 
 /**
  * VALIDATE phase of the two-phase save (review #47 round 4, P1-2):
  * every gate and the full composition run, but NOTHING is durably
- * recorded — no snapshot, no journal entry. The client re-checks its
- * frozen settings form after this succeeds, then calls /commit-save;
- * an attempt abandoned at the re-check therefore consumes nothing,
+ * recorded — no snapshot, no journal entry. The client re-samples its
+ * in-memory configuration copy after this succeeds, then calls
+ * /commit-save; an attempt abandoned at the re-check consumes nothing,
  * and the permanent snapshot always describes the configuration
  * immediately preceding an ACTUAL conversion. The `snapshot` result
  * reports the prospective outcome ('pending-write' /
@@ -663,51 +875,54 @@ async function composeSaveInternal(
   if (!r.ok) {
     return r;
   }
-  const { block, modeResult, effectiveMap, canonical } = r.ctx;
+  const { block, effectiveBlock, settingsChanged, modeResult, effectiveMap, canonical } = r.ctx;
 
-  // ---- 7b2. V2-FLAG GATE (review #45 P1-1): saving converts the
-  //           configuration to v2, and a v2 config with the flag OFF
-  //           is exactly the dangerous state the rollback docs warn
-  //           about (the flag-off runtime cannot read sensorMap and
-  //           can deregister cached accessories). The editor is
-  //           disabled client-side when the flag is off; this is the
-  //           fail-closed server backstop. Previews stay available —
-  //           a dry run is how users decide whether to opt in.
-  if (detectV2FlagSource(block as ConfigInputShape, deps.env ?? process.env) === 'none') {
+  // ---- 7b2. V2 OPT-OUT GATE (review #45 P1-1): saving converts the
+  //           configuration to v2, and a v2 config on an installation
+  //           that explicitly opts out of the v2 runtime is exactly
+  //           the dangerous state the rollback docs warn about (the
+  //           v1.6 pipeline cannot read sensorMap and can deregister
+  //           cached accessories). The editor is read-only client-side
+  //           under the opt-out; this is the fail-closed server
+  //           backstop. Previews stay available — a dry run is how
+  //           users decide whether to remove the opt-out.
+  if (detectV2FlagSource(block as ConfigInputShape, deps.env ?? process.env) === 'opted-out') {
     return {
       ok: false,
       error: {
         code: 'v2-flag-off',
-        message: 'The sensor-map v2 flag is off, so the runtime would not read a saved sensor map — and a v2 '
-          + 'configuration with the flag off can deregister cached accessories. Enable "Advanced (v2.0 preview) → '
-          + 'Enable sensor-map v2 live path" in the settings form, restart Homebridge, and retry. Nothing was written.',
+        message: 'This installation explicitly opts out of the sensor-map runtime (_sensorMapV2: false or '
+          + 'SENSOR_MAP_V2=0), so the runtime would not read a saved sensor map — and a v2 configuration with the '
+          + 'opt-out active can deregister cached accessories. Remove the opt-out, restart Homebridge, and retry. '
+          + 'Nothing was written.',
       },
     };
   }
 
-  // ---- 7b3. UNSAVED-SETTINGS GATE (review #47 P1-1): editor
+  // ---- 7b3. CONFIGURATION-COPY DRIFT GATE (review #47 P1-1):
   //           persistence replaces HB UI X's in-memory config with the
-  //           disk-derived composed block, so a settings-form edit the
-  //           user has not saved (a credential, a toggle, a filter)
-  //           would be silently discarded — and the post-save receipt
-  //           would still read clean, because disk matches what was
-  //           composed. When the client supplies its in-memory copy,
-  //           refuse any difference from disk beyond the schema form's
-  //           measured automatic materialization (empty arrays for
-  //           absent keys). Fail-safe by design: unmeasured form
-  //           normalization refuses too, and saving or discarding the
-  //           form changes clears it. REQUIRED for digest sessions
-  //           (review #47 round 3, P2): a digest save comes from the
-  //           browser, where the settings form is always present —
-  //           omitting formBlock must not bypass the gate. Callers
-  //           without a form use the faithful raw-`base` path, whose
-  //           byte-equality proves the same thing.
+  //           disk-derived composed block, so any divergence in that
+  //           session copy would be silently discarded — and the
+  //           post-save receipt would still read clean, because disk
+  //           matches what was composed. When the client supplies its
+  //           copy, refuse any difference from disk beyond the
+  //           measured automatic materialization a pre-beta.17
+  //           schema-form session left behind (empty arrays for
+  //           absent keys).
+  //           Fail-safe by design: unmeasured normalization refuses
+  //           too, and reloading the page clears it. REQUIRED for
+  //           digest sessions (review #47 round 3, P2): a digest save
+  //           comes from the browser, which always holds an in-memory
+  //           configuration copy — omitting formBlock must not bypass
+  //           the gate. Callers without one use the faithful
+  //           raw-`base` path, whose byte-equality proves the same
+  //           thing.
   if (typeof p.baseDigest === 'string' && p.formBlock === undefined) {
     return {
       ok: false,
       error: {
         code: 'unsaved-settings-changes',
-        message: 'The settings form state was not provided, so unsaved form changes cannot be ruled out. '
+        message: 'The page did not provide its configuration copy, so divergence cannot be ruled out. '
           + 'Reload the plugin settings and retry; nothing was written.',
       },
     };
@@ -718,7 +933,7 @@ async function composeSaveInternal(
         ok: false,
         error: {
           code: 'unsaved-settings-changes',
-          message: 'The settings form state could not be verified. Reload the plugin settings and retry; nothing was written.',
+          message: 'The page configuration copy could not be verified. Reload the plugin settings and retry; nothing was written.',
         },
       };
     }
@@ -728,8 +943,8 @@ async function composeSaveInternal(
         ok: false,
         error: {
           code: 'unsaved-settings-changes',
-          message: `The settings form has unsaved changes ('${drifted}'). Save or discard those changes in the `
-            + 'settings form first; nothing was written.',
+          message: `The page's configuration copy differs from the saved configuration ('${drifted}'). `
+            + 'Reload the plugin settings page and retry; nothing was written.',
         },
       };
     }
@@ -771,7 +986,7 @@ async function composeSaveInternal(
 
   // ---- 8. Compose. detectConfigMode's verdict is passed explicitly
   //         (it is the single authority on "legacy").
-  const composed = composeV2ConfigSave(block, canonical as unknown[], effectiveMap, modeResult.mode);
+  const composed = composeV2ConfigSave(effectiveBlock, canonical as unknown[], effectiveMap, modeResult.mode);
 
   // ---- 9a. Prospective pre-conversion-record outcome, READ-ONLY in
   //          BOTH phases: every refusable record problem (corrupt
@@ -814,19 +1029,20 @@ async function composeSaveInternal(
   //          two-phase protocol (review #47 round 5, P1): /commit-save
   //          only writes when presented with the token /compose-save
   //          issued for EXACTLY this state — the authoritative disk
-  //          block, the canonicalized proposal, the settings-form
-  //          state, the inventory-bound consequences, the composed
-  //          output, and the prospective record outcome. The commit
+  //          block, the canonicalized proposal, the page's
+  //          configuration-copy state, the inventory-bound
+  //          consequences, the composed output, and the prospective
+  //          record outcome. The commit
   //          recomputes the token from CURRENT state, so a direct
   //          commit (stale client, console request, future refactor)
   //          refuses before anything is written, and any drift between
   //          the phases refuses the same way. An integrity token, not
   //          an auth token: the bridge already trusts its session —
   //          the token guarantees VALIDATE-BEFORE-COMMIT on matching
-  //          state; it cannot prove the browser performed the
-  //          intervening settings-form re-read, which remains
-  //          client-enforced in composeAndPersist (pinned by the
-  //          hostile-mutation test).
+  //          state; it cannot prove the browser re-sampled its
+  //          in-memory configuration copy between the phases, which
+  //          remains client-enforced in composeAndPersist (pinned by
+  //          the hostile-mutation test).
   const nextConfigDigest = blockDigest(composed.nextConfig);
   const validationToken = createHash('sha256').update(canonicalJsonLocal({
     v: 1,
@@ -842,6 +1058,7 @@ async function composeSaveInternal(
     return {
       ok: true,
       nextConfig: composed.nextConfig,
+      settingsChanged,
       nextConfigDigest,
       validationToken,
       snapshot,
@@ -856,7 +1073,7 @@ async function composeSaveInternal(
       error: {
         code: 'commit-without-validation',
         message: 'The commit did not present a validation token. Saves must validate first (/compose-save), '
-          + 're-check the settings form, and then commit. Nothing was written.',
+          + 'then commit. Nothing was written.',
       },
     };
   }
@@ -865,7 +1082,7 @@ async function composeSaveInternal(
       ok: false,
       error: {
         code: 'stale-confirmation',
-        message: 'The configuration, proposal, settings form, or station inventory changed between validating '
+        message: 'The configuration, proposal, page state, or station inventory changed between validating '
           + 'and committing this save. Preview again and retry; nothing was written.',
       },
     };
@@ -916,6 +1133,7 @@ async function composeSaveInternal(
   return {
     ok: true,
     nextConfig: composed.nextConfig,
+    settingsChanged,
     nextConfigDigest,
     validationToken,
     snapshot,
@@ -960,16 +1178,45 @@ export async function handlePreviewSave(
   const { effectiveMap, canonical } = r.ctx;
   const consequences = computeSaveConsequences(r.ctx);
 
+  // Notes that concern a previewed change attach to that row (beta.17
+  // RC smoke: detached note boxes read as page-wide alarms); only
+  // notes matching no change stay in the residual list. Presentation
+  // only — the digest was computed above, before this attachment, and
+  // /compose-save recomputes the same unattached projection.
+  const noteDtos = effectiveMap.notes.map(n => toDiagnosticDto('note', n));
+  const changeKeys = new Set([...consequences.changes, ...consequences.configOnly]
+    .map(c => `${c.stationMac.toUpperCase()}|${c.dataPoint}`));
+  const residualNotes: EditorDiagnosticDto[] = [];
+  const inlineNotes = new Map<string, string[]>();
+  for (const n of noteDtos) {
+    const key = n.stationMac !== undefined && n.dataPoint !== undefined
+      ? `${n.stationMac.toUpperCase()}|${n.dataPoint}` : undefined;
+    if (key !== undefined && changeKeys.has(key)) {
+      const list = inlineNotes.get(key) ?? [];
+      if (!list.includes(n.message)) {
+        list.push(n.message);
+      }
+      inlineNotes.set(key, list);
+    } else {
+      residualNotes.push(n);
+    }
+  }
+  const attach = <T extends { stationMac: string; dataPoint: string; notes?: string[] }>(c: T): T => {
+    const list = inlineNotes.get(`${c.stationMac.toUpperCase()}|${c.dataPoint}`);
+    return list !== undefined ? { ...c, notes: list } : c;
+  };
+
   return {
     ok: true,
     canonicalSensorMap: canonical,
+    settingsChanged: r.ctx.settingsChanged,
     rows: consequences.proposedRows,
-    changes: consequences.changes,
-    configOnly: consequences.configOnly,
+    changes: consequences.changes.map(attach),
+    configOnly: consequences.configOnly.map(attach),
     structuralChangeCount: consequences.structuralChangeCount,
     digest: consequences.digest,
     warnings: effectiveMap.warnings.map(w => toDiagnosticDto('warning', w)),
-    notes: effectiveMap.notes.map(n => toDiagnosticDto('note', n)),
+    notes: residualNotes,
   };
 }
 
@@ -1007,7 +1254,19 @@ export interface SaveConsequences {
  * digest verification in PR C.
  */
 export function computeSaveConsequences(ctx: SavePipelineContext): SaveConsequences {
-  const { block, modeResult, proposal, stations, discovery, uiState, effectiveMap, canonical } = ctx;
+  const { block, modeResult, proposal, stationsBefore, stationsAfter, discovery, uiState, canonical } = ctx;
+
+  // The after-side RUNTIME world: the validated proposal evaluated
+  // over the PATCHED filter's inventory (round 2 P1: ctx.effectiveMap
+  // is the authoring/serialization map over the unfiltered inventory
+  // and must not be the consequence model).
+  const proposedRuntimeMap = buildEffectiveSensorMap({
+    userOverrides: proposal,
+    discovery,
+    uiState,
+    stations: stationsAfter,
+    configMode: 'v2',
+  });
 
   // CURRENT effective state from the on-disk block over the SAME
   // inventory: a legacy config's current state is its compat
@@ -1015,17 +1274,27 @@ export function computeSaveConsequences(ctx: SavePipelineContext): SaveConsequen
   // sensorMap. Same-inventory comparison keeps the diff about the
   // PROPOSAL, never about station drift.
   const currentOverrides: ReadonlyArray<unknown> = modeResult.mode === 'legacy'
-    ? compatToOverrides(block as LegacyConfig, stations)
+    ? compatToOverrides(block as LegacyConfig, stationsBefore)
     : (Array.isArray(block.sensorMap) ? block.sensorMap : []);
   const currentMap = buildEffectiveSensorMap({
     userOverrides: currentOverrides,
     discovery,
     uiState,
-    stations,
+    // The before-world sees the ON-DISK filter (PR #60 review F1); a
+    // save that narrows the filter diffs against what the runtime
+    // currently exposes, so the exclusions surface as removals.
+    stations: stationsBefore,
     configMode: 'v2',
   });
+  // The row universe is a UNION (defaults x stations, discovery pairs,
+  // override targets), so filtering the inventory alone does not
+  // remove a filtered-out station's discovery-driven rows. The runtime
+  // world per side is rows whose station the filter leaves VISIBLE.
+  const macsBefore = new Set(stationsBefore.map(st => st.macAddress.toUpperCase()));
+  const macsAfter = new Set(stationsAfter.map(st => st.macAddress.toUpperCase()));
+
   const currentLayers = acceptedOverrideLayers(currentOverrides, currentMap.errors);
-  const proposedLayers = acceptedOverrideLayers(proposal, effectiveMap.errors);
+  const proposedLayers = acceptedOverrideLayers(proposal, proposedRuntimeMap.errors);
 
   type ConfiguredRow = Exclude<EffectiveSensorRow, { kind: 'unrecognized' }>;
   const accessorySet = (rows: EffectiveSensorRow[]): Map<string, ConfiguredRow> => {
@@ -1037,8 +1306,8 @@ export function computeSaveConsequences(ctx: SavePipelineContext): SaveConsequen
     }
     return out;
   };
-  const before = accessorySet(currentMap.rows);
-  const after = accessorySet(effectiveMap.rows);
+  const before = accessorySet(currentMap.rows.filter(r => macsBefore.has(r.stationMac.toUpperCase())));
+  const after = accessorySet(proposedRuntimeMap.rows.filter(r => macsAfter.has(r.stationMac.toUpperCase())));
 
   // Fields whose change matters to the user. structuralSignature
   // decides the `structural` flag (re-registration); the rest mark a
@@ -1049,6 +1318,20 @@ export function computeSaveConsequences(ctx: SavePipelineContext): SaveConsequen
     'sourceUnit', 'displayUnit', 'threshold', 'triggerEnabled',
     'triggerDirection', 'batteryField', 'hasBatterySubService', 'embedName',
   ] as const;
+  // The platform composes HAP display names from the RUNTIME station
+  // inventory (station prefix only when multiple stations are
+  // visible), so a filter change that crosses the 1-station boundary
+  // RENAMES every retained accessory in place. Model it with the
+  // platform's own recipe per side (round 2 P2).
+  const composedName = (row: ConfiguredRow, inventory: StationInventory): string => {
+    const station = inventory.find(st => st.macAddress.toUpperCase() === row.stationMac.toUpperCase());
+    return composeRowDisplayName(
+      { macAddress: row.stationMac, name: station?.name ?? '' },
+      row.name,
+      inventory.length > 1,
+    );
+  };
+
   const changes: PreviewChangeDto[] = [];
   for (const [key, b] of before) {
     const a = after.get(key);
@@ -1062,13 +1345,16 @@ export function computeSaveConsequences(ctx: SavePipelineContext): SaveConsequen
     }
     const differs = ROW_FIELDS.filter(f =>
       (b as unknown as Record<string, unknown>)[f] !== (a as unknown as Record<string, unknown>)[f]);
-    if (differs.length > 0) {
+    const nameBefore = composedName(b, stationsBefore);
+    const nameAfter = composedName(a, stationsAfter);
+    if (differs.length > 0 || nameBefore !== nameAfter) {
       changes.push({
         stationMac: b.stationMac, dataPoint: b.dataPoint,
         change: 'modified',
         structural: b.structuralSignature !== a.structuralSignature,
         before: toEditorRowDto(b, currentLayers),
         after: toEditorRowDto(a, proposedLayers),
+        ...(nameBefore !== nameAfter ? { displayName: { before: nameBefore, after: nameAfter } } : {}),
       });
     }
   }
@@ -1100,8 +1386,8 @@ export function computeSaveConsequences(ctx: SavePipelineContext): SaveConsequen
     }
     return out;
   };
-  const beforeDisabled = disabledSet(currentMap.rows);
-  const afterDisabled = disabledSet(effectiveMap.rows);
+  const beforeDisabled = disabledSet(currentMap.rows.filter(r => macsBefore.has(r.stationMac.toUpperCase())));
+  const afterDisabled = disabledSet(proposedRuntimeMap.rows.filter(r => macsAfter.has(r.stationMac.toUpperCase())));
   const configOnly: ConfigOnlyChangeDto[] = [];
   for (const key of new Set([...beforeDisabled.keys(), ...afterDisabled.keys()])) {
     const b = beforeDisabled.get(key);
@@ -1137,7 +1423,7 @@ export function computeSaveConsequences(ctx: SavePipelineContext): SaveConsequen
     ? (x.dataPoint < y.dataPoint ? -1 : x.dataPoint > y.dataPoint ? 1 : 0)
     : (x.stationMac < y.stationMac ? -1 : 1));
 
-  const proposedRows = effectiveMap.rows
+  const proposedRows = proposedRuntimeMap.rows
     .map(row => toEditorRowDto(row, proposedLayers))
     .sort((a, b) => a.stationMac === b.stationMac
       ? (a.dataPoint < b.dataPoint ? -1 : a.dataPoint > b.dataPoint ? 1 : 0)
@@ -1151,12 +1437,57 @@ export function computeSaveConsequences(ctx: SavePipelineContext): SaveConsequen
         structuralSignature: row.structuralSignature,
       }))
       .sort((a, b) => `${a.stationMac}|${a.dataPoint}` < `${b.stationMac}|${b.dataPoint}` ? -1 : 1);
+  // The digest binds EVERY user-visible consequence (round 3 P2): the
+  // full normalized change list — kind of change, structural flag, the
+  // salient row fields on both sides, and the composed display-name
+  // rename — plus the config-only list. A stable PROJECTION rather
+  // than the raw DTOs, because rows carry volatile observation
+  // timestamps (firstSeen/lastSeen) that must not stale a digest
+  // between preview and commit. A discovery station-name change that
+  // alters a shown rename therefore changes the digest, and the stale
+  // confirmation refuses.
+  const rowProjection = (r: EditorRowDto | undefined): Record<string, unknown> | null => r ? {
+    enabled: r.enabled,
+    name: r.name ?? null,
+    kind: r.kind,
+    measurement: r.measurement ?? null,
+    sourceUnit: r.sourceUnit ?? null,
+    displayUnit: r.displayUnit ?? null,
+    threshold: r.threshold ?? null,
+    triggerEnabled: r.triggerEnabled ?? null,
+    triggerDirection: r.triggerDirection ?? null,
+    batteryField: r.batteryField,
+    hasBatterySubService: r.hasBatterySubService ?? null,
+    embedName: r.embedName ?? null,
+  } : null;
+  const changeProjection = changes.map(c => ({
+    stationMac: c.stationMac,
+    dataPoint: c.dataPoint,
+    change: c.change,
+    structural: c.structural,
+    displayName: c.displayName ?? null,
+    before: rowProjection(c.before),
+    after: rowProjection(c.after),
+  }));
+  const configOnlyProjection = configOnly.map(c => ({
+    stationMac: c.stationMac,
+    dataPoint: c.dataPoint,
+    change: c.change,
+    before: rowProjection(c.before),
+    after: rowProjection(c.after),
+  }));
   const digest = createHash('sha256')
     .update(canonicalJsonLocal({
       base: block,
       canonical,
       current: setSummary(before),
       proposed: setSummary(after),
+      changes: changeProjection,
+      configOnly: configOnlyProjection,
+      // The visible settings banner is a consequence too (round 4 P2):
+      // key NAMES only, never values — a consequence-equivalent switch
+      // between settings patches must not reuse the old confirmation.
+      settingsChanged: [...ctx.settingsChanged].sort(),
     }))
     .digest('hex');
 
@@ -1192,6 +1523,21 @@ export interface EditorStatePayload {
  * SAYS so — those are states the editor must render, not transport
  * failures.
  */
+function settingsDtoFor(block: Record<string, unknown>): EditorStateDto['settings'] {
+  return {
+    name: typeof block.name === 'string' ? block.name : '',
+    dataSource: block.dataSource === 'realtime' ? 'realtime' : 'polling',
+    stationFilter: Array.isArray(block.stationFilter)
+      ? (block.stationFilter as unknown[]).filter((e): e is string => typeof e === 'string')
+      : [],
+    ...(typeof block.embedNameUpdateMinIntervalMinutes === 'number'
+      ? { embedNameUpdateMinIntervalMinutes: block.embedNameUpdateMinIntervalMinutes }
+      : {}),
+    apiKeySet: typeof block.apiKey === 'string' && block.apiKey.length > 0,
+    applicationKeySet: typeof block.applicationKey === 'string' && block.applicationKey.length > 0,
+  };
+}
+
 export async function handleGetEditorState(
   deps: HandlerDeps,
   payload: unknown,
@@ -1228,7 +1574,7 @@ export async function handleGetEditorState(
   const block = blocks[0];
 
   const modeResult = detectConfigMode(block as ConfigInputShape);
-  const v2FlagEnabled = detectV2FlagSource(block as ConfigInputShape, deps.env ?? process.env) !== 'none';
+  const v2FlagEnabled = detectV2FlagSource(block as ConfigInputShape, deps.env ?? process.env) !== 'opted-out';
   // detectConfigMode already includes safeModeBanner in warnings —
   // no separate push, or safe mode would show the banner twice.
   for (const w of modeResult.warnings) {
@@ -1238,15 +1584,16 @@ export async function handleGetEditorState(
     warnings.push({
       severity: 'warning',
       code: 'v2-flag-off',
-      message: 'The sensor-map v2 flag is off: the table below is a preview and saving is disabled. To edit for '
-        + 'real, enable "Advanced (v2.0 preview) → Enable sensor-map v2 live path" in the settings form and '
-        + 'restart Homebridge.',
+      message: 'This installation explicitly opts out of the sensor-map runtime, so the table below is a preview '
+        + 'and saving is disabled. Remove the opt-out (_sensorMapV2: false or SENSOR_MAP_V2=0) and restart '
+        + 'Homebridge to edit for real.',
     });
   }
   if (modeResult.mode === 'safe-mode') {
     return {
       configMode: 'safe-mode',
       v2FlagEnabled,
+      settings: settingsDtoFor(block),
       editorAvailable: false,
       baseDigest: blockDigest(block),
       blockIndex: 0,
@@ -1274,6 +1621,7 @@ export async function handleGetEditorState(
     return {
       configMode: modeResult.mode,
       v2FlagEnabled,
+      settings: settingsDtoFor(block),
       editorAvailable: false,
       baseDigest: blockDigest(block),
       blockIndex: 0,
@@ -1331,8 +1679,86 @@ export async function handleGetEditorState(
 
   const layers = acceptedOverrideLayers(overrides, effectiveMap.errors);
 
+  // Pure-defaults resolution over the SAME inventory: the values Use
+  // Defaults returns a row to (beta.17 RC smoke — the editor shows
+  // them instead of staging an invisible removal). Family displayUnit
+  // templates are overrides and deliberately absent here; the client
+  // overlays them.
+  const defaultsMap = buildEffectiveSensorMap({
+    userOverrides: [],
+    discovery,
+    uiState,
+    stations,
+    configMode: 'v2',
+  });
+  const defaultsByKey = new Map<string, EditorRowDefaultsDto>();
+  for (const d of defaultsMap.rows) {
+    if (d.kind === 'unrecognized') {
+      continue;
+    }
+    const dto: EditorRowDefaultsDto = { enabled: d.enabled };
+    if (d.name !== undefined) {
+      dto.name = d.name;
+    }
+    if (d.sourceUnit !== undefined) {
+      dto.sourceUnit = d.sourceUnit;
+    }
+    if (d.displayUnit !== undefined) {
+      dto.displayUnit = d.displayUnit;
+    }
+    if (typeof d.threshold === 'number') {
+      dto.threshold = d.threshold;
+    }
+    if (d.triggerEnabled !== undefined) {
+      dto.triggerEnabled = d.triggerEnabled;
+    }
+    if (d.triggerDirection === 'above' || d.triggerDirection === 'below') {
+      dto.triggerDirection = d.triggerDirection;
+    }
+    defaultsByKey.set(`${d.stationMac.toUpperCase()}|${d.dataPoint}`, dto);
+  }
+
+  // POSITIVE reported-evidence sets (review P1: "never reported" must
+  // not be inferred from missing history alone). Cached accessories
+  // prove a field produced an accessory even when discovery.json does
+  // not exist yet (fresh upgrade); a station with NO discovery entries
+  // has never been observed, so absence proves nothing there.
+  // A MISSING cache snapshot is not an empty one (review round-2 P1):
+  // the client sends no key when the cache read failed or timed out,
+  // and without a complete read a missing accessory proves nothing.
+  const cacheKnown = Array.isArray(p.cachedAccessoryUniqueIds);
+  const cachedKeys = new Set<string>();
+  if (Array.isArray(p.cachedAccessoryUniqueIds)) {
+    for (const id of p.cachedAccessoryUniqueIds) {
+      if (typeof id !== 'string') {
+        continue;
+      }
+      const m = /^([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})-(.+)$/.exec(id);
+      if (m) {
+        cachedKeys.add(`${m[1].toUpperCase()}|${m[2]}`);
+      }
+    }
+  }
+  const observedStations = new Set<string>();
+  for (const entry of discovery.entries) {
+    observedStations.add(entry.stationMac.toUpperCase());
+  }
+
   const rows = effectiveMap.rows
-    .map(row => toEditorRowDto(row, layers))
+    .map(row => {
+      const dto = toEditorRowDto(row, layers);
+      const key = `${row.stationMac.toUpperCase()}|${row.dataPoint}`;
+      const defaults = defaultsByKey.get(key);
+      if (defaults !== undefined && row.kind !== 'unrecognized') {
+        dto.defaults = defaults;
+      }
+      if (dto.firstSeen !== undefined || cachedKeys.has(key)) {
+        dto.everReported = true;
+      } else if (cacheKnown && observedStations.has(row.stationMac.toUpperCase())) {
+        dto.everReported = false;
+      } // else: unknown — leave undefined.
+      return dto;
+    })
     .sort((a, b) => a.stationMac === b.stationMac
       ? (a.dataPoint < b.dataPoint ? -1 : a.dataPoint > b.dataPoint ? 1 : 0)
       : (a.stationMac < b.stationMac ? -1 : 1));
@@ -1344,6 +1770,10 @@ export async function handleGetEditorState(
   return {
     configMode: modeResult.mode,
     v2FlagEnabled,
+    // Live settings for the Connection section (beta.17, GA #56).
+    // Constructed explicitly, never spread from the block: credential
+    // values must not reach this DTO — only presence booleans.
+    settings: settingsDtoFor(block),
     // PR C: save path live, gated on the v2 opt-in (review #45 P1-1).
     // Multi-block configs stay read-only until a multi-Home editor
     // exists (review #47 P1-2) — the save pipeline refuses them too.
@@ -1781,8 +2211,10 @@ interface SchemaProp {
 let cachedSchemaProperties: Record<string, SchemaProp> | undefined;
 
 /**
- * The plugin's config.schema.json property map — the source of truth
- * for what HB UI X's settings form can EXPRESS. Read from the package
+ * The plugin's config.schema.json property map — the vocabulary the
+ * drift gate tolerates as automatic materialization in a session's
+ * in-memory copy (the schema form that produced such copies retired
+ * at beta.17; the tolerance remains for old sessions). Read from the package
  * root (this file compiles into homebridge-ui/); packaging tests pin
  * the schema into the published tarball. The path derives from
  * import.meta.url — the package is ESM, where __dirname does not
@@ -1792,29 +2224,16 @@ let cachedSchemaProperties: Record<string, SchemaProp> | undefined;
  * save must refuse rather than guess.
  */
 function configSchemaProperties(deps?: HandlerDeps): Record<string, SchemaProp> {
-  // Judge the form against the schema it actually RENDERED: with the
-  // dynamic schema present (v2-live mode), HB UI X loads it instead
-  // of the packaged one, and a control it omits cannot hold an
-  // unsaved user edit. Absent or unreadable, HB UI X falls back to
-  // the packaged schema, so this gate does too.
-  if (deps?.storagePath) {
-    try {
-      const raw = readFileSync(dynamicSchemaPath(deps.storagePath, PLUGIN_NAME), 'utf8');
-      const parsed = JSON.parse(raw) as { schema?: { properties?: Record<string, SchemaProp> } };
-      if (parsed.schema?.properties && typeof parsed.schema.properties === 'object') {
-        return parsed.schema.properties;
-      }
-    } catch {
-      // fall through to the packaged schema
-    }
-  }
+  // The dynamic-schema preference retired with the schema form
+  // (beta.17): no form renders, so the packaged schema is the only
+  // materialization vocabulary the drift gate needs.
   if (!cachedSchemaProperties) {
     const here = path.dirname(fileURLToPath(import.meta.url));
     const raw = readFileSync(path.resolve(here, '..', 'config.schema.json'), 'utf8');
     const parsed = JSON.parse(raw) as { schema?: { properties?: Record<string, SchemaProp> } };
     const properties = parsed.schema?.properties;
     if (!properties || typeof properties !== 'object') {
-      throw new Error('config.schema.json has no schema.properties; cannot evaluate the settings form state.');
+      throw new Error('config.schema.json has no schema.properties; cannot evaluate the configuration copy.');
     }
     cachedSchemaProperties = properties;
   }
@@ -1822,7 +2241,7 @@ function configSchemaProperties(deps?: HandlerDeps): Record<string, SchemaProp> 
 }
 
 /**
- * Is `value` something the schema form MATERIALIZES on its own for a
+ * Is `value` something a pre-beta.17 schema-form session MATERIALIZED on its own for a
  * key absent from config.json? Measured on HB UI X 5.28: the form
  * value fills every declared `default` (top-level AND nested inside
  * object properties like `thresholds`/`units`), and has also been
@@ -1898,7 +2317,7 @@ function propDrift(formValue: unknown, diskValue: unknown, prop: SchemaProp, pat
  * holds an UNSAVED USER EDIT relative to the on-disk block, or
  * undefined when it holds none (review #47 P1-1).
  *
- * Scope (measured on HB UI X 5.28): the settings modal's schema form
+ * Scope (measured on HB UI X 5.28, pre-beta.17 — the form no longer renders): the settings modal's schema form
  * binds two-way into pluginConfig[0] and REPLACES the block with the
  * form VALUE — which contains only schema-declared properties, with
  * every declared default materialized. Consequences for this gate:

@@ -149,6 +149,64 @@ describe('/editor-state — v2 configuration', () => {
     expect(wire).not.toContain('wrapperId');
   });
 
+  it('recognized rows carry their pure-default values; custom and unrecognized rows do not', async () => {
+    const rig = makeRig([V2_BLOCK]);
+    discoveryStore(rig, [
+      { mac: MAC, dataPoint: 'windspeedmph' },
+      { mac: MAC, dataPoint: 'weirdfield9' },
+    ]);
+    const dto = await handleGetEditorState(rig.deps, {});
+    const byDp = new Map(dto.rows.filter(r => r.stationMac === MAC).map(r => [r.dataPoint, r]));
+
+    // The station-disabled wind row: its DEFAULT is enabled — what Use
+    // Defaults returns it to (beta.17 RC smoke).
+    const wind = byDp.get('windspeedmph')!;
+    expect(wind.enabled).toBe(false);
+    expect(wind.defaults).toBeDefined();
+    expect(wind.defaults!.enabled).toBe(true);
+    expect(typeof wind.defaults!.name).toBe('string');
+    expect(wind.defaults!.displayUnit).toBeDefined();
+
+    // Custom and unrecognized rows have no default row to return to.
+    expect(byDp.get('customtemp1')!.defaults).toBeUndefined();
+    expect(byDp.get('weirdfield9')!.defaults).toBeUndefined();
+  });
+
+  it('everReported is tri-state from POSITIVE evidence only (review P1, both rounds)', async () => {
+    // (a) Discovery HAS observed the station AND a COMPLETE cache read
+    //     exists (an empty array is a successful read): seen rows
+    //     true, unseen recognized rows false.
+    const rig = makeRig([V2_BLOCK]);
+    discoveryStore(rig, [{ mac: MAC, dataPoint: 'tempf' }]);
+    const dto = await handleGetEditorState(rig.deps, { cachedAccessoryUniqueIds: [] });
+    const byDp = new Map(dto.rows.filter(r => r.stationMac === MAC).map(r => [r.dataPoint, r]));
+    expect(byDp.get('tempf')!.everReported).toBe(true);
+    expect(byDp.get('windspeedmph')!.everReported).toBe(false);
+
+    // (b) NO discovery history, but a live cached accessory exists
+    //     (the upgrade shape): the cached field is true, everything
+    //     else is UNKNOWN, never false.
+    const rig2 = makeRig([V2_BLOCK]);
+    const dto2 = await handleGetEditorState(rig2.deps, {
+      cachedAccessoryUniqueIds: [`${MAC}-windspeedmph`],
+    });
+    const byDp2 = new Map(dto2.rows.filter(r => r.stationMac === MAC).map(r => [r.dataPoint, r]));
+    expect(byDp2.get('windspeedmph')!.everReported).toBe(true);
+    expect(byDp2.get('tempf')!.everReported).toBeUndefined();
+
+    // (c) Discovery observed the station but the cache read FAILED
+    //     (no key sent): a cached 1.x accessory could exist for any
+    //     unseen field, so absence proves nothing — never false
+    //     (review round-2 P1: the failure mode that deregistered a
+    //     restored accessory).
+    const rig3 = makeRig([V2_BLOCK]);
+    discoveryStore(rig3, [{ mac: MAC, dataPoint: 'tempf' }]);
+    const dto3 = await handleGetEditorState(rig3.deps, {});
+    const byDp3 = new Map(dto3.rows.filter(r => r.stationMac === MAC).map(r => [r.dataPoint, r]));
+    expect(byDp3.get('tempf')!.everReported).toBe(true);
+    expect(byDp3.get('windspeedmph')!.everReported).toBeUndefined();
+  });
+
   it('rows are sorted by stationMac then dataPoint', async () => {
     const rig = makeRig([{
       ...V2_BLOCK,
@@ -408,8 +466,10 @@ describe('/editor-state — mirrorState (review #45 round 4)', () => {
 });
 
 describe('/editor-state — v2-flag gating (review #45 P1-1)', () => {
-  it('flag OFF: editorAvailable false with a directing banner (rows still preview)', async () => {
-    const rig = makeRig([LEGACY_BLOCK]); // no _sensorMapV2, env {}
+  it('explicit opt-out: editorAvailable false with a directing banner (rows still preview)', async () => {
+    // Post-flip a BARE config is v2-enabled; only the explicit
+    // opt-out disables the editor.
+    const rig = makeRig([{ ...LEGACY_BLOCK, _sensorMapV2: false }]);
     discoveryStore(rig, [{ mac: MAC, dataPoint: 'tempf' }]);
     const dto = await handleGetEditorState(rig.deps, {});
     expect(dto.v2FlagEnabled).toBe(false);
@@ -447,7 +507,9 @@ describe('/editor-state — legacy and troubled configurations', () => {
     ]);
     const dto = await handleGetEditorState(rig.deps, {});
     expect(dto.configMode).toBe('legacy');
-    expect(dto.v2FlagEnabled).toBe(false);
+    // Post-flip the editor is enabled by default even on a legacy
+    // config: the migration preview doubles as the live editor entry.
+    expect(dto.v2FlagEnabled).toBe(true);
     expect(dto.authoredSource).toBe('compat-seeded');
     const tempf = dto.rows.find(r => r.stationMac === MAC && r.dataPoint === 'tempf');
     expect(tempf?.enabled).toBe(true);
