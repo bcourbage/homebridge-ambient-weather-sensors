@@ -1774,6 +1774,24 @@ Tests: for every non-motion kind, submit an override with each of these fields; 
   gained identity/unit comparisons so the review's three semantic
   mutations now fail.
 
+  Review round 2 (same day) hardened four contracts: (1) invalid or
+  future stamps FAIL CLOSED into the safe-mode-style protective
+  posture (retain + bind-existing, no reconciliation, read-only
+  editor with a named diagnostic) instead of cap-and-continue, which
+  the reviewer's lifecycle probe proved unregisters a cached
+  accessory riding an adopted definition; both stamps genuinely
+  absent remains the defined legacy `(1, 1)` state. (2) Conversion
+  and the first sensor-map save PRESERVE an existing valid stamp pair
+  (a fresh settings-only install is already stamped at birth);
+  `(1, 1)` initializes only a fully unstamped legacy config. (3) A
+  partial authored identity now BLOCKS the later definition's default
+  row in its applicable scope, matching P0's fallback gate — a
+  declared-but-invalid identity intent is never answered with the
+  catalog's substitute accessory. (4) The catalog records the wiki's
+  documented Meteobridge polarity variant ("1=Low, 0=OK") on battout,
+  battin, batt1..batt10, and batt_25 alongside the standard
+  declaration; no decoder change.
+
 - Status: **APPROVED FOR IMPLEMENTATION**. Beta cycle can begin.
 
 ## 18. Catalog completion: three decisions and assignment preservation
@@ -1934,26 +1952,42 @@ is therefore TWO stamps plus the catalog's own version metadata:
   exactly like any structural save. Enabling adopted-disabled rows is
   a per-row choice, authored as ordinary `enabled` fragments in the
   same or a later previewed save.
-- **Legacy → v2 conversion is pure**: it sets `catalogBaseline =
-  catalogAdopted = 1` (the version whose behavior the legacy config
-  already had — implicit-baseline configs converted before these
-  fields existed are identical by the absent-stamp rule below).
-  Conversion never adopts. Adoption may be OFFERED alongside
+- **Legacy → v2 conversion is pure, and stamps are
+  never rewound**: conversion (and the first sensor-map save
+  generally) PRESERVES an existing valid stamp pair verbatim — a
+  fresh settings-only installation already carries the pair its birth
+  wrote (say `(2, 2)`), and rewinding it to `(1, 1)` on the first
+  sensor-map save would shrink catalog visibility out from under the
+  config's own defaults. Only a configuration with BOTH stamps absent
+  (an unstamped legacy config, i.e. the entire installed base today)
+  is initialized to `catalogBaseline = catalogAdopted = 1`, the
+  version whose behavior it already had. Conversion never adopts and
+  never advances a stamp. Adoption may be OFFERED alongside
   conversion, but it is a separate, separately previewed operation
-  the user explicitly requests. The §11 migration-equivalence gate
-  therefore stays trivially satisfiable as the catalog grows.
-- **Absent and malformed stamps are conservative.** Both fields
-  absent: `catalogBaseline = catalogAdopted = 1` (every config in the
-  field today). Malformed values (non-integer, < 1, or `baseline >
-  adopted`): treated as absent with a prominent warn — no new
-  exposure ever results from a broken stamp. `catalogAdopted` greater
-  than the running plugin's `AWN_CATALOG_VERSION` (config written by
-  a newer plugin): visibility caps at the running version with a
-  notice; rows above the cap resolve as they would for an
-  unrecognized dataPoint, and authored rows on them validate under
-  the custom rules (so a downgrade never invalidates or reinterprets
-  an assignment). None of these enter safe mode: the sensorMap shape
-  is still the supported one.
+  the user explicitly requests. The §11 migration-equivalence gate is
+  evaluated against the config's own preserved stamps, so it stays
+  satisfiable as the catalog grows.
+- **Absent stamps keep the legacy interpretation; anything else
+  invalid FAILS CLOSED.** Both fields genuinely absent:
+  `catalogBaseline = catalogAdopted = 1` (every config in the field
+  today) — that is a defined state, not a failure. Every other
+  invalid combination — malformed values (non-integer, < 1, one field
+  present without the other, `baseline > adopted`) or `catalogAdopted`
+  greater than the running plugin's `AWN_CATALOG_VERSION` (config
+  written by a newer plugin, or a plugin downgrade) — enters the
+  PROTECTIVE posture, not cap-and-continue: cached accessories are
+  retained and value-updated only through the safe-mode-style
+  bind-existing path, the reconciliation-vs-effective-map step is
+  skipped entirely (NO accessory is unregistered), and the editor is
+  read-only with a prominent error naming the stamp problem and the
+  fix (upgrade the plugin, or repair the fields in the JSON editor).
+  Capping or resetting a stamp was measured to be destructive: it
+  removes the definition supporting an existing accessory, an
+  inherited `{"enabled": true}` fragment then has no identity and
+  fails validation, and the real-lifecycle probe confirmed the cached
+  accessory gets UNREGISTERED (PR #65 review round 2). A broken stamp
+  must therefore never change which definitions are visible — it
+  stops structural activity until a human resolves it.
 
 Serialized example (the F2 acceptance case). Before adoption, catalog
 2 defines `windspdmph_avg10m`; station A (`AA:…`) carries the explicit
@@ -2041,13 +2075,25 @@ fixture note on `windspdmph_avg10m` points here.
     own units, measurement, and kind forever.
   - **Authors a partial identity** — diagnosed as a row-scope error
     (the existing `custom-missing-*` family), never silently
-    completed from the catalog's identity and never clamped to it.
-    The definition's default row still stands for the dataPoint
-    (under §18.3's exposure rule), and the authored fragment blocks
-    the dynamic fallback per P0. An alternate source unit under an
-    inherited identity is therefore expressed today only by authoring
-    the full identity; relaxing that is a possible later extension,
-    not a P2 default.
+    completed from the catalog's identity and never clamped to it —
+    AND the partial fragment BLOCKS the later definition's default
+    row in its applicable scope (a station-scoped fragment blocks the
+    `(mac, dataPoint)` key, a global one blocks the dataPoint), with
+    the same scoping P0's `identityAuthoredAt` gives the dynamic
+    fallback. A declared-but-invalid identity intent (say a lone
+    `"sourceUnit": "mps"` meant as an alternate-unit assignment) must
+    not be answered with the catalog's enabled mph accessory — that
+    would substitute a different identity for the one the user tried
+    to author, contradicting AP-1, and the wrong VALUES would render
+    under the intended name. The key produces no accessory and an
+    actionable diagnostic (which fields are missing, and that
+    removing the fragment restores the definition's default) until
+    the user completes or removes the fragment. The historical
+    static-clamp boundary is unchanged: on v1-baseline dataPoints the
+    known-branch rules apply exactly as today. An alternate source
+    unit under an inherited identity is therefore expressed today
+    only by authoring the full identity; relaxing that is a possible
+    later extension, not a P2 default.
   The client never synthesizes or resolves identity: the editor DTO
   presents the inherited identity with a server-assigned scope (as
   `identityScope` distinguishes known/custom today), Use defaults
@@ -2124,9 +2170,24 @@ untouched, converted beta, global-override, station-override):
   adopted-later entries disabled when `sinceCatalogVersion >
   catalogBaseline` (stations B and C in the serialized example,
   including a station first observed AFTER the adoption save); fresh
-  installs receiving entry defaults; pure conversion writing
-  `baseline = adopted = 1`; absent, malformed, and future-version
-  stamps resolving conservatively.
+  installs receiving entry defaults; conversion of an unstamped
+  legacy config writing `baseline = adopted = 1` while a fresh
+  settings-only config's existing pair survives its first sensor-map
+  save verbatim.
+- §18.3's fail-closed stamp handling, proven at the LIFECYCLE level:
+  with a malformed pair or `catalogAdopted` above the running
+  plugin's version, and a cached accessory riding an inherited
+  adopted definition plus an `{"enabled": true}` fragment, no
+  accessory is unregistered, the bind-existing path still values it,
+  the editor refuses saves with the named diagnostic, and repairing
+  the stamp restores normal resolution byte-identically. Both stamps
+  absent resolves as `(1, 1)` and is NOT protective.
+- AP-2's partial-identity blocking: a lone `sourceUnit` (and each
+  other partial combination) on an adopted-definition dataPoint
+  yields the diagnostic, NO accessory from the definition's default
+  in the fragment's scope (station-scoped and global variants), an
+  unaffected sibling station still resolving the default, and the
+  same fragment behaving identically before the definition existed.
 - Conversion equivalence with a grown catalog.
 - AP-3 per-key determinism: with and without
   discovery/cache/inventory data, every key present in both
