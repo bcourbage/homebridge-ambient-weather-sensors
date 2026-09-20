@@ -561,9 +561,12 @@ describe('/editor-state — legacy and troubled configurations', () => {
     expect(dto.editorAvailable).toBe(false);
   });
 
-  it('throws when no config path is available or no block exists', async () => {
+  it('renders the FRESH-INSTALL state when no block exists; throws only on unreadable config (GA review P1-2)', async () => {
     const rig = makeRig([{ platform: 'SomethingElse' }]);
-    await expect(handleGetEditorState(rig.deps, {})).rejects.toThrow(/No AmbientWeatherSensors platform block/);
+    const dto = await handleGetEditorState(rig.deps, {});
+    expect(dto.freshInstall).toBe(true);
+    expect(dto.editorAvailable).toBe(true);
+    expect(dto.rows).toEqual([]);
     await expect(handleGetEditorState({ ...rig.deps, configPath: undefined }, {}))
       .rejects.toThrow(/No config.json path/);
     await expect(handleGetEditorState({ ...rig.deps, configPath: path.join(rig.root, 'missing.json') }, {}))

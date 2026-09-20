@@ -324,6 +324,13 @@ interface StationGroup {
           <div class="banner info">{{ n.message }}</div>
         }
       }
+      @if (state()!.freshInstall) {
+        <div class="banner info">
+          No Ambient Weather configuration exists yet. Enter your API key and application key under
+          Connection &amp; polling and save; your stations and sensors appear here after the plugin
+          first connects. Keys come from your account page at ambientweather.net.
+        </div>
+      }
       <!-- Rollback-mirror indicator (review #45 round 4): the manual
            current-state rollback documented in the README is
            authorized ONLY by 'verified'. Warning states stay
@@ -646,7 +653,11 @@ interface StationGroup {
            the work completes: draft count, preview, and save. Always
            rendered while the editor is usable (appearing on the first
            draft shifted the page mid-edit, beta.13 smoke F3). -->
-      @if (state()!.rows.length > 0) {
+      <!-- Rendered with rows (including read-only preview mode, where
+           Save hides but Preview works) OR whenever the editor can
+           save settings with zero rows: a fresh install, or credential
+           recovery before any discovery (GA review P1-2/P1-3). -->
+      @if (state()!.rows.length > 0 || state()!.editorAvailable) {
         <div class="draft-bar">
           @if (draftCount() > 0) {
             <span class="grow"><strong>{{ draftCount() }}</strong> draft {{ draftCount() === 1 ? 'change' : 'changes' }}, not saved yet.</span>
@@ -886,6 +897,13 @@ export class AwnRootComponent {
 
   // ---- Connection settings (beta.17, GA #56) ----
   protected readonly connectionOpen = signal(false);
+
+  /** Fresh install: open Connection by default — it is the whole page. */
+  private readonly openConnectionWhenFresh = effect(() => {
+    if (this.state()?.freshInstall) {
+      this.connectionOpen.set(true);
+    }
+  });
   protected readonly noticesOpen = signal(false);
   protected readonly notices = signal<Array<{ id: string; dataPoint: string; occurredAt: string }>>([]);
   protected settingsForm: ReturnType<FormBuilder['group']> | null = null;

@@ -410,6 +410,7 @@ interface SavePipelineContext {
 }
 
 type SavePipelineResult =
+  | { ok: true; settingsOnly: SettingsOnlyCtx }
   | { ok: true; ctx: SavePipelineContext }
   | { ok: false; error: ComposeSaveError };
 
@@ -544,6 +545,52 @@ function applySettingsPatch(block: Record<string, unknown>, raw: unknown): Setti
   return { block: next, changed };
 }
 
+/**
+ * The base token /editor-state issues when NO platform block exists
+ * (GA review P1-2): a fresh installation has nothing to digest, and
+ * the settings-only save that creates the block must still prove the
+ * session saw that state (a block appearing in the meantime refuses
+ * as stale, exactly like any other base drift).
+ */
+export const FRESH_INSTALL_DIGEST = 'fresh-install:no-platform-block';
+
+/**
+ * A SETTINGS-ONLY save (GA review P1-2/P1-3): the sensor map is
+ * untouched (the proposal canonically equals the on-disk authored
+ * state, or no block exists yet) and only connection settings change.
+ * It runs a guarded path with no station-inventory requirement and
+ * NEVER converts: nothing sensor-map-shaped is written, so a legacy
+ * block stays legacy and a fresh block is created plain. This is how
+ * a new installation enters credentials and how broken credentials
+ * are corrected before the first successful discovery.
+ */
+export interface SettingsOnlyCtx {
+  /** The on-disk block, or null on a fresh installation. */
+  block: Record<string, unknown> | null;
+  effectiveBlock: Record<string, unknown>;
+  settingsChanged: string[];
+  freshInstall: boolean;
+}
+
+/**
+ * Settings whose change has NO accessory consequence: the
+ * settings-only path may carry these and nothing else. stationFilter
+ * is deliberately absent — narrowing or widening it registers and
+ * deregisters accessories, so it always takes the full pipeline with
+ * its inventory-bound preview.
+ */
+const CONSEQUENCE_FREE_SETTINGS: ReadonlySet<string> = new Set([
+  'name', 'apiKey', 'applicationKey', 'dataSource', 'embedNameUpdateMinIntervalMinutes',
+]);
+
+function settingsOnlyDigest(block: Record<string, unknown> | null, settingsChanged: string[]): string {
+  return createHash('sha256').update(canonicalJsonLocal({
+    v: 'settings-only-1',
+    base: block,
+    settingsChanged: [...settingsChanged].sort(),
+  })).digest('hex');
+}
+
 async function runSavePipeline(
   deps: HandlerDeps,
   p: ComposeSavePayload,
@@ -569,7 +616,30 @@ async function runSavePipeline(
     .filter((b): b is Record<string, unknown> =>
       !!b && typeof b === 'object' && (b as { platform?: unknown }).platform === 'AmbientWeatherSensors');
   if (blocks.length === 0) {
-    return { ok: false, error: { code: 'no-platform-block', message: 'No AmbientWeatherSensors platform block found in config.json.' } };
+    // Fresh installation (GA review P1-2): the ONLY save that may
+    // proceed with no block is the settings-only save that creates
+    // one — the session must have loaded the fresh-install state, the
+    // proposal must be empty, and a settings patch must exist. The
+    // created block is PLAIN (no v2 markers): it stays a
+    // never-converted configuration until the first sensor-map save.
+    if (p.baseDigest !== FRESH_INSTALL_DIGEST) {
+      return { ok: false, error: { code: 'no-platform-block', message: 'No AmbientWeatherSensors platform block found in config.json.' } };
+    }
+    if (Array.isArray(p.proposal) && p.proposal.length > 0) {
+      return { ok: false, error: { code: 'no-platform-block', message: 'No platform block exists yet: sensors cannot be configured before the first connection. Save the connection settings first.' } };
+    }
+    const skeleton: Record<string, unknown> = { platform: 'AmbientWeatherSensors', name: 'AmbientWeather' };
+    const outcome = applySettingsPatch(skeleton, p.settings);
+    if ('error' in outcome) {
+      return { ok: false, error: { code: 'invalid-settings', message: `${outcome.error} Nothing was written.` } };
+    }
+    if (outcome.changed.length === 0) {
+      return { ok: false, error: { code: 'invalid-settings', message: 'Nothing to save yet: enter the connection settings first. Nothing was written.' } };
+    }
+    if (!outcome.changed.every(k => CONSEQUENCE_FREE_SETTINGS.has(k))) {
+      return { ok: false, error: { code: 'invalid-settings', message: 'Only connection settings can be saved before the plugin first connects. Nothing was written.' } };
+    }
+    return { ok: true, settingsOnly: { block: null, effectiveBlock: outcome.block, settingsChanged: outcome.changed, freshInstall: true } };
   }
   // ---- 1b. Exactly-one-block invariant (review #47 P1-2). The
   //          session token identifies a block by CONTENT, while the
@@ -648,6 +718,40 @@ async function runSavePipeline(
   }
   const effectiveBlock = settingsOutcome.block;
   const settingsChanged = settingsOutcome.changed;
+
+  // ---- 3d. SETTINGS-ONLY SHORT-CIRCUIT (GA review P1-3): when the
+  //          proposal canonically equals the on-disk authored state
+  //          and only settings change, the save needs no station
+  //          inventory (broken credentials mean there may BE none)
+  //          and performs no conversion. Any sensor-map difference
+  //          falls through to the full pipeline, fail-closed.
+  if (settingsChanged.length > 0
+    && settingsChanged.every(k => CONSEQUENCE_FREE_SETTINGS.has(k))
+    && Array.isArray(p.proposal)) {
+    const authoredNow: unknown = modeResult.mode === 'legacy'
+      ? undefined // computed below only if the cheap v2 check missed
+      : (Array.isArray(block.sensorMap) ? block.sensorMap : []);
+    let untouched = authoredNow !== undefined
+      && canonicalJsonLocal(p.proposal) === canonicalJsonLocal(authoredNow);
+    if (!untouched && modeResult.mode === 'legacy') {
+      // Replicate /editor-state's compat seeding exactly, so the
+      // client's untouched proposal (rebuilt from that authored view)
+      // compares equal.
+      const discoveryEq = await loadDiscoveryStore(path.join(deps.persistDir, 'discovery.json'), deps.log, undefined, READ_ONLY_STORE);
+      const assembleEq = (overridesForMacs: ReadonlyArray<unknown>): StationInventory =>
+        assembleStationInventory({
+          liveStations: p.liveStations,
+          discovery: discoveryEq,
+          cachedAccessoryUniqueIds: p.cachedAccessoryUniqueIds,
+          overrideSources: [Array.isArray(block.sensorMap) ? (block.sensorMap as unknown[]) : [], overridesForMacs],
+        });
+      const seeded = compatToOverrides(block as LegacyConfig, assembleEq([]), dynamicDataPointsFrom(discoveryEq));
+      untouched = canonicalJsonLocal(p.proposal) === canonicalJsonLocal(seeded);
+    }
+    if (untouched) {
+      return { ok: true, settingsOnly: { block, effectiveBlock, settingsChanged, freshInstall: false } };
+    }
+  }
 
   // ---- 4. Proposal shape. On a LEGACY config with NO proposal, the
   //         save is a pure migration: the proposal is seeded from the
@@ -865,6 +969,130 @@ export async function handleCommitSave(
   return composeSaveInternal(deps, payload, true);
 }
 
+/**
+ * Compose/commit for a SETTINGS-ONLY save (GA review P1-2/P1-3). The
+ * reviewed gates that still apply, apply unchanged: the base is the
+ * on-disk state (stale refuses in the pipeline), a digest session
+ * must present its configuration copy and any drift refuses, and the
+ * two-phase validation token binds commit to exactly the validated
+ * state. What deliberately does NOT apply: the v2 opt-out gate
+ * (nothing v2-shaped is written — correcting credentials under the
+ * opt-out is precisely the recovery this path exists for), the
+ * station-inventory requirement, conversion, and the snapshot/journal
+ * record (no sensor-map bytes change).
+ */
+function composeSettingsOnly(
+  deps: HandlerDeps,
+  p: ComposeSavePayload,
+  ctx: SettingsOnlyCtx,
+  persist: boolean,
+): ComposeSaveResult {
+  const { block, effectiveBlock, settingsChanged, freshInstall } = ctx;
+
+  if (!freshInstall) {
+    if (typeof p.baseDigest === 'string' && p.formBlock === undefined) {
+      return {
+        ok: false,
+        error: {
+          code: 'unsaved-settings-changes',
+          message: 'The page did not provide its configuration copy, so divergence cannot be ruled out. '
+            + 'Reload the plugin settings and retry; nothing was written.',
+        },
+      };
+    }
+    if (p.formBlock !== undefined) {
+      if (!p.formBlock || typeof p.formBlock !== 'object' || Array.isArray(p.formBlock)) {
+        return {
+          ok: false,
+          error: {
+            code: 'unsaved-settings-changes',
+            message: 'The page configuration copy could not be verified. Reload the plugin settings and retry; nothing was written.',
+          },
+        };
+      }
+      const drifted = settingsFormDrift(p.formBlock as Record<string, unknown>, block!, deps);
+      if (drifted !== undefined) {
+        return {
+          ok: false,
+          error: {
+            code: 'unsaved-settings-changes',
+            message: `The page's configuration copy differs from the saved configuration ('${drifted}'). `
+              + 'Reload the plugin settings page and retry; nothing was written.',
+          },
+        };
+      }
+    }
+  }
+
+  const digest = settingsOnlyDigest(block, settingsChanged);
+  if (p.confirmDigest !== undefined && p.confirmDigest !== digest) {
+    return {
+      ok: false,
+      error: {
+        code: 'stale-confirmation',
+        message: 'The configuration changed since this save was previewed. Preview again and re-confirm; nothing was written.',
+      },
+    };
+  }
+
+  const nextConfig = effectiveBlock;
+  const nextConfigDigest = blockDigest(nextConfig);
+  const validationToken = createHash('sha256').update(canonicalJsonLocal({
+    v: 'settings-only-1',
+    baseDigest: block === null ? FRESH_INSTALL_DIGEST : blockDigest(block),
+    formBlock: p.formBlock ?? null,
+    nextConfigDigest,
+  })).digest('hex');
+  const canonicalSensorMap = (block !== null && Array.isArray(block.sensorMap)
+    ? block.sensorMap : []) as SensorMapOverride[];
+
+  if (!persist) {
+    return {
+      ok: true,
+      nextConfig,
+      settingsChanged,
+      nextConfigDigest,
+      validationToken,
+      snapshot: 'not-applicable',
+      canonicalSensorMap,
+      warnings: [],
+      notes: [],
+    };
+  }
+  if (typeof p.validationToken !== 'string' || p.validationToken.length === 0) {
+    return {
+      ok: false,
+      error: {
+        code: 'commit-without-validation',
+        message: 'The commit did not present a validation token. Saves must validate first (/compose-save), '
+          + 'then commit. Nothing was written.',
+      },
+    };
+  }
+  if (p.validationToken !== validationToken) {
+    return {
+      ok: false,
+      error: {
+        code: 'stale-confirmation',
+        message: 'The configuration or page state changed between validating and committing this save. '
+          + 'Preview again and retry; nothing was written.',
+      },
+    };
+  }
+  // No snapshot, no journal: nothing sensor-map-shaped changes.
+  return {
+    ok: true,
+    nextConfig,
+    settingsChanged,
+    nextConfigDigest,
+    validationToken,
+    snapshot: 'not-applicable',
+    canonicalSensorMap,
+    warnings: [],
+    notes: [],
+  };
+}
+
 async function composeSaveInternal(
   deps: HandlerDeps,
   payload: unknown,
@@ -874,6 +1102,9 @@ async function composeSaveInternal(
   const r = await runSavePipeline(deps, p);
   if (!r.ok) {
     return r;
+  }
+  if ('settingsOnly' in r) {
+    return composeSettingsOnly(deps, p, r.settingsOnly, persist);
   }
   const { block, effectiveBlock, settingsChanged, modeResult, effectiveMap, canonical } = r.ctx;
 
@@ -1174,6 +1405,25 @@ export async function handlePreviewSave(
   const r = await runSavePipeline(deps, p);
   if (!r.ok) {
     return { ok: false, error: r.error };
+  }
+  if ('settingsOnly' in r) {
+    // A settings-only preview (GA review P1-2/P1-3): no accessory
+    // consequences exist and no inventory is required — exactly the
+    // states (fresh install, broken credentials) where none can be.
+    const { block, settingsChanged } = r.settingsOnly;
+    return {
+      ok: true,
+      canonicalSensorMap: (block !== null && Array.isArray(block.sensorMap)
+        ? block.sensorMap : []) as SensorMapOverride[],
+      settingsChanged,
+      rows: [],
+      changes: [],
+      configOnly: [],
+      structuralChangeCount: 0,
+      digest: settingsOnlyDigest(block, settingsChanged),
+      warnings: [],
+      notes: [],
+    };
   }
   const { effectiveMap, canonical } = r.ctx;
   const consequences = computeSaveConsequences(r.ctx);
@@ -1558,7 +1808,29 @@ export async function handleGetEditorState(
     .filter((b): b is Record<string, unknown> =>
       !!b && typeof b === 'object' && (b as { platform?: unknown }).platform === 'AmbientWeatherSensors');
   if (blocks.length === 0) {
-    throw new Error('No AmbientWeatherSensors platform block found in config.json.');
+    // Fresh installation (GA review P1-2): render a functional page
+    // whose Connection section can enter credentials; the
+    // settings-only save creates the block. baseDigest is the
+    // fresh-install sentinel, so a block appearing before the save
+    // refuses as stale like any other base drift.
+    return {
+      configMode: 'legacy',
+      v2FlagEnabled: detectV2FlagSource({} as ConfigInputShape, deps.env ?? process.env) !== 'opted-out',
+      freshInstall: true,
+      settings: settingsDtoFor({}),
+      editorAvailable: true,
+      baseDigest: FRESH_INSTALL_DIGEST,
+      blockIndex: 0,
+      version: deps.version,
+      stations: [],
+      authored: [],
+      authoredSource: 'sensorMap',
+      mirrorState: recognizeMirror({}).state,
+      rows: [],
+      warnings: [],
+      errors: [],
+      notes: [],
+    };
   }
 
   const warnings: EditorDiagnosticDto[] = [];

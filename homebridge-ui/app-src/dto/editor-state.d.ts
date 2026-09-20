@@ -201,6 +201,13 @@ export interface EditorSettingsDto {
 }
 
 export interface EditorStateDto {
+  /**
+   * No platform block exists yet (a fresh installation): the page
+   * renders the Connection section for first-time credential entry,
+   * and the settings-only save creates the block. baseDigest is the
+   * fresh-install sentinel in this state.
+   */
+  freshInstall?: boolean;
   configMode: 'legacy' | 'v2' | 'safe-mode';
   v2FlagEnabled: boolean;
   /** Live settings rendered by the Connection section. */
