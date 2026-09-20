@@ -31,12 +31,14 @@ export interface ModeDetectionResult {
   safeModeBanner?: string;
   /**
    * The config's catalog-adoption stamps (§18.3), resolved. Set for
-   * 'v2' mode ((1, 1) when both fields are absent — the defined legacy
-   * interpretation). An INVALID stamp pair never reaches 'v2': it
-   * fails closed into 'safe-mode', because capping or resetting the
-   * stamps changes which definitions are visible and was measured to
-   * unregister a cached accessory riding an adopted definition
-   * (PR #65 review round 2).
+   * 'v2' AND 'legacy' modes ((1, 1) when both fields are absent — the
+   * defined legacy interpretation; a fresh settings-only install is a
+   * LEGACY-shaped block born stamped at the current version). An
+   * INVALID stamp pair never reaches either mode: it fails closed
+   * into 'safe-mode' in every mode, because capping or resetting the
+   * stamps changes which definitions are visible — and the legacy
+   * pipeline reconciles, so it was measured to unregister a cached
+   * accessory (PR #65 review round 2; PR #66 review F3).
    */
   catalogBaseline?: number;
   catalogAdopted?: number;
@@ -86,10 +88,30 @@ export function detectConfigMode(config: ConfigInputShape | undefined): ModeDete
     return { mode: 'legacy', warnings };
   }
 
+  // Catalog stamps validate FIRST, in EVERY mode (§18.3, PR #66 review
+  // F3): a legacy-shaped block carries stamps too — a fresh
+  // settings-only installation is born stamped before its first
+  // conversion, and a newer plugin's skeleton may carry a future pair.
+  // An invalid pair fails closed into the protective posture — the
+  // legacy pipeline RECONCILES, so running it against stamps the
+  // plugin cannot trust was measured to unregister a cached accessory.
+  // Capping or resetting would silently change definition visibility.
+  const stampResult = parseCatalogStamps(config as Record<string, unknown>);
+  if (stampResult.status === 'invalid') {
+    const banner = `The catalog adoption stamps are invalid: ${stampResult.problem}. `
+      + 'The plugin cannot tell which sensor definitions this configuration expects, so no '
+      + 'structural changes happen. Existing accessories keep running from cache; the UI is '
+      + 'read-only until the catalogBaseline/catalogAdopted fields are repaired in the JSON '
+      + 'config editor or the plugin is upgraded.';
+    warnings.push(banner);
+    return { mode: 'safe-mode', warnings, safeModeBanner: banner };
+  }
+  const { catalogBaseline, catalogAdopted } = stampResult.stamps;
+
   const raw = config.configVersion;
 
   if (raw === undefined) {
-    return { mode: 'legacy', warnings };
+    return { mode: 'legacy', warnings, catalogBaseline, catalogAdopted };
   }
 
   // Non-integer / non-number → safe mode.
@@ -112,29 +134,10 @@ export function detectConfigMode(config: ConfigInputShape | undefined): ModeDete
   // At or below current version. Version 1 would be pre-v2 hand-labeled
   // legacy; treat identically to absent for compat purposes.
   if (raw === 1) {
-    return { mode: 'legacy', warnings };
+    return { mode: 'legacy', warnings, catalogBaseline, catalogAdopted };
   }
 
   // configVersion === 2.
-  // Catalog stamps validate FIRST (§18.3): an invalid or
-  // future-version pair fails closed into the protective posture —
-  // cached accessories are retained (safe mode skips reconciliation
-  // entirely), fresh values reach only the safe-mode binder's
-  // baseline-native bindings, and the editor is read-only until a
-  // human repairs the stamps or upgrades the plugin. Capping or
-  // resetting instead would silently change definition visibility
-  // under existing accessories.
-  const stampResult = parseCatalogStamps(config as Record<string, unknown>);
-  if (stampResult.status === 'invalid') {
-    const banner = `The catalog adoption stamps are invalid: ${stampResult.problem}. `
-      + 'The plugin cannot tell which sensor definitions this configuration expects, so no '
-      + 'structural changes happen. Existing accessories keep running from cache; the UI is '
-      + 'read-only until the catalogBaseline/catalogAdopted fields are repaired in the JSON '
-      + 'config editor or the plugin is upgraded.';
-    warnings.push(banner);
-    return { mode: 'safe-mode', warnings, safeModeBanner: banner };
-  }
-
   // Mirror metadata is validated whenever it is PRESENT — regardless of
   // whether any mirrored legacy fields remain (review round 3, finding
   // 2: deleting every mirrored field must not silently skip the check;
@@ -177,12 +180,7 @@ export function detectConfigMode(config: ConfigInputShape | undefined): ModeDete
     );
   }
   // 'recognized': the maintained downgrade mirror — intentionally silent.
-  return {
-    mode: 'v2',
-    warnings,
-    catalogBaseline: stampResult.stamps.catalogBaseline,
-    catalogAdopted: stampResult.stamps.catalogAdopted,
-  };
+  return { mode: 'v2', warnings, catalogBaseline, catalogAdopted };
 }
 
 function describe(v: unknown): string {

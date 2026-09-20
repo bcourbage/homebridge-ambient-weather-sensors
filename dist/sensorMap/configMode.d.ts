@@ -25,12 +25,14 @@ export interface ModeDetectionResult {
     safeModeBanner?: string;
     /**
      * The config's catalog-adoption stamps (§18.3), resolved. Set for
-     * 'v2' mode ((1, 1) when both fields are absent — the defined legacy
-     * interpretation). An INVALID stamp pair never reaches 'v2': it
-     * fails closed into 'safe-mode', because capping or resetting the
-     * stamps changes which definitions are visible and was measured to
-     * unregister a cached accessory riding an adopted definition
-     * (PR #65 review round 2).
+     * 'v2' AND 'legacy' modes ((1, 1) when both fields are absent — the
+     * defined legacy interpretation; a fresh settings-only install is a
+     * LEGACY-shaped block born stamped at the current version). An
+     * INVALID stamp pair never reaches either mode: it fails closed
+     * into 'safe-mode' in every mode, because capping or resetting the
+     * stamps changes which definitions are visible — and the legacy
+     * pipeline reconciles, so it was measured to unregister a cached
+     * accessory (PR #65 review round 2; PR #66 review F3).
      */
     catalogBaseline?: number;
     catalogAdopted?: number;

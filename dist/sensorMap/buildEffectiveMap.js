@@ -21,7 +21,7 @@
  */
 import { CATALOG_V2_ROWS, DEFAULT_SENSOR_MAP, defaultEnabledFor, defaultRowForConfigOverride, hasAuthoredIdentity, staticDefaultRowFor, } from './defaultMap.js';
 import { computeStructuralSignature } from './structuralSignature.js';
-import { DEFAULT_DISPLAY_UNIT_FOR_MEASUREMENT } from './units.js';
+import { DEFAULT_DISPLAY_UNIT_FOR_MEASUREMENT, LEGAL_UNITS_FOR_MEASUREMENT } from './units.js';
 import { validateOverrideBody, validateOverrideIdentity, } from './validation.js';
 import { WRAPPER_FOR_KIND_AND_MEASUREMENT, wrapperById } from './wrappers.js';
 import { WRAPPER_SPEC } from './wrapperFactories.js';
@@ -102,6 +102,27 @@ export function buildEffectiveSensorMap(input) {
     // battery-ownership pass) attributes to the fragment that DISABLED a
     // reserved canonical owner.
     const enabledProvenance = new Map();
+    // Raw merged view per bucket, for CROSS-SCOPE identity gating at
+    // validation time (PR #66 review F2): a station-scoped fragment must
+    // be validated against the SAME identity resolution will use. When
+    // the GLOBAL layer authors an identity for the dataPoint (valid or
+    // rejected — raw presence, like the P0 sets), the station fragment
+    // must not inherit a catalog/fallback identity instead: validating
+    // it against the definition while resolution applies the authored
+    // identity signed rows whose displayUnit was illegal for the real
+    // measurement (the wrapper then throws on a reading).
+    const rawMergedByBucket = new Map();
+    for (const [bucketKey, bucket] of pendingMerges) {
+        const m = {};
+        for (const frag of bucket.fragments) {
+            for (const [k, v] of Object.entries(frag.record)) {
+                if (v !== undefined) {
+                    m[k] = v;
+                }
+            }
+        }
+        rawMergedByBucket.set(bucketKey, m);
+    }
     for (const { key, fragments } of pendingMerges.values()) {
         // Merge fragments field-by-field, later wins on conflict. Record
         // which fragment provided each field's final value.
@@ -151,7 +172,10 @@ export function buildEffectiveSensorMap(input) {
                 identityAuthoredStation.add(`${key.stationMac.toUpperCase()}|${key.dataPoint}`);
             }
         }
-        const defaultRow = defaultRowForConfigOverride(key.dataPoint, catalogAdopted, merged);
+        const globalRawForDp = key.stationMac !== undefined
+            ? rawMergedByBucket.get(`*|${key.dataPoint}`)
+            : undefined;
+        const defaultRow = defaultRowForConfigOverride(key.dataPoint, catalogAdopted, merged, globalRawForDp);
         const result = validateOverrideBody(merged, key, defaultRow);
         // Body validation warnings — attribute each to the fragment
         // whose value for that field survived the merge. If the warning
@@ -366,6 +390,18 @@ export function buildEffectiveSensorMap(input) {
                     message: `Custom dataPoint '${dataPoint}' has no wrapper for `
                         + `(${kind}, ${measurement}). Custom sensors are not available in this `
                         + 'plugin version.',
+                });
+            },
+            onIllegalDisplayUnit: (displayUnit, rowMeasurement) => {
+                notes.push({
+                    code: 'illegal-cross-scope-displayunit',
+                    source: 'override',
+                    overrideIndex: rowScopeIndex,
+                    dataPoint,
+                    stationMac: mac,
+                    message: `displayUnit '${displayUnit}' on ${mac}|${dataPoint} is not legal for the row's resolved `
+                        + `measurement '${rowMeasurement}' (it was authored in a different scope against a different identity). `
+                        + 'The row loads with the measurement\'s default display unit.',
                 });
             },
             onWrapperMismatch: (wrapperId, kind, measurement, fromDefaultMap) => {
@@ -638,7 +674,7 @@ function mergeOverrides(global, station) {
     return mergeInto(global, station);
 }
 function resolveRow(inp) {
-    const { stationMac, dataPoint, defaultRow, override, discovered, catalogBaseline, onNoWrapper, onWrapperMismatch, } = inp;
+    const { stationMac, dataPoint, defaultRow, override, discovered, catalogBaseline, onNoWrapper, onWrapperMismatch, onIllegalDisplayUnit, } = inp;
     // ---- Unrecognized: no default, no user override with kind+measurement.
     if (!defaultRow && !hasKindAndMeasurement(override)) {
         if (!discovered) {
@@ -778,11 +814,23 @@ function resolveRow(inp) {
         // Underspecified custom row that slipped past validation. Skip.
         return { row: null };
     }
+    // Cross-scope legality guard (PR #66 review F2): per-fragment
+    // validation checked displayUnit against the identity of ITS scope;
+    // the RESOLVED measurement can differ when a station-authored
+    // identity meets a global fragment. Never sign a row whose
+    // displayUnit its wrapper would reject — fall back to the
+    // measurement's documented default and surface a note.
+    let effectiveDisplayUnit = displayUnit;
+    const legal = LEGAL_UNITS_FOR_MEASUREMENT[measurement];
+    if (!legal.includes(effectiveDisplayUnit)) {
+        onIllegalDisplayUnit(effectiveDisplayUnit, measurement);
+        effectiveDisplayUnit = DEFAULT_DISPLAY_UNIT_FOR_MEASUREMENT[measurement] ?? sourceUnit;
+    }
     const row = {
         ...base,
         measurement: measurement,
         sourceUnit,
-        displayUnit,
+        displayUnit: effectiveDisplayUnit,
     };
     return { row, batteryClaim };
 }

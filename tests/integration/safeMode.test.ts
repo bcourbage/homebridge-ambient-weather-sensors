@@ -452,6 +452,37 @@ describe('platform safe-mode (finding #1 / §17.2)', () => {
     vi.restoreAllMocks();
   });
 
+  it('invalid stamps on a LEGACY-SHAPED block also enter the protective posture — the legacy pipeline reconciles (review F3)', () => {
+    // A legacy-shaped block (no configVersion) can carry stamps: a
+    // fresh settings-only install is born stamped, and a newer
+    // plugin's skeleton may carry a future pair. Pre-fix, this block
+    // read as LEGACY and the compat pipeline reconciled — the
+    // real-lifecycle probe unregistered a cached temperature
+    // accessory. Now: safe mode, everything retained.
+    const { platform, api, log } = makePlatform({
+      apiKey: 'test',
+      applicationKey: 'test',
+      temperatureSensors: true,
+      catalogBaseline: 1,
+      catalogAdopted: 99,
+    });
+    addCached(platform, 'AA:BB:CC:DD:EE:01-tempf', 'Temperature');
+    expect(platform.accessories).toHaveLength(1);
+
+    vi.spyOn(global, 'setInterval').mockImplementation(() => 0 as unknown as ReturnType<typeof setInterval>);
+    api.emit('didFinishLaunching');
+
+    expect(api.registered).toHaveLength(0);
+    expect(api.unregistered).toHaveLength(0);
+    expect(platform.accessories).toHaveLength(1);
+    expect(log.find('error', 'SAFE MODE')).not.toHaveLength(0);
+    // The baseline-native accessory still gets a value binding.
+    const bindings = (platform as unknown as { safeModeBindings: Map<string, unknown> }).safeModeBindings;
+    expect(bindings.has('AA:BB:CC:DD:EE:01-tempf')).toBe(true);
+
+    vi.restoreAllMocks();
+  });
+
   it('normal mode (no configVersion) does NOT enter safe mode', () => {
     const { platform, api, log } = makePlatform({
       apiKey: 'test',

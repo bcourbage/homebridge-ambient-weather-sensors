@@ -883,6 +883,21 @@ async function composeSaveInternal(deps, payload, persist) {
             },
         };
     }
+    // Adoption ALWAYS requires its own preview digest (PR #66 review
+    // F4), even with zero structural consequences: advancing
+    // catalogAdopted changes what every future resolution sees, and the
+    // digest above binds the stamp transition, so only a preview of THIS
+    // adoption can mint it.
+    if (p.adoptCatalogVersion !== undefined && p.confirmDigest === undefined) {
+        return {
+            ok: false,
+            error: {
+                code: 'confirmation-required',
+                message: 'Adopting the new catalog version must be previewed and confirmed first; nothing was written.',
+                structuralChangeCount: consequences.structuralChangeCount,
+            },
+        };
+    }
     // ---- 8. Compose. detectConfigMode's verdict is passed explicitly
     //         (it is the single authority on "legacy").
     const composed = composeV2ConfigSave(effectiveBlock, canonical, effectiveMap, modeResult.mode, stampsResolved);
@@ -1369,6 +1384,13 @@ export function computeSaveConsequences(ctx) {
         // key NAMES only, never values — a consequence-equivalent switch
         // between settings patches must not reuse the old confirmation.
         settingsChanged: [...ctx.settingsChanged].sort(),
+        // The stamp transition is a consequence in its own right (PR #66
+        // review F4): adoption changes which definitions every future
+        // resolution sees, even when today's accessory sets are equal
+        // (all six fields already explicitly assigned). A digest minted
+        // by an ordinary preview must never authorize an adoption save,
+        // so both sides of the transition are bound.
+        stamps: { current: ctx.stampsCurrent, resolved: ctx.stampsResolved },
     }))
         .digest('hex');
     return {

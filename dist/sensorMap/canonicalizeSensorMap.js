@@ -43,7 +43,7 @@
  * MACs ascending case-insensitive; fields in the fixed §17.4 order.
  */
 import { buildEffectiveSensorMap, partitionOverrideLayers } from './buildEffectiveMap.js';
-import { defaultRowForOverride } from './defaultMap.js';
+import { defaultRowForConfigOverride } from './defaultMap.js';
 /** §17.4 rule 4 — the fixed field order for byte-stable output. */
 const FIELD_ORDER = [
     'batteryField', 'dataPoint', 'displayUnit', 'embedName', 'enabled',
@@ -75,6 +75,15 @@ export function canonicalizeSensorMap(input) {
         return out;
     };
     const layers = partitionOverrideLayers(input.overrides);
+    // The serializer's known/custom classification MUST be the resolver's
+    // (PR #66 review F1): an ADOPTED definition with no authored identity
+    // is a KNOWN row — materializing its identity into the canonical
+    // output would silently convert an inherited row into an explicit
+    // assignment (violating §18.4 AP-2's "canonicalization never
+    // materializes inherited identity"), and the station-scoped variant
+    // diverged outright. Stamp-aware lookup, same rule everywhere.
+    const catalogAdopted = input.catalogAdopted ?? 1;
+    const knownRowFor = (dp, ...overrideLayers) => defaultRowForConfigOverride(dp, catalogAdopted, ...overrideLayers);
     const full = byKey(buildEffectiveSensorMap({ ...common, userOverrides: [...input.overrides] }));
     const defaults = byKey(buildEffectiveSensorMap({ ...common, userOverrides: [] }));
     const globalLayer = byKey(buildEffectiveSensorMap({
@@ -103,7 +112,7 @@ export function canonicalizeSensorMap(input) {
     };
     const stationMacs = input.stations.map(s => s.macAddress.toUpperCase());
     for (const dp of layers.global.keys()) {
-        if (defaultRowForOverride(dp, layers.global.get(dp))) {
+        if (knownRowFor(dp, layers.global.get(dp))) {
             continue;
         }
         // Any station's global-layer row carries the template identity.
@@ -114,7 +123,7 @@ export function canonicalizeSensorMap(input) {
     }
     for (const [mac, perDp] of layers.station) {
         for (const dp of perDp.keys()) {
-            if (defaultRowForOverride(dp, layers.global.get(dp), perDp.get(dp)) || globalLayer.get(`${mac}|${dp}`)) {
+            if (knownRowFor(dp, layers.global.get(dp), perDp.get(dp)) || globalLayer.get(`${mac}|${dp}`)) {
                 continue; // known, or identity already provided by the global layer
             }
             const row = full.get(`${mac}|${dp}`);
@@ -138,7 +147,7 @@ export function canonicalizeSensorMap(input) {
     const entries = [];
     // ---- Global entries: the template layer vs the built-in baseline.
     for (const dp of layers.global.keys()) {
-        const isCustom = !defaultRowForOverride(dp, layers.global.get(dp));
+        const isCustom = !knownRowFor(dp, layers.global.get(dp));
         const row = stationMacs.map(mac => globalLayer.get(`${mac}|${dp}`)).find(r => r !== undefined);
         if (!row) {
             // The global layer alone doesn't resolve a configured row on any
@@ -185,7 +194,7 @@ export function canonicalizeSensorMap(input) {
             if (!proposed) {
                 continue; // row didn't resolve (station not in inventory, etc.)
             }
-            const isCustom = !defaultRowForOverride(dp, layers.global.get(dp), perDp.get(dp));
+            const isCustom = !knownRowFor(dp, layers.global.get(dp), perDp.get(dp));
             const globalRow = globalLayer.get(key);
             const reference = globalRow
                 ?? (isCustom ? identity.get(key) : defaults.get(key));

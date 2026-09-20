@@ -16,10 +16,18 @@ import { CATALOG_V1_BASELINE, CURRENT_CATALOG_VERSION, parseCatalogStamps } from
 import {
   CATALOG_V2_ROWS,
   catalogRowFor,
+  defaultEnabledFor,
   defaultRowFor,
   staticDefaultRowFor,
 } from '../../../src/sensorMap/defaultMap';
-import { toCanonical } from '../../../src/sensorMap/unitConversions';
+import { buildWrapperRouting, distributeViaRouting } from '../../../src/sensorMap/routing';
+import type { AmbientWeatherSensorsPlatform } from '../../../src/platform';
+import {
+  MockServices,
+  makeMockAccessory,
+  makeMockPlatform,
+  type MockCharacteristic,
+} from '../../helpers/mockHomebridge';
 import type {
   DiscoveryStore,
   EffectiveSensorRow,
@@ -126,10 +134,31 @@ describe('§18.3 fail-closed mode detection', () => {
     expect(map.errors).toHaveLength(0);
   });
 
-  it('legacy mode is unaffected by the stamp fields (interpreted at conversion)', () => {
-    const r = detectConfigMode({ temperatureSensors: true } as never);
-    expect(r.mode).toBe('legacy');
-    expect(r.catalogBaseline).toBeUndefined();
+  it('legacy mode carries the parsed stamps: a fresh (2, 2)-born block is reported as (2, 2), unstamped as (1, 1)', () => {
+    // PR #66 review F3: a fresh settings-only installation is a
+    // LEGACY-shaped block born stamped; reporting it as (1, 1) would
+    // misstate its exposure history to the editor and to conversion.
+    const fresh = detectConfigMode({
+      temperatureSensors: true,
+      catalogBaseline: CURRENT_CATALOG_VERSION, catalogAdopted: CURRENT_CATALOG_VERSION,
+    } as never);
+    expect(fresh.mode).toBe('legacy');
+    expect(fresh.catalogBaseline).toBe(CURRENT_CATALOG_VERSION);
+    expect(fresh.catalogAdopted).toBe(CURRENT_CATALOG_VERSION);
+
+    const unstamped = detectConfigMode({ temperatureSensors: true } as never);
+    expect(unstamped.mode).toBe('legacy');
+    expect(unstamped.catalogBaseline).toBe(1);
+    expect(unstamped.catalogAdopted).toBe(1);
+  });
+
+  it('invalid stamps on a LEGACY-shaped block ALSO fail closed — the legacy pipeline reconciles (F3)', () => {
+    const r = detectConfigMode({
+      temperatureSensors: true,
+      catalogBaseline: 1, catalogAdopted: CURRENT_CATALOG_VERSION + 5,
+    } as never);
+    expect(r.mode).toBe('safe-mode');
+    expect(r.safeModeBanner).toContain('catalog');
   });
 });
 
@@ -248,20 +277,60 @@ describe('§18.4 the Demeter preservation fixture', () => {
     expect(a.name).toBe('Odd But Mine');
   });
 
-  it('AP-4 value-level discriminator: an authored alternate unit keeps ITS interpretation after adoption', () => {
+  it('AP-4 value-level discriminator: the authored alternate unit RENDERS through the real wrapper after save, reload, and adoption', () => {
+    // Save/reload first: the canonical serializer must round-trip the
+    // explicit assignment, and the reloaded row must render through
+    // the REAL wind wrapper with the AUTHORED unit interpretation. A
+    // silent clamp to the definition's mph leaves the structural
+    // signature unchanged, so only the rendered value discriminates:
+    // raw 10 as mps renders "22 mph" (converted); clamped it would
+    // render "10 mph".
     const mps: SensorMapOverride = {
       dataPoint: 'windspdmph_avg10m', stationMac: MAC_A,
       kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mps',
       name: 'Metric Wind',
     };
-    const after = buildEffectiveSensorMap(input([mps], { baseline: 1, adopted: 2 }));
-    const row = configured(after, MAC_A, 'windspdmph_avg10m');
-    expect(row.kind === 'unrecognized' || row.measurement === 'timestamp' || row.measurement === 'boolean').toBe(false);
+    const common = { stations: STATIONS_AB, discovery: emptyDiscovery(), uiState: emptyUiState() };
+    const canonical = canonicalizeSensorMap({
+      overrides: [mps], ...common, catalogBaseline: 1, catalogAdopted: 2,
+    });
+    const reloaded = buildEffectiveSensorMap(input(canonical, { baseline: 1, adopted: 2 }));
+    expect(reloaded.errors).toEqual([]);
+    const row = configured(reloaded, MAC_A, 'windspdmph_avg10m');
     expect((row as { sourceUnit?: string }).sourceUnit).toBe('mps');
-    // The discriminator: 10 mps and 10 mph canonicalize differently,
-    // so a silent clamp to the definition's mph would change every
-    // rendered value even though the structural signature is the same.
-    expect(toCanonical('wind-speed', 'mps', 10)).not.toBe(toCanonical('wind-speed', 'mph', 10));
+
+    const renderThrough = (r: typeof row, raw: number): string => {
+      const platform = makeMockPlatform();
+      const accessory = makeMockAccessory({ uniqueId: `${r.stationMac}-${r.dataPoint}`, displayName: r.name ?? r.dataPoint });
+      const routing = buildWrapperRouting(
+        platform as unknown as AmbientWeatherSensorsPlatform,
+        { rows: [r], errors: [], warnings: [], notes: [] },
+        () => accessory as never,
+      );
+      distributeViaRouting(
+        platform as unknown as AmbientWeatherSensorsPlatform,
+        routing,
+        [{ macAddress: r.stationMac, lastData: { [r.dataPoint]: raw } }],
+      );
+      const motion = accessory.getService(MockServices.MotionSensor)!;
+      const valueChar = [...(motion as unknown as { characteristics: Map<string, MockCharacteristic> })
+        .characteristics.values()].find(c => c.displayName === 'Value');
+      expect(valueChar, 'rendered Value characteristic').toBeDefined();
+      return String(valueChar!.value);
+    };
+
+    // 10 m/s renders converted to the mph display default — the
+    // authored interpretation ran.
+    expect(renderThrough(row, 10)).toBe('22 mph');
+
+    // Control: the adopted DEFINITION's own row (no assignment,
+    // enabled for the probe) renders the same raw as mph unconverted —
+    // proving the two interpretations are observably different through
+    // the identical wrapper.
+    const definitionMap = buildEffectiveSensorMap(input(
+      [{ dataPoint: 'windspdmph_avg10m', enabled: true }], { baseline: 1, adopted: 2 }));
+    const definitionRow = configured(definitionMap, MAC_A, 'windspdmph_avg10m');
+    expect(renderThrough(definitionRow, 10)).toBe('10 mph');
   });
 });
 
@@ -371,6 +440,108 @@ describe('§18.4 AP-3 per-key determinism across missing observations', () => {
     // Row-universe difference is legitimate and asserted separately:
     // inventory expands defaults per station.
     expect(withMap.size).toBeGreaterThan(withoutMap.size);
+  });
+});
+
+describe('canonicalization treats inherited rows as KNOWN (review F1)', () => {
+  const ADOPTED = { catalogBaseline: 1, catalogAdopted: 2 };
+  const common = { stations: STATIONS_AB, discovery: emptyDiscovery(), uiState: emptyUiState(), ...ADOPTED };
+
+  it('a global rename of an adopted definition canonicalizes WITHOUT materializing identity', () => {
+    const canonical = canonicalizeSensorMap({
+      overrides: [{ dataPoint: 'windspdmph_avg10m', name: 'My Wind' }], ...common,
+    });
+    expect(canonical).toHaveLength(1);
+    const entry = canonical[0] as Record<string, unknown>;
+    expect(entry.dataPoint).toBe('windspdmph_avg10m');
+    expect(entry.name).toBe('My Wind');
+    expect(entry.kind, 'inherited identity must never be materialized').toBeUndefined();
+    expect(entry.measurement).toBeUndefined();
+    expect(entry.sourceUnit).toBeUndefined();
+  });
+
+  it('a STATION-scoped rename canonicalizes and reloads to identical effective rows (no divergence)', () => {
+    const overrides: SensorMapOverride[] = [
+      { dataPoint: 'windspdmph_avg10m', stationMac: MAC_A, name: 'Roof Wind' },
+    ];
+    const canonical = canonicalizeSensorMap({ overrides, ...common });
+    const entry = canonical.find(e => e.stationMac === MAC_A) as Record<string, unknown> | undefined;
+    expect(entry).toBeDefined();
+    expect(entry!.kind).toBeUndefined();
+    const before = buildEffectiveSensorMap(input(overrides, { baseline: 1, adopted: 2 }));
+    const reloaded = buildEffectiveSensorMap(input(canonical, { baseline: 1, adopted: 2 }));
+    expect(reloaded.errors).toEqual([]);
+    expect(reloaded.rows).toEqual(before.rows);
+  });
+
+  it('an EXPLICIT assignment still canonicalizes as custom with its full identity', () => {
+    const canonical = canonicalizeSensorMap({ overrides: [WIND_ASSIGNMENT], ...common });
+    const entry = canonical.find(e => e.stationMac === MAC_A) as Record<string, unknown> | undefined;
+    expect(entry).toBeDefined();
+    expect(entry!.kind).toBe('motion');
+    expect(entry!.measurement).toBe('wind-speed');
+    expect(entry!.sourceUnit).toBe('mph');
+  });
+});
+
+describe('validation and resolution use ONE identity per key (review F2)', () => {
+  const ADOPTED = { baseline: 1, adopted: 2 };
+
+  it('a station non-identity exception under a global EXPLICIT identity is rejected, exactly as before adoption', () => {
+    // Pre-adoption, {displayUnit} alone on this dataPoint was
+    // custom-missing-kind; adoption must not make it valid against the
+    // catalog identity while resolution applies the global pressure
+    // assignment (a signed pressure row with a wind unit would throw
+    // in the wrapper on the first reading).
+    const overrides: SensorMapOverride[] = [
+      { dataPoint: 'windspdmph_avg10m', kind: 'motion', measurement: 'pressure', sourceUnit: 'inHg', name: 'Odd Pressure' },
+      { dataPoint: 'windspdmph_avg10m', stationMac: MAC_A, displayUnit: 'fps' },
+    ];
+    const map = buildEffectiveSensorMap(input(overrides, ADOPTED));
+    expect(map.errors.map(e => e.code)).toContain('custom-missing-kind');
+    // The global assignment itself resolves untouched on every station,
+    // with its own legal display unit.
+    for (const mac of [MAC_A, MAC_B]) {
+      const row = configured(map, mac, 'windspdmph_avg10m');
+      expect(row.measurement).toBe('pressure');
+      expect((row as { displayUnit?: string }).displayUnit).not.toBe('fps');
+    }
+  });
+
+  it('a global non-identity fragment meeting a station-authored identity never signs an illegal displayUnit (guard)', () => {
+    // The reverse direction: the global fragment is VALID against the
+    // adopted wind identity (fps is a legal wind unit), but station A
+    // authors pressure. The resolved row must not carry fps — the
+    // guard falls back to the measurement default and surfaces a note.
+    const overrides: SensorMapOverride[] = [
+      { dataPoint: 'windspdmph_avg10m', displayUnit: 'fps' },
+      { dataPoint: 'windspdmph_avg10m', stationMac: MAC_A, kind: 'motion', measurement: 'pressure', sourceUnit: 'inHg', name: 'Roof Pressure' },
+    ];
+    const map = buildEffectiveSensorMap(input(overrides, ADOPTED));
+    expect(map.errors).toEqual([]);
+    const a = configured(map, MAC_A, 'windspdmph_avg10m');
+    expect(a.measurement).toBe('pressure');
+    expect((a as { displayUnit?: string }).displayUnit).toBe('inHg');
+    expect(map.notes.map(n => n.code)).toContain('illegal-cross-scope-displayunit');
+    // Station B inherits the definition and keeps the legal fps.
+    const b = configured(map, MAC_B, 'windspdmph_avg10m');
+    expect(b.measurement).toBe('wind-speed');
+    expect((b as { displayUnit?: string }).displayUnit).toBe('fps');
+  });
+});
+
+describe('entry defaults never bypass the baseline floor (review F5)', () => {
+  it('a hypothetical defaultEnabled: true new-exposure definition stays DISABLED on an older baseline', () => {
+    const eager = { ...CATALOG_V2_ROWS.find(r => r.dataPoint === 'windgustdir')!, defaultEnabled: true };
+    expect(defaultEnabledFor(eager, 1)).toBe(false); // adopted later → floored
+    expect(defaultEnabledFor(eager, 2)).toBe(true);  // born knowing it → entry default
+  });
+
+  it('the shipped new-exposure rows are disabled for every baseline', () => {
+    for (const row of CATALOG_V2_ROWS.filter(r => r.catalogExposure === 'new')) {
+      expect(defaultEnabledFor(row, 1), row.dataPoint).toBe(false);
+      expect(defaultEnabledFor(row, 2), row.dataPoint).toBe(false);
+    }
   });
 });
 

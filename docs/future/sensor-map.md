@@ -1854,6 +1854,35 @@ Tests: for every non-motion kind, submit an override with each of these fields; 
     and the two-world coverage suite (`catalogCoverage.test.ts`,
     AWN_CATALOG_VERSION = 2 pinned to the runtime constant).
 
+  PR #66 review round 1 completed the implementation on six findings:
+  (F1) the canonical serializer's known/custom classification now uses
+  the SAME stamp-aware lookup as the resolver — an inherited adopted
+  row canonicalizes without materializing identity (a global rename
+  had silently become an explicit assignment; the station-scoped
+  variant diverged). (F2) validation and resolution use ONE identity
+  per key: a station fragment is validated with the global layer's raw
+  identity authorship passed into the lookup (a non-identity station
+  exception under a global explicit assignment is rejected exactly as
+  before adoption), and resolveRow gained a displayUnit legality guard
+  for the reverse direction (a valid global fragment's unit meeting a
+  station-authored identity falls back to the measurement default with
+  an `illegal-cross-scope-displayunit` note — an illegal unit never
+  reaches a wrapper). (F3) stamps are validated FIRST in EVERY mode:
+  legacy-shaped blocks (a fresh settings-only install is born stamped
+  before conversion) carry their real stamps in the detection result,
+  and an invalid pair fails closed to safe mode even without
+  configVersion — the legacy pipeline reconciles, and the probe had
+  unregistered a cached accessory. (F4) the consequences digest binds
+  the stamp transition (current AND resolved pairs), and adoption
+  always requires its own preview's digest even with zero structural
+  consequences — an ordinary preview's digest can no longer authorize
+  an adoption. (F5) the baseline arithmetic FLOORS entry defaults: a
+  later new-exposure definition is disabled on an older baseline no
+  matter what `defaultEnabled` declares. (F6) the AP-4 discriminator
+  test renders for real: the saved/reloaded mps assignment routes a
+  raw payload through the actual wind wrapper ("22 mph") against the
+  definition row's uncoverted rendering ("10 mph").
+
 - Status: **APPROVED FOR IMPLEMENTATION**. Beta cycle can begin.
 
 ## 18. Catalog completion: three decisions and assignment preservation

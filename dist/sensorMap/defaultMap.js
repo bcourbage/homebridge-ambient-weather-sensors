@@ -816,7 +816,15 @@ export function defaultRowForConfigOverride(dataPoint, catalogAdopted, ...overri
  * definitions the install was born with) defaults to enabled.
  */
 export function defaultEnabledFor(row, catalogBaseline) {
-    return row.defaultEnabled
-        ?? !(row.catalogExposure === 'new' && (row.sinceCatalogVersion ?? 1) > catalogBaseline);
+    // The baseline rule FLOORS the entry's own default (PR #66 review
+    // F5): a NEW-exposure definition that arrived after this install's
+    // birth is disabled no matter what the entry declares — an entry
+    // shipping defaultEnabled: true must never expose accessories on an
+    // older installation just because it adopted. The entry default
+    // applies only where the install was born knowing the definition.
+    if (row.catalogExposure === 'new' && (row.sinceCatalogVersion ?? 1) > catalogBaseline) {
+        return false;
+    }
+    return row.defaultEnabled ?? true;
 }
 //# sourceMappingURL=defaultMap.js.map

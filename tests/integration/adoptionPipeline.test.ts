@@ -141,10 +141,64 @@ describe('explicit adoption (§18.3)', () => {
 
     // The commit returns the persistable config (the CLIENT persists
     // it through the HB UI config API) with only the stamp advanced.
-    const next = await commit(rig, payload);
+    // Adoption always presents ITS preview's digest (review F4).
+    const next = await commit(rig, { ...payload, confirmDigest: preview.digest });
     expect(next.catalogBaseline).toBe(1);
     expect(next.catalogAdopted).toBe(CURRENT_CATALOG_VERSION);
     expect(next.sensorMap).toEqual([]);
+  });
+
+  it('adoption WITHOUT a preview digest is refused even with zero structural consequences (review F4)', async () => {
+    const rig = makeRig([V2_BLOCK]);
+    discoveryStore(rig);
+    const r = await handleComposeSave(rig.deps, { base: V2_BLOCK, proposal: [], adoptCatalogVersion: CURRENT_CATALOG_VERSION });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error.code).toBe('confirmation-required');
+  });
+
+  it("an ordinary preview's digest never authorizes an adoption save (review F4)", async () => {
+    // Even when every catalog-2 field already has an explicit global
+    // assignment (accessory sets identical with and without adoption),
+    // the digest binds the stamp transition, so the ordinary preview's
+    // digest is stale for the adoption compose.
+    const assignments = [
+      'windgustdir', 'windspdmph_avg2m', 'winddir_avg2m',
+      'windspdmph_avg10m', '24hourrainin', 'totalrainin',
+    ].map(dp => ({
+      dataPoint: dp, kind: 'motion',
+      measurement: dp.includes('dir') ? 'direction' : dp.includes('rain') ? 'rain-accumulation' : 'wind-speed',
+      sourceUnit: dp.includes('dir') ? 'degrees' : dp.includes('rain') ? 'in' : 'mph',
+      name: `Mine ${dp}`,
+    }));
+    const block = { ...V2_BLOCK, sensorMap: assignments };
+    const rig = makeRig([block]);
+    discoveryStore(rig);
+
+    const ordinary = await handlePreviewSave(rig.deps, { base: block, proposal: assignments });
+    expect(ordinary.ok).toBe(true);
+    if (!ordinary.ok) return;
+
+    const adoption = await handleComposeSave(rig.deps, {
+      base: block, proposal: assignments,
+      adoptCatalogVersion: CURRENT_CATALOG_VERSION,
+      confirmDigest: ordinary.digest,
+    });
+    expect(adoption.ok).toBe(false);
+    if (!adoption.ok) expect(adoption.error.code).toBe('stale-confirmation');
+
+    // The adoption's OWN preview digest works.
+    const adoptionPreview = await handlePreviewSave(rig.deps, {
+      base: block, proposal: assignments, adoptCatalogVersion: CURRENT_CATALOG_VERSION,
+    });
+    expect(adoptionPreview.ok).toBe(true);
+    if (!adoptionPreview.ok) return;
+    expect(adoptionPreview.digest).not.toBe(ordinary.digest);
+    const committed = await commit(rig, {
+      base: block, proposal: assignments,
+      adoptCatalogVersion: CURRENT_CATALOG_VERSION,
+      confirmDigest: adoptionPreview.digest,
+    });
+    expect(committed.catalogAdopted).toBe(CURRENT_CATALOG_VERSION);
   });
 
   it('adoption is refused on a legacy configuration (convert first)', async () => {
@@ -201,13 +255,16 @@ describe('fail-closed stamps at the save boundary (§18.3)', () => {
     if (!r.ok) expect(r.error.code).toBe('safe-mode');
   });
 
-  it('a legacy block with hand-broken stamps refuses conversion with the stamp diagnostic', async () => {
+  it('a legacy block with hand-broken stamps fails closed at MODE DETECTION (review F3), refusing conversion', async () => {
     const broken = { ...LEGACY_BLOCK, catalogAdopted: 2 };
     const rig = makeRig([broken]);
     discoveryStore(rig);
     const r = await handlePreviewSave(rig.deps, { base: broken });
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.error.code).toBe('catalog-stamps');
+    // Stamps validate in EVERY mode now, so the block never reads as
+    // legacy: the safe-mode gate refuses before the pipeline's own
+    // catalog-stamps belt-and-suspenders check could.
+    if (!r.ok) expect(r.error.code).toBe('safe-mode');
   });
 
   it('repairing the stamps restores normal saves', async () => {
@@ -220,6 +277,17 @@ describe('fail-closed stamps at the save boundary (§18.3)', () => {
 });
 
 describe('the editor view of adoption (§18.4 AP-2, /editor-state)', () => {
+  it('a fresh (2, 2)-born legacy-shaped block reports its real stamps to the editor (review F3)', async () => {
+    const born = { ...LEGACY_BLOCK, catalogBaseline: CURRENT_CATALOG_VERSION, catalogAdopted: CURRENT_CATALOG_VERSION };
+    const rig = makeRig([born]);
+    discoveryStore(rig);
+    const state = await handleGetEditorState(rig.deps, {});
+    expect(state.configMode).toBe('legacy');
+    expect(state.catalog).toEqual({
+      baseline: CURRENT_CATALOG_VERSION, adopted: CURRENT_CATALOG_VERSION, current: CURRENT_CATALOG_VERSION,
+    });
+  });
+
   it('an unstamped v2 config reports (1, 1) with the current version, and adopted definitions stay invisible', async () => {
     const rig = makeRig([V2_BLOCK]);
     discoveryStore(rig);
