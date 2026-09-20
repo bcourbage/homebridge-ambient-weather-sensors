@@ -337,6 +337,47 @@ describe('adoption never erases an explicit assignment (review round 2 F1)', () 
   });
 });
 
+describe('a station exception to a global template survives the full pipeline (review round 3 F1)', () => {
+  it('global fps template + station mph assignment: preview accepts, commit persists mph, reload stays custom-station, second save stable', async () => {
+    const proposal = [
+      { dataPoint: 'windspdmph_avg10m', displayUnit: 'fps' },
+      {
+        dataPoint: 'windspdmph_avg10m', stationMac: MAC,
+        kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph', displayUnit: 'mph',
+      },
+    ];
+    const block = { ...V2_BLOCK, catalogBaseline: 1, catalogAdopted: CURRENT_CATALOG_VERSION, sensorMap: [] as unknown[] };
+    const rig = makeRig([block]);
+    discoveryStore(rig);
+
+    const preview = await handlePreviewSave(rig.deps, { base: block, proposal });
+    expect(preview.ok, preview.ok ? '' : JSON.stringify((preview as { error: unknown }).error)).toBe(true);
+    if (!preview.ok) return;
+    const next = await commit(rig, { base: block, proposal, confirmDigest: preview.digest });
+
+    const saved = next.sensorMap as Record<string, unknown>[];
+    const station = saved.find(e => e.stationMac === MAC);
+    expect(station).toBeDefined();
+    expect(station!.displayUnit, 'the mph exception must survive').toBe('mph');
+    const globalEntry = saved.find(e => e.stationMac === undefined);
+    expect(globalEntry!.displayUnit).toBe('fps');
+
+    const disk = JSON.parse(readFileSync(rig.configPath, 'utf8')) as { platforms: unknown[] };
+    disk.platforms = [next];
+    writeFileSync(rig.configPath, JSON.stringify(disk, null, 2));
+    const state = await handleGetEditorState(rig.deps, {});
+    const row = state.rows.find(r => r.dataPoint === 'windspdmph_avg10m' && r.stationMac === MAC);
+    expect(row!.identityScope).toBe('custom-station');
+    expect(row!.displayUnit).toBe('mph');
+
+    const secondPreview = await handlePreviewSave(rig.deps, { base: next, proposal: saved });
+    expect(secondPreview.ok).toBe(true);
+    if (!secondPreview.ok) return;
+    const second = await commit(rig, { base: next, proposal: saved, confirmDigest: secondPreview.digest });
+    expect(JSON.stringify(second.sensorMap)).toBe(JSON.stringify(saved));
+  });
+});
+
 describe('fail-closed stamps at the save boundary (§18.3)', () => {
   it('a v2 block with invalid stamps refuses saves as safe mode', async () => {
     const broken = { ...V2_BLOCK, catalogBaseline: 1, catalogAdopted: CURRENT_CATALOG_VERSION + 7 };

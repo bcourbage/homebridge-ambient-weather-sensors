@@ -599,6 +599,75 @@ describe('an explicit assignment survives value-equal catalog defaults (review r
   });
 });
 
+describe('station exceptions to authored global settings survive canonicalization (review round 3 F1)', () => {
+  const common = {
+    stations: STATIONS_AB, discovery: emptyDiscovery(), uiState: emptyUiState(),
+    catalogBaseline: 1, catalogAdopted: 2,
+  };
+  const IDENTITY: SensorMapOverride = {
+    dataPoint: 'windspdmph_avg10m', stationMac: MAC_A,
+    kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph',
+  };
+  // The reviewer's field table: each station exception EQUALS the bare
+  // identity's own default but overrides a DIFFERENT authored global
+  // value, so dropping it would make the station inherit the global
+  // setting on reload.
+  const CASES: ReadonlyArray<[string, unknown, unknown]> = [
+    ['displayUnit', 'fps', 'mph'],
+    ['name', 'Global label', 'windspdmph_avg10m'],
+    ['batteryField', 'spare_batt', null],
+    ['embedName', true, false],
+    ['triggerEnabled', false, true],
+    ['triggerDirection', 'below', 'above'],
+    ['threshold', 12, 30],
+  ];
+
+  it.each(CASES)('%s: global %j with station exception %j round-trips intact', (field, globalValue, stationValue) => {
+    const proposal = [
+      { dataPoint: 'windspdmph_avg10m', [field]: globalValue },
+      { ...IDENTITY, [field]: stationValue },
+    ] as unknown as SensorMapOverride[];
+    const before = buildEffectiveSensorMap(input(proposal, { baseline: 1, adopted: 2 }));
+    expect(before.errors, field).toEqual([]);
+    const canonical = canonicalizeSensorMap({ overrides: proposal, ...common });
+    const after = buildEffectiveSensorMap(input(canonical, { baseline: 1, adopted: 2 }));
+    expect(after.errors, field).toEqual([]);
+    const rowOf = (m: { rows: EffectiveSensorRow[] }) => configured(m, MAC_A, 'windspdmph_avg10m') as unknown as Record<string, unknown>;
+    expect(rowOf(before)[field], `${field} resolves the station value`).toBe(stationValue);
+    expect(rowOf(after)[field], `${field} survives canonical save/reload`).toBe(stationValue);
+    // The full effective rows are equal — the divergence gate's exact
+    // comparison, untouched and passing.
+    expect(after.rows).toEqual(before.rows);
+    // And a second canonicalization is byte-stable.
+    const again = canonicalizeSensorMap({ overrides: canonical, ...common });
+    expect(JSON.stringify(again), field).toBe(JSON.stringify(canonical));
+  });
+
+  it('the enabled-state control keeps working: a station explicit assignment inheriting a global disable', () => {
+    const proposal: SensorMapOverride[] = [
+      { dataPoint: 'windspdmph_avg10m', enabled: false },
+      { ...IDENTITY },
+    ];
+    const canonical = canonicalizeSensorMap({ overrides: proposal, ...common });
+    const after = buildEffectiveSensorMap(input(canonical, { baseline: 1, adopted: 2 }));
+    expect(configured(after, MAC_A, 'windspdmph_avg10m').enabled).toBe(false);
+  });
+
+  it('sibling and never-seen stations still inherit the global template', () => {
+    const proposal: SensorMapOverride[] = [
+      { dataPoint: 'windspdmph_avg10m', displayUnit: 'fps', enabled: true },
+      { ...IDENTITY, displayUnit: 'mph' },
+    ];
+    const canonical = canonicalizeSensorMap({ overrides: proposal, ...common });
+    const withC = buildEffectiveSensorMap(input(canonical, { baseline: 1, adopted: 2 },
+      [...STATIONS_AB, { macAddress: MAC_C, name: 'New' }]));
+    expect((configured(withC, MAC_A, 'windspdmph_avg10m') as unknown as Record<string, unknown>).displayUnit).toBe('mph');
+    for (const mac of [MAC_B, MAC_C]) {
+      expect((configured(withC, mac, 'windspdmph_avg10m') as unknown as Record<string, unknown>).displayUnit, mac).toBe('fps');
+    }
+  });
+});
+
 describe('entry defaults never bypass the baseline floor (review F5)', () => {
   it('a hypothetical defaultEnabled: true new-exposure definition stays DISABLED on an older baseline', () => {
     const eager = { ...CATALOG_V2_ROWS.find(r => r.dataPoint === 'windgustdir')!, defaultEnabled: true };

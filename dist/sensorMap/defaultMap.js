@@ -811,9 +811,12 @@ export function defaultRowForConfigOverride(dataPoint, catalogAdopted, ...overri
 /**
  * The default `enabled` value a default row contributes under a
  * config's stamps (§18.3 exposure arithmetic): a NEW-exposure
- * definition that arrived after the config's baseline defaults to
- * disabled; everything else (v1 baseline rows, anchored rows, and
- * definitions the install was born with) defaults to enabled.
+ * definition that arrived after the config's baseline is DISABLED,
+ * unconditionally. Everywhere else the entry's own `defaultEnabled`
+ * decides (absent = enabled) — v1 baseline and anchored rows carry no
+ * value and stay enabled, while all six current new-exposure
+ * definitions deliberately declare false, so they are off even on
+ * installs born knowing them.
  */
 export function defaultEnabledFor(row, catalogBaseline) {
     // The baseline rule FLOORS the entry's own default (PR #66 review

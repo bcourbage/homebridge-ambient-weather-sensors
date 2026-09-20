@@ -231,6 +231,28 @@ export function canonicalizeSensorMap(input: CanonicalizeInput): SensorMapOverri
     }
   }
 
+  // Station-custom comparison baseline (PR #66 round 3 F1): what the
+  // station key will resolve to ON RELOAD if the station authors ONLY
+  // its identity — the CANONICAL global entries applied over that
+  // identity. An authored global fragment can supply settings without
+  // supplying identity (a Units template, a rename, a battery choice),
+  // so a station exception must be kept whenever it differs from what
+  // the station would actually inherit: a station mph choice under a
+  // global fps template is an exception even though mph equals the
+  // bare identity's default. The baseline is built from the MINIMIZED
+  // global output, not the input fragments, because reload sees only
+  // the output — a global value the global pass dropped (it equaled
+  // the built-in default) is not inheritable by a custom row whose own
+  // default differs, and the station entry must then carry the field
+  // itself. Same resolver as everything else.
+  const canonicalGlobalFragments = entries
+    .filter(e => e.stationMac === undefined)
+    .map(e => ({ dataPoint: e.dataPoint, ...e.fields } as unknown as SensorMapOverride));
+  const stationBaseline = byKey(buildEffectiveSensorMap({
+    ...common,
+    userOverrides: [...canonicalGlobalFragments, ...identityOverrides],
+  }));
+
   // ---- Station entries: exceptions relative to the global layer
   //      (falling back to defaults/identity when no global layer
   //      configures the dataPoint on that station).
@@ -248,7 +270,7 @@ export function canonicalizeSensorMap(input: CanonicalizeInput): SensorMapOverri
       // a template (round 2 F1).
       const globalRow = layers.global.has(dp) ? globalLayer.get(key) : undefined;
       const reference = (isCustom && !globalAuthorsIdentity(dp))
-        ? identity.get(key)
+        ? stationBaseline.get(key)
         : (globalRow ?? (isCustom ? identity.get(key) : defaults.get(key)));
       const fields = diffRows(proposed, reference);
       const onlyIdentityRestated = isCustom && globalRow !== undefined

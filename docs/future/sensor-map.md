@@ -1903,6 +1903,24 @@ Tests: for every non-motion kind, submit an override with each of these fields; 
   authored-template absorption control, and the inherited-row
   control.
 
+  Round 3 corrected the round-2 baseline itself: comparing a station
+  custom against the IDENTITY-ONLY resolution dropped valid station
+  exceptions to authored global non-identity settings (a station mph
+  choice under a global fps Units template equals the bare identity's
+  default, so it was minimized away; the divergence gate then refused
+  the valid save). The comparison baseline for station customs is now
+  the CANONICAL global entries applied over the station's minimal
+  identity — built from the minimized global OUTPUT, not the input
+  fragments, because reload sees only the output: a global value the
+  global pass drops (it equaled the built-in default) is not
+  inheritable by a custom row whose own default differs, and the
+  station entry then carries the field itself. Pinned table-driven
+  across displayUnit, name, batteryField (null), embedName,
+  triggerEnabled, triggerDirection, and threshold, plus the
+  global-disable inheritance control, sibling/never-seen-station
+  inheritance, second-save byte-stability, and the exact mph/fps
+  lifecycle through the real pipeline.
+
 - Status: **APPROVED FOR IMPLEMENTATION**. Beta cycle can begin.
 
 ## 18. Catalog completion: three decisions and assignment preservation
