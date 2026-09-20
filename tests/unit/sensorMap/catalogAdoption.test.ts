@@ -530,6 +530,75 @@ describe('validation and resolution use ONE identity per key (review F2)', () =>
   });
 });
 
+describe('an explicit assignment survives value-equal catalog defaults (review round 2 F1)', () => {
+  const common = {
+    stations: STATIONS_AB, discovery: emptyDiscovery(), uiState: emptyUiState(),
+    catalogBaseline: 1, catalogAdopted: 2,
+  };
+  // The reviewer's exact fixture: an explicit station assignment whose
+  // every effective value equals the adopted definition's defaults.
+  const VALUE_EQUAL: SensorMapOverride = {
+    batteryField: 'battout', dataPoint: 'windspdmph_avg10m', enabled: false,
+    kind: 'motion', measurement: 'wind-speed', name: 'Wind Speed 10m Avg',
+    sourceUnit: 'mph', stationMac: MAC_A,
+  };
+
+  it('canonicalization preserves the authored identity even when every value matches the definition', () => {
+    const canonical = canonicalizeSensorMap({ overrides: [VALUE_EQUAL], ...common });
+    expect(canonical).toHaveLength(1);
+    const entry = canonical[0] as Record<string, unknown>;
+    expect(entry.stationMac).toBe(MAC_A);
+    expect(entry.kind).toBe('motion');
+    expect(entry.measurement).toBe('wind-speed');
+    expect(entry.sourceUnit).toBe('mph');
+    expect(entry.enabled).toBe(false);
+    // Second save from the canonical output is byte-stable.
+    const again = canonicalizeSensorMap({ overrides: canonical, ...common });
+    expect(JSON.stringify(again)).toBe(JSON.stringify(canonical));
+    // And the resolution stays an explicit custom row across reloads.
+    const reloaded = buildEffectiveSensorMap(input(canonical, { baseline: 1, adopted: 2 }));
+    expect(reloaded.errors).toEqual([]);
+    expect(configured(reloaded, MAC_A, 'windspdmph_avg10m').name).toBe('Wind Speed 10m Avg');
+  });
+
+  it('a global NON-identity template does not absorb the station assignment either', () => {
+    const overrides: SensorMapOverride[] = [
+      { dataPoint: 'windspdmph_avg10m', name: 'Windy' },
+      VALUE_EQUAL,
+    ];
+    const canonical = canonicalizeSensorMap({ overrides, ...common });
+    const station = canonical.find(e => e.stationMac === MAC_A) as Record<string, unknown> | undefined;
+    expect(station, 'the explicit assignment must survive').toBeDefined();
+    expect(station!.kind).toBe('motion');
+    expect(station!.measurement).toBe('wind-speed');
+    expect(station!.sourceUnit).toBe('mph');
+    const globalEntry = canonical.find(e => e.stationMac === undefined) as Record<string, unknown> | undefined;
+    expect(globalEntry).toBeDefined();
+    expect(globalEntry!.kind, 'the global rename stays identity-free').toBeUndefined();
+  });
+
+  it('a station row restating a GLOBAL AUTHORED custom template is still absorbed (original semantics)', () => {
+    const template: SensorMapOverride = {
+      dataPoint: 'barn_flow', kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph', name: 'Flow',
+    };
+    const restated: SensorMapOverride = { ...template, stationMac: MAC_A };
+    const canonical = canonicalizeSensorMap({ overrides: [template, restated], ...common });
+    expect(canonical.filter(e => e.stationMac !== undefined)).toHaveLength(0);
+    expect(canonical.filter(e => e.stationMac === undefined)).toHaveLength(1);
+  });
+
+  it('control: a genuinely inherited row still canonicalizes without gaining identity', () => {
+    const canonical = canonicalizeSensorMap({
+      overrides: [{ dataPoint: 'windspdmph_avg10m', stationMac: MAC_A, enabled: true }], ...common,
+    });
+    expect(canonical).toHaveLength(1);
+    const entry = canonical[0] as Record<string, unknown>;
+    expect(entry.enabled).toBe(true);
+    expect(entry.kind).toBeUndefined();
+    expect(entry.measurement).toBeUndefined();
+  });
+});
+
 describe('entry defaults never bypass the baseline floor (review F5)', () => {
   it('a hypothetical defaultEnabled: true new-exposure definition stays DISABLED on an older baseline', () => {
     const eager = { ...CATALOG_V2_ROWS.find(r => r.dataPoint === 'windgustdir')!, defaultEnabled: true };

@@ -820,8 +820,9 @@ export function defaultEnabledFor(row, catalogBaseline) {
     // F5): a NEW-exposure definition that arrived after this install's
     // birth is disabled no matter what the entry declares — an entry
     // shipping defaultEnabled: true must never expose accessories on an
-    // older installation just because it adopted. The entry default
-    // applies only where the install was born knowing the definition.
+    // older installation just because it adopted. Where the install was
+    // born knowing the definition, the ENTRY default decides — and all
+    // six current definitions deliberately declare false.
     if (row.catalogExposure === 'new' && (row.sinceCatalogVersion ?? 1) > catalogBaseline) {
         return false;
     }

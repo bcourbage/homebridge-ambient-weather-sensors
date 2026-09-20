@@ -1881,7 +1881,27 @@ Tests: for every non-motion kind, submit an override with each of these fields; 
   matter what `defaultEnabled` declares. (F6) the AP-4 discriminator
   test renders for real: the saved/reloaded mps assignment routes a
   raw payload through the actual wind wrapper ("22 mph") against the
-  definition row's uncoverted rendering ("10 mph").
+  definition row's unconverted rendering ("10 mph").
+
+  Round 2 closed the last preservation hole: the canonical
+  serializer's `onlyIdentityRestated` shortcut (and the station
+  entry's global-layer reference) treated ANY row resolving in the
+  global-only effective map as an authored global template — but after
+  adoption that map contains inherited catalog defaults, so an
+  explicit station assignment whose values all equal the definition's
+  defaults was silently dropped from the canonical output
+  (`sensorMap: []`), reclassifying it as catalog-owned: the exact
+  provenance-loss case §18.2 outcome 1 forbids, invisible to the
+  effective-value divergence gate. The fix keys every global-template
+  inference on the AUTHORED global layer (`layers.global` presence
+  plus `hasAuthoredIdentity`), creates identity baselines for
+  station-authored customs whose identity the global layer does not
+  author, and leaves genuinely inherited rows canonicalizing without
+  gaining identity. Pinned end to end: adopt, commit, persisted
+  reload (editor scope stays custom-station), second-save
+  byte-stability, the global non-identity-template variant, the
+  authored-template absorption control, and the inherited-row
+  control.
 
 - Status: **APPROVED FOR IMPLEMENTATION**. Beta cycle can begin.
 

@@ -158,11 +158,14 @@ export interface DefaultSensorRow {
      */
     sinceCatalogVersion?: number;
     /**
-     * Explicit default for the row's enabled state, overriding the
-     * §18.3 baseline arithmetic in BOTH directions. The P2 new-exposure
-     * rows ship `false`: they stay non-exposing even on fresh installs
-     * (and conversion equivalence holds trivially); enabling is always
-     * a per-row user decision.
+     * Explicit default for the row's enabled state where the §18.3
+     * baseline rule permits one: an install born knowing the definition
+     * uses this value, while a definition adopted onto an OLDER
+     * baseline is always disabled — the floor cannot be overridden
+     * (PR #66 review F5). The P2 new-exposure rows ship `false`: they
+     * stay non-exposing even on fresh installs (and conversion
+     * equivalence holds trivially); enabling is always a per-row user
+     * decision.
      */
     defaultEnabled?: boolean;
     /**

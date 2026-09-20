@@ -732,14 +732,13 @@ async function runSavePipeline(
     return { ok: false, error: { code: 'sensor-map-shape', message: shapeErr } };
   }
 
-  // ---- 3b2. Catalog stamps (§18.3). A v2 block with an invalid pair
-  //           never reaches here (mode detection fails it closed into
-  //           safe mode); this gate additionally covers a LEGACY block
-  //           whose stamps were hand-broken — conversion must refuse
-  //           rather than guess. A valid existing pair is preserved
-  //           verbatim through compose; only a config with BOTH stamps
-  //           absent initializes to (1, 1), the behavior it already
-  //           had.
+  // ---- 3b2. Catalog stamps (§18.3). Mode detection validates the
+  //           pair in EVERY mode and fails invalid stamps closed into
+  //           safe mode before this point; this parse is a defensive
+  //           redundant gate on the same rule. A valid existing pair
+  //           is preserved verbatim through compose; only a config
+  //           with BOTH stamps absent initializes to (1, 1), the
+  //           behavior it already had.
   const stampResult = parseCatalogStamps(block as Record<string, unknown>);
   if (stampResult.status === 'invalid') {
     return {
@@ -1943,9 +1942,12 @@ export async function handleGetEditorState(
   const block = blocks[0];
 
   const modeResult = detectConfigMode(block as ConfigInputShape);
-  // The block's adoption stamps (§18.3): (1, 1) for legacy mode and
-  // every unstamped v2 config; an invalid pair took the safe-mode
-  // return above and never reaches the builds below.
+  // The block's adoption stamps (§18.3), resolved by mode detection in
+  // EVERY mode: (1, 1) when both fields are absent, and the block's
+  // own pair otherwise — a fresh settings-only install is a
+  // legacy-shaped block born stamped at the current version. An
+  // invalid pair took the safe-mode return above and never reaches
+  // the builds below.
   const blockCatalogBaseline = modeResult.catalogBaseline ?? 1;
   const blockCatalogAdopted = modeResult.catalogAdopted ?? 1;
   const v2FlagEnabled = detectV2FlagSource(block as ConfigInputShape, deps.env ?? process.env) !== 'opted-out';

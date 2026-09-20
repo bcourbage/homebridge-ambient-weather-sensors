@@ -6,7 +6,7 @@
  * stamp handling at the save boundary, and the editor's catalog view.
  */
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -242,6 +242,98 @@ describe('explicit adoption (§18.3)', () => {
     const next = await commit(rig, { ...payload, confirmDigest: preview.digest });
     expect((next.sensorMap as unknown[]).length).toBeGreaterThan(0);
     expect(next.catalogAdopted).toBe(CURRENT_CATALOG_VERSION);
+  });
+});
+
+describe('adoption never erases an explicit assignment (review round 2 F1)', () => {
+  // The reviewer's exact reproduction: a canonical station-scoped
+  // assignment whose every value equals the catalog-2 definition's
+  // defaults, adopted without changing it, persisted, reloaded, and
+  // saved again.
+  const ASSIGNMENT = {
+    batteryField: 'battout', dataPoint: 'windspdmph_avg10m', enabled: false,
+    kind: 'motion', measurement: 'wind-speed', name: 'Wind Speed 10m Avg',
+    sourceUnit: 'mph', stationMac: MAC,
+  };
+
+  async function adoptPersistReload(rig: Rig, block: Record<string, unknown>, proposal: unknown[]) {
+    const payload = { base: block, proposal, adoptCatalogVersion: CURRENT_CATALOG_VERSION };
+    const preview = await handlePreviewSave(rig.deps, payload);
+    expect(preview.ok, preview.ok ? '' : (preview as { error: { code: string } }).error.code).toBe(true);
+    if (!preview.ok) throw new Error('unreachable');
+    const next = await commit(rig, { ...payload, confirmDigest: preview.digest });
+    // Persist exactly as the client would, then reload the editor from
+    // disk.
+    const disk = JSON.parse(readFileSync(rig.configPath, 'utf8')) as { platforms: unknown[] };
+    disk.platforms = [next];
+    writeFileSync(rig.configPath, JSON.stringify(disk, null, 2));
+    const state = await handleGetEditorState(rig.deps, {});
+    return { next, state };
+  }
+
+  it('adopt → commit → persisted reload keeps the identity, the custom-station scope, and second-save stability', async () => {
+    const block = { ...V2_BLOCK, catalogBaseline: 1, catalogAdopted: 1, sensorMap: [ASSIGNMENT] };
+    const rig = makeRig([block]);
+    discoveryStore(rig);
+
+    const { next, state } = await adoptPersistReload(rig, block, [ASSIGNMENT]);
+    expect(next.catalogAdopted).toBe(CURRENT_CATALOG_VERSION);
+    const saved = next.sensorMap as Record<string, unknown>[];
+    expect(saved).toHaveLength(1);
+    expect(saved[0].kind).toBe('motion');
+    expect(saved[0].measurement).toBe('wind-speed');
+    expect(saved[0].sourceUnit).toBe('mph');
+    expect(saved[0].stationMac).toBe(MAC);
+
+    const row = state.rows.find(r => r.dataPoint === 'windspdmph_avg10m' && r.stationMac === MAC);
+    expect(row).toBeDefined();
+    expect(row!.identityScope).toBe('custom-station');
+    expect(row!.enabled).toBe(false);
+
+    // Second save (no adoption, unchanged proposal): byte-stable.
+    const persisted = { ...next };
+    const second = await commit(rig, { base: persisted, proposal: saved });
+    expect(JSON.stringify(second.sensorMap)).toBe(JSON.stringify(saved));
+    expect(second.catalogAdopted).toBe(CURRENT_CATALOG_VERSION);
+  });
+
+  it('the variant with a global NON-identity template also preserves the station assignment', async () => {
+    const globalRename = { dataPoint: 'windspdmph_avg10m', name: 'Windy' };
+    const block = { ...V2_BLOCK, catalogBaseline: 1, catalogAdopted: 1, sensorMap: [globalRename, ASSIGNMENT] };
+    const rig = makeRig([block]);
+    discoveryStore(rig);
+
+    const { next, state } = await adoptPersistReload(rig, block, [globalRename, ASSIGNMENT]);
+    const saved = next.sensorMap as Record<string, unknown>[];
+    const station = saved.find(e => e.stationMac === MAC);
+    expect(station, 'the explicit assignment must survive').toBeDefined();
+    expect(station!.kind).toBe('motion');
+    const row = state.rows.find(r => r.dataPoint === 'windspdmph_avg10m' && r.stationMac === MAC);
+    expect(row!.identityScope).toBe('custom-station');
+  });
+
+  it('control: a genuinely inherited row stays inherited (no identity gained) through the same lifecycle', async () => {
+    const inherited = { dataPoint: 'windgustdir', enabled: true, stationMac: MAC };
+    const block = { ...V2_BLOCK, catalogBaseline: 1, catalogAdopted: CURRENT_CATALOG_VERSION, sensorMap: [inherited] };
+    const rig = makeRig([block]);
+    discoveryStore(rig);
+
+    // Ordinary save (already adopted), previewed for the structural add.
+    const preview = await handlePreviewSave(rig.deps, { base: block, proposal: [inherited] });
+    expect(preview.ok).toBe(true);
+    if (!preview.ok) return;
+    const next = await commit(rig, { base: block, proposal: [inherited], confirmDigest: preview.digest });
+    const saved = next.sensorMap as Record<string, unknown>[];
+    expect(saved).toHaveLength(1);
+    expect(saved[0].kind).toBeUndefined();
+    expect(saved[0].measurement).toBeUndefined();
+
+    const disk = JSON.parse(readFileSync(rig.configPath, 'utf8')) as { platforms: unknown[] };
+    disk.platforms = [next];
+    writeFileSync(rig.configPath, JSON.stringify(disk, null, 2));
+    const state = await handleGetEditorState(rig.deps, {});
+    const row = state.rows.find(r => r.dataPoint === 'windgustdir' && r.stationMac === MAC);
+    expect(row!.identityScope).toBe('known');
   });
 });
 

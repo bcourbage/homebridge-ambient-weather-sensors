@@ -43,7 +43,7 @@
  * MACs ascending case-insensitive; fields in the fixed §17.4 order.
  */
 import { buildEffectiveSensorMap, partitionOverrideLayers } from './buildEffectiveMap.js';
-import { defaultRowForConfigOverride } from './defaultMap.js';
+import { defaultRowForConfigOverride, hasAuthoredIdentity } from './defaultMap.js';
 /** §17.4 rule 4 — the fixed field order for byte-stable output. */
 const FIELD_ORDER = [
     'batteryField', 'dataPoint', 'displayUnit', 'embedName', 'enabled',
@@ -84,6 +84,16 @@ export function canonicalizeSensorMap(input) {
     // diverged outright. Stamp-aware lookup, same rule everywhere.
     const catalogAdopted = input.catalogAdopted ?? 1;
     const knownRowFor = (dp, ...overrideLayers) => defaultRowForConfigOverride(dp, catalogAdopted, ...overrideLayers);
+    // Whether the GLOBAL layer supplies an AUTHORED identity for a
+    // dataPoint (PR #66 round 2 F1). `globalLayer` below is a complete
+    // effective map — after adoption it contains inherited catalog
+    // defaults too, and a value-equal default row is NOT evidence of an
+    // authored global template. Only an authored global identity may
+    // stand in for a station entry's identity or absorb a station row
+    // that restates it; anything less and the station's explicit
+    // assignment must survive canonicalization verbatim (§18.4 AP-1 —
+    // the provenance-loss case §18.2 forbids).
+    const globalAuthorsIdentity = (dp) => hasAuthoredIdentity(layers.global.get(dp));
     const full = byKey(buildEffectiveSensorMap({ ...common, userOverrides: [...input.overrides] }));
     const defaults = byKey(buildEffectiveSensorMap({ ...common, userOverrides: [] }));
     const globalLayer = byKey(buildEffectiveSensorMap({
@@ -123,8 +133,9 @@ export function canonicalizeSensorMap(input) {
     }
     for (const [mac, perDp] of layers.station) {
         for (const dp of perDp.keys()) {
-            if (knownRowFor(dp, layers.global.get(dp), perDp.get(dp)) || globalLayer.get(`${mac}|${dp}`)) {
-                continue; // known, or identity already provided by the global layer
+            if (knownRowFor(dp, layers.global.get(dp), perDp.get(dp))
+                || (globalAuthorsIdentity(dp) && globalLayer.get(`${mac}|${dp}`) !== undefined)) {
+                continue; // known, or identity AUTHORED by the global layer
             }
             const row = full.get(`${mac}|${dp}`);
             if (row) {
@@ -195,11 +206,17 @@ export function canonicalizeSensorMap(input) {
                 continue; // row didn't resolve (station not in inventory, etc.)
             }
             const isCustom = !knownRowFor(dp, layers.global.get(dp), perDp.get(dp));
-            const globalRow = globalLayer.get(key);
-            const reference = globalRow
-                ?? (isCustom ? identity.get(key) : defaults.get(key));
+            // The global-layer reference only counts where a global fragment
+            // is actually AUTHORED for the dataPoint — an inherited catalog
+            // default resolving in globalLayer is the built-in baseline, not
+            // a template (round 2 F1).
+            const globalRow = layers.global.has(dp) ? globalLayer.get(key) : undefined;
+            const reference = (isCustom && !globalAuthorsIdentity(dp))
+                ? identity.get(key)
+                : (globalRow ?? (isCustom ? identity.get(key) : defaults.get(key)));
             const fields = diffRows(proposed, reference);
             const onlyIdentityRestated = isCustom && globalRow !== undefined
+                && globalAuthorsIdentity(dp)
                 && Object.keys(fields).length === 0;
             if (isCustom) {
                 // Custom station entries ALWAYS re-declare identity — the
