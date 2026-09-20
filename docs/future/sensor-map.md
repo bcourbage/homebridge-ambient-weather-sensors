@@ -1792,6 +1792,18 @@ Tests: for every non-motion kind, submit an override with each of these fields; 
   battin, batt1..batt10, and batt_25 alongside the standard
   declaration; no decoder change.
 
+  Review round 3 (same day, documentation-only) tightened the
+  protective-mode promise to what the safe-mode binder actually
+  delivers, verified through the real platform/HAP lifecycle: EVERY
+  accessory is preserved, fresh values flow only to independently
+  understood baseline-native bindings (`tempf` updates), and
+  adopted-definition, custom, and extended accessories stay frozen at
+  cached values — the P2 acceptance tests prove both classes, and the
+  binder is explicitly not broadened. The lightning/leak inversion
+  wording now names the standard (non-Meteobridge) convention as its
+  reference. Round 3 cleared the P1 findings and recommended merging
+  the P1 package.
+
 - Status: **APPROVED FOR IMPLEMENTATION**. Beta cycle can begin.
 
 ## 18. Catalog completion: three decisions and assignment preservation
@@ -1975,12 +1987,21 @@ is therefore TWO stamps plus the catalog's own version metadata:
   present without the other, `baseline > adopted`) or `catalogAdopted`
   greater than the running plugin's `AWN_CATALOG_VERSION` (config
   written by a newer plugin, or a plugin downgrade) — enters the
-  PROTECTIVE posture, not cap-and-continue: cached accessories are
-  retained and value-updated only through the safe-mode-style
-  bind-existing path, the reconciliation-vs-effective-map step is
-  skipped entirely (NO accessory is unregistered), and the editor is
+  PROTECTIVE posture, not cap-and-continue: EVERY cached accessory is
+  retained, the reconciliation-vs-effective-map step is skipped
+  entirely (NO accessory is unregistered), and the editor is
   read-only with a prominent error naming the stamp problem and the
   fix (upgrade the plugin, or repair the fields in the JSON editor).
+  Fresh values flow ONLY to accessories the safe-mode bind-existing
+  path (§17.2) can interpret independently of the broken stamp — the
+  baseline-native bindings whose expected characteristic set is fully
+  attached. Everything else — adopted-definition rows, custom
+  assignments, extended sensors whose live-value semantics depend on
+  config-driven thresholds and display modes — stays FROZEN at its
+  last-known HAP values, exactly as safe mode freezes them; the
+  frozen count is logged. Preservation is the promise here, not
+  fresh data: broadening the binder to value-update
+  stamp-dependent accessories is explicitly out of scope.
   Capping or resetting a stamp was measured to be destructive: it
   removes the definition supporting an existing accessory, an
   inherited `{"enabled": true}` fragment then has no identity and
@@ -2174,14 +2195,18 @@ untouched, converted beta, global-override, station-override):
   legacy config writing `baseline = adopted = 1` while a fresh
   settings-only config's existing pair survives its first sensor-map
   save verbatim.
-- §18.3's fail-closed stamp handling, proven at the LIFECYCLE level:
-  with a malformed pair or `catalogAdopted` above the running
-  plugin's version, and a cached accessory riding an inherited
-  adopted definition plus an `{"enabled": true}` fragment, no
-  accessory is unregistered, the bind-existing path still values it,
-  the editor refuses saves with the named diagnostic, and repairing
-  the stamp restores normal resolution byte-identically. Both stamps
-  absent resolves as `(1, 1)` and is NOT protective.
+- §18.3's fail-closed stamp handling, proven at the LIFECYCLE level
+  for BOTH update classes: with a malformed pair or `catalogAdopted`
+  above the running plugin's version, and a cached accessory riding
+  an inherited adopted definition plus an `{"enabled": true}`
+  fragment, no accessory is registered or unregistered; a
+  baseline-native binding (`tempf`) keeps receiving fresh values
+  through the bind-existing path while the adopted-definition,
+  custom (e.g. Celsius), and extended accessories retain their
+  cached values frozen; the editor refuses saves with the named
+  diagnostic; and repairing the stamp restores normal resolution
+  byte-identically. Both stamps absent resolves as `(1, 1)` and is
+  NOT protective.
 - AP-2's partial-identity blocking: a lone `sourceUnit` (and each
   other partial combination) on an adopted-definition dataPoint
   yields the diagnostic, NO accessory from the definition's default

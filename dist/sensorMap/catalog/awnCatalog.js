@@ -286,7 +286,7 @@ export const AWN_CATALOG = [
         notes: 'Deliberately unbound to rows pending device evidence (existing policy).' },
     { family: 'batt_lightning', keys: ['batt_lightning'], class: 'battery-auxiliary', disposition: 'auxiliary',
         meaning: 'Lightning detector battery status',
-        encoding: 'Vendor declares "1=Low 0=OK" — INVERTED relative to the other battery fields. '
+        encoding: 'Vendor declares "1=Low 0=OK" — INVERTED relative to the standard (non-Meteobridge) convention of the other battery fields. '
             + 'Deployed decoder reads 0 as low (uniform across fields), contradicting the declaration here. '
             + 'Device observation: payload 0 with fresh batteries and a healthy AWN dashboard, shown low by the plugin '
             + '— consistent with the vendor declaration, inconsistent with the deployed decoder.',
@@ -294,7 +294,7 @@ export const AWN_CATALOG = [
         notes: 'No decoder change in P1; per-field polarity is P3 decoder-design input. The README workaround (batteryField: null) stands meanwhile.' },
     { family: 'batleak1...batleak4', indexed: { prefix: 'batleak', from: 1, to: 4 }, class: 'battery-auxiliary', disposition: 'auxiliary',
         meaning: 'Leak detector battery status',
-        encoding: 'Vendor declares "1=Low 0=OK" — INVERTED relative to the other battery fields, like batt_lightning. '
+        encoding: 'Vendor declares "1=Low 0=OK" — INVERTED relative to the standard (non-Meteobridge) convention of the other battery fields, like batt_lightning. '
             + 'The uniform deployed decoder would misread it; no production binding exists today.',
         evidence: WIKI + '; deployed decoder readBatteryLow (src/batteryFields.ts)',
         notes: 'Association/polarity/ownership design pending (with leak support, P3).' },
