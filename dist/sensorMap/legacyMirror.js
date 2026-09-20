@@ -265,9 +265,15 @@ export function projectLegacyMirror(effectiveMap) {
         }
     }
     // ---- Custom rows: the explicit downgrade-loss boundary. Exclude by
-    //      station-scoped uniqueId AND bare dataPoint so v1.7's broad
-    //      includes() matchers can never misclassify one into a wrong
-    //      wrapper (on any station, present or future).
+    //      station-scoped uniqueId, PLUS the bare dataPoint only when NO
+    //      station resolves a v1-representable row for it (review F1): a
+    //      bare exclusion suppresses the dataPoint on EVERY station, so
+    //      with station A assigned Celsius and station B on the
+    //      compatibility identity, bare 'barn_temp' would deregister B's
+    //      perfectly valid 1.7 accessory on rollback. All-custom
+    //      dataPoints keep the bare form so v1.7's broad includes()
+    //      matchers can never misclassify one on a future station.
+    const knownDps = new Set(known.map(r => r.dataPoint));
     const customDataPoints = new Set();
     for (const r of custom) {
         excludeSensors.push(`${r.stationMac}-${r.dataPoint}`);
@@ -286,7 +292,9 @@ export function projectLegacyMirror(effectiveMap) {
         }
     }
     for (const dp of customDataPoints) {
-        excludeSensors.push(dp);
+        if (!knownDps.has(dp)) {
+            excludeSensors.push(dp);
+        }
     }
     // ---- Battery suppression: a known row whose default owns a battery
     //      but whose effective batteryField is null → raw field form.

@@ -1358,6 +1358,40 @@ describe('draft editing + preview (PR B — no persistence)', () => {
     expect(proposal.some(f => f.dataPoint === 'custom_wind')).toBe(false);
   });
 
+  it('Use defaults on an explicit assignment over a fallback-recognized name CLOSES the editor — no foreign identity is reseeded (review F2)', async () => {
+    const base = editorState();
+    // barn_temp assigned as wind speed. Per the server rule the row
+    // carries NO defaults (the fallback identity's defaults describe a
+    // different sensor).
+    const assigned = {
+      stationMac: MAC, dataPoint: 'barn_temp', kind: 'motion' as const, measurement: 'wind-speed',
+      sourceUnit: 'mph', name: 'Barn Wind', enabled: true, batteryField: null,
+      origin: 'station' as const, identityScope: 'custom-station' as const, everReported: true,
+    };
+    const ipc = makeIpc(editorState({
+      rows: [...base.rows, assigned],
+      authored: [{
+        index: 0, layer: 'station' as const, stationMac: MAC, stationMacKey: MAC, dataPoint: 'barn_temp',
+        fields: { kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph', name: 'Barn Wind' },
+      }],
+    }), [], PREVIEW_OK);
+    const fixture = await render(ipc);
+    const el = openEditor(fixture, 'barn_temp');
+    expect(el.querySelector('.row-facts')!.textContent).toContain('motion accessory');
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Use defaults') as HTMLButtonElement).click();
+    await settle(fixture);
+    // Closed, never reseeded: a form built for the wind assignment
+    // must not display the fallback's Fahrenheit facts.
+    expect(el.querySelector('.editor-form')).toBeNull();
+    expect(el.textContent).toContain('1 draft change, not saved yet.');
+    // The staged removal drops the fragment; the preview states the truth.
+    ([...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement).click();
+    await settle(fixture);
+    const proposal = (ipc.requests.filter(r => r.path === '/preview-save').at(-1)!
+      .body as { proposal: Array<Record<string, unknown>> }).proposal;
+    expect(proposal.some(f => f.dataPoint === 'barn_temp')).toBe(false);
+  });
+
   it('renders row-scoped notes inline on their change rows (beta.17 RC smoke)', async () => {
     const withInline: PreviewResultDto = {
       ...PREVIEW_OK,

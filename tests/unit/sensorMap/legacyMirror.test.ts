@@ -35,12 +35,20 @@ const TWO_STATIONS: StationInventory = [
   { macAddress: MAC2, name: 'Cabin' },
 ];
 
-function v2Map(sensorMap: unknown[], stations: StationInventory = ONE_STATION): EffectiveSensorMap {
+function v2Map(
+  sensorMap: unknown[],
+  stations: StationInventory = ONE_STATION,
+  opts: { extraDiscovery?: Array<{ stationMac: string; dataPoint: string }> } = {},
+): EffectiveSensorMap {
+  const discovery = emptyDiscoveryStore();
+  for (const e of opts.extraDiscovery ?? []) {
+    discovery.entries.push({ ...e, stationName: '', firstSeen: 'a', lastSeen: 'b' });
+  }
   return buildPlatformEffectiveMap({
     config: { sensorMap },
     configMode: 'v2',
     stations,
-    discovery: emptyDiscoveryStore(),
+    discovery,
     uiState: emptyUiStateStore(),
   });
 }
@@ -596,6 +604,25 @@ describe('journalConversionBaseline (append-only entry files, deduplicated, no s
     expect(outcomes.slice().sort()).toEqual(['appended', 'unchanged']);
     expect(await readEntries()).toHaveLength(1);
   }, 20_000);
+});
+
+describe('per-station representability in exclusions (review F1)', () => {
+  it('MIXED stations: only the assigned station is excluded; the bare dataPoint exclusion would suppress the valid 1.7 row on the other station', () => {
+    const mirror = projectLegacyMirror(v2Map(
+      [{ dataPoint: 'barn_temp', stationMac: MAC1, kind: 'temperature', measurement: 'temperature', sourceUnit: 'celsius' }],
+      TWO_STATIONS,
+      { extraDiscovery: [{ stationMac: MAC2, dataPoint: 'barn_temp' }] },
+    ));
+    expect(mirror.excludeSensors ?? []).toContain(`${MAC1}-barn_temp`);
+    expect(mirror.excludeSensors ?? []).not.toContain('barn_temp');
+  });
+
+  it('ALL-custom dataPoints keep the bare exclusion (future stations must not be misclassified)', () => {
+    const mirror = projectLegacyMirror(v2Map(
+      [{ dataPoint: 'barn_temp', kind: 'temperature', measurement: 'temperature', sourceUnit: 'celsius' }],
+    ));
+    expect(mirror.excludeSensors ?? []).toContain('barn_temp');
+  });
 });
 
 describe('v1-representable identity boundary (#63 P0)', () => {

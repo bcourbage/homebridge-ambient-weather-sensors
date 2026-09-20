@@ -28,12 +28,12 @@ import { describe, expect, it, afterEach, vi } from 'vitest';
 
 import { AmbientWeatherSensorsPlatform } from '../../src/platform';
 import { canonicalizeSensorMap } from '../../src/sensorMap/canonicalizeSensorMap';
-import { compatToOverrides } from '../../src/sensorMap/compat';
+import { compatToOverrides, dynamicDataPointsFrom } from '../../src/sensorMap/compat';
 import { buildEffectiveSensorMap } from '../../src/sensorMap/buildEffectiveMap';
 import { composeV2ConfigSave } from '../../src/sensorMap/legacyMirror';
 import { emptyDiscoveryStore } from '../../src/sensorMap/persistence/discoveryStore';
 import { emptyUiStateStore } from '../../src/sensorMap/persistence/uiStateStore';
-import { convertedConfigFor, documentedRollback, inventoryOf } from '../helpers/conversion';
+import { convertedConfigFor, discoveryOf, documentedRollback, inventoryOf } from '../helpers/conversion';
 import {
   HapMockAPI,
   serializeRegistered,
@@ -242,6 +242,70 @@ describe('rollback equivalence — real 1.7.3 vs HEAD flag-off, full HAP graph, 
       }
     });
   }
+});
+
+describe('mixed-station rollback keeps the other station whole on real 1.7.3 (review F1)', () => {
+  it('station A assigned Celsius rolls back as an exclusion; station B on the compatibility identity survives with its accessory', async () => {
+    const CABIN: RawStation = {
+      macAddress: 'AA:BB:CC:DD:EE:05',
+      info: { name: 'Cabin' },
+      lastData: { barn_temp: 70, tempf: 65, battout: 1 },
+    };
+    const outdoor: RawStation = {
+      ...OUTDOOR_STATION,
+      lastData: { ...OUTDOOR_STATION.lastData, barn_temp: 21 },
+    };
+    const stations = [outdoor, CABIN];
+    const inventory = inventoryOf(stations);
+    const discovery = discoveryOf(stations);
+    const legacy = { temperatureSensors: true, humiditySensors: true };
+    const overrides = [
+      ...compatToOverrides(legacy, inventory, dynamicDataPointsFrom(discovery)),
+      {
+        dataPoint: 'barn_temp', stationMac: OUTDOOR_STATION.macAddress,
+        kind: 'temperature', measurement: 'temperature', sourceUnit: 'celsius',
+        name: 'Barn Temp', enabled: true,
+      },
+    ];
+    const canonical = canonicalizeSensorMap({ overrides, stations: inventory, discovery, uiState: emptyUiStateStore() });
+    const effectiveMap = buildEffectiveSensorMap({
+      userOverrides: canonical, discovery, uiState: emptyUiStateStore(),
+      stations: inventory, configMode: 'v2',
+    });
+    expect(effectiveMap.errors).toEqual([]);
+    const { nextConfig } = composeV2ConfigSave(
+      { platform: 'AmbientWeatherSensors', apiKey: 'k', applicationKey: 'k', _sensorMapV2: true, ...legacy },
+      canonical, effectiveMap, 'legacy',
+    );
+    // The mirror scopes the exclusion to station A (review F1): a bare
+    // 'barn_temp' would suppress B's valid 1.7 accessory too.
+    const mirror = nextConfig as { excludeSensors?: string[] };
+    expect(mirror.excludeSensors ?? []).toContain(`${OUTDOOR_STATION.macAddress}-barn_temp`);
+    expect(mirror.excludeSensors ?? []).not.toContain('barn_temp');
+    const rolledBack = documentedRollback(nextConfig as Record<string, unknown>);
+
+    // v2 run to populate the cache both stations included.
+    const v2Run = await runLifecycleWith(
+      AmbientWeatherSensorsPlatform as unknown as PlatformCtor,
+      nextConfig as Record<string, unknown>, stations,
+    );
+    const aUid = `${OUTDOOR_STATION.macAddress}-barn_temp`;
+    const bUid = `${CABIN.macAddress}-barn_temp`;
+    const cachedA = v2Run.raw.find(a => (a.context.device as { uniqueId?: string } | undefined)?.uniqueId === aUid);
+    const cachedB = v2Run.raw.find(a => (a.context.device as { uniqueId?: string } | undefined)?.uniqueId === bUid);
+    expect(cachedA, 'v2 registered the Celsius assignment on A').toBeDefined();
+    expect(cachedB, 'v2 registered the compatibility row on B').toBeDefined();
+
+    // Real published 1.7.3 on the rolled-back config with that cache:
+    // EXACTLY station A's accessory is the loss boundary.
+    const v173 = await runLifecycleWith(
+      Platform173 as unknown as PlatformCtor, rolledBack, stations, v2Run.raw,
+    );
+    expect(v173.api.unregistered, 'exact unregister set').toEqual([cachedA]);
+    const survivorIds = serializeAccessories(v2Run.raw.filter(a => a !== cachedA)).map(a => a.uniqueId);
+    expect(survivorIds).toContain(bUid);
+    expect(survivorIds).toContain(`${OUTDOOR_STATION.macAddress}-tempf`);
+  });
 });
 
 describe('custom-row downgrade loss boundary on real 1.7.3', () => {

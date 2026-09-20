@@ -2021,7 +2021,14 @@ export async function handleGetEditorState(
       const dto = toEditorRowDto(row, layers);
       const key = `${row.stationMac.toUpperCase()}|${row.dataPoint}`;
       const defaults = defaultsByKey.get(key);
-      if (defaults !== undefined && row.kind !== 'unrecognized') {
+      // Only rows whose identity IS the catalog/compat identity carry
+      // defaults (review F2): for an explicit custom assignment on a
+      // fallback-recognized name, the empty-overrides map resolves the
+      // FALLBACK identity, and reseeding those defaults into a form
+      // built for the assigned identity mixes two sensors' facts. The
+      // client's Use defaults closes such editors and lets the preview
+      // state the truth (an identity change is a re-registration).
+      if (defaults !== undefined && row.kind !== 'unrecognized' && dto.identityScope === 'known') {
         dto.defaults = defaults;
       }
       if (dto.firstSeen !== undefined || cachedKeys.has(key)) {
