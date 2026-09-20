@@ -414,6 +414,44 @@ describe('platform safe-mode (finding #1 / §17.2)', () => {
     vi.restoreAllMocks();
   });
 
+  it('invalid catalog stamps enter the SAME protective posture: every accessory retained, baseline-native values only (§18.3)', () => {
+    // The PR #65 round-3 contract, at the platform lifecycle level: a
+    // broken stamp pair must never change definition visibility — it
+    // stops structural activity. A cached accessory riding an adopted
+    // definition (windspdmph_avg10m, enabled by an authored fragment)
+    // plus a baseline-native one (tempf):
+    //   - nothing registers or unregisters;
+    //   - tempf keeps a safe-mode binding (fresh values keep flowing);
+    //   - the adopted-definition accessory gets NO binding — it stays
+    //     FROZEN at cached values, because its identity depends on the
+    //     stamps the plugin cannot trust.
+    const { platform, api, log } = makePlatform({
+      configVersion: 2,
+      apiKey: 'test',
+      applicationKey: 'test',
+      catalogBaseline: 1,
+      catalogAdopted: 99, // written by a newer plugin / corrupted
+      sensorMap: [{ dataPoint: 'windspdmph_avg10m', enabled: true }],
+    });
+    addCached(platform, 'AA:BB:CC:DD:EE:01-tempf', 'Temperature');
+    addCached(platform, 'AA:BB:CC:DD:EE:01-windspdmph_avg10m', 'Motion Sensor');
+    expect(platform.accessories).toHaveLength(2);
+
+    vi.spyOn(global, 'setInterval').mockImplementation(() => 0 as unknown as ReturnType<typeof setInterval>);
+    api.emit('didFinishLaunching');
+
+    expect(api.registered).toHaveLength(0);
+    expect(api.unregistered).toHaveLength(0);
+    expect(platform.accessories).toHaveLength(2);
+    expect(log.find('error', 'SAFE MODE')).not.toHaveLength(0);
+
+    const bindings = (platform as unknown as { safeModeBindings: Map<string, unknown> }).safeModeBindings;
+    expect(bindings.has('AA:BB:CC:DD:EE:01-tempf')).toBe(true);
+    expect(bindings.has('AA:BB:CC:DD:EE:01-windspdmph_avg10m')).toBe(false);
+
+    vi.restoreAllMocks();
+  });
+
   it('normal mode (no configVersion) does NOT enter safe mode', () => {
     const { platform, api, log } = makePlatform({
       apiKey: 'test',

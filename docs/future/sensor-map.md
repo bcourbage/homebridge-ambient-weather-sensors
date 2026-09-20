@@ -1804,6 +1804,56 @@ Tests: for every non-motion kind, submit an override with each of these fields; 
   reference. Round 3 cleared the P1 findings and recommended merging
   the P1 package.
 
+- **2026-09-20 (P2)**: §18 implemented (issue #63 P2). Implementation
+  decisions within the reviewed design:
+  - The stamps are the public fields `catalogBaseline` /
+    `catalogAdopted`, written ONLY by `composeV2ConfigSave`; parsing
+    and the fail-closed rules live in `catalogVersion.ts`
+    (`CURRENT_CATALOG_VERSION = 2`), and an invalid pair routes
+    through the EXISTING safe-mode machinery with a stamp-specific
+    banner — one protective posture, not a second one.
+  - Catalog-2 definitions live in `CATALOG_V2_ROWS`, never in
+    `DEFAULT_SENSOR_MAP`: the frozen v1 table keeps sole ownership of
+    the validation clamp, the battery reservation set, the legacy
+    mirror's universe, and the unconditional pairs expansion.
+    Anchored rows (feelsLike5-10, dewPoint5-10, soiltemp1f-10f,
+    pm25_in_24h) are built from the same primitives as the fallback
+    synthesizer and are resolution-only (no pair expansion — the
+    fallback never expanded pairs either), so adoption changes no
+    effective row; tests pin identity equality per key. New-exposure
+    rows (windgustdir, windspdmph_avg2m, winddir_avg2m,
+    windspdmph_avg10m, 24hourrainin, totalrainin) use the generic
+    per-pair wrappers from the custom table, so removing an
+    equivalent explicit assignment after adoption keeps the
+    structural signature.
+  - The new rows carry an explicit `defaultEnabled: false` overriding
+    the baseline arithmetic in BOTH directions: they stay
+    non-exposing even on fresh installs, which keeps the §11
+    conversion-equivalence gate satisfiable for every baseline
+    (including a fresh settings-only install born at (2, 2) whose
+    first sensor-map save converts). Exposing them is always a
+    per-row previewed decision.
+  - AP-2's third branch reuses the existing branches: an adopted
+    definition with no authored identity validates through the KNOWN
+    branch (its clamp warns are unreachable — nothing to strip), and
+    ANY authored identity routes to the CUSTOM branch verbatim, so a
+    partial identity gets the existing `custom-missing-*` diagnostics
+    and, via the P0 authorship gate generalized in
+    `defaultRowForConfigOverride`, blocks the definition's default in
+    its scope.
+  - Adoption is the pipeline payload field `adoptCatalogVersion`
+    (exactly `CURRENT_CATALOG_VERSION`, v2 configs only, never on
+    conversion or the fresh path), flowing through
+    preview → compose → commit like any save; the editor DTO reports
+    `catalog { baseline, adopted, current }` and stamp-aware
+    `identityScope`. The UI affordance is P4 scope.
+  - Tests: `catalogAdoption.test.ts` (resolution matrix),
+    `adoptionPipeline.test.ts` (pipeline matrix), the stamp-broken
+    platform lifecycle in `safeMode.test.ts` (tempf keeps its binding,
+    the adopted/custom accessory stays frozen, zero registrations),
+    and the two-world coverage suite (`catalogCoverage.test.ts`,
+    AWN_CATALOG_VERSION = 2 pinned to the runtime constant).
+
 - Status: **APPROVED FOR IMPLEMENTATION**. Beta cycle can begin.
 
 ## 18. Catalog completion: three decisions and assignment preservation
