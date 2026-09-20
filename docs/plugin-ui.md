@@ -2,7 +2,7 @@
 
 Opening the plugin's settings in Homebridge Config UI X shows ONE
 page: the sensor-map editor with its Connection section. Since
-2.0.0-beta.17 the schema-generated settings form is retired — every
+2.0.0 the schema-generated settings form is retired — every
 editable setting lives on this page — and the preview-era panels
 (status table, discovered-datapoints dump, notices panel) are gone.
 

@@ -25,11 +25,11 @@
 </SPAN>
 
 
-## Sensor-map v2.0 (on by default since beta.17)
+## Sensor-map v2.0
 
 The v2.0 line runs the sensor-map architecture that unifies which
 sensors expose, how they're named, and which HomeKit types they use.
-**Since v2.0.0-beta.17 the v2 pipeline is ON by default.** A legacy
+**In v2.0.0 the v2 pipeline is ON by default.** A legacy
 (1.x-style) configuration runs unchanged through the built-in
 compatibility translation — the same accessories, names, units, and
 thresholds, proven by a full HAP-graph equivalence gate — and nothing
@@ -145,6 +145,26 @@ Connection section: draft, preview, and save with guarded
 confirmation. [docs/plugin-ui.md](./docs/plugin-ui.md) explains the
 page and how saving works. See `docs/future/sensor-map.md` for the full design if
 you're curious about the shape of the v2 config.
+
+## What's New in v2.0.0
+
+The sensor-map release. Every sensor the plugin can expose is one row
+in a map: visible on the plugin's settings page, individually
+nameable, unit-convertible, and switchable on or off, with unknown
+station fields assignable as custom sensors. The page previews every
+consequence of a save — each accessory that would register,
+deregister, or re-register — before anything is written, and the save
+itself is a guarded transaction verified against the on-disk
+configuration.
+
+Upgrading from 1.x changes nothing by itself: a legacy configuration
+runs through a compatibility translation proven accessory-identical
+to v1.7, and your configuration file is not touched until the first
+time you save on the settings page. That first save preserves your
+original 1.x settings in a snapshot, and the Rollback status on the
+settings page gives the exact steps back to v1.7.3 if you ever want
+them. See the Sensor-map v2.0 section above for details, and
+[CHANGELOG.md](./CHANGELOG.md) for the full beta-by-beta history.
 
 ## What's New in v1.7.2
 

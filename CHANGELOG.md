@@ -9,6 +9,36 @@ entries short and user-facing.
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/
 
+## [2.0.0] — 2026-09-19
+
+The sensor-map release: seventeen betas, general availability. This
+release contains no code changes over 2.0.0-beta.17 — it is the same
+build promoted after a monitored bake on live installations. The
+beta entries below carry the detail; the 2.0 line over v1.7.3 in
+brief:
+
+- **Every sensor is one row in a map.** The plugin's settings page
+  lists every field each station can expose: rename it, convert its
+  display unit (per row or per category), set motion thresholds and
+  trigger direction, or switch it off. Unknown station fields can be
+  assigned as custom sensors, and sensors a station has never
+  reported are labeled and can be hidden or disabled in bulk.
+- **Saving is previewed and guarded.** Preview shows every
+  consequence — each accessory that would register, deregister, or
+  re-register, with per-row Skip — and Save applies exactly what was
+  previewed, verified server-side against the on-disk configuration.
+  API keys are handled as secrets and never leave the server.
+- **Upgrading changes nothing by itself.** A legacy 1.x configuration
+  runs through a compatibility translation proven accessory-identical
+  to v1.7 by a full HAP-graph equivalence gate; the configuration
+  file is untouched until the first save, which preserves the
+  original 1.x settings in a snapshot first. The settings page's
+  Rollback status gives the exact, verified steps back to v1.7.3.
+- **Downgrade safety.** v1.7.1+ freezes safely on a v2 configuration
+  instead of misreading it, and both rollback paths (current
+  settings, or the pre-conversion snapshot) are documented and
+  tested against the real published 1.7.3.
+
 ## [2.0.0-beta.17] — 2026-09-15
 
 ### Changed
