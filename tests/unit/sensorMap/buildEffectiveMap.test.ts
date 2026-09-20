@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import { buildEffectiveSensorMap } from '../../../src/sensorMap/buildEffectiveMap';
+import { canonicalizeSensorMap } from '../../../src/sensorMap/canonicalizeSensorMap';
+import { toCanonical } from '../../../src/sensorMap/unitConversions';
 import { DEFAULT_SENSOR_MAP } from '../../../src/sensorMap/defaultMap';
 import type {
   DiscoveryStore,
@@ -690,6 +692,105 @@ describe('buildEffectiveSensorMap — malformed input rejection (finding #10)', 
 // Un-skipped by the Stage-4 table restoration. Canonical-owner
 // behavior for KNOWN rows stays covered by the "battery attachment"
 // describe above.
+describe('authored identities win over the legacy fallback (#63 P0)', () => {
+  const STATION = { macAddress: MAC1, name: 'Home' };
+  const discoveryFor = (dps: string[], mac: string = MAC1) => ({
+    schemaVersion: 1 as const,
+    entries: dps.map(dp => ({ stationMac: mac, stationName: 'Home', dataPoint: dp, firstSeen: 'a', lastSeen: 'b' })),
+  });
+
+  it("the reviewer's barn_temp: an explicit Celsius assignment stays Celsius — raw 25 is 25\u00b0C, not \u22123.89\u00b0C", () => {
+    const result = buildEffectiveSensorMap({
+      ...baseInput(),
+      stations: [STATION],
+      discovery: discoveryFor(['barn_temp']),
+      userOverrides: [{ stationMac: MAC1, dataPoint: 'barn_temp', kind: 'temperature', measurement: 'temperature', sourceUnit: 'celsius', name: 'Barn' }],
+    });
+    expect(result.errors).toEqual([]);
+    expect(result.warnings).toEqual([]);
+    const row = result.rows.find(r => r.dataPoint === 'barn_temp' && r.stationMac === MAC1);
+    expect(row).toBeDefined();
+    if (row && row.kind !== 'unrecognized') {
+      expect(row.kind).toBe('temperature');
+      expect(row.sourceUnit).toBe('celsius');
+      expect(row.name).toBe('Barn');
+      expect(toCanonical(row.measurement, row.sourceUnit, 25)).toBe(25);
+    }
+  });
+
+  it("the reviewer's barn_solar: an explicit lux assignment stays lux — raw 25 is 25 lux, not 3165 lux", () => {
+    const result = buildEffectiveSensorMap({
+      ...baseInput(),
+      stations: [STATION],
+      discovery: discoveryFor(['barn_solar']),
+      userOverrides: [{ dataPoint: 'barn_solar', kind: 'light', measurement: 'illuminance', sourceUnit: 'lux', name: 'Barn Solar' }],
+    });
+    expect(result.errors).toEqual([]);
+    const row = result.rows.find(r => r.dataPoint === 'barn_solar' && r.stationMac === MAC1);
+    if (row && row.kind !== 'unrecognized') {
+      expect(row.sourceUnit).toBe('lux');
+      expect(toCanonical(row.measurement, row.sourceUnit, 25)).toBe(25);
+    }
+  });
+
+  it('an INVALID explicit assignment on a fallback-recognized name stays a diagnosed unrecognized row, never a guess', () => {
+    const result = buildEffectiveSensorMap({
+      ...baseInput(),
+      stations: [STATION],
+      discovery: discoveryFor(['barn_temp']),
+      userOverrides: [{ dataPoint: 'barn_temp', sourceUnit: 'celsius' }],
+    });
+    expect(result.errors.map(e => e.code)).toContain('custom-missing-kind');
+    const row = result.rows.find(r => r.dataPoint === 'barn_temp' && r.stationMac === MAC1);
+    expect(row?.kind).toBe('unrecognized');
+  });
+
+  it('identity blocking is SCOPED: a station-layer identity leaves other stations on the compatibility identity', () => {
+    const result = buildEffectiveSensorMap({
+      ...baseInput(),
+      stations: [STATION, { macAddress: MAC2, name: 'Cabin' }],
+      discovery: {
+        schemaVersion: 1,
+        entries: [
+          { stationMac: MAC1, stationName: 'Home', dataPoint: 'barn_temp', firstSeen: 'a', lastSeen: 'b' },
+          { stationMac: MAC2, stationName: 'Cabin', dataPoint: 'barn_temp', firstSeen: 'a', lastSeen: 'b' },
+        ],
+      },
+      userOverrides: [{ stationMac: MAC1, dataPoint: 'barn_temp', kind: 'temperature', measurement: 'temperature', sourceUnit: 'celsius' }],
+    });
+    const home = result.rows.find(r => r.dataPoint === 'barn_temp' && r.stationMac === MAC1);
+    const cabin = result.rows.find(r => r.dataPoint === 'barn_temp' && r.stationMac === MAC2);
+    if (home && home.kind !== 'unrecognized') {
+      expect(home.sourceUnit).toBe('celsius');
+    }
+    if (cabin && cabin.kind !== 'unrecognized') {
+      expect(cabin.sourceUnit).toBe('fahrenheit'); // the fallback identity, untouched
+    }
+    expect(result.errors).toEqual([]);
+  });
+
+  it('canonical save/reload round-trips the explicit identity with an unchanged structural signature', () => {
+    const overrides = [{ dataPoint: 'barn_temp', kind: 'temperature', measurement: 'temperature', sourceUnit: 'celsius', name: 'Barn' }];
+    const common = {
+      stations: [STATION],
+      discovery: discoveryFor(['barn_temp']),
+      uiState: { schemaVersion: 1 as const, dismissedNoticeIds: [], forgottenFields: [] },
+    };
+    const direct = buildEffectiveSensorMap({ ...common, userOverrides: overrides, configMode: 'v2' });
+    const canonical = canonicalizeSensorMap({ overrides, ...common });
+    const entry = canonical.find(e => e.dataPoint === 'barn_temp');
+    expect(entry).toMatchObject({ kind: 'temperature', measurement: 'temperature', sourceUnit: 'celsius' });
+    const reloaded = buildEffectiveSensorMap({ ...common, userOverrides: canonical, configMode: 'v2' });
+    expect(reloaded.errors).toEqual([]);
+    const before = direct.rows.find(r => r.dataPoint === 'barn_temp');
+    const after = reloaded.rows.find(r => r.dataPoint === 'barn_temp');
+    if (before && before.kind !== 'unrecognized' && after && after.kind !== 'unrecognized') {
+      expect(after.sourceUnit).toBe('celsius');
+      expect(after.structuralSignature).toBe(before.structuralSignature);
+    }
+  });
+});
+
 describe('buildEffectiveSensorMap — dynamic legacy-matcher recognition (GA review P1-1 / issue #63)', () => {
   it('a field outside the static table that the legacy matcher accepts resolves as a KNOWN row', () => {
     const result = buildEffectiveSensorMap({
@@ -764,14 +865,14 @@ describe('buildEffectiveSensorMap — custom-row battery ownership (finding #6)'
     const result = buildEffectiveSensorMap({
       ...baseInput(),
       userOverrides: [{
-        dataPoint: 'custom_second_probe',
+        dataPoint: 'custom_second_temp',
         kind: 'temperature',
         measurement: 'temperature',
         sourceUnit: 'fahrenheit',
         batteryField: 'battout',
       }],
     });
-    const row = result.rows.find(r => r.dataPoint === 'custom_second_probe');
+    const row = result.rows.find(r => r.dataPoint === 'custom_second_temp');
     expect(row).toBeDefined();
     if (row && row.kind !== 'unrecognized') {
       expect(row.batteryField).toBe('battout');
@@ -791,7 +892,7 @@ describe('buildEffectiveSensorMap — custom-row battery ownership (finding #6)'
           batteryField: 'my_barn_batt',
         },
         {
-          dataPoint: 'custom_barn_probe',
+          dataPoint: 'custom_barn_temp',
           kind: 'temperature',
           measurement: 'temperature',
           sourceUnit: 'fahrenheit',
@@ -800,7 +901,7 @@ describe('buildEffectiveSensorMap — custom-row battery ownership (finding #6)'
       ],
     });
     const wind = result.rows.find(r => r.dataPoint === 'custom_barn_wind');
-    const temp = result.rows.find(r => r.dataPoint === 'custom_barn_probe');
+    const temp = result.rows.find(r => r.dataPoint === 'custom_barn_temp');
     // Stage-4 ordering: the winner is DETERMINISTIC — the claimant
     // whose batteryField was authored by the EARLIEST config fragment
     // (wind at index 0), never resolution-iteration order.
@@ -814,7 +915,7 @@ describe('buildEffectiveSensorMap — custom-row battery ownership (finding #6)'
     expect(note).toBeDefined();
     expect(note?.source).toBe('override');
     expect(note?.overrideIndex).toBe(1);
-    expect(note?.dataPoint).toBe('custom_barn_probe');
+    expect(note?.dataPoint).toBe('custom_barn_temp');
     expect(result.warnings.some(w => w.code === 'duplicate-battery-owner')).toBe(false);
     // Signatures reflect settled ownership.
     expect(wind && wind.kind !== 'unrecognized' ? wind.structuralSignature : '').toContain('battery:1');

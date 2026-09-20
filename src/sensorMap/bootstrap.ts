@@ -23,7 +23,7 @@
  * reporting the field again the default map will resolve it).
  */
 
-import { defaultRowFor } from './defaultMap.js';
+import { staticDefaultRowFor, defaultRowFor } from './defaultMap.js';
 import { LEGACY_TYPE_TO_KIND, LEGACY_TYPE_TO_MEASUREMENT } from './legacyTables.js';
 import type { Measurement, SensorKind } from './types.js';
 
@@ -94,7 +94,13 @@ export function inferForCachedAccessory(accessory: CachedAccessoryShape): Bootst
   }
 
   // ---- Measurement: three-level fallback avoiding kind-alone guessing.
-  const defaultRow = dataPoint ? defaultRowFor(dataPoint) : undefined;
+  //      STATIC catalog only (#63 P0): this inference decides whether a
+  //      cached accessory with no live row is reconciled (and possibly
+  //      deregistered) or preserved. Guessing a measurement from the
+  //      dynamic legacy fallback turned preserve-cached custom
+  //      accessories into deletions; the fallback names carry no more
+  //      certainty here than they did before it existed.
+  const defaultRow = dataPoint ? staticDefaultRowFor(dataPoint) : undefined;
   const measurement: Measurement | undefined =
     defaultRow?.measurement
     ?? (legacyType ? LEGACY_TYPE_TO_MEASUREMENT[legacyType] : undefined);

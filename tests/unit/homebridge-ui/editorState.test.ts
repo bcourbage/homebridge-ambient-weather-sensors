@@ -84,7 +84,7 @@ const V2_BLOCK = {
   sensorMap: [
     { dataPoint: 'tempf', name: 'Outdoor Temp' },
     { dataPoint: 'windspeedmph', stationMac: MAC, enabled: false },
-    { dataPoint: 'customprobe1', kind: 'temperature', measurement: 'temperature', sourceUnit: 'celsius' },
+    { dataPoint: 'customtemp1', kind: 'temperature', measurement: 'temperature', sourceUnit: 'celsius' },
   ],
 };
 
@@ -120,11 +120,11 @@ describe('/editor-state — v2 configuration', () => {
     const byDp = new Map(dto.rows.filter(r => r.stationMac === MAC).map(r => [r.dataPoint, r]));
     expect(byDp.get('tempf')).toMatchObject({ origin: 'global', name: 'Outdoor Temp', kind: 'temperature' });
     expect(byDp.get('windspeedmph')).toMatchObject({ origin: 'station', enabled: false });
-    expect(byDp.get('customprobe1')).toMatchObject({ origin: 'global', kind: 'temperature', sourceUnit: 'celsius' });
+    expect(byDp.get('customtemp1')).toMatchObject({ origin: 'global', kind: 'temperature', sourceUnit: 'celsius' });
     // batteryField mirrors the resolver exactly — null is PRESENT,
     // never omitted (review #32 F2).
-    expect(byDp.get('customprobe1')!.batteryField).toBeNull();
-    expect('batteryField' in byDp.get('customprobe1')!).toBe(true);
+    expect(byDp.get('customtemp1')!.batteryField).toBeNull();
+    expect('batteryField' in byDp.get('customtemp1')!).toBe(true);
     expect(byDp.get('weirdfield9')).toMatchObject({
       origin: 'unrecognized', kind: 'unrecognized', enabled: false, firstSeen: '2026-01-01T00:00:00Z',
     });
@@ -168,7 +168,7 @@ describe('/editor-state — v2 configuration', () => {
     expect(wind.defaults!.displayUnit).toBeDefined();
 
     // Custom and unrecognized rows have no default row to return to.
-    expect(byDp.get('customprobe1')!.defaults).toBeUndefined();
+    expect(byDp.get('customtemp1')!.defaults).toBeUndefined();
     expect(byDp.get('weirdfield9')!.defaults).toBeUndefined();
   });
 

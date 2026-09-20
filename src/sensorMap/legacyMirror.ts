@@ -170,14 +170,38 @@ type ConfiguredRow = Exclude<EffectiveSensorRow, { kind: 'unrecognized' }>;
  * Reverse projection: effective v2 map → sparse v1.7 legacy fields.
  * PURE. See the module header for the contract.
  */
+/**
+ * Whether v1.7 would interpret this resolved row the way it actually
+ * behaves (#63 P0): 1.7's substring matcher assigns a recognized name
+ * ITS OWN identity, so a row is v1-representable only when its
+ * resolved identity is exactly what 1.7 would assume. An explicitly
+ * assigned Celsius barn_temp is NOT — it mirrors as an exclusion, or
+ * 1.7 would render its readings as Fahrenheit.
+ */
+export function v1RepresentableIdentity(row: ConfiguredRow): boolean {
+  const def = defaultRowFor(row.dataPoint);
+  if (!def) {
+    return false;
+  }
+  return row.kind === def.kind && row.measurement === def.measurement
+    && (row.measurement === 'timestamp' || row.measurement === 'boolean'
+      || (row as { sourceUnit?: unknown }).sourceUnit === def.sourceUnit);
+}
+
 export function projectLegacyMirror(effectiveMap: EffectiveSensorMap): LegacyConfig {
   const known: ConfiguredRow[] = [];
   const custom: ConfiguredRow[] = [];
+  // v1-representable means MORE than "1.7 recognizes the name" (#63
+  // P0): 1.7's substring matcher assigns a name ITS OWN identity, so a
+  // row is known to the mirror only when its resolved identity is
+  // exactly what 1.7 would assume. An explicitly assigned Celsius
+  // barn_temp classifies CUSTOM and rolls back as an exclusion —
+  // 1.7 rendering it as Fahrenheit would corrupt the value.
   for (const row of effectiveMap.rows) {
     if (row.kind === 'unrecognized') {
       continue;
     }
-    if (defaultRowFor(row.dataPoint)) {
+    if (v1RepresentableIdentity(row)) {
       known.push(row);
     } else {
       custom.push(row);

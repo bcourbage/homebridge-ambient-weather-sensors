@@ -10,7 +10,7 @@ import { compatToOverrides } from '../../../src/sensorMap/compat';
 import { detectConfigMode } from '../../../src/sensorMap/configMode';
 import { buildEffectiveSensorMap } from '../../../src/sensorMap/buildEffectiveMap';
 import { defaultRowFor } from '../../../src/sensorMap/defaultMap';
-import {
+import { v1RepresentableIdentity,
   LEGACY_JOURNAL_DIR,
   LEGACY_MIRROR_KEY,
   LEGACY_SENSOR_FIELDS,
@@ -92,14 +92,14 @@ describe('projectLegacyMirror (finding 5 — reverse projection)', () => {
   it('a custom row emits BOTH the station-scoped uniqueId and the bare dataPoint exclusion', () => {
     // Custom rows surface as no-wrapper errors while the table is empty
     // - both exclusion forms must still be emitted, or v1.7's broad
-    // includes("temp") matcher would build a WRONG wrapper for barn_thermo.
+    // includes("temp") matcher would build a WRONG wrapper for barn_temp.
     const mirror = projectLegacyMirror(v2Map(
-      [{ dataPoint: 'barn_thermo', kind: 'temperature', measurement: 'temperature', sourceUnit: 'celsius', displayUnit: 'celsius' }],
+      [{ dataPoint: 'barn_temp', kind: 'temperature', measurement: 'temperature', sourceUnit: 'celsius', displayUnit: 'celsius' }],
       TWO_STATIONS,
     ));
-    expect(mirror.excludeSensors).toContain('barn_thermo');
-    expect(mirror.excludeSensors).toContain(`${MAC1}-barn_thermo`);
-    expect(mirror.excludeSensors).toContain(`${MAC2}-barn_thermo`);
+    expect(mirror.excludeSensors).toContain('barn_temp');
+    expect(mirror.excludeSensors).toContain(`${MAC1}-barn_temp`);
+    expect(mirror.excludeSensors).toContain(`${MAC2}-barn_temp`);
   });
 
   it('batteryField: null on a canonical row mirrors as the raw batt* field name', () => {
@@ -598,6 +598,22 @@ describe('journalConversionBaseline (append-only entry files, deduplicated, no s
   }, 20_000);
 });
 
+describe('v1-representable identity boundary (#63 P0)', () => {
+  it('an explicit assignment matching what 1.7 would assume mirrors as KNOWN; a differing one mirrors as an exclusion', () => {
+    // Identical identity: 1.7 interprets barn_temp exactly this way,
+    // so rollback needs no exclusion.
+    const same = projectLegacyMirror(v2Map(
+      [{ dataPoint: 'barn_temp', kind: 'temperature', measurement: 'temperature', sourceUnit: 'fahrenheit' }],
+    ));
+    expect(same.excludeSensors ?? []).not.toContain('barn_temp');
+    // Celsius: 1.7 would misrender the readings — excluded on rollback.
+    const differs = projectLegacyMirror(v2Map(
+      [{ dataPoint: 'barn_temp', kind: 'temperature', measurement: 'temperature', sourceUnit: 'celsius' }],
+    ));
+    expect(differs.excludeSensors ?? []).toContain('barn_temp');
+  });
+});
+
 describe('metric rainfall survives the mirror (GA review P2-5)', () => {
   it('a uniform metric rain family (mm on totals, mm_per_hr on rate) mirrors units.rain = mm', () => {
     const mirror = projectLegacyMirror(v2Map([
@@ -631,7 +647,7 @@ describe('projection property test (finding 5 — reviewer requirement)', () => 
       { dataPoint: 'windgustmph', displayUnit: 'kph' },
       { dataPoint: 'maxdailygust', displayUnit: 'kph' },
       { dataPoint: 'lightning_day', batteryField: null },                           // battery suppression
-      { dataPoint: 'barn_thermo', kind: 'temperature', measurement: 'temperature', sourceUnit: 'celsius', displayUnit: 'celsius' }, // custom
+      { dataPoint: 'barn_temp', kind: 'temperature', measurement: 'temperature', sourceUnit: 'celsius', displayUnit: 'celsius' }, // custom
     ];
     const v2 = v2Map(sensorMap, TWO_STATIONS);
     const mirror = projectLegacyMirror(v2);
@@ -655,7 +671,10 @@ describe('projection property test (finding 5 — reviewer requirement)', () => 
     const index = (m: EffectiveSensorMap): Map<string, Rowish> => {
       const out = new Map<string, Rowish>();
       for (const r of m.rows) {
-        if (r.kind === 'unrecognized' || !defaultRowFor(r.dataPoint)) {
+        // v1-representable = the identity 1.7 would itself assume
+        // (#63 P0): the explicit Celsius barn_temp row is custom on
+        // BOTH sides of this comparison, not known.
+        if (r.kind === 'unrecognized' || !v1RepresentableIdentity(r)) {
           continue;
         }
         out.set(`${r.stationMac}|${r.dataPoint}`, r as unknown as Rowish);
@@ -682,8 +701,8 @@ describe('projection property test (finding 5 — reviewer requirement)', () => 
     // The custom dataPoint is the loss boundary: a REAL row in the v2
     // map (table restored), absent from the legacy projection, and
     // excluded by the mirror so v1.7's broad matchers can't misclassify.
-    expect(v2.rows.some(r => r.dataPoint === 'barn_thermo' && r.kind !== 'unrecognized')).toBe(true);
-    expect(legacy.rows.some(r => r.dataPoint === 'barn_thermo')).toBe(false);
-    expect(mirror.excludeSensors).toContain('barn_thermo');
+    expect(v2.rows.some(r => r.dataPoint === 'barn_temp' && r.kind !== 'unrecognized')).toBe(true);
+    expect(legacy.rows.some(r => r.dataPoint === 'barn_temp')).toBe(false);
+    expect(mirror.excludeSensors).toContain('barn_temp');
   });
 });

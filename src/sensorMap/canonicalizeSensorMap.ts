@@ -44,7 +44,7 @@
  */
 
 import { buildEffectiveSensorMap, partitionOverrideLayers, type BuildInput } from './buildEffectiveMap.js';
-import { defaultRowFor } from './defaultMap.js';
+import { defaultRowForOverride } from './defaultMap.js';
 import type {
   DiscoveryStore,
   EffectiveSensorRow,
@@ -127,7 +127,7 @@ export function canonicalizeSensorMap(input: CanonicalizeInput): SensorMapOverri
   };
   const stationMacs = input.stations.map(s => s.macAddress.toUpperCase());
   for (const dp of layers.global.keys()) {
-    if (defaultRowFor(dp)) {
+    if (defaultRowForOverride(dp, layers.global.get(dp))) {
       continue;
     }
     // Any station's global-layer row carries the template identity.
@@ -138,7 +138,7 @@ export function canonicalizeSensorMap(input: CanonicalizeInput): SensorMapOverri
   }
   for (const [mac, perDp] of layers.station) {
     for (const dp of perDp.keys()) {
-      if (defaultRowFor(dp) || globalLayer.get(`${mac}|${dp}`)) {
+      if (defaultRowForOverride(dp, layers.global.get(dp), perDp.get(dp)) || globalLayer.get(`${mac}|${dp}`)) {
         continue; // known, or identity already provided by the global layer
       }
       const row = full.get(`${mac}|${dp}`);
@@ -165,7 +165,7 @@ export function canonicalizeSensorMap(input: CanonicalizeInput): SensorMapOverri
 
   // ---- Global entries: the template layer vs the built-in baseline.
   for (const dp of layers.global.keys()) {
-    const isCustom = !defaultRowFor(dp);
+    const isCustom = !defaultRowForOverride(dp, layers.global.get(dp));
     const row = stationMacs.map(mac => globalLayer.get(`${mac}|${dp}`)).find(r => r !== undefined);
     if (!row) {
       // The global layer alone doesn't resolve a configured row on any
@@ -213,7 +213,7 @@ export function canonicalizeSensorMap(input: CanonicalizeInput): SensorMapOverri
       if (!proposed) {
         continue; // row didn't resolve (station not in inventory, etc.)
       }
-      const isCustom = !defaultRowFor(dp);
+      const isCustom = !defaultRowForOverride(dp, layers.global.get(dp), perDp.get(dp));
       const globalRow = globalLayer.get(key);
       const reference = globalRow
         ?? (isCustom ? identity.get(key) : defaults.get(key));

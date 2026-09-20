@@ -91,7 +91,7 @@ describe('downgrade journeys: editor-generated v2 config + v2-written cache', ()
     const sensorMap = [
       { dataPoint: 'humidity', enabled: false },                 // disabled in v2 → stays gone in v1.7
       { dataPoint: 'tempf', name: 'Patio' },                     // rename (behavioral; lost on downgrade)
-      { dataPoint: 'barn_thermo', kind: 'temperature', measurement: 'temperature', sourceUnit: 'celsius', displayUnit: 'celsius' }, // custom
+      { dataPoint: 'barn_temp', kind: 'temperature', measurement: 'temperature', sourceUnit: 'celsius', displayUnit: 'celsius' }, // custom
     ];
     const v2Map = buildEffectiveSensorMap({
       userOverrides: sensorMap,
@@ -160,7 +160,7 @@ describe('downgrade journeys: editor-generated v2 config + v2-written cache', ()
     // A future-v2 custom accessory (post-table-restore shape) — the
     // explicit downgrade-loss boundary.
     const custom = v2CachedAccessory({
-      dataPoint: 'barn_thermo', type: 'CustomSensor', displayName: 'Barn Temp',
+      dataPoint: 'barn_temp', type: 'CustomSensor', displayName: 'Barn Temp',
       kind: 'temperature', measurement: 'temperature',
       services: (a) => {
         const svc = a.addService(MockServices.TemperatureSensor);
@@ -178,7 +178,7 @@ describe('downgrade journeys: editor-generated v2 config + v2-written cache', ()
       info: { name: 'Home' },
       lastData: {
         tempf: 68, humidity: 40, humidityin: 50, baromabsin: 29.92,
-        battout: 1, battin: 1, barn_thermo: 21,
+        battout: 1, battin: 1, barn_temp: 21,
       },
     }];
     vi.spyOn(global, 'fetch').mockImplementation(async () => new Response(JSON.stringify(awnPayload), {
@@ -212,9 +212,9 @@ describe('downgrade journeys: editor-generated v2 config + v2-written cache', ()
     expect(api.registered.some(a => (a.context.device as { uniqueId?: string }).uniqueId === `${MAC}-humidity`)).toBe(false);
     // The custom dataPoint is never REGISTERED anew either (the cache
     // was preserved, not rebuilt) — and never as a wrong-wrapper
-    // accessory despite barn_thermo.includes('temp') and
+    // accessory despite barn_temp.includes('temp') and
     // temperatureSensors: true in the mirror.
-    expect(api.registered.some(a => (a.context.device as { uniqueId?: string }).uniqueId === `${MAC}-barn_thermo`)).toBe(false);
+    expect(api.registered.some(a => (a.context.device as { uniqueId?: string }).uniqueId === `${MAC}-barn_temp`)).toBe(false);
 
     // The representable accessories were restored (v1.7 update path) —
     // wrappers exist and the rename fell back to the friendly name.
@@ -318,7 +318,7 @@ describe('downgrade journeys: editor-generated v2 config + v2-written cache', ()
     // (pinned on release/1.7.0 in tests/integration/configGuard.test.ts).
     const sensorMap = [
       { dataPoint: 'humidity', enabled: false },
-      { dataPoint: 'barn_thermo', kind: 'temperature', measurement: 'temperature', sourceUnit: 'celsius', displayUnit: 'celsius' },
+      { dataPoint: 'barn_temp', kind: 'temperature', measurement: 'temperature', sourceUnit: 'celsius', displayUnit: 'celsius' },
     ];
     const v2Map = buildEffectiveSensorMap({
       userOverrides: sensorMap,
@@ -353,7 +353,7 @@ describe('downgrade journeys: editor-generated v2 config + v2-written cache', ()
     platform.configureAccessory(tempf as never);
     vi.spyOn(global, 'fetch').mockImplementation(async () => new Response(JSON.stringify([{
       macAddress: MAC, info: { name: 'Home' },
-      lastData: { tempf: 68, humidity: 40, battout: 1, barn_thermo: 21 },
+      lastData: { tempf: 68, humidity: 40, battout: 1, barn_temp: 21 },
     }]), { status: 200, headers: { 'content-type': 'application/json' } }));
     vi.spyOn(global, 'setInterval').mockImplementation(() => 0 as unknown as ReturnType<typeof setInterval>);
 
@@ -364,7 +364,7 @@ describe('downgrade journeys: editor-generated v2 config + v2-written cache', ()
 
     expect(api.unregistered).not.toContain(tempf);
     expect(api.registered.some(a => (a.context.device as { uniqueId?: string }).uniqueId === `${MAC}-humidity`)).toBe(false);
-    expect(api.registered.some(a => (a.context.device as { uniqueId?: string }).uniqueId === `${MAC}-barn_thermo`)).toBe(false);
+    expect(api.registered.some(a => (a.context.device as { uniqueId?: string }).uniqueId === `${MAC}-barn_temp`)).toBe(false);
     vi.restoreAllMocks();
   });
 });

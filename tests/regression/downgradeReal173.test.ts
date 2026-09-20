@@ -245,13 +245,13 @@ describe('rollback equivalence — real 1.7.3 vs HEAD flag-off, full HAP graph, 
 });
 
 describe('custom-row downgrade loss boundary on real 1.7.3', () => {
-  it('the mirror exclusions defeat the broad matchers: barn_thermo is dropped, never misregistered', async () => {
+  it('the mirror exclusions defeat the broad matchers: barn_temp is dropped, never misregistered', async () => {
     const inventory = inventoryOf([OUTDOOR_STATION]);
     const legacy = { temperatureSensors: true, humiditySensors: true };
     const overrides = [
       ...compatToOverrides(legacy, inventory),
       {
-        dataPoint: 'barn_thermo', stationMac: OUTDOOR_STATION.macAddress,
+        dataPoint: 'barn_temp', stationMac: OUTDOOR_STATION.macAddress,
         kind: 'temperature', measurement: 'temperature', sourceUnit: 'celsius',
         name: 'Barn Temp', enabled: true,
       },
@@ -273,13 +273,13 @@ describe('custom-row downgrade loss boundary on real 1.7.3', () => {
 
     const payload: RawStation = {
       ...OUTDOOR_STATION,
-      lastData: { ...OUTDOOR_STATION.lastData, barn_thermo: 21 },
+      lastData: { ...OUTDOOR_STATION.lastData, barn_temp: 21 },
     };
     const v173 = await runLifecycleWith(
       Platform173 as unknown as PlatformCtor, rolledBack, [payload],
     );
     const ids = v173.accessories.map(a => a.uniqueId);
-    expect(ids).not.toContain(`${OUTDOOR_STATION.macAddress}-barn_thermo`);
+    expect(ids).not.toContain(`${OUTDOOR_STATION.macAddress}-barn_temp`);
     expect(ids).toContain(`${OUTDOOR_STATION.macAddress}-tempf`);
     expect(ids).toContain(`${OUTDOOR_STATION.macAddress}-humidity`);
     expect(v173.unregisteredCount).toBe(0);
@@ -293,7 +293,7 @@ describe('custom-row downgrade loss boundary on real 1.7.3', () => {
       AmbientWeatherSensorsPlatform as unknown as PlatformCtor,
       nextConfig as Record<string, unknown>, [payload],
     );
-    const customUid = `${OUTDOOR_STATION.macAddress}-barn_thermo`;
+    const customUid = `${OUTDOOR_STATION.macAddress}-barn_temp`;
     const cachedCustom = v2Run.raw.find(a =>
       (a.context.device as { uniqueId?: string } | undefined)?.uniqueId === customUid);
     expect(cachedCustom, 'v2 run registered the custom accessory').toBeDefined();

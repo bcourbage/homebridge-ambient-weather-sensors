@@ -30,7 +30,7 @@ import { loadNoticeStore, } from '../dist/sensorMap/persistence/noticesStore.js'
 import { loadUiStateStore, } from '../dist/sensorMap/persistence/uiStateStore.js';
 import { DISPLAY_FAMILIES, MEASUREMENT_LABELS, UNIT_VOCABULARY, unitOptionsFor } from '../dist/sensorMap/unitVocabulary.js';
 import { WRAPPER_FOR_KIND_AND_MEASUREMENT } from '../dist/sensorMap/wrappers.js';
-import { defaultRowFor } from '../dist/sensorMap/defaultMap.js';
+import { defaultRowForOverride } from '../dist/sensorMap/defaultMap.js';
 /**
  * The UI bridge is a READ-ONLY consumer of the platform's persistence
  * stores (§8 single-writer): it must never quarantine-rename a corrupt
@@ -1722,7 +1722,8 @@ function toEditorRowDto(row, layers) {
     // only when its resolved measurement matches the accepted global
     // identity's measurement.
     const globalOverride = layers.global.get(row.dataPoint);
-    dto.identityScope = defaultRowFor(row.dataPoint) !== undefined
+    const stationOverride = layers.station.get(row.stationMac)?.get(row.dataPoint);
+    dto.identityScope = defaultRowForOverride(row.dataPoint, globalOverride, stationOverride) !== undefined
         ? 'known'
         : globalOverride?.kind !== undefined && globalOverride.measurement !== undefined
             && globalOverride.measurement === row.measurement

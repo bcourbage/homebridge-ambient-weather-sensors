@@ -624,6 +624,36 @@ function synthesizeLegacyRow(dataPoint) {
         canonicalForBattery: battery !== null && isCanonicalSensorForBattery(dataPoint, battery),
     };
 }
+/**
+ * Whether an authored override carries EXPLICIT identity intent: any
+ * presence of kind, measurement, or sourceUnit — wrong-typed and null
+ * values included, because an invalid explicit assignment must surface
+ * as a diagnostic, never be silently replaced by a guess (#63 P0).
+ */
+export function hasAuthoredIdentity(override) {
+    return !!override && typeof override === 'object'
+        && ('kind' in override || 'measurement' in override || 'sourceUnit' in override);
+}
+/**
+ * The default row RESOLUTION may consult for a dataPoint given the
+ * authored override layers that apply to it (#63 P0 — authored
+ * identities must win): the static catalog always applies (explicit
+ * identity against it stays the long-standing diagnosed conflict);
+ * the dynamic legacy-compatibility fallback applies ONLY when no
+ * passed layer authors identity. An explicitly assigned name that the
+ * fallback also recognizes therefore resolves exactly as it did
+ * before the fallback existed — the assignment is authoritative.
+ */
+export function defaultRowForOverride(dataPoint, ...overrideLayers) {
+    const staticRow = staticDefaultRowFor(dataPoint);
+    if (staticRow) {
+        return staticRow;
+    }
+    if (overrideLayers.some(hasAuthoredIdentity)) {
+        return undefined;
+    }
+    return defaultRowFor(dataPoint);
+}
 let _byDataPoint;
 const _synthesized = new Map();
 /** The STATIC table lookup only — no dynamic fallback. */

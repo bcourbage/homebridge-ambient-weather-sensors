@@ -45,7 +45,7 @@ import {
 } from '../dist/sensorMap/persistence/uiStateStore.js';
 import { DISPLAY_FAMILIES, MEASUREMENT_LABELS, UNIT_VOCABULARY, unitOptionsFor } from '../dist/sensorMap/unitVocabulary.js';
 import { WRAPPER_FOR_KIND_AND_MEASUREMENT } from '../dist/sensorMap/wrappers.js';
-import { defaultRowFor } from '../dist/sensorMap/defaultMap.js';
+import { defaultRowForOverride, defaultRowFor } from '../dist/sensorMap/defaultMap.js';
 import { PLUGIN_NAME } from '../dist/settings.js';
 import type { Logger, ReadStoreOptions } from '../dist/sensorMap/persistence/atomicWrite.js';
 import type {
@@ -2189,7 +2189,8 @@ function toEditorRowDto(row: EffectiveSensorRow, layers: OverrideLayers): Editor
   // only when its resolved measurement matches the accepted global
   // identity's measurement.
   const globalOverride = layers.global.get(row.dataPoint);
-  dto.identityScope = defaultRowFor(row.dataPoint) !== undefined
+  const stationOverride = layers.station.get(row.stationMac)?.get(row.dataPoint);
+  dto.identityScope = defaultRowForOverride(row.dataPoint, globalOverride, stationOverride) !== undefined
     ? 'known'
     : globalOverride?.kind !== undefined && globalOverride.measurement !== undefined
       && globalOverride.measurement === row.measurement

@@ -45,7 +45,7 @@ describe('value routing mechanism (unit)', () => {
     });
     const customRow = makeNumericRow({
       kind: 'temperature', measurement: 'temperature', wrapperId: 'temperature',
-      sourceUnit: 'fahrenheit', displayUnit: 'fahrenheit', dataPoint: 'my_barn_thermo',
+      sourceUnit: 'fahrenheit', displayUnit: 'fahrenheit', dataPoint: 'my_barn_temp',
       stationMac: MAC_UPPER, name: 'Barn Temp',
     });
     const lastRainRow = makeTimestampRow({
@@ -55,7 +55,7 @@ describe('value routing mechanism (unit)', () => {
 
     const accessories = new Map([
       [`${MAC_UPPER}-tempf`, makeMockAccessory({ uniqueId: `${MAC_UPPER}-tempf`, displayName: 'Outdoor Temp' })],
-      [`${MAC_UPPER}-my_barn_thermo`, makeMockAccessory({ uniqueId: `${MAC_UPPER}-my_barn_thermo`, displayName: 'Barn Temp' })],
+      [`${MAC_UPPER}-my_barn_temp`, makeMockAccessory({ uniqueId: `${MAC_UPPER}-my_barn_temp`, displayName: 'Barn Temp' })],
       [`${MAC_UPPER}-lastRain`, makeMockAccessory({ uniqueId: `${MAC_UPPER}-lastRain`, displayName: 'Last Rain' })],
     ]);
 
@@ -79,14 +79,14 @@ describe('value routing mechanism (unit)', () => {
       platform as unknown as AmbientWeatherSensorsPlatform,
       routing,
       // Payload MAC is lowercase — routingKey uppercases both sides.
-      [{ macAddress: MAC_LOWER, lastData: { tempf: 68, my_barn_thermo: 50, unmapped: 999 } }],
+      [{ macAddress: MAC_LOWER, lastData: { tempf: 68, my_barn_temp: 50, unmapped: 999 } }],
     );
 
     const tempSvc = accessories.get(`${MAC_UPPER}-tempf`)!.getService(MockServices.TemperatureSensor)!;
     expect(tempSvc.readCharacteristic(MockCharacteristics.CurrentTemperature)).toBeCloseTo(F_TO_C(68), 6);
 
     // The custom dataPoint reached its wrapper — the load-bearing win.
-    const barnSvc = accessories.get(`${MAC_UPPER}-my_barn_thermo`)!.getService(MockServices.TemperatureSensor)!;
+    const barnSvc = accessories.get(`${MAC_UPPER}-my_barn_temp`)!.getService(MockServices.TemperatureSensor)!;
     expect(barnSvc.readCharacteristic(MockCharacteristics.CurrentTemperature)).toBeCloseTo(F_TO_C(50), 6);
   });
 

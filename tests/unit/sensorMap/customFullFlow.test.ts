@@ -88,13 +88,13 @@ const ENTRIES: Entry[] = [
     key: 'temperature|temperature',
     // Non-default sourceUnit (celsius) + a displayUnit the NATIVE wrapper
     // must IGNORE (the HAP characteristic is fixed-unit celsius).
-    override: { dataPoint: 'barn_thermo', kind: 'temperature', measurement: 'temperature', sourceUnit: 'celsius', displayUnit: 'fahrenheit', name: 'Barn Temperature' },
+    override: { dataPoint: 'barn_temp', kind: 'temperature', measurement: 'temperature', sourceUnit: 'celsius', displayUnit: 'fahrenheit', name: 'Barn Temperature' },
     wrapperId: 'temperature', value: 25,
     assert: nativeChar(MockServices.TemperatureSensor, MockCharacteristics.CurrentTemperature, 25),
   },
   {
     key: 'humidity|humidity',
-    override: { dataPoint: 'barn_rh', kind: 'humidity', measurement: 'humidity', sourceUnit: 'percent', name: 'Barn Humidity' },
+    override: { dataPoint: 'barn_humidity', kind: 'humidity', measurement: 'humidity', sourceUnit: 'percent', name: 'Barn Humidity' },
     wrapperId: 'humidity', value: 40,
     assert: nativeChar(MockServices.HumiditySensor, MockCharacteristics.CurrentRelativeHumidity, 40),
   },

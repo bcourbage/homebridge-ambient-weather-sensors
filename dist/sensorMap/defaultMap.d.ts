@@ -46,6 +46,24 @@ export declare const LEGACY_FIELD_MATCHERS: ReadonlyArray<{
     legacyType: string;
     test: (dataPoint: string) => boolean;
 }>;
+/**
+ * Whether an authored override carries EXPLICIT identity intent: any
+ * presence of kind, measurement, or sourceUnit — wrong-typed and null
+ * values included, because an invalid explicit assignment must surface
+ * as a diagnostic, never be silently replaced by a guess (#63 P0).
+ */
+export declare function hasAuthoredIdentity(override: unknown): boolean;
+/**
+ * The default row RESOLUTION may consult for a dataPoint given the
+ * authored override layers that apply to it (#63 P0 — authored
+ * identities must win): the static catalog always applies (explicit
+ * identity against it stays the long-standing diagnosed conflict);
+ * the dynamic legacy-compatibility fallback applies ONLY when no
+ * passed layer authors identity. An explicitly assigned name that the
+ * fallback also recognizes therefore resolves exactly as it did
+ * before the fallback existed — the assignment is authoritative.
+ */
+export declare function defaultRowForOverride(dataPoint: string, ...overrideLayers: ReadonlyArray<unknown>): DefaultSensorRow | undefined;
 /** The STATIC table lookup only — no dynamic fallback. */
 export declare function staticDefaultRowFor(dataPoint: string): DefaultSensorRow | undefined;
 export declare function defaultRowFor(dataPoint: string): DefaultSensorRow | undefined;
