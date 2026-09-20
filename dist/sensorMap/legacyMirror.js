@@ -323,11 +323,11 @@ export function projectLegacyMirror(effectiveMap) {
     //      otherwise omit, so a downgrade falls back to v1.7 defaults
     //      rather than silently stretching one row's unit over the whole
     //      family. Documented fallback behavior.
-    const unitFor = (pred) => {
+    const unitFor = (pred, normalize = u => u) => {
         const values = new Set();
         for (const r of known) {
             if (r.enabled && pred(r) && 'displayUnit' in r && r.displayUnit !== undefined) {
-                values.add(r.displayUnit);
+                values.add(normalize(r.displayUnit));
             }
         }
         return values.size === 1 ? [...values][0] : undefined;
@@ -347,15 +347,14 @@ export function projectLegacyMirror(effectiveMap) {
         units.windSpeed = windUnit;
     }
     // v1.7's units.rain is a single in/mm dropdown covering both
-    // accumulation and rate; project rate units down to their base.
-    const rainUnit = unitFor(r => r.kind === 'motion' && (r.measurement === 'rain-accumulation' || r.measurement === 'rain-rate'));
-    if (rainUnit) {
-        const base = rainUnit === 'mm' || rainUnit === 'mm_per_hr' ? 'mm'
-            : rainUnit === 'in' || rainUnit === 'in_per_hr' ? 'in'
-                : undefined;
-        if (base === 'mm') {
-            units.rain = base;
-        }
+    // accumulation and rate, so a uniform metric family holds mm on
+    // accumulation rows and mm_per_hr on rate rows: normalize each
+    // row's unit to its base BEFORE the uniformity check (GA review
+    // P2-5 — comparing raw values called mm vs mm_per_hr a conflict and
+    // dropped metric rainfall from the rollback mirror).
+    const rainUnit = unitFor(r => r.kind === 'motion' && (r.measurement === 'rain-accumulation' || r.measurement === 'rain-rate'), u => (u === 'mm_per_hr' ? 'mm' : u === 'in_per_hr' ? 'in' : u));
+    if (rainUnit === 'mm') {
+        units.rain = rainUnit;
     }
     const pressureUnit = unitFor(r => r.kind === 'motion' && r.measurement === 'pressure');
     if (pressureUnit && pressureUnit !== 'inHg' && V17_LEGAL_LEGACY_UNITS.pressure.includes(pressureUnit)) {

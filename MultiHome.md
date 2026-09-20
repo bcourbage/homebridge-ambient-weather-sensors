@@ -197,7 +197,7 @@ You can mix names and MACs in the same filter — whichever matches wins.
 
 Expected. The Plugins page shows one card per installed npm package, not one card per platform instance. Look in the **Status** tab — each child bridge shows up there as its own row.
 
-The Plugin Config form (the gear icon on the Plugins page) can only edit the **first** platform instance. The second and subsequent instances have to be edited via JSON Config.
+With more than one platform instance, the plugin settings page is read-only for **all** of them (it refuses to guess which block to write): edit every instance via JSON Config. The page says so when it detects a multi-Home configuration.
 
 ### "Same QR code appears for both child bridges"
 

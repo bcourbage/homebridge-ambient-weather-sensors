@@ -598,6 +598,28 @@ describe('journalConversionBaseline (append-only entry files, deduplicated, no s
   }, 20_000);
 });
 
+describe('metric rainfall survives the mirror (GA review P2-5)', () => {
+  it('a uniform metric rain family (mm on totals, mm_per_hr on rate) mirrors units.rain = mm', () => {
+    const mirror = projectLegacyMirror(v2Map([
+      { dataPoint: 'hourlyrainin', displayUnit: 'mm_per_hr' },
+      { dataPoint: 'dailyrainin', displayUnit: 'mm' },
+      { dataPoint: 'eventrainin', displayUnit: 'mm' },
+      { dataPoint: 'weeklyrainin', displayUnit: 'mm' },
+      { dataPoint: 'monthlyrainin', displayUnit: 'mm' },
+      { dataPoint: 'yearlyrainin', displayUnit: 'mm' },
+    ]));
+    expect(mirror.units?.rain).toBe('mm');
+  });
+
+  it('a genuinely mixed rain family still omits units.rain', () => {
+    const mirror = projectLegacyMirror(v2Map([
+      { dataPoint: 'hourlyrainin', displayUnit: 'mm_per_hr' },
+      { dataPoint: 'dailyrainin', displayUnit: 'in' },
+    ]));
+    expect(mirror.units?.rain).toBeUndefined();
+  });
+});
+
 describe('projection property test (finding 5 — reviewer requirement)', () => {
   it('compatToOverrides(mirror) reproduces the v1-expressible portion of the v2 effective map', () => {
     const sensorMap = [
