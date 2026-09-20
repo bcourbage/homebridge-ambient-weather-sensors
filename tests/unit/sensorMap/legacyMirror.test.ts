@@ -10,7 +10,7 @@ import { compatToOverrides } from '../../../src/sensorMap/compat';
 import { detectConfigMode } from '../../../src/sensorMap/configMode';
 import { buildEffectiveSensorMap } from '../../../src/sensorMap/buildEffectiveMap';
 import { defaultRowFor } from '../../../src/sensorMap/defaultMap';
-import {
+import { v1RepresentableIdentity,
   LEGACY_JOURNAL_DIR,
   LEGACY_MIRROR_KEY,
   LEGACY_SENSOR_FIELDS,
@@ -35,12 +35,20 @@ const TWO_STATIONS: StationInventory = [
   { macAddress: MAC2, name: 'Cabin' },
 ];
 
-function v2Map(sensorMap: unknown[], stations: StationInventory = ONE_STATION): EffectiveSensorMap {
+function v2Map(
+  sensorMap: unknown[],
+  stations: StationInventory = ONE_STATION,
+  opts: { extraDiscovery?: Array<{ stationMac: string; dataPoint: string }> } = {},
+): EffectiveSensorMap {
+  const discovery = emptyDiscoveryStore();
+  for (const e of opts.extraDiscovery ?? []) {
+    discovery.entries.push({ ...e, stationName: '', firstSeen: 'a', lastSeen: 'b' });
+  }
   return buildPlatformEffectiveMap({
     config: { sensorMap },
     configMode: 'v2',
     stations,
-    discovery: emptyDiscoveryStore(),
+    discovery,
     uiState: emptyUiStateStore(),
   });
 }
@@ -598,6 +606,63 @@ describe('journalConversionBaseline (append-only entry files, deduplicated, no s
   }, 20_000);
 });
 
+describe('per-station representability in exclusions (review F1)', () => {
+  it('MIXED stations: only the assigned station is excluded; the bare dataPoint exclusion would suppress the valid 1.7 row on the other station', () => {
+    const mirror = projectLegacyMirror(v2Map(
+      [{ dataPoint: 'barn_temp', stationMac: MAC1, kind: 'temperature', measurement: 'temperature', sourceUnit: 'celsius' }],
+      TWO_STATIONS,
+      { extraDiscovery: [{ stationMac: MAC2, dataPoint: 'barn_temp' }] },
+    ));
+    expect(mirror.excludeSensors ?? []).toContain(`${MAC1}-barn_temp`);
+    expect(mirror.excludeSensors ?? []).not.toContain('barn_temp');
+  });
+
+  it('ALL-custom dataPoints keep the bare exclusion (future stations must not be misclassified)', () => {
+    const mirror = projectLegacyMirror(v2Map(
+      [{ dataPoint: 'barn_temp', kind: 'temperature', measurement: 'temperature', sourceUnit: 'celsius' }],
+    ));
+    expect(mirror.excludeSensors ?? []).toContain('barn_temp');
+  });
+});
+
+describe('v1-representable identity boundary (#63 P0)', () => {
+  it('an explicit assignment matching what 1.7 would assume mirrors as KNOWN; a differing one mirrors as an exclusion', () => {
+    // Identical identity: 1.7 interprets barn_temp exactly this way,
+    // so rollback needs no exclusion.
+    const same = projectLegacyMirror(v2Map(
+      [{ dataPoint: 'barn_temp', kind: 'temperature', measurement: 'temperature', sourceUnit: 'fahrenheit' }],
+    ));
+    expect(same.excludeSensors ?? []).not.toContain('barn_temp');
+    // Celsius: 1.7 would misrender the readings — excluded on rollback.
+    const differs = projectLegacyMirror(v2Map(
+      [{ dataPoint: 'barn_temp', kind: 'temperature', measurement: 'temperature', sourceUnit: 'celsius' }],
+    ));
+    expect(differs.excludeSensors ?? []).toContain('barn_temp');
+  });
+});
+
+describe('metric rainfall survives the mirror (GA review P2-5)', () => {
+  it('a uniform metric rain family (mm on totals, mm_per_hr on rate) mirrors units.rain = mm', () => {
+    const mirror = projectLegacyMirror(v2Map([
+      { dataPoint: 'hourlyrainin', displayUnit: 'mm_per_hr' },
+      { dataPoint: 'dailyrainin', displayUnit: 'mm' },
+      { dataPoint: 'eventrainin', displayUnit: 'mm' },
+      { dataPoint: 'weeklyrainin', displayUnit: 'mm' },
+      { dataPoint: 'monthlyrainin', displayUnit: 'mm' },
+      { dataPoint: 'yearlyrainin', displayUnit: 'mm' },
+    ]));
+    expect(mirror.units?.rain).toBe('mm');
+  });
+
+  it('a genuinely mixed rain family still omits units.rain', () => {
+    const mirror = projectLegacyMirror(v2Map([
+      { dataPoint: 'hourlyrainin', displayUnit: 'mm_per_hr' },
+      { dataPoint: 'dailyrainin', displayUnit: 'in' },
+    ]));
+    expect(mirror.units?.rain).toBeUndefined();
+  });
+});
+
 describe('projection property test (finding 5 — reviewer requirement)', () => {
   it('compatToOverrides(mirror) reproduces the v1-expressible portion of the v2 effective map', () => {
     const sensorMap = [
@@ -633,7 +698,10 @@ describe('projection property test (finding 5 — reviewer requirement)', () => 
     const index = (m: EffectiveSensorMap): Map<string, Rowish> => {
       const out = new Map<string, Rowish>();
       for (const r of m.rows) {
-        if (r.kind === 'unrecognized' || !defaultRowFor(r.dataPoint)) {
+        // v1-representable = the identity 1.7 would itself assume
+        // (#63 P0): the explicit Celsius barn_temp row is custom on
+        // BOTH sides of this comparison, not known.
+        if (r.kind === 'unrecognized' || !v1RepresentableIdentity(r)) {
           continue;
         }
         out.set(`${r.stationMac}|${r.dataPoint}`, r as unknown as Rowish);

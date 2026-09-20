@@ -89,5 +89,28 @@ export interface LegacyConfig {
  * don't depend on station (threshold, displayUnit, category
  * toggles, embed mode) still flow through as global overrides.
  */
-export declare function compatToOverrides(legacy: LegacyConfig, stations?: StationInventory): SensorMapOverride[];
+/**
+ * The discovery-observed data points that resolve only via the dynamic
+ * legacy-matcher fallback — the fields the compat projection must gate
+ * beyond the static table (GA review P1-1). Lives here, in a module
+ * with a LEAF import graph: the UI bridge imports it, and its previous
+ * home (platformEffectiveMap) transitively reaches the accessory
+ * classes, which the Angular app's typecheck must never include.
+ */
+export declare function dynamicDataPointsFrom(discovery: {
+    entries: ReadonlyArray<{
+        dataPoint: string;
+    }>;
+}): string[];
+export declare function compatToOverrides(legacy: LegacyConfig, stations?: StationInventory, 
+/**
+ * Data points OUTSIDE the static default table that resolve via the
+ * dynamic legacy-matcher fallback (GA review P1-1) — in practice the
+ * discovery-observed fields the static table lacks. The compat
+ * projection must gate them exactly like static rows (category
+ * toggles, include/exclude, battery suppression), or a legacy
+ * config with a category off would register accessories v1.7 never
+ * created.
+ */
+dynamicDataPoints?: Iterable<string>): SensorMapOverride[];
 //# sourceMappingURL=compat.d.ts.map

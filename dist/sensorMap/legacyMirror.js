@@ -136,14 +136,37 @@ export const LEGACY_SENSOR_FIELDS = [
  * Reverse projection: effective v2 map → sparse v1.7 legacy fields.
  * PURE. See the module header for the contract.
  */
+/**
+ * Whether v1.7 would interpret this resolved row the way it actually
+ * behaves (#63 P0): 1.7's substring matcher assigns a recognized name
+ * ITS OWN identity, so a row is v1-representable only when its
+ * resolved identity is exactly what 1.7 would assume. An explicitly
+ * assigned Celsius barn_temp is NOT — it mirrors as an exclusion, or
+ * 1.7 would render its readings as Fahrenheit.
+ */
+export function v1RepresentableIdentity(row) {
+    const def = defaultRowFor(row.dataPoint);
+    if (!def) {
+        return false;
+    }
+    return row.kind === def.kind && row.measurement === def.measurement
+        && (row.measurement === 'timestamp' || row.measurement === 'boolean'
+            || row.sourceUnit === def.sourceUnit);
+}
 export function projectLegacyMirror(effectiveMap) {
     const known = [];
     const custom = [];
+    // v1-representable means MORE than "1.7 recognizes the name" (#63
+    // P0): 1.7's substring matcher assigns a name ITS OWN identity, so a
+    // row is known to the mirror only when its resolved identity is
+    // exactly what 1.7 would assume. An explicitly assigned Celsius
+    // barn_temp classifies CUSTOM and rolls back as an exclusion —
+    // 1.7 rendering it as Fahrenheit would corrupt the value.
     for (const row of effectiveMap.rows) {
         if (row.kind === 'unrecognized') {
             continue;
         }
-        if (defaultRowFor(row.dataPoint)) {
+        if (v1RepresentableIdentity(row)) {
             known.push(row);
         }
         else {
@@ -242,9 +265,15 @@ export function projectLegacyMirror(effectiveMap) {
         }
     }
     // ---- Custom rows: the explicit downgrade-loss boundary. Exclude by
-    //      station-scoped uniqueId AND bare dataPoint so v1.7's broad
-    //      includes() matchers can never misclassify one into a wrong
-    //      wrapper (on any station, present or future).
+    //      station-scoped uniqueId, PLUS the bare dataPoint only when NO
+    //      station resolves a v1-representable row for it (review F1): a
+    //      bare exclusion suppresses the dataPoint on EVERY station, so
+    //      with station A assigned Celsius and station B on the
+    //      compatibility identity, bare 'barn_temp' would deregister B's
+    //      perfectly valid 1.7 accessory on rollback. All-custom
+    //      dataPoints keep the bare form so v1.7's broad includes()
+    //      matchers can never misclassify one on a future station.
+    const knownDps = new Set(known.map(r => r.dataPoint));
     const customDataPoints = new Set();
     for (const r of custom) {
         excludeSensors.push(`${r.stationMac}-${r.dataPoint}`);
@@ -263,7 +292,9 @@ export function projectLegacyMirror(effectiveMap) {
         }
     }
     for (const dp of customDataPoints) {
-        excludeSensors.push(dp);
+        if (!knownDps.has(dp)) {
+            excludeSensors.push(dp);
+        }
     }
     // ---- Battery suppression: a known row whose default owns a battery
     //      but whose effective batteryField is null → raw field form.
@@ -323,11 +354,11 @@ export function projectLegacyMirror(effectiveMap) {
     //      otherwise omit, so a downgrade falls back to v1.7 defaults
     //      rather than silently stretching one row's unit over the whole
     //      family. Documented fallback behavior.
-    const unitFor = (pred) => {
+    const unitFor = (pred, normalize = u => u) => {
         const values = new Set();
         for (const r of known) {
             if (r.enabled && pred(r) && 'displayUnit' in r && r.displayUnit !== undefined) {
-                values.add(r.displayUnit);
+                values.add(normalize(r.displayUnit));
             }
         }
         return values.size === 1 ? [...values][0] : undefined;
@@ -347,15 +378,14 @@ export function projectLegacyMirror(effectiveMap) {
         units.windSpeed = windUnit;
     }
     // v1.7's units.rain is a single in/mm dropdown covering both
-    // accumulation and rate; project rate units down to their base.
-    const rainUnit = unitFor(r => r.kind === 'motion' && (r.measurement === 'rain-accumulation' || r.measurement === 'rain-rate'));
-    if (rainUnit) {
-        const base = rainUnit === 'mm' || rainUnit === 'mm_per_hr' ? 'mm'
-            : rainUnit === 'in' || rainUnit === 'in_per_hr' ? 'in'
-                : undefined;
-        if (base === 'mm') {
-            units.rain = base;
-        }
+    // accumulation and rate, so a uniform metric family holds mm on
+    // accumulation rows and mm_per_hr on rate rows: normalize each
+    // row's unit to its base BEFORE the uniformity check (GA review
+    // P2-5 — comparing raw values called mm vs mm_per_hr a conflict and
+    // dropped metric rainfall from the rollback mirror).
+    const rainUnit = unitFor(r => r.kind === 'motion' && (r.measurement === 'rain-accumulation' || r.measurement === 'rain-rate'), u => (u === 'mm_per_hr' ? 'mm' : u === 'in_per_hr' ? 'in' : u));
+    if (rainUnit === 'mm') {
+        units.rain = rainUnit;
     }
     const pressureUnit = unitFor(r => r.kind === 'motion' && r.measurement === 'pressure');
     if (pressureUnit && pressureUnit !== 'inHg' && V17_LEGAL_LEGACY_UNITS.pressure.includes(pressureUnit)) {

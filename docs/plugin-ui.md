@@ -28,13 +28,13 @@ application key, the station filter, and the embed-name update
 interval. Edits here count as drafts, appear in previews, and save
 through the same guarded transaction as sensor-map edits.
 
-Credentials are handled as secrets. The key fields are always blank:
-a blank field means the stored value is unchanged; typing a value
-replaces it; clearing requires the explicit checkbox (checking it
-blanks and locks the text field, so conflicting intents cannot be
-entered). Stored values never appear on the page, in previews, in
-logs, or in the snapshot/journal records — the page shows only
-whether a key is set.
+Credentials are handled as secrets. A stored key renders as a fixed
+run of mask dots (never its value): leaving the mask untouched means
+the stored key is unchanged; focusing the pristine mask selects it,
+so typing replaces the key; deleting the mask and leaving the field
+empty requests clearing the stored key. Stored values never appear on
+the page, in previews, in logs, or in the snapshot/journal records —
+the page shows only whether a key is set.
 
 ## Applying a save
 

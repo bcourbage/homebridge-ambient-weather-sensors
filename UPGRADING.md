@@ -4,6 +4,23 @@ This document covers what to expect when upgrading your installation. For techni
 
 ---
 
+## v1.7.x → v2.0.0
+
+Updating the plugin changes nothing by itself: your configuration
+file is untouched and your accessories stay exactly as they are. The
+new sensor-map settings page (Plugins → Ambient Weather → gear icon)
+is where everything now happens — rename sensors, change display
+units, set thresholds, disable rows, assign unrecognized fields.
+
+The first time you SAVE on that page, the configuration converts to
+the v2 format; your original 1.x settings are preserved first in
+`legacy-config-snapshot.json` (plugin data directory), and the page's
+Rollback status shows the exact way back to v1.7.3 whenever you want
+it. Until that first save, downgrading is simply installing 1.7.x
+again.
+
+Requirements: Node.js 22.13+ within 22.x, or 24.x.
+
 ## v1.5.x → v1.6.0
 
 v1.6.0 is a small but behavior-changing release. Two related changes around the **Extended Sensors display mode**:

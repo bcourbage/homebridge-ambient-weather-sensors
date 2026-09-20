@@ -28,7 +28,7 @@
  */
 
 import { buildEffectiveSensorMap } from './buildEffectiveMap.js';
-import { compatToOverrides, type LegacyConfig } from './compat.js';
+import { compatToOverrides, dynamicDataPointsFrom, type LegacyConfig } from './compat.js';
 import type { ConfigMode } from './configMode.js';
 import type {
   DiscoveryStore,
@@ -87,6 +87,8 @@ export function selectUserOverrides(
   config: EffectiveMapConfig,
   configMode: ConfigMode,
   stations: StationInventory,
+  /** Discovery store, for the compat projection's dynamic data points (GA review P1-1). */
+  discovery?: DiscoveryStore,
 ): ReadonlyArray<unknown> {
   if (configMode === 'safe-mode') {
     return [];
@@ -95,8 +97,10 @@ export function selectUserOverrides(
     const raw = config.sensorMap;
     return Array.isArray(raw) ? (raw as unknown[]) : [];
   }
-  // legacy
-  return compatToOverrides(config as LegacyConfig, stations);
+  // legacy: the compat projection must gate the discovery-observed
+  // fields the static table lacks exactly like static rows.
+  return compatToOverrides(config as LegacyConfig, stations,
+    discovery ? dynamicDataPointsFrom(discovery) : []);
 }
 
 /**
@@ -104,7 +108,7 @@ export function selectUserOverrides(
  * caller has already loaded `discovery` / `uiState` from disk.
  */
 export function buildPlatformEffectiveMap(inputs: EffectiveMapInputs): EffectiveSensorMap {
-  const userOverrides = selectUserOverrides(inputs.config, inputs.configMode, inputs.stations);
+  const userOverrides = selectUserOverrides(inputs.config, inputs.configMode, inputs.stations, inputs.discovery);
   return buildEffectiveSensorMap({
     userOverrides,
     discovery: inputs.discovery,

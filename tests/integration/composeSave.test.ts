@@ -17,7 +17,7 @@ import * as path from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { blockDigest, handleCommitSave, handleComposeSave, handleGetEditorState, handlePreviewSave, syntheticProbeMac, type HandlerDeps } from '../../homebridge-ui/handlers';
+import { blockDigest, FRESH_INSTALL_DIGEST, handleCommitSave, handleComposeSave, handleGetEditorState, handlePreviewSave, syntheticProbeMac, type HandlerDeps } from '../../homebridge-ui/handlers';
 import { composeAndPersist, type OrchestratorDeps } from '../../homebridge-ui/saveOrchestrator';
 import { DraftStore } from '../../homebridge-ui/app-src/draft-store';
 import { buildEffectiveSensorMap } from '../../src/sensorMap/buildEffectiveMap';
@@ -162,6 +162,158 @@ function makeClient(rig: Rig): {
   };
   return Object.assign(state, { deps });
 }
+
+describe('settings-only guarded save path (GA review P1-2 / P1-3)', () => {
+  it('the orchestrator and the server agree on the fresh-install sentinel', async () => {
+    const src = await import('node:fs').then(m => m.readFileSync('homebridge-ui/saveOrchestrator.ts', 'utf8'));
+    expect(src).toContain(`'` + FRESH_INSTALL_DIGEST + `'`);
+  });
+
+  it('FRESH INSTALL: /editor-state renders, and the settings-only save CREATES the block (never-converted, no snapshot)', async () => {
+    const rig = makeRig({ platform: 'SomeOtherPlatform', name: 'X' });
+    const state = await handleGetEditorState(rig.deps, {});
+    expect(state.freshInstall).toBe(true);
+    expect(state.editorAvailable).toBe(true);
+    expect(state.baseDigest).toBe(FRESH_INSTALL_DIGEST);
+    expect(state.rows).toEqual([]);
+    expect(state.settings.apiKeySet).toBe(false);
+
+    const client = makeClient(rig);
+    const result = await composeAndPersist(client.deps, {
+      proposal: [],
+      settings: {
+        name: 'My Weather',
+        apiKey: { set: 'new-api-key' },
+        applicationKey: { set: 'new-app-key' },
+      },
+      baseDigest: FRESH_INSTALL_DIGEST,
+      blockIndex: 0,
+    });
+    expect(result.ok).toBe(true);
+    expect(client.events.filter(e => e === 'update' || e === 'save')).toEqual(['update', 'save']);
+    const created = client.persistedArray!.find(b => b.platform === 'AmbientWeatherSensors')!;
+    expect(created).toBeDefined();
+    expect(created.apiKey).toBe('new-api-key');
+    expect(created.applicationKey).toBe('new-app-key');
+    expect(created.name).toBe('My Weather');
+    // Plain block: NEVER converted by credential entry.
+    expect(created.configVersion).toBeUndefined();
+    expect(created.sensorMap).toBeUndefined();
+    expect(created._legacyMirror).toBeUndefined();
+    expect(existsSync(path.join(rig.persistDir, LEGACY_SNAPSHOT_FILE))).toBe(false);
+  });
+
+  it('FRESH-INSTALL token refuses when a block exists (stale), and sensors cannot precede the first save', async () => {
+    const rig = makeRig(LEGACY_BLOCK);
+    const staleFresh = await handlePreviewSave(rig.deps, {
+      baseDigest: FRESH_INSTALL_DIGEST, proposal: [], settings: { apiKey: { set: 'k2' } },
+    });
+    expect(staleFresh.ok).toBe(false);
+    if (!staleFresh.ok) {
+      expect(staleFresh.error.code).toBe('stale-base');
+    }
+
+    const rig2 = makeRig({ platform: 'SomeOtherPlatform' });
+    const withSensors = await handlePreviewSave(rig2.deps, {
+      baseDigest: FRESH_INSTALL_DIGEST,
+      proposal: [{ dataPoint: 'custom_x', kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph' }],
+      settings: { apiKey: { set: 'k' } },
+    });
+    expect(withSensors.ok).toBe(false);
+    if (!withSensors.ok) {
+      expect(withSensors.error.code).toBe('no-platform-block');
+    }
+  });
+
+  it('CREDENTIAL RECOVERY: wrong credentials, NO discovery and NO cache — the untouched proposal saves new keys without conversion', async () => {
+    // The reviewer-reproduced deadlock: preview refused
+    // no-station-inventory, which required the discovery the broken
+    // credentials prevent.
+    const rig = makeRig(LEGACY_BLOCK); // no discoveryStore(rig): zero inventory
+    const state = await handleGetEditorState(rig.deps, {});
+    expect(state.freshInstall).toBeUndefined();
+    const store = new DraftStore();
+    store.reset(state.authored);
+
+    const payload = {
+      baseDigest: state.baseDigest,
+      proposal: store.proposal(),
+      settings: { apiKey: { set: 'corrected-key' } },
+      formBlock: LEGACY_BLOCK,
+    };
+    const preview = await handlePreviewSave(rig.deps, payload);
+    expect(preview.ok).toBe(true);
+    if (!preview.ok) {
+      return;
+    }
+    expect(preview.settingsChanged).toEqual(['apiKey']);
+    expect(preview.changes).toEqual([]);
+    expect(preview.structuralChangeCount).toBe(0);
+
+    const client = makeClient(rig);
+    const result = await composeAndPersist(client.deps, {
+      proposal: store.proposal(),
+      settings: { apiKey: { set: 'corrected-key' } },
+      confirmDigest: preview.digest,
+      baseDigest: state.baseDigest,
+      blockIndex: 0,
+    });
+    expect(result.ok).toBe(true);
+    const saved = client.persistedArray![0];
+    expect(saved.apiKey).toBe('corrected-key');
+    // NO conversion: the block is byte-identical apart from the key.
+    expect(saved.configVersion).toBeUndefined();
+    expect(saved.sensorMap).toBeUndefined();
+    const { apiKey: _a, ...restSaved } = saved;
+    const { apiKey: _b, ...restOrig } = LEGACY_BLOCK as Record<string, unknown>;
+    for (const k of Object.keys(restOrig)) {
+      expect(restSaved[k]).toEqual(restOrig[k]);
+    }
+    expect(existsSync(path.join(rig.persistDir, LEGACY_SNAPSHOT_FILE))).toBe(false);
+  });
+
+  it('fail-closed: the SAME zero-inventory state with a sensor-map difference still refuses no-station-inventory', async () => {
+    const rig = makeRig(LEGACY_BLOCK);
+    const state = await handleGetEditorState(rig.deps, {});
+    const store = new DraftStore();
+    store.reset(state.authored);
+    store.setFieldFor(undefined, 'tempf', 'name', 'Renamed');
+    const preview = await handlePreviewSave(rig.deps, {
+      baseDigest: state.baseDigest,
+      proposal: store.proposal(),
+      settings: { apiKey: { set: 'corrected-key' } },
+    });
+    expect(preview.ok).toBe(false);
+    if (!preview.ok) {
+      expect(preview.error.code).toBe('no-station-inventory');
+    }
+  });
+
+  it('a settings-only save on a V2 block leaves the sensorMap bytes untouched and works under the v2 OPT-OUT', async () => {
+    const V2_BLOCK = {
+      platform: 'AmbientWeatherSensors', name: 'Test Station',
+      apiKey: 'k', applicationKey: 'a', _sensorMapV2: false, configVersion: 2,
+      sensorMap: [{ dataPoint: 'windspeedmph', stationMac: MAC, displayUnit: 'kph' }],
+    };
+    const rig = makeRig(V2_BLOCK);
+    discoveryStore(rig);
+    const state = await handleGetEditorState(rig.deps, {});
+    const store = new DraftStore();
+    store.reset(state.authored);
+    const client = makeClient(rig);
+    const result = await composeAndPersist(client.deps, {
+      proposal: store.proposal(),
+      settings: { name: 'Renamed Station' },
+      baseDigest: state.baseDigest,
+      blockIndex: 0,
+    });
+    expect(result.ok).toBe(true);
+    const saved = client.persistedArray![0];
+    expect(saved.name).toBe('Renamed Station');
+    expect(saved.sensorMap).toEqual(V2_BLOCK.sensorMap);
+    expect(saved._sensorMapV2).toBe(false); // the opt-out survives untouched
+  });
+});
 
 describe('structural confirmation digest (PR C / finding 5)', () => {
   const STRUCTURAL_PAYLOAD = {

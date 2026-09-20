@@ -24,7 +24,7 @@ import { describe, expect, it } from 'vitest';
 
 import { AmbientWeatherSensorsPlatform } from '../../src/platform';
 import { buildEffectiveSensorMap } from '../../src/sensorMap/buildEffectiveMap';
-import { compatToOverrides, type LegacyConfig } from '../../src/sensorMap/compat';
+import { compatToOverrides, dynamicDataPointsFrom, type LegacyConfig } from '../../src/sensorMap/compat';
 import type {
   DiscoveryStore,
   EffectiveSensorRow,
@@ -67,7 +67,6 @@ function v2RegisteredSet(config: LegacyConfig, stations: RawStation[]): Set<stri
   // Pass the inventory so include/exclude matchers use the full v1
   // seven-candidate list (finding #2). Without this the pair-set
   // comparison silently diverges on any station-scoped entry.
-  const overrides = compatToOverrides(config, inventory);
   const discovery: DiscoveryStore = { schemaVersion: 1, entries: [] };
   for (const s of stations) {
     for (const key of Object.keys(s.lastData)) {
@@ -80,6 +79,10 @@ function v2RegisteredSet(config: LegacyConfig, stations: RawStation[]): Set<stri
       });
     }
   }
+  // The compat projection gates dynamic (beyond-the-static-table)
+  // fields from discovery, exactly as the runtime does (GA review
+  // P1-1).
+  const overrides = compatToOverrides(config, inventory, dynamicDataPointsFrom(discovery));
   const uiState: UiStateStore = { schemaVersion: 1, dismissedNoticeIds: [], forgottenFields: [] };
   const result = buildEffectiveSensorMap({
     userOverrides: overrides,

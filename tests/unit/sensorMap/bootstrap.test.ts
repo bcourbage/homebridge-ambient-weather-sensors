@@ -31,6 +31,24 @@ function accessory(input: {
   };
 }
 
+describe('cached-accessory inference stays on the STATIC catalog (#63 P0)', () => {
+  it('a CustomSensor-typed cache on a fallback-recognized name is preserved, not inferred into a guess', () => {
+    const verdict = inferForCachedAccessory({
+      context: { device: { uniqueId: 'AA:BB:CC:DD:EE:01-barn_temp', type: 'CustomSensor', kind: 'temperature' } },
+      services: [],
+    } as never);
+    expect(verdict.status).toBe('preserve-cached');
+  });
+
+  it('a legacy-typed cache still infers through the legacy type table (1.7.3 upgrade path intact)', () => {
+    const verdict = inferForCachedAccessory({
+      context: { device: { uniqueId: 'AA:BB:CC:DD:EE:01-feelsLike5', type: 'Temperature' } },
+      services: [],
+    } as never);
+    expect(verdict).toMatchObject({ status: 'inferred', kind: 'temperature', measurement: 'temperature' });
+  });
+});
+
 describe('dataPointFromUniqueId', () => {
   it('extracts sensorKey after the first hyphen', () => {
     expect(dataPointFromUniqueId(`${MAC}-tempf`)).toBe('tempf');

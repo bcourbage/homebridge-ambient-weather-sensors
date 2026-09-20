@@ -19,7 +19,7 @@
  * accessories continue via configureAccessory() restore; no new
  * add/remove decisions happen.
  */
-import { DEFAULT_SENSOR_MAP, defaultRowFor } from './defaultMap.js';
+import { DEFAULT_SENSOR_MAP, defaultRowForOverride, hasAuthoredIdentity, staticDefaultRowFor } from './defaultMap.js';
 import { computeStructuralSignature } from './structuralSignature.js';
 import { DEFAULT_DISPLAY_UNIT_FOR_MEASUREMENT } from './units.js';
 import { validateOverrideBody, validateOverrideIdentity, } from './validation.js';
@@ -32,6 +32,17 @@ export function buildEffectiveSensorMap(input) {
     const errors = [];
     const warnings = [];
     const notes = [];
+    // Where RAW fragments author identity (kind, measurement, or
+    // sourceUnit), rejected fragments included (#63 P0): an invalid
+    // explicit assignment must stay an unrecognized row with its
+    // diagnostic, never resolve through the legacy fallback as a guess.
+    // Scoped like custom identities themselves: a GLOBAL identity blocks
+    // the fallback for the dataPoint everywhere; a STATION identity
+    // blocks it for that (station, dataPoint) only — other stations'
+    // rows keep the compatibility identity.
+    const identityAuthoredGlobal = new Set();
+    const identityAuthoredStation = new Set();
+    const identityAuthoredAt = (mac, dp) => identityAuthoredGlobal.has(dp) || identityAuthoredStation.has(`${mac}|${dp}`);
     const pendingMerges = new Map();
     input.userOverrides.forEach((raw, i) => {
         const idResult = validateOverrideIdentity(raw);
@@ -130,7 +141,15 @@ export function buildEffectiveSensorMap(input) {
                 message: `Duplicate sensorMap entries for '${key.dataPoint}'${key.stationMac ? ` on ${key.stationMac}` : ''}; merged in order with later fields winning. Canonicalize on next UI save.`,
             });
         }
-        const defaultRow = defaultRowFor(key.dataPoint);
+        if (hasAuthoredIdentity(merged)) {
+            if (key.stationMac === undefined) {
+                identityAuthoredGlobal.add(key.dataPoint);
+            }
+            else {
+                identityAuthoredStation.add(`${key.stationMac.toUpperCase()}|${key.dataPoint}`);
+            }
+        }
+        const defaultRow = defaultRowForOverride(key.dataPoint, merged);
         const result = validateOverrideBody(merged, key, defaultRow);
         // Body validation warnings — attribute each to the fragment
         // whose value for that field survived the merge. If the warning
@@ -253,7 +272,7 @@ export function buildEffectiveSensorMap(input) {
     // feedback ("waiting for station" rows, per §3.3.4 of
     // sensor-map.md), instead of a silent nothing.
     for (const dp of globalOverrides.keys()) {
-        if (defaultRowFor(dp)) {
+        if (identityAuthoredGlobal.has(dp) ? staticDefaultRowFor(dp) : defaultRowForOverride(dp, globalOverrides.get(dp))) {
             // Global row for a known dataPoint — the defaults × stations
             // pass above already emitted a pair for every station.
             continue;
@@ -286,14 +305,22 @@ export function buildEffectiveSensorMap(input) {
     const batteryClaims = [];
     for (const { mac, dataPoint } of pairs.values()) {
         const key = `${mac}|${dataPoint}`;
-        // Skip forgotten unrecognized fields.
-        if (forgotten.has(key) && !defaultRowFor(dataPoint)) {
-            continue;
-        }
-        const defaultRow = defaultRowFor(dataPoint);
         const globalOv = globalOverrides.get(dataPoint);
         const stationOv = stationOverrides.get(mac)?.get(dataPoint);
         const merged = mergeOverrides(globalOv, stationOv);
+        // Authored identity blocks the dynamic fallback (#63 P0): the
+        // explicit assignment resolves exactly as before the fallback
+        // existed — including when the assignment is INVALID and its
+        // fragments were rejected (the raw set above), so a diagnosed
+        // entry never degrades into a guessed row. The static catalog is
+        // unaffected.
+        const defaultRow = identityAuthoredAt(mac, dataPoint)
+            ? staticDefaultRowFor(dataPoint)
+            : defaultRowForOverride(dataPoint, merged);
+        // Skip forgotten unrecognized fields.
+        if (forgotten.has(key) && !defaultRow) {
+            continue;
+        }
         const discovered = discoveryByStationDp.get(key);
         // Row-scope (last-fragment) provenance — used for row-scope failures
         // like `no-wrapper`, independent of batteryField authorship.

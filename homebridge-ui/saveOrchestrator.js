@@ -19,6 +19,10 @@
  * HB UI X client API. Only type imports reference server code (erased
  * at compile time; safe in the browser).
  */
+// The fresh-install session token (GA review P1-2). A VALUE import
+// would drag the server bundle into the Angular app's typecheck, so
+// the sentinel is duplicated here and pinned equal by a unit test.
+const FRESH_INSTALL_DIGEST = 'fresh-install:no-platform-block';
 const DEFAULT_TIMEOUTS = { request: 15_000, persist: 12_000 };
 /** Reject after `ms` so a lost response becomes a visible outcome. */
 function withTimeout(work, ms, label) {
@@ -151,7 +155,7 @@ async function composeAndPersistFrozen(deps, args) {
         // wrong position would overwrite another Home's configuration.
         // The server refuses multi-block configs too; this is the
         // client-side half, checked before any request is made.
-        if (blocks.length === 0) {
+        if (blocks.length === 0 && args.baseDigest !== FRESH_INSTALL_DIGEST) {
             return {
                 ok: false,
                 error: {
@@ -220,7 +224,16 @@ async function composeAndPersistFrozen(deps, args) {
     let index;
     if (digestSession) {
         index = cfgArray.findIndex(b => b && b.platform === 'AmbientWeatherSensors');
-        if (args.blockIndex !== undefined && args.blockIndex !== index) {
+        if (index === -1) {
+            // Fresh installation (GA review P1-2): no plugin block exists in
+            // the session config either — the settings-only save CREATES it,
+            // appended at position 0 of the plugin's own config array. The
+            // server accepts this only for the fresh-install session token
+            // and an empty proposal; any block appearing since the page
+            // loaded refuses as stale on the server's own disk check.
+            index = cfgArray.length;
+        }
+        else if (args.blockIndex !== undefined && args.blockIndex !== index) {
             return {
                 ok: false,
                 error: {
@@ -319,7 +332,11 @@ async function composeAndPersistFrozen(deps, args) {
             replacedBlock[key] = undefined;
         }
     }
-    const nextArray = cfgArray.map((b, i) => (i === index ? replacedBlock : b));
+    // On a fresh installation index points past the end (the block is
+    // being CREATED); map() would never visit it, so append explicitly.
+    const nextArray = index === cfgArray.length
+        ? [...cfgArray, replacedBlock]
+        : cfgArray.map((b, i) => (i === index ? replacedBlock : b));
     // Post-compose persistence failures are INDETERMINATE (review #45
     // P1-2): HB UI X may have taken effect and then rejected, or lost
     // the response. Never tell the user "nothing was written" here —

@@ -172,6 +172,27 @@ describe('/editor-state — v2 configuration', () => {
     expect(byDp.get('weirdfield9')!.defaults).toBeUndefined();
   });
 
+  it('an explicit assignment on a fallback-recognized name carries NO defaults (review F2)', async () => {
+    // barn_temp assigned as wind speed: the empty-overrides map would
+    // resolve the FALLBACK temperature identity for the same key, and
+    // those defaults must never reach a row whose identity is the
+    // user's assignment — Use defaults closes such editors instead of
+    // reseeding a different sensor's facts into the form.
+    const rig = makeRig([{
+      ...V2_BLOCK,
+      sensorMap: [{
+        dataPoint: 'barn_temp', stationMac: MAC,
+        kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph', name: 'Barn Wind',
+      }],
+    }]);
+    discoveryStore(rig, [{ mac: MAC, dataPoint: 'barn_temp' }]);
+    const dto = await handleGetEditorState(rig.deps, {});
+    const row = dto.rows.find(r => r.dataPoint === 'barn_temp' && r.stationMac === MAC)!;
+    expect(row.kind).toBe('motion');
+    expect(row.identityScope).toBe('custom-station');
+    expect(row.defaults).toBeUndefined();
+  });
+
   it('everReported is tri-state from POSITIVE evidence only (review P1, both rounds)', async () => {
     // (a) Discovery HAS observed the station AND a COMPLETE cache read
     //     exists (an empty array is a successful read): seen rows
@@ -561,9 +582,12 @@ describe('/editor-state — legacy and troubled configurations', () => {
     expect(dto.editorAvailable).toBe(false);
   });
 
-  it('throws when no config path is available or no block exists', async () => {
+  it('renders the FRESH-INSTALL state when no block exists; throws only on unreadable config (GA review P1-2)', async () => {
     const rig = makeRig([{ platform: 'SomethingElse' }]);
-    await expect(handleGetEditorState(rig.deps, {})).rejects.toThrow(/No AmbientWeatherSensors platform block/);
+    const dto = await handleGetEditorState(rig.deps, {});
+    expect(dto.freshInstall).toBe(true);
+    expect(dto.editorAvailable).toBe(true);
+    expect(dto.rows).toEqual([]);
     await expect(handleGetEditorState({ ...rig.deps, configPath: undefined }, {}))
       .rejects.toThrow(/No config.json path/);
     await expect(handleGetEditorState({ ...rig.deps, configPath: path.join(rig.root, 'missing.json') }, {}))
