@@ -22,7 +22,7 @@
 
 import { batteryFieldForSensor } from '../batteryFields.js';
 import { friendlySensorName, sensorKeyByFriendlyName } from '../sensorNames.js';
-import { DEFAULT_SENSOR_MAP } from './defaultMap.js';
+import { DEFAULT_SENSOR_MAP, defaultRowFor, staticDefaultRowFor } from './defaultMap.js';
 import { composeDisplayName, hapClean } from './displayName.js';
 import type {
   DefaultSensorRow,
@@ -112,9 +112,37 @@ const BATTERY_FIELD_REGEX = /^(?:battout|battin|batt(?:[1-9]|10)|batt_co2|batt_l
  * don't depend on station (threshold, displayUnit, category
  * toggles, embed mode) still flow through as global overrides.
  */
+/**
+ * The discovery-observed data points that resolve only via the dynamic
+ * legacy-matcher fallback — the fields the compat projection must gate
+ * beyond the static table (GA review P1-1). Lives here, in a module
+ * with a LEAF import graph: the UI bridge imports it, and its previous
+ * home (platformEffectiveMap) transitively reaches the accessory
+ * classes, which the Angular app's typecheck must never include.
+ */
+export function dynamicDataPointsFrom(discovery: { entries: ReadonlyArray<{ dataPoint: string }> }): string[] {
+  const out = new Set<string>();
+  for (const entry of discovery.entries) {
+    if (!staticDefaultRowFor(entry.dataPoint) && defaultRowFor(entry.dataPoint)) {
+      out.add(entry.dataPoint);
+    }
+  }
+  return [...out];
+}
+
 export function compatToOverrides(
   legacy: LegacyConfig,
   stations: StationInventory = [],
+  /**
+   * Data points OUTSIDE the static default table that resolve via the
+   * dynamic legacy-matcher fallback (GA review P1-1) — in practice the
+   * discovery-observed fields the static table lacks. The compat
+   * projection must gate them exactly like static rows (category
+   * toggles, include/exclude, battery suppression), or a legacy
+   * config with a category off would register accessories v1.7 never
+   * created.
+   */
+  dynamicDataPoints: Iterable<string> = [],
 ): SensorMapOverride[] {
   const overrides: SensorMapOverride[] = [];
 
@@ -123,7 +151,21 @@ export function compatToOverrides(
   const suppressedBatteries = buildSuppressedBatteries(legacy.excludeSensors);
   const hasStations = stations.length > 0;
 
-  for (const row of DEFAULT_SENSOR_MAP) {
+  const rows: DefaultSensorRow[] = [...DEFAULT_SENSOR_MAP];
+  const staticDps = new Set(DEFAULT_SENSOR_MAP.map(r => r.dataPoint));
+  const seenDynamic = new Set<string>();
+  for (const dp of dynamicDataPoints) {
+    if (staticDps.has(dp) || seenDynamic.has(dp)) {
+      continue;
+    }
+    seenDynamic.add(dp);
+    const synthesized = defaultRowFor(dp);
+    if (synthesized) {
+      rows.push(synthesized);
+    }
+  }
+
+  for (const row of rows) {
     if (!hasStations) {
       // Boot-before-fetch fallback. Preserve the pre-station-aware
       // behavior: include/exclude matching against global forms

@@ -50,6 +50,7 @@ import {
   hapClean as sharedHapClean,
 } from './sensorMap/displayName.js';
 import { legacyTypeForWrapperId } from './sensorMap/legacyDeviceType.js';
+import { LEGACY_FIELD_MATCHERS } from './sensorMap/defaultMap.js';
 import {
   DISCOVERY_FILE,
   DiscoveryTracker,
@@ -416,21 +417,24 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
     // pre-computed AQI values, not raw PM concentrations, and they
     // can carry sentinel values that would mislead HomeKit users.
     // If a future change loosens the regex, re-check this guard.
-    if (
-      (sensor.includes('temp') || sensor.includes('feelsLike') || sensor.includes('dewPoint'))
-      && this.config.temperatureSensors
-    ) {
-      return 'Temperature';
-    } else if (sensor.includes('humid') && this.config.humiditySensors) {
-      return 'Humidity';
-    } else if (sensor.includes('solar') && this.config.solarRadiationSensors) {
-      return 'Solar Radiation';
-    } else if (/^co2($|_)/.test(sensor) && this.config.co2Sensors) {
-      return 'CO2';
-    } else if (/^pm25($|_)/.test(sensor) && this.config.airQualitySensors) {
-      return 'PM2.5';
-    } else if (/^pm10($|_)/.test(sensor) && this.config.airQualitySensors) {
-      return 'PM10';
+    // Value-tile matching consumes the SHARED matcher list (GA review
+    // P1-1 / issue #63): the v2 recognizer synthesizes rows from the
+    // same list, so legacy registration and v2 recognition cannot
+    // drift. Semantics preserved exactly: each matcher is tried in
+    // order, and a shape match whose category toggle is off falls
+    // through to the next matcher, as the original else-if chain did.
+    const categoryToggles: Record<string, boolean | undefined> = {
+      'temperature': this.config.temperatureSensors,
+      'humidity': this.config.humiditySensors,
+      'light': this.config.solarRadiationSensors,
+      'co2': this.config.co2Sensors,
+      'air-quality-pm25': this.config.airQualitySensors,
+      'air-quality-pm10': this.config.airQualitySensors,
+    };
+    for (const matcher of LEGACY_FIELD_MATCHERS) {
+      if (matcher.test(sensor) && categoryToggles[matcher.kind]) {
+        return matcher.legacyType;
+      }
     }
 
     // Extended sensors (v1.5.0). Gated by the master toggle
@@ -924,7 +928,7 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
     });
   }
 
-  async discoverDevices() {
+  async discoverDevices(): Promise<void> {
     // Flag-gated v2 reconciler. Row-driven construction + routing,
     // default ON since beta.17 (GA #65); explicit opt-outs keep the
     // v1.6.0 path. See discoverDevicesV2 for the full contract.

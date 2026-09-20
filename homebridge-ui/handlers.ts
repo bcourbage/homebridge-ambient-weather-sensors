@@ -19,7 +19,7 @@ import { fileURLToPath } from 'url';
 
 import { buildEffectiveSensorMap, partitionOverrideLayers } from '../dist/sensorMap/buildEffectiveMap.js';
 import { canonicalizeSensorMap } from '../dist/sensorMap/canonicalizeSensorMap.js';
-import { compatToOverrides, type LegacyConfig } from '../dist/sensorMap/compat.js';
+import { compatToOverrides, dynamicDataPointsFrom, type LegacyConfig } from '../dist/sensorMap/compat.js';
 import { detectConfigMode, type ConfigInputShape } from '../dist/sensorMap/configMode.js';
 import {
   composeV2ConfigSave,
@@ -686,7 +686,7 @@ async function runSavePipeline(
     // Compat seeding is an AUTHORING concern: it translates the
     // legacy config's semantics for every station, unfiltered — the
     // station filter narrows the runtime, never the configuration.
-    proposal = compatToOverrides(block as LegacyConfig, assemble([]));
+    proposal = compatToOverrides(block as LegacyConfig, assemble([]), dynamicDataPointsFrom(discovery));
     assembled = assemble(proposal);
   } else {
     proposal = p.proposal as SensorMapOverride[];
@@ -1274,7 +1274,7 @@ export function computeSaveConsequences(ctx: SavePipelineContext): SaveConsequen
   // sensorMap. Same-inventory comparison keeps the diff about the
   // PROPOSAL, never about station drift.
   const currentOverrides: ReadonlyArray<unknown> = modeResult.mode === 'legacy'
-    ? compatToOverrides(block as LegacyConfig, stationsBefore)
+    ? compatToOverrides(block as LegacyConfig, stationsBefore, dynamicDataPointsFrom(discovery))
     : (Array.isArray(block.sensorMap) ? block.sensorMap : []);
   const currentMap = buildEffectiveSensorMap({
     userOverrides: currentOverrides,
@@ -1658,7 +1658,7 @@ export async function handleGetEditorState(
   let stations: StationInventory;
   if (modeResult.mode === 'legacy') {
     stations = assemble([]);
-    overrides = compatToOverrides(block as LegacyConfig, stations);
+    overrides = compatToOverrides(block as LegacyConfig, stations, dynamicDataPointsFrom(discovery));
     stations = assemble(overrides);
   } else {
     overrides = rawSensorMap;

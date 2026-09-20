@@ -92,14 +92,14 @@ describe('projectLegacyMirror (finding 5 — reverse projection)', () => {
   it('a custom row emits BOTH the station-scoped uniqueId and the bare dataPoint exclusion', () => {
     // Custom rows surface as no-wrapper errors while the table is empty
     // - both exclusion forms must still be emitted, or v1.7's broad
-    // includes("temp") matcher would build a WRONG wrapper for barn_temp.
+    // includes("temp") matcher would build a WRONG wrapper for barn_thermo.
     const mirror = projectLegacyMirror(v2Map(
-      [{ dataPoint: 'barn_temp', kind: 'temperature', measurement: 'temperature', sourceUnit: 'celsius', displayUnit: 'celsius' }],
+      [{ dataPoint: 'barn_thermo', kind: 'temperature', measurement: 'temperature', sourceUnit: 'celsius', displayUnit: 'celsius' }],
       TWO_STATIONS,
     ));
-    expect(mirror.excludeSensors).toContain('barn_temp');
-    expect(mirror.excludeSensors).toContain(`${MAC1}-barn_temp`);
-    expect(mirror.excludeSensors).toContain(`${MAC2}-barn_temp`);
+    expect(mirror.excludeSensors).toContain('barn_thermo');
+    expect(mirror.excludeSensors).toContain(`${MAC1}-barn_thermo`);
+    expect(mirror.excludeSensors).toContain(`${MAC2}-barn_thermo`);
   });
 
   it('batteryField: null on a canonical row mirrors as the raw batt* field name', () => {
@@ -609,7 +609,7 @@ describe('projection property test (finding 5 — reviewer requirement)', () => 
       { dataPoint: 'windgustmph', displayUnit: 'kph' },
       { dataPoint: 'maxdailygust', displayUnit: 'kph' },
       { dataPoint: 'lightning_day', batteryField: null },                           // battery suppression
-      { dataPoint: 'barn_temp', kind: 'temperature', measurement: 'temperature', sourceUnit: 'celsius', displayUnit: 'celsius' }, // custom
+      { dataPoint: 'barn_thermo', kind: 'temperature', measurement: 'temperature', sourceUnit: 'celsius', displayUnit: 'celsius' }, // custom
     ];
     const v2 = v2Map(sensorMap, TWO_STATIONS);
     const mirror = projectLegacyMirror(v2);
@@ -660,8 +660,8 @@ describe('projection property test (finding 5 — reviewer requirement)', () => 
     // The custom dataPoint is the loss boundary: a REAL row in the v2
     // map (table restored), absent from the legacy projection, and
     // excluded by the mirror so v1.7's broad matchers can't misclassify.
-    expect(v2.rows.some(r => r.dataPoint === 'barn_temp' && r.kind !== 'unrecognized')).toBe(true);
-    expect(legacy.rows.some(r => r.dataPoint === 'barn_temp')).toBe(false);
-    expect(mirror.excludeSensors).toContain('barn_temp');
+    expect(v2.rows.some(r => r.dataPoint === 'barn_thermo' && r.kind !== 'unrecognized')).toBe(true);
+    expect(legacy.rows.some(r => r.dataPoint === 'barn_thermo')).toBe(false);
+    expect(mirror.excludeSensors).toContain('barn_thermo');
   });
 });

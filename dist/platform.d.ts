@@ -57,7 +57,7 @@ export declare class AmbientWeatherSensorsPlatform implements DynamicPlatformPlu
     private configMode;
     constructor(log: Logger, config: PlatformConfig, api: API);
     configureAccessory(accessory: PlatformAccessory): void;
-    determineSensorType(sensor: string): "PM2.5" | "PM10" | "Solar Radiation" | "CO2" | "Temperature" | "Humidity" | "UV" | "WindSpeed" | "WindGust" | "WindMaxDailyGust" | "WindDirection" | "WindDirection10m" | "PressureRelative" | "PressureAbsolute" | "RainRate" | "RainEvent" | "RainDaily" | "RainWeekly" | "RainMonthly" | "RainYearly" | "LastRain" | "LightningDay" | "LightningHour" | "LightningDistance" | "LightningLastStrike" | "NOT_SUPPORTED";
+    determineSensorType(sensor: string): string;
     /**
      * Compose a HAP-clean accessory displayName from station + sensor
      * metadata.
@@ -136,7 +136,7 @@ export declare class AmbientWeatherSensorsPlatform implements DynamicPlatformPlu
      * notion.
      */
     deregisterAccessories(Devices: DEVICE[]): void;
-    discoverDevices(): any;
+    discoverDevices(): Promise<void>;
     /**
      * Choose how to keep the registered wrappers updated. Two data-source
      * options:

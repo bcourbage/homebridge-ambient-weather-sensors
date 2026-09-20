@@ -71,7 +71,7 @@ const LEGACY_BLOCK = {
   windSensors: true,
 };
 
-const CUSTOM_ROW = { dataPoint: 'customtemp1', kind: 'temperature', measurement: 'temperature', sourceUnit: 'celsius' };
+const CUSTOM_ROW = { dataPoint: 'customprobe1', kind: 'temperature', measurement: 'temperature', sourceUnit: 'celsius' };
 
 const V2_BLOCK = {
   platform: 'AmbientWeatherSensors',
@@ -132,14 +132,14 @@ describe('/preview-save — diff semantics', () => {
 
   it('adding a battery field previews as modified AND structural', async () => {
     const rig = makeRig(V2_BLOCK);
-    discoveryStore(rig, ['tempf', 'customtemp1']);
+    discoveryStore(rig, ['tempf', 'customprobe1']);
     const result = await handlePreviewSave(rig.deps, {
       base: V2_BLOCK,
       proposal: [{ ...CUSTOM_ROW, batteryField: 'barn_batt' }],
     });
     expect(result.ok).toBe(true);
     if (result.ok) {
-      const change = result.changes.find(c => c.dataPoint === 'customtemp1');
+      const change = result.changes.find(c => c.dataPoint === 'customprobe1');
       expect(change).toMatchObject({ change: 'modified', structural: true });
       expect(result.structuralChangeCount).toBe(1);
     }
@@ -161,7 +161,7 @@ describe('/preview-save — diff semantics', () => {
     const removed = await handlePreviewSave(rig.deps, { base: V2_BLOCK, proposal: [] });
     expect(removed.ok).toBe(true);
     if (removed.ok) {
-      expect(removed.changes.find(c => c.dataPoint === 'customtemp1'))
+      expect(removed.changes.find(c => c.dataPoint === 'customprobe1'))
         .toMatchObject({ change: 'removed', structural: true });
     }
   });

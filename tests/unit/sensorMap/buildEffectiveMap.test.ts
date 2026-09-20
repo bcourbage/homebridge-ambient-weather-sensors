@@ -690,6 +690,49 @@ describe('buildEffectiveSensorMap — malformed input rejection (finding #10)', 
 // Un-skipped by the Stage-4 table restoration. Canonical-owner
 // behavior for KNOWN rows stays covered by the "battery attachment"
 // describe above.
+describe('buildEffectiveSensorMap — dynamic legacy-matcher recognition (GA review P1-1 / issue #63)', () => {
+  it('a field outside the static table that the legacy matcher accepts resolves as a KNOWN row', () => {
+    const result = buildEffectiveSensorMap({
+      ...baseInput(),
+      stations: [{ macAddress: MAC1, name: 'Home' }],
+      discovery: { schemaVersion: 1, entries: [
+        { stationMac: MAC1, stationName: 'Home', dataPoint: 'feelsLike5', firstSeen: 'a', lastSeen: 'b' },
+        { stationMac: MAC1, stationName: 'Home', dataPoint: 'soilhum4', firstSeen: 'a', lastSeen: 'b' },
+      ] },
+    });
+    const row = result.rows.find(r => r.dataPoint === 'feelsLike5' && r.stationMac === MAC1);
+    expect(row).toBeDefined();
+    expect(row!.kind).toBe('temperature');
+    if (row!.kind !== 'unrecognized') {
+      expect(row!.enabled).toBe(true);
+      expect(row!.name).toBe('Feels Like 5');
+      expect(row!.batteryField).toBe('batt5'); // the legacy numbered-probe rule
+    }
+    // The NEGATIVE control: 'hum' is not 'humid' — the legacy matcher
+    // rejects soilhum4 and so must v2.
+    const negative = result.rows.find(r => r.dataPoint === 'soilhum4' && r.stationMac === MAC1);
+    expect(negative?.kind).toBe('unrecognized');
+  });
+
+  it('an authored override on a dynamically recognized dataPoint edits the KNOWN row (no custom identity required)', () => {
+    const result = buildEffectiveSensorMap({
+      ...baseInput(),
+      stations: [{ macAddress: MAC1, name: 'Home' }],
+      userOverrides: [{ dataPoint: 'soiltemp3f', name: 'Greenhouse Soil', enabled: true }],
+      discovery: { schemaVersion: 1, entries: [
+        { stationMac: MAC1, stationName: 'Home', dataPoint: 'soiltemp3f', firstSeen: 'a', lastSeen: 'b' },
+      ] },
+    });
+    expect(result.errors).toEqual([]); // not refused as custom-missing-kind
+    const row = result.rows.find(r => r.dataPoint === 'soiltemp3f' && r.stationMac === MAC1);
+    expect(row).toBeDefined();
+    if (row && row.kind !== 'unrecognized') {
+      expect(row.kind).toBe('temperature');
+      expect(row.name).toBe('Greenhouse Soil');
+    }
+  });
+});
+
 describe('buildEffectiveSensorMap — custom-row battery ownership (finding #6)', () => {
   it('a custom row with a NOVEL batteryField gets hasBatterySubService=true', () => {
     // `my_barn_batt` is not reserved by any default canonical row,
@@ -721,14 +764,14 @@ describe('buildEffectiveSensorMap — custom-row battery ownership (finding #6)'
     const result = buildEffectiveSensorMap({
       ...baseInput(),
       userOverrides: [{
-        dataPoint: 'custom_second_temp',
+        dataPoint: 'custom_second_probe',
         kind: 'temperature',
         measurement: 'temperature',
         sourceUnit: 'fahrenheit',
         batteryField: 'battout',
       }],
     });
-    const row = result.rows.find(r => r.dataPoint === 'custom_second_temp');
+    const row = result.rows.find(r => r.dataPoint === 'custom_second_probe');
     expect(row).toBeDefined();
     if (row && row.kind !== 'unrecognized') {
       expect(row.batteryField).toBe('battout');
@@ -748,7 +791,7 @@ describe('buildEffectiveSensorMap — custom-row battery ownership (finding #6)'
           batteryField: 'my_barn_batt',
         },
         {
-          dataPoint: 'custom_barn_temp',
+          dataPoint: 'custom_barn_probe',
           kind: 'temperature',
           measurement: 'temperature',
           sourceUnit: 'fahrenheit',
@@ -757,7 +800,7 @@ describe('buildEffectiveSensorMap — custom-row battery ownership (finding #6)'
       ],
     });
     const wind = result.rows.find(r => r.dataPoint === 'custom_barn_wind');
-    const temp = result.rows.find(r => r.dataPoint === 'custom_barn_temp');
+    const temp = result.rows.find(r => r.dataPoint === 'custom_barn_probe');
     // Stage-4 ordering: the winner is DETERMINISTIC — the claimant
     // whose batteryField was authored by the EARLIEST config fragment
     // (wind at index 0), never resolution-iteration order.
@@ -771,7 +814,7 @@ describe('buildEffectiveSensorMap — custom-row battery ownership (finding #6)'
     expect(note).toBeDefined();
     expect(note?.source).toBe('override');
     expect(note?.overrideIndex).toBe(1);
-    expect(note?.dataPoint).toBe('custom_barn_temp');
+    expect(note?.dataPoint).toBe('custom_barn_probe');
     expect(result.warnings.some(w => w.code === 'duplicate-battery-owner')).toBe(false);
     // Signatures reflect settled ownership.
     expect(wind && wind.kind !== 'unrecognized' ? wind.structuralSignature : '').toContain('battery:1');

@@ -17,7 +17,7 @@ import * as path from 'path';
 import { fileURLToPath } from 'url';
 import { buildEffectiveSensorMap, partitionOverrideLayers } from '../dist/sensorMap/buildEffectiveMap.js';
 import { canonicalizeSensorMap } from '../dist/sensorMap/canonicalizeSensorMap.js';
-import { compatToOverrides } from '../dist/sensorMap/compat.js';
+import { compatToOverrides, dynamicDataPointsFrom } from '../dist/sensorMap/compat.js';
 import { detectConfigMode } from '../dist/sensorMap/configMode.js';
 import { composeV2ConfigSave, journalConversionBaseline, verifyConversionJournalReadable, recognizeMirror, verifyLegacySnapshot, writeLegacySnapshot, } from '../dist/sensorMap/legacyMirror.js';
 import { sensorMapShapeError } from '../dist/sensorMap/platformEffectiveMap.js';
@@ -353,7 +353,7 @@ async function runSavePipeline(deps, p) {
         // Compat seeding is an AUTHORING concern: it translates the
         // legacy config's semantics for every station, unfiltered — the
         // station filter narrows the runtime, never the configuration.
-        proposal = compatToOverrides(block, assemble([]));
+        proposal = compatToOverrides(block, assemble([]), dynamicDataPointsFrom(discovery));
         assembled = assemble(proposal);
     }
     else {
@@ -893,7 +893,7 @@ export function computeSaveConsequences(ctx) {
     // sensorMap. Same-inventory comparison keeps the diff about the
     // PROPOSAL, never about station drift.
     const currentOverrides = modeResult.mode === 'legacy'
-        ? compatToOverrides(block, stationsBefore)
+        ? compatToOverrides(block, stationsBefore, dynamicDataPointsFrom(discovery))
         : (Array.isArray(block.sensorMap) ? block.sensorMap : []);
     const currentMap = buildEffectiveSensorMap({
         userOverrides: currentOverrides,
@@ -1241,7 +1241,7 @@ export async function handleGetEditorState(deps, payload) {
     let stations;
     if (modeResult.mode === 'legacy') {
         stations = assemble([]);
-        overrides = compatToOverrides(block, stations);
+        overrides = compatToOverrides(block, stations, dynamicDataPointsFrom(discovery));
         stations = assemble(overrides);
     }
     else {

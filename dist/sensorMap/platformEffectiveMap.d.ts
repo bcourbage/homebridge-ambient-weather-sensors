@@ -58,7 +58,9 @@ export declare function sensorMapShapeError(config: EffectiveMapConfig, configMo
  * time this runs, a v2 sensorMap is either absent (default exposure)
  * or a real array.
  */
-export declare function selectUserOverrides(config: EffectiveMapConfig, configMode: ConfigMode, stations: StationInventory): ReadonlyArray<unknown>;
+export declare function selectUserOverrides(config: EffectiveMapConfig, configMode: ConfigMode, stations: StationInventory, 
+/** Discovery store, for the compat projection's dynamic data points (GA review P1-1). */
+discovery?: DiscoveryStore): ReadonlyArray<unknown>;
 /**
  * Assemble the effective sensor map at the platform boundary. Pure — the
  * caller has already loaded `discovery` / `uiState` from disk.

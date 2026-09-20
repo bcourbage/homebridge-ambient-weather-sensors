@@ -22,6 +22,8 @@
  */
 
 import type { DefaultSensorRow } from './types.js';
+import { batteryFieldForSensor, isCanonicalSensorForBattery } from '../batteryFields.js';
+import { friendlySensorName } from '../sensorNames.js';
 import {
   TEMPERATURE_WRAPPER,
   HUMIDITY_WRAPPER,
@@ -600,10 +602,95 @@ export const DEFAULT_SENSOR_MAP: ReadonlyArray<DefaultSensorRow> = [
  * O(1) lookup by dataPoint. Built lazily on first access so tests
  * can validate the array shape before the index is constructed.
  */
+/**
+ * The LEGACY field-shape matchers, in the exact order and with the
+ * exact predicates of v1.7's `determineSensorType` (GA review P1-1 /
+ * issue #63 Option A): one shared acceptance source of truth, so the
+ * v2 recognizer cannot drift from what the legacy runtime registers.
+ * `determineSensorType` consumes this list for its value-tile half;
+ * `defaultRowFor` synthesizes rows from it for fields outside the
+ * static table. Extended sensors (wind/rain/pressure/uv/lightning)
+ * match by exact name and are fully covered by the static table.
+ *
+ * Scope note: real AWN vocabulary has no key matching two families at
+ * once, so first-match identity is well-defined; a hypothetical
+ * multi-family key would follow this order, as v1.7 does with all
+ * category toggles on.
+ */
+export const LEGACY_FIELD_MATCHERS: ReadonlyArray<{
+  kind: DefaultSensorRow['kind'];
+  legacyType: string;
+  test: (dataPoint: string) => boolean;
+}> = [
+  {
+    kind: 'temperature', legacyType: 'Temperature',
+    test: dp => dp.includes('temp') || dp.includes('feelsLike') || dp.includes('dewPoint'),
+  },
+  { kind: 'humidity', legacyType: 'Humidity', test: dp => dp.includes('humid') },
+  { kind: 'light', legacyType: 'Solar Radiation', test: dp => dp.includes('solar') },
+  { kind: 'co2', legacyType: 'CO2', test: dp => /^co2($|_)/.test(dp) },
+  { kind: 'air-quality-pm25', legacyType: 'PM2.5', test: dp => /^pm25($|_)/.test(dp) },
+  { kind: 'air-quality-pm10', legacyType: 'PM10', test: dp => /^pm10($|_)/.test(dp) },
+];
+
+/** Row-shape ingredients per legacy-matched kind. */
+const SYNTH_SHAPE: Record<string, Pick<DefaultSensorRow, 'kind' | 'measurement' | 'wrapper' | 'sourceUnit' | 'displayUnit'>> = {
+  'temperature':      { kind: 'temperature', measurement: 'temperature', wrapper: TEMPERATURE_WRAPPER, sourceUnit: 'fahrenheit', displayUnit: 'fahrenheit' },
+  'humidity':         { kind: 'humidity', measurement: 'humidity', wrapper: HUMIDITY_WRAPPER, sourceUnit: 'percent', displayUnit: 'percent' },
+  'light':            { kind: 'light', measurement: 'illuminance', wrapper: SOLAR_RADIATION_WRAPPER, sourceUnit: 'wm2', displayUnit: 'lux' },
+  'co2':              { kind: 'co2', measurement: 'co2', wrapper: CO2_WRAPPER, sourceUnit: 'ppm', displayUnit: 'ppm' },
+  'air-quality-pm25': { kind: 'air-quality-pm25', measurement: 'pm25', wrapper: AIR_QUALITY_PM25_WRAPPER, sourceUnit: 'ugm3', displayUnit: 'ugm3' },
+  'air-quality-pm10': { kind: 'air-quality-pm10', measurement: 'pm10', wrapper: AIR_QUALITY_PM10_WRAPPER, sourceUnit: 'ugm3', displayUnit: 'ugm3' },
+};
+
+/**
+ * Synthesize the default row for a field the legacy matcher accepts
+ * but the static table lacks (a WH31 channel beyond the table's
+ * range, a soil-probe temperature, any future AWN field a substring
+ * family covers). Name, battery field, and battery canonicality come
+ * from the SAME legacy functions the v1.7 runtime uses, so the
+ * synthesized row registers exactly what v1.7 registers.
+ */
+function synthesizeLegacyRow(dataPoint: string): DefaultSensorRow | undefined {
+  const match = LEGACY_FIELD_MATCHERS.find(m => m.test(dataPoint));
+  if (!match) {
+    return undefined;
+  }
+  const battery = batteryFieldForSensor(dataPoint) ?? null;
+  return {
+    dataPoint,
+    ...SYNTH_SHAPE[match.kind],
+    name: friendlySensorName(dataPoint),
+    batteryField: battery,
+    canonicalForBattery: battery !== null && isCanonicalSensorForBattery(dataPoint, battery),
+  };
+}
+
 let _byDataPoint: Map<string, DefaultSensorRow> | undefined;
-export function defaultRowFor(dataPoint: string): DefaultSensorRow | undefined {
+const _synthesized = new Map<string, DefaultSensorRow | undefined>();
+
+/** The STATIC table lookup only — no dynamic fallback. */
+export function staticDefaultRowFor(dataPoint: string): DefaultSensorRow | undefined {
   if (!_byDataPoint) {
     _byDataPoint = new Map(DEFAULT_SENSOR_MAP.map(r => [r.dataPoint, r]));
   }
   return _byDataPoint.get(dataPoint);
+}
+
+export function defaultRowFor(dataPoint: string): DefaultSensorRow | undefined {
+  if (!_byDataPoint) {
+    _byDataPoint = new Map(DEFAULT_SENSOR_MAP.map(r => [r.dataPoint, r]));
+  }
+  const staticRow = _byDataPoint.get(dataPoint);
+  if (staticRow) {
+    return staticRow;
+  }
+  // Dynamic fallback (GA review P1-1): the legacy matcher's
+  // acceptance is substring-based and unbounded; a finite table
+  // cannot mirror it. Synthesized rows are cached so repeated
+  // resolution sees one stable object per dataPoint.
+  if (!_synthesized.has(dataPoint)) {
+    _synthesized.set(dataPoint, synthesizeLegacyRow(dataPoint));
+  }
+  return _synthesized.get(dataPoint);
 }

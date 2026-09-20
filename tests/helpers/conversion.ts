@@ -11,7 +11,7 @@ import { expect } from 'vitest';
 
 import { buildEffectiveSensorMap } from '../../src/sensorMap/buildEffectiveMap';
 import { canonicalizeSensorMap } from '../../src/sensorMap/canonicalizeSensorMap';
-import { compatToOverrides, type LegacyConfig } from '../../src/sensorMap/compat';
+import { compatToOverrides, dynamicDataPointsFrom, type LegacyConfig } from '../../src/sensorMap/compat';
 import { composeV2ConfigSave } from '../../src/sensorMap/legacyMirror';
 import { emptyDiscoveryStore } from '../../src/sensorMap/persistence/discoveryStore';
 import { emptyUiStateStore } from '../../src/sensorMap/persistence/uiStateStore';
@@ -23,18 +23,38 @@ export function inventoryOf(stations: RawStation[]): StationInventory {
   return stations.map(s => ({ macAddress: s.macAddress, name: s.info?.name ?? s.macAddress }));
 }
 
+/**
+ * The discovery state a real conversion runs under: the plugin can
+ * only save after it has run, and running records every reported
+ * (station, dataPoint) pair — which the compat projection needs to
+ * gate fields outside the static table (GA review P1-1).
+ */
+export function discoveryOf(stations: RawStation[]): ReturnType<typeof emptyDiscoveryStore> {
+  return {
+    schemaVersion: 1,
+    entries: stations.flatMap(s => Object.keys(s.lastData).map(dataPoint => ({
+      stationMac: s.macAddress,
+      stationName: s.info?.name ?? '',
+      dataPoint,
+      firstSeen: '2026-01-01T00:00:00Z',
+      lastSeen: '2026-01-02T00:00:00Z',
+    }))),
+  };
+}
+
 export function convertedConfigFor(config: LegacyConfig, stations: RawStation[]): Record<string, unknown> {
   const inventory = inventoryOf(stations);
-  const overrides = compatToOverrides(config, inventory);
+  const discovery = discoveryOf(stations);
+  const overrides = compatToOverrides(config, inventory, dynamicDataPointsFrom(discovery));
   const canonical = canonicalizeSensorMap({
     overrides,
     stations: inventory,
-    discovery: emptyDiscoveryStore(),
+    discovery,
     uiState: emptyUiStateStore(),
   });
   const effectiveMap = buildEffectiveSensorMap({
     userOverrides: canonical,
-    discovery: emptyDiscoveryStore(),
+    discovery,
     uiState: emptyUiStateStore(),
     stations: inventory,
     configMode: 'v2',
