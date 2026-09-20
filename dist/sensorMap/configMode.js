@@ -13,6 +13,7 @@
  * editability is preferable to losing every accessory in HomeKit.
  */
 import { recognizeMirror } from './legacyMirror.js';
+import { parseCatalogStamps } from './catalogVersion.js';
 export const CURRENT_CONFIG_VERSION = 2;
 const LEGACY_TOGGLE_KEYS = [
     'temperatureSensors', 'humiditySensors', 'solarRadiationSensors',
@@ -53,6 +54,24 @@ export function detectConfigMode(config) {
         return { mode: 'legacy', warnings };
     }
     // configVersion === 2.
+    // Catalog stamps validate FIRST (§18.3): an invalid or
+    // future-version pair fails closed into the protective posture —
+    // cached accessories are retained (safe mode skips reconciliation
+    // entirely), fresh values reach only the safe-mode binder's
+    // baseline-native bindings, and the editor is read-only until a
+    // human repairs the stamps or upgrades the plugin. Capping or
+    // resetting instead would silently change definition visibility
+    // under existing accessories.
+    const stampResult = parseCatalogStamps(config);
+    if (stampResult.status === 'invalid') {
+        const banner = `The catalog adoption stamps are invalid: ${stampResult.problem}. `
+            + 'The plugin cannot tell which sensor definitions this configuration expects, so no '
+            + 'structural changes happen. Existing accessories keep running from cache; the UI is '
+            + 'read-only until the catalogBaseline/catalogAdopted fields are repaired in the JSON '
+            + 'config editor or the plugin is upgraded.';
+        warnings.push(banner);
+        return { mode: 'safe-mode', warnings, safeModeBanner: banner };
+    }
     // Mirror metadata is validated whenever it is PRESENT — regardless of
     // whether any mirrored legacy fields remain (review round 3, finding
     // 2: deleting every mirrored field must not silently skip the check;
@@ -91,7 +110,12 @@ export function detectConfigMode(config) {
             + 'configVersion: 2 takes precedence; the legacy toggles are ignored.');
     }
     // 'recognized': the maintained downgrade mirror — intentionally silent.
-    return { mode: 'v2', warnings };
+    return {
+        mode: 'v2',
+        warnings,
+        catalogBaseline: stampResult.stamps.catalogBaseline,
+        catalogAdopted: stampResult.stamps.catalogAdopted,
+    };
 }
 function describe(v) {
     if (v === null) {

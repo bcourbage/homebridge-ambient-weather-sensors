@@ -14,6 +14,7 @@
  */
 
 import { recognizeMirror } from './legacyMirror.js';
+import { parseCatalogStamps } from './catalogVersion.js';
 
 export const CURRENT_CONFIG_VERSION = 2;
 
@@ -28,6 +29,17 @@ export interface ModeDetectionResult {
    * in the UI. Undefined for legacy/v2 modes.
    */
   safeModeBanner?: string;
+  /**
+   * The config's catalog-adoption stamps (§18.3), resolved. Set for
+   * 'v2' mode ((1, 1) when both fields are absent — the defined legacy
+   * interpretation). An INVALID stamp pair never reaches 'v2': it
+   * fails closed into 'safe-mode', because capping or resetting the
+   * stamps changes which definitions are visible and was measured to
+   * unregister a cached accessory riding an adopted definition
+   * (PR #65 review round 2).
+   */
+  catalogBaseline?: number;
+  catalogAdopted?: number;
 }
 
 /**
@@ -104,6 +116,25 @@ export function detectConfigMode(config: ConfigInputShape | undefined): ModeDete
   }
 
   // configVersion === 2.
+  // Catalog stamps validate FIRST (§18.3): an invalid or
+  // future-version pair fails closed into the protective posture —
+  // cached accessories are retained (safe mode skips reconciliation
+  // entirely), fresh values reach only the safe-mode binder's
+  // baseline-native bindings, and the editor is read-only until a
+  // human repairs the stamps or upgrades the plugin. Capping or
+  // resetting instead would silently change definition visibility
+  // under existing accessories.
+  const stampResult = parseCatalogStamps(config as Record<string, unknown>);
+  if (stampResult.status === 'invalid') {
+    const banner = `The catalog adoption stamps are invalid: ${stampResult.problem}. `
+      + 'The plugin cannot tell which sensor definitions this configuration expects, so no '
+      + 'structural changes happen. Existing accessories keep running from cache; the UI is '
+      + 'read-only until the catalogBaseline/catalogAdopted fields are repaired in the JSON '
+      + 'config editor or the plugin is upgraded.';
+    warnings.push(banner);
+    return { mode: 'safe-mode', warnings, safeModeBanner: banner };
+  }
+
   // Mirror metadata is validated whenever it is PRESENT — regardless of
   // whether any mirrored legacy fields remain (review round 3, finding
   // 2: deleting every mirrored field must not silently skip the check;
@@ -146,7 +177,12 @@ export function detectConfigMode(config: ConfigInputShape | undefined): ModeDete
     );
   }
   // 'recognized': the maintained downgrade mirror — intentionally silent.
-  return { mode: 'v2', warnings };
+  return {
+    mode: 'v2',
+    warnings,
+    catalogBaseline: stampResult.stamps.catalogBaseline,
+    catalogAdopted: stampResult.stamps.catalogAdopted,
+  };
 }
 
 function describe(v: unknown): string {

@@ -367,7 +367,25 @@ export function validateOverrideBody(
   // SensorMapOverride containing only the fields the user provided
   // (with unrecognized-kind stripped, per above).
 
-  const isCustom = defaultRow === undefined;
+  // Branch selection (§18.4 AP-2): identity AUTHORITY is a separate
+  // axis from override completeness.
+  //   - v1-baseline default row (sinceCatalogVersion absent/1): the
+  //     KNOWN branch — the frozen historical clamp, unchanged.
+  //   - later-catalog definition, override authors NO identity field:
+  //     the row INHERITS the definition's identity; the known branch
+  //     validates it (its clamping warns cannot fire — nothing to
+  //     strip), so rename-only / disable-only / display-unit-only
+  //     edits pass with no custom-missing-* and no clamps.
+  //   - later-catalog definition, override authors ANY identity field
+  //     (raw presence of kind / measurement / sourceUnit, the same
+  //     test P0's hasAuthoredIdentity applies): the CUSTOM branch,
+  //     verbatim — a complete identity is an explicit assignment that
+  //     ignores the catalog; a partial one is diagnosed by the
+  //     custom-missing-* family, never completed from the catalog.
+  //   - no default row at all: the CUSTOM branch, as always.
+  const isAdoptedDefinition = defaultRow !== undefined && (defaultRow.sinceCatalogVersion ?? 1) > 1;
+  const identityAuthored = 'kind' in merged || 'measurement' in merged || 'sourceUnit' in merged;
+  const isCustom = defaultRow === undefined || (isAdoptedDefinition && identityAuthored);
 
   // Effective measurement — what the row's measurement will be after
   // resolving overrides against defaults. Applied BEFORE the
@@ -376,7 +394,7 @@ export function validateOverrideBody(
   // from the built-in default or the user's override.
   const effectiveMeasurement: Measurement | undefined = isCustom
     ? out.measurement
-    : defaultRow.measurement;
+    : defaultRow!.measurement;
 
   // Measurement-shape normalization. Applies to both known and
   // custom rows — timestamp rows must have sourceUnit === 'ms' or
@@ -486,39 +504,42 @@ export function validateOverrideBody(
       }
     }
   } else {
-    // Known dataPoint: measurement is fixed by the default row.
-    if (out.measurement !== undefined && out.measurement !== defaultRow.measurement) {
+    // Known dataPoint (v1 baseline), or an INHERITED later-catalog
+    // identity (no identity fields authored — the clamping warns below
+    // are unreachable for that case by construction).
+    const knownRow = defaultRow!;
+    if (out.measurement !== undefined && out.measurement !== knownRow.measurement) {
       warnings.push({
         code: 'ignored-measurement-fixed',
         field: 'measurement',
-        message: `measurement override on known dataPoint '${dp}' ignored; measurement is fixed at ${defaultRow.measurement}.`,
+        message: `measurement override on known dataPoint '${dp}' ignored; measurement is fixed at ${knownRow.measurement}.`,
       });
       delete out.measurement;
     }
     if (out.kind !== undefined) {
-      if (!isCompatibleKind(defaultRow.measurement, out.kind as Exclude<SensorKind, 'unrecognized'>)) {
+      if (!isCompatibleKind(knownRow.measurement, out.kind as Exclude<SensorKind, 'unrecognized'>)) {
         return err(
           'incompatible-kind-for-known-measurement',
-          `kind '${out.kind}' is not compatible with the built-in measurement '${defaultRow.measurement}' on ${dp}.`,
+          `kind '${out.kind}' is not compatible with the built-in measurement '${knownRow.measurement}' on ${dp}.`,
           warnings,
           'kind',
         );
       }
     }
-    if (out.sourceUnit !== undefined && out.sourceUnit !== defaultRow.sourceUnit) {
+    if (out.sourceUnit !== undefined && out.sourceUnit !== knownRow.sourceUnit) {
       warnings.push({
         code: 'ignored-sourceunit-fixed',
         field: 'sourceUnit',
-        message: `sourceUnit override on known dataPoint '${dp}' ignored; source unit is fixed at ${defaultRow.sourceUnit}.`,
+        message: `sourceUnit override on known dataPoint '${dp}' ignored; source unit is fixed at ${knownRow.sourceUnit}.`,
       });
       delete out.sourceUnit;
     }
     if (out.displayUnit !== undefined) {
-      const legal = LEGAL_UNITS_FOR_MEASUREMENT[defaultRow.measurement];
+      const legal = LEGAL_UNITS_FOR_MEASUREMENT[knownRow.measurement];
       if (!legal.includes(out.displayUnit)) {
         return err(
           'illegal-displayunit-for-known-measurement',
-          `displayUnit '${out.displayUnit}' is not legal for measurement '${defaultRow.measurement}' on ${dp}.`,
+          `displayUnit '${out.displayUnit}' is not legal for measurement '${knownRow.measurement}' on ${dp}.`,
           warnings,
           'displayUnit',
         );

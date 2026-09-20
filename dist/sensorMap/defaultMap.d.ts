@@ -67,4 +67,35 @@ export declare function defaultRowForOverride(dataPoint: string, ...overrideLaye
 /** The STATIC table lookup only — no dynamic fallback. */
 export declare function staticDefaultRowFor(dataPoint: string): DefaultSensorRow | undefined;
 export declare function defaultRowFor(dataPoint: string): DefaultSensorRow | undefined;
+/**
+ * The catalog-v2 definitions (§18.3, issue #63 P2). Materialized after
+ * SYNTH_SHAPE exists (module init order); see makeCatalogV2Rows for
+ * the exposure classes.
+ */
+export declare const CATALOG_V2_ROWS: ReadonlyArray<DefaultSensorRow>;
+/**
+ * A later-catalog definition for `dataPoint`, when the config's
+ * `catalogAdopted` covers it. Never consulted for authored identities
+ * (§18.4 AP-1/AP-2 — the callers gate on authorship first).
+ */
+export declare function catalogRowFor(dataPoint: string, catalogAdopted: number): DefaultSensorRow | undefined;
+/**
+ * Stamp-aware default resolution for a dataPoint given the authored
+ * override layers that apply to it (§18.3 + §18.4 AP-2, generalizing
+ * the P0 rule): the v1 static table always applies; ANY authored
+ * identity — complete, partial, valid, or rejected — blocks both the
+ * later-catalog definitions and the dynamic fallback in its scope, so
+ * an explicit assignment (or a diagnosed attempt at one) is never
+ * answered with a substituted default; otherwise adopted definitions
+ * resolve before the fallback (anchored ones identically to it).
+ */
+export declare function defaultRowForConfigOverride(dataPoint: string, catalogAdopted: number, ...overrideLayers: ReadonlyArray<unknown>): DefaultSensorRow | undefined;
+/**
+ * The default `enabled` value a default row contributes under a
+ * config's stamps (§18.3 exposure arithmetic): a NEW-exposure
+ * definition that arrived after the config's baseline defaults to
+ * disabled; everything else (v1 baseline rows, anchored rows, and
+ * definitions the install was born with) defaults to enabled.
+ */
+export declare function defaultEnabledFor(row: DefaultSensorRow, catalogBaseline: number): boolean;
 //# sourceMappingURL=defaultMap.d.ts.map

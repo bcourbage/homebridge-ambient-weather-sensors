@@ -563,6 +563,94 @@ export const DEFAULT_SENSOR_MAP = [
     ...STATIC_ROWS,
     ...makeNumberedRows(),
 ];
+/*
+ * Catalog-v2 definitions (§18.3, issue #63 P2). DELIBERATELY not part
+ * of DEFAULT_SENSOR_MAP: that array is the frozen v1 baseline — the
+ * validation clamp's domain (§18.4 AP-2), the battery reservation set,
+ * the legacy mirror's universe, and the unconditional pairs expansion
+ * all key off it and must not grow.
+ *
+ * Two exposure classes:
+ *
+ *   ANCHORED — keys the legacy substring fallback already recognizes.
+ *   Each row must be IDENTICAL to what `synthesizeLegacyRow` produces
+ *   for the key (identity, units, name, battery, canonicality), so an
+ *   adopted config resolves the same effective row the fallback gave —
+ *   asserted by tests, and by construction here: the rows are built
+ *   from the same primitives the fallback uses. Resolution-only.
+ *
+ *   NEW — previously unrecognized wind/rain fields. Wrappers are the
+ *   generic per-(kind, measurement) choices from the custom table, so
+ *   a user who authored the same identity as a custom row before
+ *   adopting keeps the same wrapper (and structural signature) if they
+ *   later remove the assignment in favor of the definition.
+ */
+function makeAnchoredRow(dataPoint, shapeKind) {
+    const battery = batteryFieldForSensor(dataPoint) ?? null;
+    return {
+        dataPoint,
+        ...SYNTH_SHAPE[shapeKind],
+        name: friendlySensorName(dataPoint),
+        batteryField: battery,
+        canonicalForBattery: battery !== null && isCanonicalSensorForBattery(dataPoint, battery),
+        sinceCatalogVersion: 2,
+        catalogExposure: 'anchored',
+    };
+}
+function makeCatalogV2Rows() {
+    const rows = [];
+    // Anchored: channel feels-like / dew-point beyond the static 1..4,
+    // soil-temperature probes, indoor PM2.5 24h average.
+    for (let n = 5; n <= 10; n++) {
+        rows.push(makeAnchoredRow(`feelsLike${n}`, 'temperature'));
+        rows.push(makeAnchoredRow(`dewPoint${n}`, 'temperature'));
+    }
+    for (let n = 1; n <= 10; n++) {
+        rows.push(makeAnchoredRow(`soiltemp${n}f`, 'temperature'));
+    }
+    rows.push(makeAnchoredRow('pm25_in_24h', 'air-quality-pm25'));
+    // New exposure: the published wind/rain fields the plugin never
+    // recognized. Default-disabled on installs whose baseline predates
+    // them (§18.3 arithmetic in the resolver).
+    const newRow = (r) => ({
+        ...r,
+        batteryField: 'battout',
+        canonicalForBattery: false,
+        sinceCatalogVersion: 2,
+        catalogExposure: 'new',
+    });
+    rows.push(newRow({
+        dataPoint: 'windgustdir', kind: 'motion', measurement: 'direction',
+        wrapper: WIND_DIRECTION_WRAPPER, name: 'Wind Gust Direction',
+        sourceUnit: 'degrees', displayUnit: 'degrees',
+    }));
+    rows.push(newRow({
+        dataPoint: 'windspdmph_avg2m', kind: 'motion', measurement: 'wind-speed',
+        wrapper: WIND_SPEED_WRAPPER, name: 'Wind Speed 2m Avg',
+        sourceUnit: 'mph', displayUnit: 'mph',
+    }));
+    rows.push(newRow({
+        dataPoint: 'winddir_avg2m', kind: 'motion', measurement: 'direction',
+        wrapper: WIND_DIRECTION_WRAPPER, name: 'Wind Direction 2m Avg',
+        sourceUnit: 'degrees', displayUnit: 'degrees',
+    }));
+    rows.push(newRow({
+        dataPoint: 'windspdmph_avg10m', kind: 'motion', measurement: 'wind-speed',
+        wrapper: WIND_SPEED_WRAPPER, name: 'Wind Speed 10m Avg',
+        sourceUnit: 'mph', displayUnit: 'mph',
+    }));
+    rows.push(newRow({
+        dataPoint: '24hourrainin', kind: 'motion', measurement: 'rain-accumulation', threshold: 0.01,
+        wrapper: RAIN_EVENT_WRAPPER, name: 'Rain Last 24h',
+        sourceUnit: 'in', displayUnit: 'in',
+    }));
+    rows.push(newRow({
+        dataPoint: 'totalrainin', kind: 'motion', measurement: 'rain-accumulation', threshold: 0.01,
+        wrapper: RAIN_EVENT_WRAPPER, name: 'Rain Total',
+        sourceUnit: 'in', displayUnit: 'in',
+    }));
+    return rows;
+}
 /**
  * O(1) lookup by dataPoint. Built lazily on first access so tests
  * can validate the array shape before the index is constructed.
@@ -679,5 +767,54 @@ export function defaultRowFor(dataPoint) {
         _synthesized.set(dataPoint, synthesizeLegacyRow(dataPoint));
     }
     return _synthesized.get(dataPoint);
+}
+/**
+ * The catalog-v2 definitions (§18.3, issue #63 P2). Materialized after
+ * SYNTH_SHAPE exists (module init order); see makeCatalogV2Rows for
+ * the exposure classes.
+ */
+export const CATALOG_V2_ROWS = makeCatalogV2Rows();
+let _v2ByDataPoint;
+/**
+ * A later-catalog definition for `dataPoint`, when the config's
+ * `catalogAdopted` covers it. Never consulted for authored identities
+ * (§18.4 AP-1/AP-2 — the callers gate on authorship first).
+ */
+export function catalogRowFor(dataPoint, catalogAdopted) {
+    if (!_v2ByDataPoint) {
+        _v2ByDataPoint = new Map(CATALOG_V2_ROWS.map(r => [r.dataPoint, r]));
+    }
+    const row = _v2ByDataPoint.get(dataPoint);
+    return row !== undefined && (row.sinceCatalogVersion ?? 1) <= catalogAdopted ? row : undefined;
+}
+/**
+ * Stamp-aware default resolution for a dataPoint given the authored
+ * override layers that apply to it (§18.3 + §18.4 AP-2, generalizing
+ * the P0 rule): the v1 static table always applies; ANY authored
+ * identity — complete, partial, valid, or rejected — blocks both the
+ * later-catalog definitions and the dynamic fallback in its scope, so
+ * an explicit assignment (or a diagnosed attempt at one) is never
+ * answered with a substituted default; otherwise adopted definitions
+ * resolve before the fallback (anchored ones identically to it).
+ */
+export function defaultRowForConfigOverride(dataPoint, catalogAdopted, ...overrideLayers) {
+    const staticRow = staticDefaultRowFor(dataPoint);
+    if (staticRow) {
+        return staticRow;
+    }
+    if (overrideLayers.some(hasAuthoredIdentity)) {
+        return undefined;
+    }
+    return catalogRowFor(dataPoint, catalogAdopted) ?? defaultRowFor(dataPoint);
+}
+/**
+ * The default `enabled` value a default row contributes under a
+ * config's stamps (§18.3 exposure arithmetic): a NEW-exposure
+ * definition that arrived after the config's baseline defaults to
+ * disabled; everything else (v1 baseline rows, anchored rows, and
+ * definitions the install was born with) defaults to enabled.
+ */
+export function defaultEnabledFor(row, catalogBaseline) {
+    return !(row.catalogExposure === 'new' && (row.sinceCatalogVersion ?? 1) > catalogBaseline);
 }
 //# sourceMappingURL=defaultMap.js.map

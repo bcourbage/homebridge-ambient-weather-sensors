@@ -20,7 +20,14 @@
  * add/remove decisions happen.
  */
 
-import { DEFAULT_SENSOR_MAP, defaultRowFor, defaultRowForOverride, hasAuthoredIdentity, staticDefaultRowFor } from './defaultMap.js';
+import {
+  CATALOG_V2_ROWS,
+  DEFAULT_SENSOR_MAP,
+  defaultEnabledFor,
+  defaultRowForConfigOverride,
+  hasAuthoredIdentity,
+  staticDefaultRowFor,
+} from './defaultMap.js';
 import { computeStructuralSignature } from './structuralSignature.js';
 import type {
   BooleanSensorRow,
@@ -65,6 +72,14 @@ export interface BuildInput {
   uiState: UiStateStore;
   stations: StationInventory;
   configMode: 'legacy' | 'v2' | 'safe-mode';
+  /**
+   * The config's adoption stamps (§18.3). Absent means the v1
+   * baseline (1, 1) — every unstamped config in the field. Callers
+   * with an INVALID stamp pair never reach this builder: config-mode
+   * detection routes them to the safe-mode protective posture.
+   */
+  catalogBaseline?: number;
+  catalogAdopted?: number;
 }
 
 export function buildEffectiveSensorMap(input: BuildInput): EffectiveSensorMap {
@@ -75,6 +90,8 @@ export function buildEffectiveSensorMap(input: BuildInput): EffectiveSensorMap {
   const errors: RowValidationError[] = [];
   const warnings: RowValidationWarning[] = [];
   const notes: InternalInvariantNote[] = [];
+  const catalogBaseline = input.catalogBaseline ?? 1;
+  const catalogAdopted = input.catalogAdopted ?? 1;
   // Where RAW fragments author identity (kind, measurement, or
   // sourceUnit), rejected fragments included (#63 P0): an invalid
   // explicit assignment must stay an unrecognized row with its
@@ -214,7 +231,7 @@ export function buildEffectiveSensorMap(input: BuildInput): EffectiveSensorMap {
         identityAuthoredStation.add(`${key.stationMac.toUpperCase()}|${key.dataPoint}`);
       }
     }
-    const defaultRow = defaultRowForOverride(key.dataPoint, merged);
+    const defaultRow = defaultRowForConfigOverride(key.dataPoint, catalogAdopted, merged);
     const result = validateOverrideBody(merged, key, defaultRow);
 
     // Body validation warnings — attribute each to the fragment
@@ -307,10 +324,24 @@ export function buildEffectiveSensorMap(input: BuildInput): EffectiveSensorMap {
     stationByMac.set(s.macAddress.toUpperCase(), s.name);
   }
 
-  // Defaults × stations.
+  // Defaults × stations — the v1 baseline unconditionally, plus the
+  // ADOPTED NEW-exposure definitions (§18.3). Anchored definitions
+  // deliberately do NOT expand pairs: the fallback they anchor never
+  // did either, so adopting them adds no rows — they take effect only
+  // at resolution, replacing the synthesized row with the identical
+  // anchored one.
   for (const station of input.stations) {
     const mac = station.macAddress.toUpperCase();
     for (const row of DEFAULT_SENSOR_MAP) {
+      const key = `${mac}|${row.dataPoint}`;
+      if (!pairs.has(key)) {
+        pairs.set(key, { mac, dataPoint: row.dataPoint, stationName: station.name });
+      }
+    }
+    for (const row of CATALOG_V2_ROWS) {
+      if (row.catalogExposure !== 'new' || (row.sinceCatalogVersion ?? 1) > catalogAdopted) {
+        continue;
+      }
       const key = `${mac}|${row.dataPoint}`;
       if (!pairs.has(key)) {
         pairs.set(key, { mac, dataPoint: row.dataPoint, stationName: station.name });
@@ -355,7 +386,7 @@ export function buildEffectiveSensorMap(input: BuildInput): EffectiveSensorMap {
   // feedback ("waiting for station" rows, per §3.3.4 of
   // sensor-map.md), instead of a silent nothing.
   for (const dp of globalOverrides.keys()) {
-    if (identityAuthoredGlobal.has(dp) ? staticDefaultRowFor(dp) : defaultRowForOverride(dp, globalOverrides.get(dp))) {
+    if (identityAuthoredGlobal.has(dp) ? staticDefaultRowFor(dp) : defaultRowForConfigOverride(dp, catalogAdopted, globalOverrides.get(dp))) {
       // Global row for a known dataPoint — the defaults × stations
       // pass above already emitted a pair for every station.
       continue;
@@ -401,7 +432,7 @@ export function buildEffectiveSensorMap(input: BuildInput): EffectiveSensorMap {
     // unaffected.
     const defaultRow = identityAuthoredAt(mac, dataPoint)
       ? staticDefaultRowFor(dataPoint)
-      : defaultRowForOverride(dataPoint, merged);
+      : defaultRowForConfigOverride(dataPoint, catalogAdopted, merged);
 
     // Skip forgotten unrecognized fields.
     if (forgotten.has(key) && !defaultRow) {
@@ -420,6 +451,7 @@ export function buildEffectiveSensorMap(input: BuildInput): EffectiveSensorMap {
       defaultRow,
       override: merged,
       discovered,
+      catalogBaseline,
       onNoWrapper: (kind, measurement) => {
         // A custom (no-default) row is authored entirely by overrides, so
         // rowScopeProvenance always has its last-fragment index. Attribute
@@ -749,6 +781,8 @@ interface ResolveInput {
   defaultRow: DefaultSensorRow | undefined;
   override: SensorMapOverride | undefined;
   discovered: DiscoveredFieldRecord | undefined;
+  /** The config's baseline stamp, for §18.3's default-enabled arithmetic. */
+  catalogBaseline: number;
   /**
    * Called when a CUSTOM row (no `defaultRow`) resolves no wrapper —
    * i.e. its `(kind, measurement)` isn't in
@@ -803,7 +837,7 @@ interface ResolvedRow {
 function resolveRow(inp: ResolveInput): ResolvedRow {
   const {
     stationMac, dataPoint, defaultRow, override, discovered,
-    onNoWrapper, onWrapperMismatch,
+    catalogBaseline, onNoWrapper, onWrapperMismatch,
   } = inp;
 
   // ---- Unrecognized: no default, no user override with kind+measurement.
@@ -850,8 +884,12 @@ function resolveRow(inp: ResolveInput): ResolvedRow {
     ?? sourceUnit;
 
   // ---- Resolve enabled BEFORE battery ownership. A disabled row
-  //       must never consume a claim slot.
-  const enabled = override?.enabled !== false;
+  //       must never consume a claim slot. The default derives from
+  //       the config's baseline (§18.3): a NEW-exposure definition
+  //       that arrived after this install's birth defaults to
+  //       disabled; everything else defaults to enabled, as always.
+  const enabled = override?.enabled
+    ?? (defaultRow !== undefined ? defaultEnabledFor(defaultRow, catalogBaseline) : true);
 
   // ---- Resolve battery attachment (Stage-4 ownership pass; see the
   //       ResolvedRow doc-comment). Canonical defaults own outright;

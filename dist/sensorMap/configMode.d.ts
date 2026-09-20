@@ -23,6 +23,17 @@ export interface ModeDetectionResult {
      * in the UI. Undefined for legacy/v2 modes.
      */
     safeModeBanner?: string;
+    /**
+     * The config's catalog-adoption stamps (§18.3), resolved. Set for
+     * 'v2' mode ((1, 1) when both fields are absent — the defined legacy
+     * interpretation). An INVALID stamp pair never reaches 'v2': it
+     * fails closed into 'safe-mode', because capping or resetting the
+     * stamps changes which definitions are visible and was measured to
+     * unregister a cached accessory riding an adopted definition
+     * (PR #65 review round 2).
+     */
+    catalogBaseline?: number;
+    catalogAdopted?: number;
 }
 /**
  * Subset of the raw config the mode detector cares about.
