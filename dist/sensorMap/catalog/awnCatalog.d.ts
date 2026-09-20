@@ -15,13 +15,21 @@
  * known gaps stay visible as tested `catalog-gap` dispositions instead
  * of being disguised as implemented support, and so a definition added
  * later without updating this inventory (or vice versa) fails CI.
+ * Implemented and compat entries state their expected resolved
+ * identity (`kind` / `measurement` / `sourceUnit`), and the suite
+ * compares the VALUES against the production resolution — presence
+ * alone proves nothing.
  *
  * Provenance: the published baseline is AWN's Device Data Specs wiki,
  * commit e1c13509fdcad8ad7b212e77b8193dac71e241b5 (last published edit
  * 2023-08-07). The published list is not proof that every firmware
  * field is documented; entries carry their own evidence notes where
- * they extend or contradict it. Recorded uncertainty is deliberate:
- * resolving it is P2/P3 work, not this file's job.
+ * they extend or contradict it. Evidence sources are kept SEPARATE and
+ * verbatim — the vendor's declared encoding, the deployed decoder's
+ * behavior, and any live-device observation are three distinct facts,
+ * recorded as such even (especially) where they disagree. Recorded
+ * uncertainty is deliberate: resolving it is P2/P3 work, not this
+ * file's job.
  */
 /** Bump when entries/families are added, removed, or re-dispositioned. */
 export declare const AWN_CATALOG_VERSION = 1;
@@ -77,7 +85,20 @@ export interface CatalogEntry {
     disposition: CatalogDisposition;
     /** What the field means, per the published docs / device evidence. */
     meaning: string;
-    /** AWN source unit where verified; absent when unverified. */
+    /**
+     * Expected resolved row kind. Required (test-enforced) for
+     * implemented-* and compat-fallback dispositions; the coverage suite
+     * compares it against the production resolution.
+     */
+    kind?: string;
+    /** Expected resolved row measurement; same contract as `kind`. */
+    measurement?: string;
+    /**
+     * AWN source unit as the published docs declare it (verified against
+     * the plugin where implemented). Recorded verbatim even where device
+     * verification is pending — a declared unit is never replaced by an
+     * unspecified one.
+     */
     sourceUnit?: string;
     /** Value encoding notes (numbers unless stated). */
     encoding?: string;

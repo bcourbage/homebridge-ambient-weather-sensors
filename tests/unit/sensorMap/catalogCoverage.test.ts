@@ -5,6 +5,13 @@
  * asserted AS gaps: a definition added without re-dispositioning the
  * catalog entry (or a catalog change without the definition) fails
  * here instead of silently drifting.
+ *
+ * Assertions compare IDENTITIES AND VALUES, not shapes (PR #65 review
+ * F3): every implemented/compat key's resolved kind, measurement, and
+ * source unit must equal the catalog's statement; every capability
+ * pair must resolve the declared wrapper in the real registry; and
+ * each implemented pair is instantiated against REAL hap-nodejs to
+ * prove the declared HAP service is the one the wrapper creates.
  */
 import { describe, expect, it } from 'vitest';
 
@@ -17,10 +24,20 @@ import {
 import { NATIVE_SENSOR_SERVICES } from '../../../src/sensorMap/catalog/capabilities';
 import { DEFAULT_SENSOR_MAP, defaultRowFor, staticDefaultRowFor } from '../../../src/sensorMap/defaultMap';
 import { WRAPPER_FOR_KIND_AND_MEASUREMENT } from '../../../src/sensorMap/wrappers';
+import { instantiateWrapper } from '../../../src/sensorMap/wrapperFactories';
 import { batteryFieldForSensor } from '../../../src/batteryFields';
 import { KIND_SUPPORT } from '../../../homebridge-ui/app-src/kind-support';
+import type { DefaultSensorRow, EffectiveSensorRow, WrapperId } from '../../../src/sensorMap/types';
+// Real-HAP harness (shared with the graph-parity suite).
+// eslint-disable-next-line
+import { makeHapPlatform, makeHapAccessory, contextFor } from '../../helpers/hapGraph.mjs';
+import { makeNumericRow, makeTimestampRow } from '../../helpers/effectiveRow';
+import type { AmbientWeatherSensorsPlatform } from '../../../src/platform';
 
 const NATIVE_KINDS = new Set(['temperature', 'humidity', 'light', 'co2', 'air-quality-pm25', 'air-quality-pm10']);
+
+/** Dispositions whose entries must state (and match) a resolved identity. */
+const RESOLVED_DISPOSITIONS = new Set(['implemented-native', 'implemented-extended', 'compat-fallback']);
 
 function indexOf(entry: CatalogEntry, key: string): number | undefined {
   if (!entry.indexed) {
@@ -28,6 +45,16 @@ function indexOf(entry: CatalogEntry, key: string): number | undefined {
   }
   const { prefix, suffix = '' } = entry.indexed;
   return Number(key.slice(prefix.length, suffix ? -suffix.length : undefined));
+}
+
+/** Assert a resolved row's identity equals the catalog entry's statement. */
+function expectIdentity(row: { kind: string; measurement: string; sourceUnit?: string }, entry: CatalogEntry, key: string): void {
+  expect(row.kind, `${key} kind`).toBe(entry.kind);
+  expect(row.measurement, `${key} measurement`).toBe(entry.measurement);
+  if (entry.measurement !== 'timestamp' && entry.measurement !== 'boolean') {
+    expect(entry.sourceUnit, `${key}: numeric entry must state its sourceUnit`).toBeDefined();
+    expect(row.sourceUnit, `${key} sourceUnit`).toBe(entry.sourceUnit);
+  }
 }
 
 describe('AWN catalog inventory shape', () => {
@@ -43,6 +70,15 @@ describe('AWN catalog inventory shape', () => {
       expect(entry.meaning.length, entry.family).toBeGreaterThan(0);
       expect(entry.evidence.length, entry.family).toBeGreaterThan(0);
       expect(entry.disposition, entry.family).toBeTruthy();
+    }
+  });
+
+  it('every implemented/compat entry states its expected identity', () => {
+    for (const entry of AWN_CATALOG) {
+      if (RESOLVED_DISPOSITIONS.has(entry.disposition)) {
+        expect(entry.kind, `${entry.family} must state kind`).toBeTruthy();
+        expect(entry.measurement, `${entry.family} must state measurement`).toBeTruthy();
+      }
     }
   });
 
@@ -74,9 +110,7 @@ describe('dispositions match the production recognizer, key by key', () => {
             expect(staticRow, `${key} should be in the static table`).toBeDefined();
             const isNative = NATIVE_KINDS.has(staticRow!.kind);
             expect(isNative, `${key} kind '${staticRow!.kind}' vs disposition`).toBe(entry.disposition === 'implemented-native');
-            if (entry.sourceUnit !== undefined) {
-              expect(staticRow!.sourceUnit, `${key} sourceUnit`).toBe(entry.sourceUnit);
-            }
+            expectIdentity(staticRow!, entry, key);
             break;
           }
           case 'compat-fallback': {
@@ -84,9 +118,11 @@ describe('dispositions match the production recognizer, key by key', () => {
             const staticThrough = entry.indexed?.staticThrough ?? 0;
             if (idx !== undefined && idx <= staticThrough) {
               expect(staticRow, `${key} should be static (within staticThrough)`).toBeDefined();
+              expectIdentity(staticRow!, entry, key);
             } else {
               expect(staticRow, `${key} must NOT be static yet`).toBeUndefined();
               expect(anyRow, `${key} should resolve via the fallback`).toBeDefined();
+              expectIdentity(anyRow!, entry, key);
             }
             break;
           }
@@ -129,9 +165,22 @@ describe('boundary and near-miss behavior is recorded, not hidden', () => {
 });
 
 describe('output capabilities match the runtime registries', () => {
+  const implementedSpecs = NATIVE_SENSOR_SERVICES.filter(
+    s => s.status === 'implemented' || s.status === 'implemented-narrow');
+
   it('specifies exactly the 11 native sensor service families', () => {
     expect(NATIVE_SENSOR_SERVICES).toHaveLength(11);
     expect(new Set(NATIVE_SENSOR_SERVICES.map(s => s.service)).size).toBe(11);
+  });
+
+  it('pairs are present exactly on implemented statuses', () => {
+    for (const spec of NATIVE_SENSOR_SERVICES) {
+      const implemented = spec.status === 'implemented' || spec.status === 'implemented-narrow';
+      expect(spec.pairs !== undefined, `${spec.service} pairs vs status '${spec.status}'`).toBe(implemented);
+      if (spec.pairs) {
+        expect(spec.pairs.length, spec.service).toBeGreaterThan(0);
+      }
+    }
   });
 
   it('implemented and reserved statuses agree with KIND_SUPPORT', () => {
@@ -149,16 +198,69 @@ describe('output capabilities match the runtime registries', () => {
     }
   });
 
-  it('the wrapper registry holds exactly the 15 implemented kind/measurement pairs the audit counted', () => {
-    const pairs = Object.keys(WRAPPER_FOR_KIND_AND_MEASUREMENT);
-    expect(pairs).toHaveLength(15);
-    // Every implemented pair's kind is one an implemented native
-    // service claims (motion = the extended shell).
-    const implementedKinds = new Set(NATIVE_SENSOR_SERVICES
-      .filter(s => s.status === 'implemented' || s.status === 'implemented-narrow')
-      .flatMap(s => s.kinds ?? []));
-    for (const pair of pairs) {
-      expect(implementedKinds.has(pair.split('|')[0]), pair).toBe(true);
+  it('spec pairs are SET-EQUAL to the wrapper registry (both directions)', () => {
+    const specPairs = implementedSpecs.flatMap(s => s.pairs!.map(p => p.pair)).sort();
+    const registryPairs = Object.keys(WRAPPER_FOR_KIND_AND_MEASUREMENT).sort();
+    expect(specPairs).toEqual(registryPairs);
+  });
+
+  it('every spec pair resolves ITS declared wrapper and belongs to its declared kinds', () => {
+    for (const spec of implementedSpecs) {
+      for (const { pair, wrapperId } of spec.pairs!) {
+        const descriptor = WRAPPER_FOR_KIND_AND_MEASUREMENT[pair as keyof typeof WRAPPER_FOR_KIND_AND_MEASUREMENT];
+        expect(descriptor, `${spec.service}: pair '${pair}' missing from the registry`).toBeDefined();
+        expect(descriptor!.id, `${spec.service}: pair '${pair}' wrapper`).toBe(wrapperId);
+        expect(spec.kinds, `${spec.service}: pair '${pair}' kind outside declared kinds`)
+          .toContain(pair.split('|')[0]);
+      }
     }
+  });
+});
+
+describe('implemented pairs instantiate the DECLARED HAP service (real hap-nodejs)', () => {
+  function representativeDefaultRow(wrapperId: WrapperId): DefaultSensorRow {
+    const row = DEFAULT_SENSOR_MAP.find(r => r.wrapper.id === wrapperId);
+    if (!row) throw new Error(`no DEFAULT_SENSOR_MAP row uses wrapper '${wrapperId}'`);
+    return row;
+  }
+
+  function rowFromDefault(dr: DefaultSensorRow): EffectiveSensorRow {
+    const common = {
+      kind: dr.kind, dataPoint: dr.dataPoint, name: dr.name, wrapperId: dr.wrapper.id,
+      threshold: dr.threshold, triggerDirection: dr.triggerDirection,
+      hasBatterySubService: false, batteryField: dr.batteryField ?? 'battout',
+    } as const;
+    if (dr.measurement === 'timestamp') {
+      return makeTimestampRow({ ...common });
+    }
+    return makeNumericRow({
+      ...common,
+      measurement: dr.measurement as Exclude<typeof dr.measurement, 'timestamp' | 'boolean'>,
+      sourceUnit: dr.sourceUnit, displayUnit: dr.displayUnit,
+    });
+  }
+
+  function airQualityType(wrapperId: string): string | undefined {
+    return wrapperId === 'air-quality-pm10' ? 'PM10'
+      : wrapperId === 'air-quality-pm25' ? 'PM25' : undefined;
+  }
+
+  const cases = NATIVE_SENSOR_SERVICES
+    .filter(s => s.pairs !== undefined)
+    .flatMap(s => s.pairs!.map(p => [s.service, p.pair, p.wrapperId] as const));
+
+  it.each(cases)('%s ← %s (%s)', (service, pair, wrapperId) => {
+    const platform = makeHapPlatform();
+    const ServiceCtor = (platform as { Service: Record<string, { UUID: string } | undefined> }).Service[service];
+    expect(ServiceCtor, `platform.Service.${service} must exist (spec names a real HAP service)`).toBeDefined();
+
+    const accessory = makeHapAccessory(contextFor(wrapperId, { battery: false, type: airQualityType(wrapperId) }));
+    instantiateWrapper(
+      platform as unknown as AmbientWeatherSensorsPlatform,
+      accessory as never,
+      rowFromDefault(representativeDefaultRow(wrapperId as WrapperId)),
+    );
+    const uuids = (accessory as { services: Array<{ UUID: string }> }).services.map(s => s.UUID);
+    expect(uuids, `${pair} must instantiate ${service}`).toContain(ServiceCtor!.UUID);
   });
 });

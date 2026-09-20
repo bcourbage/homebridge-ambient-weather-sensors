@@ -1746,6 +1746,34 @@ Tests: for every non-motion kind, submit an override with each of these fields; 
   config plus the stamp, never from inventory or cache. No runtime
   behavior changes in P1.
 
+  Review round 1 (same day) corrected the design in place: §18.2's
+  takeover narrative was replaced with the three MEASURED validator
+  outcomes (equal values pass unstripped; an alternate unit is
+  silently clamped with the signature unchanged — the value-level
+  corruption case; an incompatible kind resolves to the new static
+  default, not a dead row, because P0 gates only the dynamic
+  fallback). AP-2 separated identity AUTHORITY from override
+  completeness — later definitions get a third validation branch
+  (inherit / explicit complete identity / diagnosed partial) so
+  rename-only, disable-only, and display-unit-only edits stop failing
+  `custom-missing-kind`. §18.3 replaced the single scalar stamp with
+  the durable `catalogBaseline` + `catalogAdopted` pair (default
+  exposure derives from the baseline: no global disable fragments, no
+  observed-row bookkeeping, offline/never-seen stations identical by
+  arithmetic), made pure conversion keep `baseline = adopted = 1`
+  (removing the conversion-adopts-newest contradiction), and defined
+  absent/malformed/future stamp handling. AP-3 became per-key
+  decision equality instead of the unsatisfiable whole-map equality.
+  The catalog corrected the reversed `batt_lightning` evidence (the
+  README observation is `0` on a healthy device; the wiki declares
+  1=Low/0=OK for `batt_lightning` and `batleak{n}`, inverted from the
+  other battery fields; the deployed decoder reads 0 as low
+  everywhere) and recorded the declared units it had left unstated.
+  The capability spec gained exact pair-to-wrapper mappings verified
+  against real HAP service instantiation, and the coverage suite
+  gained identity/unit comparisons so the review's three semantic
+  mutations now fail.
+
 - Status: **APPROVED FOR IMPLEMENTATION**. Beta cycle can begin.
 
 ## 18. Catalog completion: three decisions and assignment preservation
@@ -1817,18 +1845,41 @@ default row resolves for it (`validateOverrideBody`, the
   (`incompatible-kind-for-known-measurement`).
 
 Therefore adding a dataPoint to the static table flips every existing
-authored row on that dataPoint from custom to known. Concretely, for
-the live preservation fixture (a station-scoped row assigning
+authored row on that dataPoint from custom to known. The measured
+outcomes (PR #65 review, executed against the committed validator with
+a synthetic later wind definition injected into the static table) for
+the live preservation fixture — a station-scoped row assigning
 `windspdmph_avg10m` an explicit identity, accessory "Wind Speed
-Average"): an anchored P2 definition would silently strip the authored
-`measurement`/`sourceUnit` (changing canonicalization output and
-potentially the structural signature — a re-registration that loses
-HomeKit room assignments and automations), and if the authored kind
-fell outside the definition's measurement family the row would be
-rejected outright. Post-P0, the rejected identity still blocks the
-fallback (correctly — fail closed), so the accessory would go DEAD on
-a plugin upgrade the user never asked to change anything. Both
-outcomes are takeovers; both are forbidden by §18.4.
+Average" — are three, by authored-value relationship to the new
+definition:
+
+1. **Identical identity** (authored motion / wind-speed / mph, equal
+   to the definition): the row validates unchanged, with no warning.
+   The validator strips an authored field only when its value DIFFERS
+   from the default's; equal values pass through. Effective identity
+   and structural signature are unchanged. Not a takeover, but the
+   authored provenance is now indistinguishable from an inherited one.
+2. **Same-measurement different unit** (authored mps): the authored
+   `sourceUnit` is clamped to the definition's mph with
+   `ignored-sourceunit-fixed`. The structural signature does NOT
+   include the source unit, so nothing re-registers — the accessory
+   silently starts interpreting every mps payload value as mph. This
+   is the worst case: silent value-level semantic corruption with no
+   structural symptom. Any preservation test must therefore include a
+   value-level discriminator (an alternate-unit fixture whose
+   RENDERED value proves which unit interpretation ran), not
+   signature assertions alone.
+3. **Incompatible kind** (authored humidity): the authored row is
+   rejected with `incompatible-kind-for-known-measurement` — and the
+   dataPoint then resolves to the new definition's own static default
+   row, because P0's authored-identity gate blocks the DYNAMIC
+   fallback, not static defaults. The explicit assignment (name,
+   threshold, unit choices) is replaced by the generic default
+   accessory under the default's exposure setting.
+
+All three disturb an assignment the user never asked to change
+(provenance loss, silent reinterpretation, replacement); §18.4 forbids
+each of them.
 
 The same mechanism, run through `compatToOverrides` and the legacy
 mirror, is how a new definition could disturb untouched 1.7-style
@@ -1838,39 +1889,101 @@ requires upgrades to leave untouched.
 ### 18.3 Exposure policy for later definitions: explicit adoption
 
 A definition that lands in a plugin update must be INERT for existing
-configs until adopted:
+configs until adopted, and the configuration must durably encode WHICH
+exposure history produced its current state — a single scalar stamp
+cannot distinguish "existing install that adopted catalog 2" from
+"fresh install born at catalog 2" after a restart. The persisted state
+is therefore TWO stamps plus the catalog's own version metadata:
 
 - The catalog gains a per-entry `sinceCatalogVersion`; everything
   recognized today (static table + fallback behavior as of
   `AWN_CATALOG_VERSION = 1`) is the **v1 baseline**.
-- The config block gains an adopted-catalog stamp (a P2 public config
-  field — named, validated, and canonicalized there, NOT added in P1).
-  A config without the stamp has adopted exactly the v1 baseline; this
-  covers every legacy config and every converted beta in the field.
-- Default resolution is stamp-scoped: an entry with
-  `sinceCatalogVersion` greater than the config's stamp contributes NO
-  default row — `staticDefaultRowFor`-driven behavior for that config
-  is identical to today's. (Implementation note for P2: default
-  resolution becomes parameterized by the adopted stamp; the
-  zero-argument form keeps meaning "v1 baseline" so existing call
-  sites stay honest.)
-- The stamp changes ONLY through an explicit, previewed adoption save
+- The config block gains two P2 public fields (named, validated, and
+  canonicalized there, NOT added in P1):
+  - **`catalogBaseline`** — the catalog version the installation was
+    BORN at: the version current when the config was first created
+    (fresh install, including the fresh-install settings-only path's
+    first block) or when a legacy config was converted. Written once,
+    never advanced.
+  - **`catalogAdopted`** — the newest catalog version whose
+    definitions are VISIBLE to this config. Advanced only by explicit
+    adoption.
+- **Default-enabled derives from the baseline**, which is what makes
+  the state durable without per-row bookkeeping: a definition with
+  `sinceCatalogVersion <= catalogBaseline` uses its entry's own
+  default-enabled value (the install was born knowing it); a
+  definition with `catalogBaseline < sinceCatalogVersion <=
+  catalogAdopted` defaults to **disabled** (it arrived by adoption on
+  an already-existing install) unless a layer explicitly authors
+  `enabled`. No global disable fragment is written (one would inherit
+  into explicitly assigned rows) and no per-observed-row fragments are
+  written (they would miss stations first seen later): the rule is
+  pure config arithmetic, so an offline station, a never-seen station,
+  or a wiped cache all resolve identically.
+- Default resolution is `catalogAdopted`-scoped: an entry with
+  `sinceCatalogVersion > catalogAdopted` contributes NO default row —
+  behavior for that config is identical to today's. (Implementation
+  note for P2: default resolution becomes parameterized by the
+  adopted stamp; the zero-argument form keeps meaning "v1 baseline"
+  so existing call sites stay honest.)
+- **`catalogAdopted` changes ONLY through an explicit adoption save**
   running the standard `/preview-save` → `/compose-save` pipeline —
   never as a side effect of a settings-only save, an unrelated editor
-  save, or a plugin upgrade. The preview names every accessory the
-  adoption would add or change before the Save gesture, exactly like
-  any structural save.
-- On adoption by an EXISTING installation, newly-defined rows arrive
-  **disabled** regardless of the entry's own default-enabled value;
-  enabling them is a per-row choice in the same previewed save. A
-  FRESH install (and the fresh-install settings-only path's first
-  block) starts at the current catalog version with the entries' own
-  defaults — there is nothing existing to preserve.
-- Legacy → v2 conversion stamps the catalog version current at
-  conversion time. The §11 migration-equivalence gate already forces
-  the converted config to reproduce the legacy accessory set exactly;
-  the disabled-on-adoption rule is what keeps that gate satisfiable as
-  the catalog grows.
+  save, a conversion, or a plugin upgrade. The preview names every
+  accessory the adoption would add or change before the Save gesture,
+  exactly like any structural save. Enabling adopted-disabled rows is
+  a per-row choice, authored as ordinary `enabled` fragments in the
+  same or a later previewed save.
+- **Legacy → v2 conversion is pure**: it sets `catalogBaseline =
+  catalogAdopted = 1` (the version whose behavior the legacy config
+  already had — implicit-baseline configs converted before these
+  fields existed are identical by the absent-stamp rule below).
+  Conversion never adopts. Adoption may be OFFERED alongside
+  conversion, but it is a separate, separately previewed operation
+  the user explicitly requests. The §11 migration-equivalence gate
+  therefore stays trivially satisfiable as the catalog grows.
+- **Absent and malformed stamps are conservative.** Both fields
+  absent: `catalogBaseline = catalogAdopted = 1` (every config in the
+  field today). Malformed values (non-integer, < 1, or `baseline >
+  adopted`): treated as absent with a prominent warn — no new
+  exposure ever results from a broken stamp. `catalogAdopted` greater
+  than the running plugin's `AWN_CATALOG_VERSION` (config written by
+  a newer plugin): visibility caps at the running version with a
+  notice; rows above the cap resolve as they would for an
+  unrecognized dataPoint, and authored rows on them validate under
+  the custom rules (so a downgrade never invalidates or reinterprets
+  an assignment). None of these enter safe mode: the sensorMap shape
+  is still the supported one.
+
+Serialized example (the F2 acceptance case). Before adoption, catalog
+2 defines `windspdmph_avg10m`; station A (`AA:…`) carries the explicit
+assignment, station B exists with no assignment, station C has never
+been seen:
+
+```json
+{ "catalogBaseline": 1, "catalogAdopted": 1,
+  "sensorMap": [
+    { "dataPoint": "windspdmph_avg10m", "stationMac": "AA:BB:CC:DD:EE:01",
+      "kind": "motion", "measurement": "wind-speed", "sourceUnit": "mph",
+      "name": "Wind Speed Average" } ] }
+```
+
+After the explicit adoption save (one field changes; the sensorMap
+array is byte-identical):
+
+```json
+{ "catalogBaseline": 1, "catalogAdopted": 2,
+  "sensorMap": [ …unchanged… ] }
+```
+
+Resolution afterward: station A's row authors a complete identity, so
+it validates under the custom rules and stays enabled and unchanged
+(AP-1); stations B and C resolve the catalog-2 default row with
+`sinceCatalogVersion (2) > catalogBaseline (1)`, so both are disabled —
+including C, first seen after the save, with no inventory consulted. A
+fresh catalog-2 install instead persists `"catalogBaseline": 2,
+"catalogAdopted": 2` and B/C-equivalent stations get the entry's own
+default-enabled value.
 
 Anchoring a field the fallback already recognizes (`compat-fallback`
 dispositions) is subject to a stricter invariant: the anchored
@@ -1899,32 +2012,88 @@ fixture note on `windspdmph_avg10m` points here.
   extends P0's invariant (authored identity blocks the dynamic
   fallback) to the static side: authored identity blocks ANY
   later-arriving default identity.
-- **AP-2 — The validation clamp is frozen to the v1 baseline.** The
-  known-dataPoint branch of `validateOverrideBody` applies exactly to
-  the dataPoints in today's static table, permanently. Definitions
-  with `sinceCatalogVersion > 1` supply defaults (post-adoption) and
-  UI vocabulary, but validate authored rows under the CUSTOM rules
-  even after adoption. Promoting a later definition into the clamping
-  set is the **boundary-transition design** — a separate, explicitly
-  reviewed decision, not implied by adding the definition. Until that
-  review, no code change may widen the clamped set.
-- **AP-3 — Preservation is config-derived only.** Whether an
-  assignment is preserved depends only on the authored config and its
-  adopted stamp — never on live inventory, the discovery store, cached
-  accessories, or whether a station is currently reporting. A station
-  offline during an upgrade or adoption, a wiped accessory cache, or
-  an unavailable AWN API must yield the same effective map as the
-  happy path. (This generalizes the P0 bootstrap lesson:
-  `inferForCachedAccessory` guesses from the static table only,
-  because a dynamic guess was deleting preserve-cached customs.)
-- **AP-4 — Byte-stability across upgrades.** For a config that has NOT
-  adopted anything new, a plugin upgrade that grows the catalog
-  produces zero change: identical effective rows, identical structural
-  signatures, and canonicalization as a byte-identical no-op. The
-  Demeter fixture is the canonical regression: authored
-  `windspdmph_avg10m` row + shipped P2 definition + old stamp →
-  effective row and `config.json` byte-identical to pre-definition
-  output.
+- **AP-2 — The validation clamp is frozen to the v1 baseline, and
+  identity AUTHORITY is a separate axis from override COMPLETENESS.**
+  The known-dataPoint branch of `validateOverrideBody` applies exactly
+  to the dataPoints in today's static table, permanently. Later
+  definitions (`sinceCatalogVersion > 1`) get a THIRD validation
+  branch, because reusing today's custom branch indiscriminately would
+  reject every ordinary edit — a rename-only, disable-only, or
+  display-unit-only override has no `kind` and today's custom branch
+  returns `custom-missing-kind` for it (measured in review). The
+  adopted-definition branch splits on what the merged per-key override
+  AUTHORS (identity fields: `kind`, `measurement`, and `sourceUnit`
+  for numeric measurements — the same fields P0's
+  `hasAuthoredIdentity` reads, with the same layer scoping as
+  `identityAuthoredAt`):
+  - **Authors no identity field** — the row INHERITS the adopted
+    definition's identity, supplied server-side exactly as known-row
+    defaults are today. Non-identity fields (`name`, `enabled`,
+    `displayUnit`, the motion-only family per the effective kind)
+    validate against the inherited measurement (display-unit legality
+    and so on), with no clamping warns because nothing is stripped.
+    The rename/disable/display-unit edits above, and adoption's own
+    disabled default, all live here.
+  - **Authors a complete identity** (`kind` + `measurement`, plus
+    `sourceUnit` when the measurement is numeric) — an EXPLICIT
+    ASSIGNMENT: validated under the custom rules verbatim, the
+    catalog identity ignored. AP-1 applies; the assignment keeps its
+    own units, measurement, and kind forever.
+  - **Authors a partial identity** — diagnosed as a row-scope error
+    (the existing `custom-missing-*` family), never silently
+    completed from the catalog's identity and never clamped to it.
+    The definition's default row still stands for the dataPoint
+    (under §18.3's exposure rule), and the authored fragment blocks
+    the dynamic fallback per P0. An alternate source unit under an
+    inherited identity is therefore expressed today only by authoring
+    the full identity; relaxing that is a possible later extension,
+    not a P2 default.
+  The client never synthesizes or resolves identity: the editor DTO
+  presents the inherited identity with a server-assigned scope (as
+  `identityScope` distinguishes known/custom today), Use defaults
+  shows the definition's identity and this config's applicable
+  defaults exactly as it does for known rows, removing the authored
+  fragment returns the row to the inherited identity plus §18.3's
+  exposure rule, and canonicalization keeps §11.3's layering
+  preservation — it never moves identity between layers or
+  materializes inherited identity into the config. Promoting a later
+  definition into the CLAMPING set is the **boundary-transition
+  design** — a separate, explicitly reviewed decision, not implied by
+  adding the definition. Until that review, no code change may widen
+  the clamped set.
+- **AP-3 — Preservation decisions are config-derived only.** For any
+  given `(stationMac?, dataPoint)` key, the resolution and exposure
+  decisions — which identity applies, whose layer authored it, whether
+  the row is an explicit assignment or inherits a definition, and its
+  effective enabled state — depend only on the authored config and its
+  stamps, never on live inventory, the discovery store, cached
+  accessories, or whether a station is currently reporting. The ROW
+  UNIVERSE legitimately varies with observations (an unavailable
+  inventory yields no station-expanded default rows, and discovery
+  introduces row keys), so the invariant is per-key decision equality
+  and retention of authored templates/identities across missing
+  observations — NOT whole-effective-map equality with and without
+  inventory, which today's architecture cannot and need not satisfy.
+  Tests separate the two: row-universe differences are asserted on
+  their own, and no key that exists in both resolutions may differ in
+  identity, provenance, or exposure. (This generalizes the P0
+  bootstrap lesson: `inferForCachedAccessory` guesses from the static
+  table only, because a dynamic guess was deleting preserve-cached
+  customs.)
+- **AP-4 — Byte-stability across upgrades, proven at the VALUE
+  level.** For a config that has NOT adopted anything new, a plugin
+  upgrade that grows the catalog produces zero change: identical
+  effective rows, identical structural signatures, and
+  canonicalization as a byte-identical no-op. The Demeter fixture is
+  the canonical regression: authored `windspdmph_avg10m` row +
+  shipped P2 definition + old stamp → effective row and `config.json`
+  byte-identical to pre-definition output. Because §18.2's outcome 2
+  showed a takeover that leaves the structural signature UNCHANGED
+  (an authored alternate unit clamped to the definition's unit),
+  signature and byte assertions alone cannot prove preservation:
+  every preservation suite includes an alternate-unit fixture whose
+  RENDERED characteristic value discriminates which unit
+  interpretation ran.
 - **AP-5 — Fallback-recognized behavior is grandfathered.** Every key
   the substring fallback resolves today keeps resolving with the same
   identity until the compatibility-retirement design says otherwise
@@ -1933,19 +2102,43 @@ fixture note on `windspdmph_avg10m` points here.
 
 Required tests when P2 lands (all four config populations: legacy
 untouched, converted beta, global-override, station-override):
-AP-4's byte-stability fixture; the Demeter preservation fixture
-(including the rejected-authored-kind variant: the row must validate
-exactly as it does today, not go dead); stamp-scoped default
-resolution (new entry invisible below its `sinceCatalogVersion`);
-adoption-arrives-disabled; conversion equivalence with a grown
-catalog; and AP-3 determinism (effective map equal with and without
-discovery/cache/inventory data present).
+
+- AP-4's byte-stability fixture, plus the alternate-unit value-level
+  discriminator (an mps assignment on a field whose definition says
+  mph: the rendered value proves the authored unit ran).
+- The Demeter preservation fixture, including the variant whose
+  authored kind conflicts with the definition's measurement family:
+  it must validate exactly as it does today (a valid custom row),
+  never be clamped, rejected, or replaced by the definition's default.
+- AP-2's branch matrix after adoption: rename-only, disable-only, and
+  display-unit-only overrides validate and inherit (no
+  `custom-missing-*`, no clamping warns); explicit complete alternate
+  identities validate identically before and after adoption; a partial
+  identity diagnoses the same row-scope error before and after; a
+  station-scoped exception over a global fragment resolves per P0's
+  layer scoping; canonical save → reload → save is byte-stable; Use
+  defaults presents the definition's identity with this config's
+  §18.3-applicable defaults.
+- §18.3's exposure arithmetic: stamp-scoped default resolution (an
+  entry invisible while `sinceCatalogVersion > catalogAdopted`);
+  adopted-later entries disabled when `sinceCatalogVersion >
+  catalogBaseline` (stations B and C in the serialized example,
+  including a station first observed AFTER the adoption save); fresh
+  installs receiving entry defaults; pure conversion writing
+  `baseline = adopted = 1`; absent, malformed, and future-version
+  stamps resolving conservatively.
+- Conversion equivalence with a grown catalog.
+- AP-3 per-key determinism: with and without
+  discovery/cache/inventory data, every key present in both
+  resolutions has identical identity, provenance, and exposure;
+  row-universe differences are asserted separately.
 
 ### 18.5 P1 boundary
 
 P1 delivers: the executable catalog + capability specification, the
 coverage suite, and this design section. P1 changes NO runtime
 behavior: no new accessory exposure, no new wrappers, no public config
-fields (the adoption stamp is designed here, added in P2), no
-automatic conversion, no compatibility retirement, no deployment. P2
-work starts only after this section is reviewed at the checkpoint.
+fields (`catalogBaseline` / `catalogAdopted` are designed here, added
+in P2), no automatic conversion, no compatibility retirement, no
+deployment. P2 work starts only after this section is reviewed at the
+checkpoint.

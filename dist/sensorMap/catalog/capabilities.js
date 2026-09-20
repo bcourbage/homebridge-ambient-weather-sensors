@@ -6,9 +6,17 @@
  * lives in awnCatalog.ts; whether an installation exposes a row is the
  * exposure policy (sensor-map.md §18). Design-checkpoint data,
  * consumed by tests only — the runtime's single authority on
- * implemented pairs remains WRAPPER_FOR_KIND_AND_MEASUREMENT, and the
- * coverage suite cross-checks this specification against it so the two
- * cannot drift.
+ * implemented pairs remains WRAPPER_FOR_KIND_AND_MEASUREMENT.
+ *
+ * The specification states the EXACT mappings, not counts: every
+ * implemented `(kind, measurement)` pair is listed with the WrapperId
+ * the registry must resolve for it, under the HAP service the wrapper
+ * must instantiate. The coverage suite cross-checks all three against
+ * the runtime — set equality with the wrapper registry, per-pair
+ * descriptor identity, and REAL HAP instantiation of each pair
+ * asserting the declared service is present in the accessory's
+ * service graph — so a swapped service claim, a renamed measurement,
+ * or a drifted wrapper binding fails CI instead of passing on shape.
  *
  * Native HAP support is not a promise that Apple's Home app renders a
  * characteristic as a tile; Apple Home versus other HomeKit clients is
@@ -21,17 +29,36 @@
  */
 export const NATIVE_SENSOR_SERVICES = [
     { service: 'TemperatureSensor', kinds: ['temperature'], status: 'implemented',
+        pairs: [{ pair: 'temperature|temperature', wrapperId: 'temperature' }],
         scope: 'Temperature measurements; source units convert to HAP Celsius.' },
     { service: 'HumiditySensor', kinds: ['humidity'], status: 'implemented',
+        pairs: [{ pair: 'humidity|humidity', wrapperId: 'humidity' }],
         scope: 'Relative humidity in percent.' },
     { service: 'LightSensor', kinds: ['light'], status: 'implemented',
+        pairs: [{ pair: 'light|illuminance', wrapperId: 'solar-radiation' }],
         scope: 'Illuminance; solar irradiance renders via the deployed W/m2-to-lux approximation (documented assumption).' },
     { service: 'CarbonDioxideSensor', kinds: ['co2'], status: 'implemented',
+        pairs: [{ pair: 'co2|co2', wrapperId: 'co2' }],
         scope: 'CO2 concentration in ppm.' },
     { service: 'AirQualitySensor', kinds: ['air-quality-pm25', 'air-quality-pm10'], status: 'implemented-narrow',
+        pairs: [
+            { pair: 'air-quality-pm25|pm25', wrapperId: 'air-quality-pm25' },
+            { pair: 'air-quality-pm10|pm10', wrapperId: 'air-quality-pm10' },
+        ],
         scope: 'PM2.5/PM10 mass densities only (kinds air-quality-pm25 and air-quality-pm10) — not a general AQI or arbitrary-pollutant mapping. AQI index fields are a catalog gap (P3).' },
     { service: 'MotionSensor', kinds: ['motion'], status: 'implemented-narrow',
-        scope: 'The weather-value/threshold shell (extended representation): a numeric measurement with an optional threshold trigger. No general direct boolean-motion assignment exists.' },
+        pairs: [
+            { pair: 'motion|uv-index', wrapperId: 'uv' },
+            { pair: 'motion|wind-speed', wrapperId: 'wind-speed' },
+            { pair: 'motion|direction', wrapperId: 'wind-direction' },
+            { pair: 'motion|pressure', wrapperId: 'pressure-relative' },
+            { pair: 'motion|rain-rate', wrapperId: 'rain-rate' },
+            { pair: 'motion|rain-accumulation', wrapperId: 'rain-event' },
+            { pair: 'motion|distance', wrapperId: 'lightning-distance' },
+            { pair: 'motion|count', wrapperId: 'lightning-day' },
+            { pair: 'motion|timestamp', wrapperId: 'last-rain' },
+        ],
+        scope: 'The weather-value/threshold shell (extended representation): a numeric measurement with an optional threshold trigger. No general direct boolean-motion assignment exists. Custom pairs resolve the most generic wrapper of each measurement; sub-flavors ride known dataPoints.' },
     { service: 'CarbonMonoxideSensor', kinds: ['co'], status: 'reserved-no-wrapper',
         scope: 'Kind reserved in the vocabulary; assignment fails with no-wrapper until P3.' },
     { service: 'LeakSensor', kinds: ['leak'], status: 'reserved-no-wrapper',

@@ -6,9 +6,17 @@
  * lives in awnCatalog.ts; whether an installation exposes a row is the
  * exposure policy (sensor-map.md §18). Design-checkpoint data,
  * consumed by tests only — the runtime's single authority on
- * implemented pairs remains WRAPPER_FOR_KIND_AND_MEASUREMENT, and the
- * coverage suite cross-checks this specification against it so the two
- * cannot drift.
+ * implemented pairs remains WRAPPER_FOR_KIND_AND_MEASUREMENT.
+ *
+ * The specification states the EXACT mappings, not counts: every
+ * implemented `(kind, measurement)` pair is listed with the WrapperId
+ * the registry must resolve for it, under the HAP service the wrapper
+ * must instantiate. The coverage suite cross-checks all three against
+ * the runtime — set equality with the wrapper registry, per-pair
+ * descriptor identity, and REAL HAP instantiation of each pair
+ * asserting the declared service is present in the accessory's
+ * service graph — so a swapped service claim, a renamed measurement,
+ * or a drifted wrapper binding fails CI instead of passing on shape.
  *
  * Native HAP support is not a promise that Apple's Home app renders a
  * characteristic as a tile; Apple Home versus other HomeKit clients is
@@ -23,11 +31,23 @@ export type NativeServiceStatus =
  | 'reserved-no-wrapper'
 /** The native service exists; the plugin vocabulary has no kind for it. */
  | 'absent-from-vocabulary';
+/** One implemented `(kind, measurement)` pair and its required wrapper. */
+export interface ImplementedPairSpec {
+    /** A `${kind}|${measurement}` key of WRAPPER_FOR_KIND_AND_MEASUREMENT. */
+    pair: string;
+    /** The frozen WrapperId the registry must resolve for this pair. */
+    wrapperId: string;
+}
 export interface NativeServiceSpec {
-    /** HAP service family (sensor-only scope). */
+    /** HAP service class name, as exposed on `platform.Service`. */
     service: string;
     /** The plugin kinds that map to it, where any exist. */
     kinds?: string[];
+    /**
+     * The implemented pairs rendering AS this service. Present exactly
+     * when status is implemented / implemented-narrow.
+     */
+    pairs?: ImplementedPairSpec[];
     status: NativeServiceStatus;
     /** Honest statement of scope and limits. */
     scope: string;
