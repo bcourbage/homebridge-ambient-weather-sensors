@@ -378,6 +378,45 @@ describe('a station exception to a global template survives the full pipeline (r
   });
 });
 
+describe('catalog-3 adoption through the pipeline (§19)', () => {
+  it('adoption steps (1,2) to (1,3): stamps advance, definitions arrive disabled, zero accessory consequences', async () => {
+    const block = { ...V2_BLOCK, catalogBaseline: 1, catalogAdopted: 2 };
+    const rig = makeRig([block]);
+    discoveryStore(rig);
+    const payload = { base: block, proposal: [], adoptCatalogVersion: CURRENT_CATALOG_VERSION };
+    const preview = await handlePreviewSave(rig.deps, payload);
+    expect(preview.ok).toBe(true);
+    if (!preview.ok) return;
+    expect(preview.changes).toEqual([]);
+    const next = await commit(rig, { ...payload, confirmDigest: preview.digest });
+    expect(next.catalogBaseline).toBe(1);
+    expect(next.catalogAdopted).toBe(CURRENT_CATALOG_VERSION);
+  });
+
+  it("a DORMANT hand-authored leak assignment is named as an ADDED consequence by the adoption preview (§19.2)", async () => {
+    // The row fails no-wrapper below catalog 3 (the runtime tolerates
+    // it row-level; only the JSON editor can author it), so adopting
+    // catalog 3 is exactly the moment it starts registering — the
+    // preview must say so and the save must demand that confirmation.
+    const dormant = { dataPoint: 'my_leak', kind: 'leak', measurement: 'boolean', name: 'My Leak', stationMac: MAC };
+    const block = { ...V2_BLOCK, catalogBaseline: 1, catalogAdopted: 1, sensorMap: [dormant] };
+    const rig = makeRig([block]);
+    discoveryStore(rig);
+
+    const payload = { base: block, proposal: [dormant], adoptCatalogVersion: CURRENT_CATALOG_VERSION };
+    const preview = await handlePreviewSave(rig.deps, payload);
+    expect(preview.ok, preview.ok ? '' : JSON.stringify((preview as { error: unknown }).error)).toBe(true);
+    if (!preview.ok) return;
+    const added = preview.changes.filter(c => c.change === 'added');
+    expect(added.map(c => c.dataPoint)).toContain('my_leak');
+
+    const next = await commit(rig, { ...payload, confirmDigest: preview.digest });
+    expect(next.catalogAdopted).toBe(CURRENT_CATALOG_VERSION);
+    const saved = next.sensorMap as Record<string, unknown>[];
+    expect(saved.find(e => e.dataPoint === 'my_leak')!.kind).toBe('leak');
+  });
+});
+
 describe('fail-closed stamps at the save boundary (§18.3)', () => {
   it('a v2 block with invalid stamps refuses saves as safe mode', async () => {
     const broken = { ...V2_BLOCK, catalogBaseline: 1, catalogAdopted: CURRENT_CATALOG_VERSION + 7 };

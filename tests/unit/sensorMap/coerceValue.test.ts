@@ -56,12 +56,17 @@ describe('coerceValue', () => {
     // Re-tag measurement to boolean for the coercer's dispatch.
     const asBool = { ...boolRow, measurement: 'boolean' } as unknown as typeof boolRow;
 
-    it('maps AWN 0/1 to 0/1', () => {
+    it('passes the FINITE RAW through so the state wrappers can decode explicitly (§19.1)', () => {
       expect(coerceValue(asBool, 1)).toBe(1);
       expect(coerceValue(asBool, 0)).toBe(0);
-      expect(coerceValue(asBool, 5)).toBe(1);
+      // Out-of-contract values reach the wrapper UNCOLLAPSED — the
+      // leak family's documented 2 = offline must arrive as 2, never
+      // as a truthy 1 (which read as a leak before P3).
+      expect(coerceValue(asBool, 2)).toBe(2);
+      expect(coerceValue(asBool, 5)).toBe(5);
       expect(coerceValue(asBool, true)).toBe(1);
       expect(coerceValue(asBool, false)).toBe(0);
+      expect(coerceValue(asBool, Number.NaN)).toBeUndefined();
     });
   });
 

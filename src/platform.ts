@@ -851,7 +851,7 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
           const batteryLow = (batteryField
                               && isCanonicalSensorForBattery(sensorKey, batteryField)
                               && !suppressedBatteries.has(batteryField))
-            ? readBatteryLow(obj.lastData as Record<string, unknown>, batteryField)
+            ? readBatteryLow(obj.lastData as Record<string, unknown>, batteryField, this.catalogAdopted)
             : undefined;
 
           Devices.push({
@@ -1270,6 +1270,7 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
           batteryLow: readBatteryLow(
             raw.lastData,
             resolveBatteryField(effectiveMap, row.stationMac, row.dataPoint) ?? undefined,
+            this.catalogAdopted,
           ),
         };
         reconciled.push({ row, device, routingUid: `${row.stationMac}-${row.dataPoint}` });
@@ -1853,7 +1854,7 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
       if (!lastData) {
         continue;
       }
-      const low = readBatteryLow(lastData, field);
+      const low = readBatteryLow(lastData, field, this.catalogAdopted);
       if (low !== undefined) {
         entry.wrapper.setBatteryLow(low);
       }
@@ -2196,6 +2197,7 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
       // picked up without reconstructing the socket). Flag off →
       // undefined map → the reader IS the legacy static lookup.
       resolveBatteryField: (mac, dp) => resolveBatteryField(this.v2EffectiveMap, mac, dp),
+      catalogAdopted: this.catalogAdopted,
     });
     this.realtimeSource.start();
   }

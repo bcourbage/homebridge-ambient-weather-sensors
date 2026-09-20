@@ -21,8 +21,8 @@
  */
 
 import {
-  CATALOG_V2_ROWS,
   DEFAULT_SENSOR_MAP,
+  VERSIONED_CATALOG_ROWS,
   defaultEnabledFor,
   defaultRowForConfigOverride,
   hasAuthoredIdentity,
@@ -56,7 +56,7 @@ import {
   validateOverrideBody,
   validateOverrideIdentity,
 } from './validation.js';
-import { WRAPPER_FOR_KIND_AND_MEASUREMENT, wrapperById } from './wrappers.js';
+import { wrapperById, wrapperFor } from './wrappers.js';
 import { WRAPPER_SPEC } from './wrapperFactories.js';
 
 export interface BuildInput {
@@ -363,7 +363,7 @@ export function buildEffectiveSensorMap(input: BuildInput): EffectiveSensorMap {
         pairs.set(key, { mac, dataPoint: row.dataPoint, stationName: station.name });
       }
     }
-    for (const row of CATALOG_V2_ROWS) {
+    for (const row of VERSIONED_CATALOG_ROWS) {
       if (row.catalogExposure !== 'new' || (row.sinceCatalogVersion ?? 1) > catalogAdopted) {
         continue;
       }
@@ -477,6 +477,7 @@ export function buildEffectiveSensorMap(input: BuildInput): EffectiveSensorMap {
       override: merged,
       discovered,
       catalogBaseline,
+      catalogAdopted,
       onNoWrapper: (kind, measurement) => {
         // A custom (no-default) row is authored entirely by overrides, so
         // rowScopeProvenance always has its last-fragment index. Attribute
@@ -820,6 +821,8 @@ interface ResolveInput {
   discovered: DiscoveredFieldRecord | undefined;
   /** The config's baseline stamp, for §18.3's default-enabled arithmetic. */
   catalogBaseline: number;
+  /** The adopted stamp, gating catalog-versioned wrapper pairs (§19.2). */
+  catalogAdopted: number;
   /**
    * Called when a CUSTOM row (no `defaultRow`) resolves no wrapper —
    * i.e. its `(kind, measurement)` isn't in
@@ -884,7 +887,7 @@ interface ResolvedRow {
 function resolveRow(inp: ResolveInput): ResolvedRow {
   const {
     stationMac, dataPoint, defaultRow, override, discovered,
-    catalogBaseline, onNoWrapper, onWrapperMismatch, onIllegalDisplayUnit,
+    catalogBaseline, catalogAdopted, onNoWrapper, onWrapperMismatch, onIllegalDisplayUnit,
   } = inp;
 
   // ---- Unrecognized: no default, no user override with kind+measurement.
@@ -905,7 +908,7 @@ function resolveRow(inp: ResolveInput): ResolvedRow {
     defaultRow?.measurement ?? override?.measurement ?? 'temperature';
 
   // ---- Resolve wrapper.
-  const wrapper = defaultRow?.wrapper ?? WRAPPER_FOR_KIND_AND_MEASUREMENT[`${kind}|${measurement}`];
+  const wrapper = defaultRow?.wrapper ?? wrapperFor(kind, measurement, catalogAdopted);
   if (!wrapper) {
     // Custom row (no defaultRow) whose (kind, measurement) has no
     // wrapper. With the table restored (Stage 4) only kinds without a

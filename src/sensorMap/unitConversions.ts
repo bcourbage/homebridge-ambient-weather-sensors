@@ -71,6 +71,11 @@ export const CANONICAL_UNIT_FOR_MEASUREMENT: Record<Measurement, SensorUnit> = {
   'uv-index':          'index',
   'count':             'count',
   'direction':         'degrees',
+  'soil-moisture':     'percent',
+  'leaf-wetness':      'percent',
+  'soil-tension':      'cb',
+  'evapotranspiration': 'in_per_day',
+  'aqi':               'index',
   'timestamp':         'ms',
   'boolean':           'count',
 } as const;
@@ -122,6 +127,9 @@ export function toCanonical(measurement: Measurement, sourceUnit: SensorUnit, va
     }
     case 'rain-rate':
       return sourceUnit === 'mm_per_hr' ? value / IN_PER_MM : value;
+    case 'evapotranspiration':
+      // Same standard in/mm factor as rain (§19.4).
+      return sourceUnit === 'mm_per_day' ? value / IN_PER_MM : value;
     case 'rain-accumulation':
       return sourceUnit === 'mm' ? value / IN_PER_MM : value;
     case 'pressure':
@@ -160,6 +168,8 @@ export function toDisplayUnit(measurement: Measurement, canonical: number, displ
       return convertSpeed(canonical, displayUnit as Parameters<typeof convertSpeed>[1]);
     case 'rain-rate':
       return displayUnit === 'mm_per_hr' ? canonical * IN_PER_MM : canonical;
+    case 'evapotranspiration':
+      return displayUnit === 'mm_per_day' ? canonical * IN_PER_MM : canonical;
     case 'rain-accumulation':
       return convertRain(canonical, displayUnit as Parameters<typeof convertRain>[1]);
     case 'pressure':

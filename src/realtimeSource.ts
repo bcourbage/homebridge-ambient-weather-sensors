@@ -57,6 +57,12 @@ export interface RealtimeOptions {
    * absent, so a bare construction keeps legacy behavior.
    */
   resolveBatteryField?: (stationMac: string, dataPoint: string) => string | null;
+  /**
+   * The config's adopted catalog version (§19.6), gating the
+   * vendor-polarity battery decode. Absent = 1, the legacy uniform
+   * decode — a bare construction keeps historical behavior.
+   */
+  catalogAdopted?: number;
 }
 
 const INITIAL_BACKOFF_MS = 1_000;
@@ -291,7 +297,7 @@ export class RealtimeSource {
         const batteryField = this.opts.resolveBatteryField
           ? this.opts.resolveBatteryField(macAddress, key) ?? undefined
           : batteryFieldForSensor(key);
-        const batteryLow = readBatteryLow(lastData as Record<string, unknown>, batteryField);
+        const batteryLow = readBatteryLow(lastData as Record<string, unknown>, batteryField, this.opts.catalogAdopted ?? 1);
         updates.push({
           uniqueId: `${macAddress}-${key}`,
           value,

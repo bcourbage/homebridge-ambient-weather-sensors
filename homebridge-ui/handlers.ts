@@ -2218,6 +2218,14 @@ export function handleGetVocabulary(): VocabularyDto {
   // wrapper).
   const vocabOrder = Object.keys(UNIT_VOCABULARY) as Measurement[];
   const assignments: VocabularyDto['assignments'] = Object.keys(WRAPPER_FOR_KIND_AND_MEASUREMENT)
+    // The assignment picker resolves choices BY MEASUREMENT ALONE (one
+    // select, kind derived — PR E round 1 F4). The boolean measurement
+    // now has FIVE kinds (§19.1), which that resolution cannot
+    // disambiguate, so boolean pairs are deliberately NOT offered here
+    // until the P4 editor adds a kind selector. Boolean assignments
+    // still work through the JSON editor and the catalog-3 default
+    // rows; the pipeline validates them like any custom row.
+    .filter(key => !key.endsWith('|boolean'))
     .map(key => {
       const sep = key.indexOf('|');
       const kind = key.slice(0, sep);

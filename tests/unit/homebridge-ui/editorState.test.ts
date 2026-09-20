@@ -614,7 +614,10 @@ describe('/vocabulary', () => {
     // cannot build would be refused by the pipeline as no-wrapper, so
     // the picker must not offer it), never fewer, each labeled by its
     // measurement. Order follows the vocabulary's measurement order.
-    const tableKeys = Object.keys(WRAPPER_FOR_KIND_AND_MEASUREMENT);
+    // Boolean pairs are deliberately withheld from the picker (§19.1:
+    // five kinds share the boolean measurement, and the picker
+    // resolves by measurement alone until the P4 kind selector).
+    const tableKeys = Object.keys(WRAPPER_FOR_KIND_AND_MEASUREMENT).filter(k => !k.endsWith('|boolean'));
     expect(dto.assignments).toHaveLength(tableKeys.length);
     expect(new Set(dto.assignments.map(a => `${a.kind}|${a.measurement}`))).toEqual(new Set(tableKeys));
     for (const a of dto.assignments) {
@@ -624,10 +627,12 @@ describe('/vocabulary', () => {
     const vocabOrder = Object.keys(UNIT_VOCABULARY);
     const indices = dto.assignments.map(a => vocabOrder.indexOf(a.measurement));
     expect(indices).toEqual([...indices].sort((x, y) => x - y));
-    // The reserved kinds have no wrapper and must never be offered.
-    for (const reserved of ['co', 'leak', 'contact', 'occupancy']) {
-      expect(dto.assignments.some(a => a.kind === reserved)).toBe(false);
+    // Boolean-kind assignments stay un-offered until the P4 kind
+    // selector; co|co is numeric and IS offered.
+    for (const withheld of ['leak', 'contact', 'occupancy', 'smoke']) {
+      expect(dto.assignments.some(a => a.kind === withheld)).toBe(false);
     }
+    expect(dto.assignments.some(a => a.kind === 'co' && a.measurement === 'co')).toBe(true);
     // Every numeric assignment target has source units to pick from;
     // timestamp deliberately has none (sourceUnit is fixed to 'ms'
     // and must be omitted from the fragment).
@@ -649,6 +654,11 @@ describe('/vocabulary', () => {
     }
     expect(dto.assignments.filter(a => a.kind === 'motion' && !a.triggering).map(a => a.measurement).sort())
       .toEqual(['direction', 'timestamp']);
+    // The catalog-3 numeric motion measurements are offered and
+    // trigger-capable.
+    for (const m of ['soil-moisture', 'leaf-wetness', 'soil-tension', 'evapotranspiration', 'aqi']) {
+      expect(dto.assignments.some(a => a.kind === 'motion' && a.measurement === m && a.triggering), m).toBe(true);
+    }
     // Uniqueness invariant (round 1 F4): the assignment UI tracks and
     // resolves choices BY MEASUREMENT ALONE (one select, kind derived).
     // A second kind for any measurement — e.g. the deferred boolean

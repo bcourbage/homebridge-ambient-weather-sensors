@@ -39,10 +39,12 @@ export function coerceValue(row: EffectiveSensorRow, raw: unknown): number | und
   }
 
   if (row.measurement === 'boolean') {
-    // AWN reports 0/1; anything truthy is "on". The wrapper receives a
-    // canonical 0 or 1.
+    // The FINITE RAW passes through unchanged (§19.1): boolean state
+    // wrappers decode explicitly (0 clear, 1 active, anything else
+    // FAULT). Collapsing here would make an out-of-contract value —
+    // the leak family's documented '2 = offline' — read as an alarm.
     if (typeof raw === 'number') {
-      return Number.isFinite(raw) ? (raw !== 0 ? 1 : 0) : undefined;
+      return Number.isFinite(raw) ? raw : undefined;
     }
     if (typeof raw === 'boolean') {
       return raw ? 1 : 0;

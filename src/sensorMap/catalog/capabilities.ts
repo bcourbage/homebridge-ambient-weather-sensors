@@ -39,6 +39,12 @@ export interface ImplementedPairSpec {
   pair: string;
   /** The frozen WrapperId the registry must resolve for this pair. */
   wrapperId: string;
+  /**
+   * The catalog version the pair arrived in (§19.2); absent = 1, the
+   * frozen v2.0 set. Must equal WRAPPER_PAIR_SINCE — the coverage
+   * suite pins the equality.
+   */
+  since?: number;
 }
 
 export interface NativeServiceSpec {
@@ -91,16 +97,27 @@ export const NATIVE_SENSOR_SERVICES: ReadonlyArray<NativeServiceSpec> = [
       { pair: 'motion|distance', wrapperId: 'lightning-distance' },
       { pair: 'motion|count', wrapperId: 'lightning-day' },
       { pair: 'motion|timestamp', wrapperId: 'last-rain' },
+      { pair: 'motion|boolean', wrapperId: 'motion-boolean', since: 3 },
+      { pair: 'motion|soil-moisture', wrapperId: 'soil-moisture', since: 3 },
+      { pair: 'motion|leaf-wetness', wrapperId: 'leaf-wetness', since: 3 },
+      { pair: 'motion|soil-tension', wrapperId: 'soil-tension', since: 3 },
+      { pair: 'motion|evapotranspiration', wrapperId: 'evapotranspiration', since: 3 },
+      { pair: 'motion|aqi', wrapperId: 'aqi', since: 3 },
     ],
-    scope: 'The weather-value/threshold shell (extended representation): a numeric measurement with an optional threshold trigger. No general direct boolean-motion assignment exists. Custom pairs resolve the most generic wrapper of each measurement; sub-flavors ride known dataPoints.' },
-  { service: 'CarbonMonoxideSensor', kinds: ['co'], status: 'reserved-no-wrapper',
-    scope: 'Kind reserved in the vocabulary; assignment fails with no-wrapper until P3.' },
-  { service: 'LeakSensor', kinds: ['leak'], status: 'reserved-no-wrapper',
-    scope: 'Kind reserved; needs the wrapper AND an explicit normal/leak/offline decoder (generic boolean coercion maps 2 to true — an offline detector must never read as a leak).' },
-  { service: 'ContactSensor', kinds: ['contact'], status: 'reserved-no-wrapper',
-    scope: 'Kind reserved; no wrapper until P3.' },
-  { service: 'OccupancySensor', kinds: ['occupancy'], status: 'reserved-no-wrapper',
-    scope: 'Kind reserved; no wrapper until P3.' },
-  { service: 'SmokeSensor', status: 'absent-from-vocabulary',
-    scope: 'Native service exists; the kind/assignment vocabulary has no entry for it today.' },
+    scope: 'The weather-value/threshold shell (extended representation): a numeric measurement with an optional threshold trigger. Catalog 3 adds the DIRECT boolean mapping (motion|boolean, §19.1) and the agronomic/AQI numeric measurements (§19.4). Custom pairs resolve the most generic wrapper of each measurement; sub-flavors ride known dataPoints.' },
+  { service: 'CarbonMonoxideSensor', kinds: ['co'], status: 'implemented',
+    pairs: [{ pair: 'co|co', wrapperId: 'co', since: 3 }],
+    scope: 'CO level in ppm, always written; CarbonMonoxideDetected flips at the fixed documented 400 ppm boundary (§19.3, the UL 2034 shortest-window floor) — a HAP alert-state semantic, not a user threshold. No AWN field reports CO; custom assignments only.' },
+  { service: 'LeakSensor', kinds: ['leak'], status: 'implemented',
+    pairs: [{ pair: 'leak|boolean', wrapperId: 'leak', since: 3 }],
+    scope: 'Boolean state with the explicit §19.1 decode: 0 normal, 1 leak, anything else StatusFault with the alert forced clear — an offline detector (declared 2) never reads as a leak.' },
+  { service: 'ContactSensor', kinds: ['contact'], status: 'implemented',
+    pairs: [{ pair: 'contact|boolean', wrapperId: 'contact', since: 3 }],
+    scope: 'Boolean state (§19.1 decode); raw 1 = triggered = contact open.' },
+  { service: 'OccupancySensor', kinds: ['occupancy'], status: 'implemented',
+    pairs: [{ pair: 'occupancy|boolean', wrapperId: 'occupancy', since: 3 }],
+    scope: 'Boolean state (§19.1 decode).' },
+  { service: 'SmokeSensor', kinds: ['smoke'], status: 'implemented',
+    pairs: [{ pair: 'smoke|boolean', wrapperId: 'smoke', since: 3 }],
+    scope: 'Boolean state (§19.1 decode); the smoke kind joined the vocabulary at catalog 3, closing the §18 capability gap.' },
 ];

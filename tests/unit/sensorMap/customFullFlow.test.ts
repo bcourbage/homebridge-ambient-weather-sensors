@@ -208,7 +208,97 @@ const ENTRIES: Entry[] = [
     wrapperId: 'last-rain', value: 1750000000000,
     assert: extendedState(/ago|never|now/i, false),
   },
+  // ---- Catalog-3 pairs (§19) — the entry-loop build adopts catalog 3.
+  {
+    key: 'leak|boolean',
+    override: { dataPoint: 'barn_leak', kind: 'leak', measurement: 'boolean', name: 'Barn Leak' },
+    wrapperId: 'leak', value: 1,
+    assert: booleanState(MockServices.LeakSensor, MockCharacteristics.LeakDetected, 1),
+  },
+  {
+    key: 'contact|boolean',
+    // Raw 1 = triggered = open = CONTACT_NOT_DETECTED (1).
+    override: { dataPoint: 'barn_door', kind: 'contact', measurement: 'boolean', name: 'Barn Door' },
+    wrapperId: 'contact', value: 1,
+    assert: booleanState(MockServices.ContactSensor, MockCharacteristics.ContactSensorState, 1),
+  },
+  {
+    key: 'occupancy|boolean',
+    override: { dataPoint: 'barn_occupied', kind: 'occupancy', measurement: 'boolean', name: 'Barn Occupied' },
+    wrapperId: 'occupancy', value: 1,
+    assert: booleanState(MockServices.OccupancySensor, MockCharacteristics.OccupancyDetected, 1),
+  },
+  {
+    key: 'smoke|boolean',
+    override: { dataPoint: 'barn_smoke', kind: 'smoke', measurement: 'boolean', name: 'Barn Smoke' },
+    wrapperId: 'smoke', value: 1,
+    assert: booleanState(MockServices.SmokeSensor, MockCharacteristics.SmokeDetected, 1),
+  },
+  {
+    key: 'motion|boolean',
+    // The DIRECT boolean motion mapping (§19.1), distinct from the
+    // threshold shell: raw 1 drives MotionDetected true.
+    override: { dataPoint: 'barn_motion', kind: 'motion', measurement: 'boolean', name: 'Barn Motion' },
+    wrapperId: 'motion-boolean', value: 1,
+    assert: booleanState(MockServices.MotionSensor, MockCharacteristics.MotionDetected, true),
+  },
+  {
+    key: 'co|co',
+    // 450 ppm is above the documented 400 ppm boundary (§19.3).
+    override: { dataPoint: 'barn_co', kind: 'co', measurement: 'co', sourceUnit: 'ppm', name: 'Barn CO' },
+    wrapperId: 'co', value: 450,
+    assert: (_platform, accessory) => {
+      const svc = accessory.getService(MockServices.CarbonMonoxideSensor)!;
+      expect(svc.readCharacteristic(MockCharacteristics.CarbonMonoxideLevel)).toBe(450);
+      expect(svc.readCharacteristic(MockCharacteristics.CarbonMonoxideDetected)).toBe(1);
+    },
+  },
+  {
+    key: 'motion|soil-moisture',
+    override: { dataPoint: 'barn_soil', kind: 'motion', measurement: 'soil-moisture', sourceUnit: 'percent', name: 'Barn Soil' },
+    wrapperId: 'soil-moisture', value: 43,
+    assert: extendedState('43%', false),
+  },
+  {
+    key: 'motion|leaf-wetness',
+    override: { dataPoint: 'barn_leaf', kind: 'motion', measurement: 'leaf-wetness', sourceUnit: 'percent', name: 'Barn Leaf' },
+    wrapperId: 'leaf-wetness', value: 87,
+    assert: extendedState('87%', false),
+  },
+  {
+    key: 'motion|soil-tension',
+    override: { dataPoint: 'barn_tension', kind: 'motion', measurement: 'soil-tension', sourceUnit: 'cb', name: 'Barn Tension' },
+    wrapperId: 'soil-tension', value: 12,
+    assert: extendedState('12 cb', false),
+  },
+  {
+    key: 'motion|evapotranspiration',
+    // mm/day display converts by the standard 25.4 (§19.4): 0.15
+    // in/day = 3.8 mm/day.
+    override: { dataPoint: 'barn_et', kind: 'motion', measurement: 'evapotranspiration', sourceUnit: 'in_per_day', displayUnit: 'mm_per_day', name: 'Barn ET' },
+    wrapperId: 'evapotranspiration', value: 0.15,
+    assert: extendedState('3.8 mm/day', false),
+  },
+  {
+    key: 'motion|aqi',
+    override: { dataPoint: 'barn_aqi', kind: 'motion', measurement: 'aqi', sourceUnit: 'index', name: 'Barn AQI' },
+    wrapperId: 'aqi', value: 42,
+    assert: extendedState('42', false),
+  },
 ];
+
+/** Boolean state family: alert value + fault clear (§19.1). */
+function booleanState(
+  service: (typeof MockServices)[keyof typeof MockServices],
+  characteristic: (typeof MockCharacteristics)[keyof typeof MockCharacteristics],
+  expected: number | boolean,
+) {
+  return (_platform: MockPlatform, accessory: Accessory) => {
+    const svc = accessory.getService(service)!;
+    expect(svc.readCharacteristic(characteristic)).toBe(expected);
+    expect(svc.readCharacteristic(MockCharacteristics.StatusFault)).toBe(0);
+  };
+}
 
 describe('test_custom_<entry> — full flow through the restored resolution table', () => {
   it('covers EXACTLY the real table (key sets compared, R10-4)', () => {
@@ -228,6 +318,10 @@ describe('test_custom_<entry> — full flow through the restored resolution tabl
         uiState: { schemaVersion: 1, dismissedNoticeIds: [], forgottenFields: [] },
         stations: [{ macAddress: MAC, name: 'Home' }],
         configMode: 'v2',
+        // The catalog-3 pairs are stamp-gated (§19.2); the v2.0
+        // fifteen resolve identically at any adopted version.
+        catalogBaseline: 1,
+        catalogAdopted: 3,
       });
       expect(map.errors, entry.key).toHaveLength(0);
       const row = map.rows.find(r => r.dataPoint === entry.override.dataPoint);

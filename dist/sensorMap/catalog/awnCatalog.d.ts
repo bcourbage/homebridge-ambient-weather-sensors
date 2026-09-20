@@ -36,10 +36,14 @@
  * Version 2 (issue #63 P2): the compat-fallback families gained
  * ANCHORED static definitions and the wind/rain gaps became
  * implemented-extended definitions, both stamp-gated behind
- * `sinceCatalogVersion: 2` (§18.3). Must equal the runtime's
+ * `sinceCatalogVersion: 2` (§18.3). Version 3 (P3, §19): the
+ * agronomic and AQI gaps became extended definitions, the leak
+ * detectors became native LeakSensor definitions with the explicit
+ * tri-state decode, and the vendor-inverted battery polarities decode
+ * correctly on adoption. Must equal the runtime's
  * CURRENT_CATALOG_VERSION — the coverage suite pins the equality.
  */
-export declare const AWN_CATALOG_VERSION = 2;
+export declare const AWN_CATALOG_VERSION = 3;
 /** The published baseline this inventory was audited against. */
 export declare const AWN_WIKI_BASELINE = "e1c13509fdcad8ad7b212e77b8193dac71e241b5";
 export type CatalogClass = 

@@ -231,7 +231,7 @@ export class RealtimeSource {
                 const batteryField = this.opts.resolveBatteryField
                     ? this.opts.resolveBatteryField(macAddress, key) ?? undefined
                     : batteryFieldForSensor(key);
-                const batteryLow = readBatteryLow(lastData, batteryField);
+                const batteryLow = readBatteryLow(lastData, batteryField, this.opts.catalogAdopted ?? 1);
                 updates.push({
                     uniqueId: `${macAddress}-${key}`,
                     value,

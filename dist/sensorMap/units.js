@@ -31,6 +31,11 @@ export const LEGAL_UNITS_FOR_MEASUREMENT = {
     'uv-index': ['index'],
     count: ['count'],
     direction: ['degrees'],
+    'soil-moisture': ['percent'],
+    'leaf-wetness': ['percent'],
+    'soil-tension': ['cb'],
+    'evapotranspiration': ['in_per_day', 'mm_per_day'],
+    'aqi': ['index'],
     timestamp: ['ms'],
     boolean: [],
 };
@@ -62,6 +67,11 @@ export const DEFAULT_SOURCE_UNIT_FOR_MEASUREMENT = {
     'uv-index': 'index',
     count: 'count',
     direction: 'degrees',
+    'soil-moisture': 'percent',
+    'leaf-wetness': 'percent',
+    'soil-tension': 'cb',
+    'evapotranspiration': 'in_per_day',
+    'aqi': 'index',
     timestamp: 'ms',
     // boolean intentionally omitted — no unit applies
 };
@@ -86,6 +96,11 @@ export const DEFAULT_DISPLAY_UNIT_FOR_MEASUREMENT = {
     'uv-index': 'index',
     count: 'count',
     direction: 'degrees',
+    'soil-moisture': 'percent',
+    'leaf-wetness': 'percent',
+    'soil-tension': 'cb',
+    'evapotranspiration': 'in_per_day',
+    'aqi': 'index',
     // timestamp intentionally omitted — rendered as relative time, no display unit
     // boolean intentionally omitted
 };
@@ -121,8 +136,16 @@ export const COMPATIBLE_KINDS_FOR_MEASUREMENT = {
     'uv-index': ['motion'],
     count: ['motion'],
     direction: ['motion'],
+    'soil-moisture': ['motion'],
+    'leaf-wetness': ['motion'],
+    'soil-tension': ['motion'],
+    'evapotranspiration': ['motion'],
+    'aqi': ['motion'],
     timestamp: ['motion'],
-    boolean: ['leak', 'contact', 'occupancy'],
+    // Boolean state kinds (§19.1): the user picks the semantics; motion
+    // here is the DIRECT boolean mapping, distinct from the threshold
+    // shell.
+    boolean: ['leak', 'contact', 'occupancy', 'smoke', 'motion'],
 };
 export function isCompatibleKind(measurement, kind) {
     return COMPATIBLE_KINDS_FOR_MEASUREMENT[measurement].includes(kind);

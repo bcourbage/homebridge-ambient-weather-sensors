@@ -656,7 +656,7 @@ export class AmbientWeatherSensorsPlatform {
                     const batteryLow = (batteryField
                         && isCanonicalSensorForBattery(sensorKey, batteryField)
                         && !suppressedBatteries.has(batteryField))
-                        ? readBatteryLow(obj.lastData, batteryField)
+                        ? readBatteryLow(obj.lastData, batteryField, this.catalogAdopted)
                         : undefined;
                     Devices.push({
                         macAddress: obj.macAddress,
@@ -1035,7 +1035,7 @@ export class AmbientWeatherSensorsPlatform {
                     // is every runtime battery read, including this first one,
                     // so the initial context/HAP seed can never drift from what
                     // later ticks resolve.
-                    batteryLow: readBatteryLow(raw.lastData, resolveBatteryField(effectiveMap, row.stationMac, row.dataPoint) ?? undefined),
+                    batteryLow: readBatteryLow(raw.lastData, resolveBatteryField(effectiveMap, row.stationMac, row.dataPoint) ?? undefined, this.catalogAdopted),
                 };
                 reconciled.push({ row, device, routingUid: `${row.stationMac}-${row.dataPoint}` });
             }
@@ -1576,7 +1576,7 @@ export class AmbientWeatherSensorsPlatform {
             if (!lastData) {
                 continue;
             }
-            const low = readBatteryLow(lastData, field);
+            const low = readBatteryLow(lastData, field, this.catalogAdopted);
             if (low !== undefined) {
                 entry.wrapper.setBatteryLow(low);
             }
@@ -1913,6 +1913,7 @@ export class AmbientWeatherSensorsPlatform {
             // picked up without reconstructing the socket). Flag off →
             // undefined map → the reader IS the legacy static lookup.
             resolveBatteryField: (mac, dp) => resolveBatteryField(this.v2EffectiveMap, mac, dp),
+            catalogAdopted: this.catalogAdopted,
         });
         this.realtimeSource.start();
     }

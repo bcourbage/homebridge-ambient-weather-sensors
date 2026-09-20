@@ -303,8 +303,10 @@ describe('AwnRootComponent (TestBed, jsdom)', () => {
 
     // The tooltip claims stay capability-truthful (pinned in full by
     // kindSupport.test.ts).
-    expect(KIND_HELP).toContain('Currently supported kinds are temperature, humidity, light, motion, CO₂, PM2.5 and PM10');
-    expect(KIND_HELP).toContain('CO, leak, contact and occupancy are reserved for future support');
+    expect(KIND_HELP).toContain('Currently supported kinds are temperature, humidity, light, motion, CO₂, PM2.5, PM10, CO, leak, contact, occupancy and smoke');
+    // Every kind has a wrapper at catalog 3 (§19), so the reserved
+    // sentence is absent; the copy still explains the ? sentinel.
+    expect(KIND_HELP).not.toContain('are reserved for future support');
 
     // Hover (or keyboard focus) shows the APP's own tooltip - native
     // title tooltips are hijacked by the settings modal's own title

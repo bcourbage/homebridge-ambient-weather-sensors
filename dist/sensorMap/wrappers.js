@@ -12,20 +12,22 @@
  *      swapping a service type) is signaled by bumping `schemaVersion`,
  *      which invalidates ONLY that wrapper's accessories on next launch.
  *
- * The 25 ids below are the FROZEN v2.0 vocabulary — matching the
- * design doc §3.9 table exactly. Changing an id after 2.0.0 ships
- * silently invalidates every user's accessory cache.
+ * The first 25 ids below are the FROZEN v2.0 vocabulary — matching
+ * the design doc §3.9 table exactly. The catalog-3 additions (§19)
+ * follow the same rule from the moment they ship. Changing an id
+ * after it ships silently invalidates every user's accessory cache.
  *
  * `WRAPPER_FOR_KIND_AND_MEASUREMENT` resolves the wrapper for a custom
  * sensor from its user-declared `(kind, measurement)`. Known-datapoint
  * rows carry their wrapper directly in the default map (see
  * `defaultMap.ts`); this lookup only matters for custom sensors.
  *
- * Kinds not yet backed by a concrete wrapper class in the codebase
- * (`co`, `leak`, `contact`, `occupancy`) are absent from the lookup
- * table. A custom row declaring one of those kinds fails validation
- * with "no wrapper available for kind X"; concrete classes will land
- * in a later beta stage once the data-model layer is proven.
+ * Catalog-3 pairs (§19.2) are STAMP-GATED: they exist in the table,
+ * but `wrapperFor` resolves them only for configs whose
+ * `catalogAdopted` covers their `sinceCatalogVersion` — a dormant
+ * authored row with a new kind keeps failing `no-wrapper` until the
+ * config explicitly adopts, because silently registering it on
+ * upgrade would be new exposure.
  */
 import { TemperatureAccessory } from '../temperatureAccessory.js';
 import { HumidityAccessory } from '../humidityAccessory.js';
@@ -37,6 +39,9 @@ import { WindSpeedAccessory, WindGustAccessory, WindMaxDailyGustAccessory, WindD
 import { PressureRelativeAccessory, PressureAbsoluteAccessory, } from '../extendedSensors/pressureAccessory.js';
 import { RainRateAccessory, RainEventAccessory, RainDailyAccessory, RainWeeklyAccessory, RainMonthlyAccessory, RainYearlyAccessory, LastRainAccessory, } from '../extendedSensors/rainAccessory.js';
 import { LightningDayAccessory, LightningHourAccessory, LightningDistanceAccessory, LightningLastStrikeAccessory, } from '../extendedSensors/lightningAccessory.js';
+import { LeakAccessory, ContactAccessory, OccupancyAccessory, SmokeAccessory, MotionBooleanAccessory, } from '../booleanStateAccessory.js';
+import { CoAccessory } from '../coAccessory.js';
+import { SoilMoistureAccessory, LeafWetnessAccessory, SoilTensionAccessory, EvapotranspirationAccessory, AqiAccessory, } from '../extendedSensors/genericValueAccessory.js';
 // Value-tile wrappers — Apple Home renders reading directly.
 export const TEMPERATURE_WRAPPER = {
     id: 'temperature',
@@ -184,6 +189,40 @@ export const LIGHTNING_LAST_STRIKE_WRAPPER = {
  * belt-and-suspenders for anything reaching the registry through
  * an untyped path.
  */
+// ---- Catalog-3 wrappers (§19) ------------------------------------
+export const LEAK_WRAPPER = {
+    id: 'leak', schemaVersion: 1, constructor: LeakAccessory,
+};
+export const CONTACT_WRAPPER = {
+    id: 'contact', schemaVersion: 1, constructor: ContactAccessory,
+};
+export const OCCUPANCY_WRAPPER = {
+    id: 'occupancy', schemaVersion: 1, constructor: OccupancyAccessory,
+};
+export const SMOKE_WRAPPER = {
+    id: 'smoke', schemaVersion: 1, constructor: SmokeAccessory,
+};
+export const MOTION_BOOLEAN_WRAPPER = {
+    id: 'motion-boolean', schemaVersion: 1, constructor: MotionBooleanAccessory,
+};
+export const CO_WRAPPER = {
+    id: 'co', schemaVersion: 1, constructor: CoAccessory,
+};
+export const SOIL_MOISTURE_WRAPPER = {
+    id: 'soil-moisture', schemaVersion: 1, constructor: SoilMoistureAccessory,
+};
+export const LEAF_WETNESS_WRAPPER = {
+    id: 'leaf-wetness', schemaVersion: 1, constructor: LeafWetnessAccessory,
+};
+export const SOIL_TENSION_WRAPPER = {
+    id: 'soil-tension', schemaVersion: 1, constructor: SoilTensionAccessory,
+};
+export const EVAPOTRANSPIRATION_WRAPPER = {
+    id: 'evapotranspiration', schemaVersion: 1, constructor: EvapotranspirationAccessory,
+};
+export const AQI_WRAPPER = {
+    id: 'aqi', schemaVersion: 1, constructor: AqiAccessory,
+};
 export const ALL_WRAPPERS = [
     TEMPERATURE_WRAPPER,
     HUMIDITY_WRAPPER,
@@ -210,6 +249,17 @@ export const ALL_WRAPPERS = [
     LIGHTNING_HOUR_WRAPPER,
     LIGHTNING_DISTANCE_WRAPPER,
     LIGHTNING_LAST_STRIKE_WRAPPER,
+    LEAK_WRAPPER,
+    CONTACT_WRAPPER,
+    OCCUPANCY_WRAPPER,
+    SMOKE_WRAPPER,
+    MOTION_BOOLEAN_WRAPPER,
+    CO_WRAPPER,
+    SOIL_MOISTURE_WRAPPER,
+    LEAF_WETNESS_WRAPPER,
+    SOIL_TENSION_WRAPPER,
+    EVAPOTRANSPIRATION_WRAPPER,
+    AQI_WRAPPER,
 ];
 /**
  * Custom-sensor `(kind, measurement)` → wrapper resolution table —
@@ -261,9 +311,45 @@ export const WRAPPER_FOR_KIND_AND_MEASUREMENT = {
     'motion|distance': LIGHTNING_DISTANCE_WRAPPER,
     'motion|count': LIGHTNING_DAY_WRAPPER,
     'motion|timestamp': LAST_RAIN_WRAPPER,
+    // Catalog-3 pairs (§19.2) — stamp-gated via WRAPPER_PAIR_SINCE.
+    'leak|boolean': LEAK_WRAPPER,
+    'contact|boolean': CONTACT_WRAPPER,
+    'occupancy|boolean': OCCUPANCY_WRAPPER,
+    'smoke|boolean': SMOKE_WRAPPER,
+    'motion|boolean': MOTION_BOOLEAN_WRAPPER,
+    'co|co': CO_WRAPPER,
+    'motion|soil-moisture': SOIL_MOISTURE_WRAPPER,
+    'motion|leaf-wetness': LEAF_WETNESS_WRAPPER,
+    'motion|soil-tension': SOIL_TENSION_WRAPPER,
+    'motion|evapotranspiration': EVAPOTRANSPIRATION_WRAPPER,
+    'motion|aqi': AQI_WRAPPER,
 };
-export function wrapperFor(kind, measurement) {
-    return WRAPPER_FOR_KIND_AND_MEASUREMENT[`${kind}|${measurement}`];
+/**
+ * The catalog version each pair arrived in (§19.2). Absent = 1, the
+ * frozen v2.0 set. `wrapperFor` gates on it so an authored row with a
+ * later kind stays `no-wrapper` until the config adopts — adoption's
+ * preview then names any newly-resolving row as an added consequence.
+ */
+export const WRAPPER_PAIR_SINCE = {
+    'leak|boolean': 3,
+    'contact|boolean': 3,
+    'occupancy|boolean': 3,
+    'smoke|boolean': 3,
+    'motion|boolean': 3,
+    'co|co': 3,
+    'motion|soil-moisture': 3,
+    'motion|leaf-wetness': 3,
+    'motion|soil-tension': 3,
+    'motion|evapotranspiration': 3,
+    'motion|aqi': 3,
+};
+export function wrapperFor(kind, measurement, catalogAdopted = 1) {
+    const key = `${kind}|${measurement}`;
+    const descriptor = WRAPPER_FOR_KIND_AND_MEASUREMENT[key];
+    if (descriptor === undefined || (WRAPPER_PAIR_SINCE[key] ?? 1) > catalogAdopted) {
+        return undefined;
+    }
+    return descriptor;
 }
 // id → descriptor lookup. Used by the platform's structural-signature
 // reconciliation (finding-#4 Stage 4, review P1-2) to derive a cached

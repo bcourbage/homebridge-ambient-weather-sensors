@@ -25,6 +25,12 @@ import type { DefaultSensorRow } from './types.js';
 import { batteryFieldForSensor, isCanonicalSensorForBattery } from '../batteryFields.js';
 import { friendlySensorName } from '../sensorNames.js';
 import {
+  AQI_WRAPPER,
+  EVAPOTRANSPIRATION_WRAPPER,
+  LEAF_WETNESS_WRAPPER,
+  LEAK_WRAPPER,
+  SOIL_MOISTURE_WRAPPER,
+  SOIL_TENSION_WRAPPER,
   TEMPERATURE_WRAPPER,
   HUMIDITY_WRAPPER,
   SOLAR_RADIATION_WRAPPER,
@@ -829,6 +835,90 @@ export function defaultRowFor(dataPoint: string): DefaultSensorRow | undefined {
  */
 export const CATALOG_V2_ROWS: ReadonlyArray<DefaultSensorRow> = makeCatalogV2Rows();
 
+/*
+ * Catalog-3 definitions (§19.5): the agronomic and AQI extended
+ * measurements plus the leak detectors. All NEW exposure,
+ * default-disabled everywhere. Battery ownership note: the catalog-3
+ * canonical probes (soilhum{n} for battsm{n}, leak{n} for batleak{n})
+ * deliberately carry `canonicalForBattery: false` and own their
+ * sub-service through the CLAIMS adjudication instead of the frozen
+ * v1 reservation set — reserving the fields statically would block a
+ * custom claimant on an UN-adopted config, which claims them legally
+ * today. Each field has exactly one catalog claimant, and an authored
+ * custom claimant outranks a default one by the earliest-authored
+ * rule, which is the intended precedence.
+ */
+function makeCatalogV3Rows(): DefaultSensorRow[] {
+  const rows: DefaultSensorRow[] = [];
+  const v3 = (r: Omit<DefaultSensorRow, 'sinceCatalogVersion' | 'catalogExposure' | 'canonicalForBattery' | 'defaultEnabled'>): DefaultSensorRow => ({
+    ...r,
+    canonicalForBattery: false,
+    sinceCatalogVersion: 3,
+    catalogExposure: 'new',
+    defaultEnabled: false,
+  });
+  for (let n = 1; n <= 10; n++) {
+    rows.push(v3({
+      dataPoint: `soilhum${n}`, kind: 'motion', measurement: 'soil-moisture',
+      wrapper: SOIL_MOISTURE_WRAPPER, name: `Soil Moisture ${n}`,
+      sourceUnit: 'percent', displayUnit: 'percent', batteryField: `battsm${n}`,
+    }));
+  }
+  for (let n = 1; n <= 8; n++) {
+    rows.push(v3({
+      dataPoint: `leafwetness${n}`, kind: 'motion', measurement: 'leaf-wetness',
+      wrapper: LEAF_WETNESS_WRAPPER, name: `Leaf Wetness ${n}`,
+      sourceUnit: 'percent', displayUnit: 'percent', batteryField: null,
+    }));
+  }
+  for (let n = 1; n <= 4; n++) {
+    rows.push(v3({
+      dataPoint: `soiltens${n}`, kind: 'motion', measurement: 'soil-tension',
+      wrapper: SOIL_TENSION_WRAPPER, name: `Soil Tension ${n}`,
+      sourceUnit: 'cb', displayUnit: 'cb', batteryField: null,
+    }));
+  }
+  rows.push(v3({
+    dataPoint: 'etos', kind: 'motion', measurement: 'evapotranspiration',
+    wrapper: EVAPOTRANSPIRATION_WRAPPER, name: 'Evapotranspiration Short',
+    sourceUnit: 'in_per_day', displayUnit: 'in_per_day', batteryField: null,
+  }));
+  rows.push(v3({
+    dataPoint: 'etrs', kind: 'motion', measurement: 'evapotranspiration',
+    wrapper: EVAPOTRANSPIRATION_WRAPPER, name: 'Evapotranspiration Tall',
+    sourceUnit: 'in_per_day', displayUnit: 'in_per_day', batteryField: null,
+  }));
+  for (let n = 1; n <= 4; n++) {
+    rows.push(v3({
+      dataPoint: `leak${n}`, kind: 'leak', measurement: 'boolean',
+      wrapper: LEAK_WRAPPER, name: `Leak Detector ${n}`,
+      // Boolean rows carry no units at resolution; 'count' is the
+      // vocabulary's inert boolean placeholder (never consulted).
+      sourceUnit: 'count', displayUnit: 'count', batteryField: `batleak${n}`,
+    }));
+  }
+  const aqi = (dataPoint: string, name: string, batteryField: string | null): DefaultSensorRow => v3({
+    dataPoint, kind: 'motion', measurement: 'aqi',
+    wrapper: AQI_WRAPPER, name,
+    sourceUnit: 'index', displayUnit: 'index', batteryField,
+  });
+  rows.push(aqi('aqi_pm25_aqin', 'AQIN PM2.5 AQI', 'batt_co2'));
+  rows.push(aqi('aqi_pm25_24h_aqin', 'AQIN PM2.5 AQI 24h', 'batt_co2'));
+  rows.push(aqi('aqi_pm10_aqin', 'AQIN PM10 AQI', 'batt_co2'));
+  rows.push(aqi('aqi_pm10_24h_aqin', 'AQIN PM10 AQI 24h', 'batt_co2'));
+  rows.push(aqi('aqi_pm25_in', 'Indoor PM2.5 AQI', null));
+  rows.push(aqi('aqi_pm25_in_24h', 'Indoor PM2.5 AQI 24h', null));
+  return rows;
+}
+
+export const CATALOG_V3_ROWS: ReadonlyArray<DefaultSensorRow> = makeCatalogV3Rows();
+
+/** Every catalog-versioned definition, all versions (§18.3/§19.5). */
+export const VERSIONED_CATALOG_ROWS: ReadonlyArray<DefaultSensorRow> = [
+  ...CATALOG_V2_ROWS,
+  ...CATALOG_V3_ROWS,
+];
+
 let _v2ByDataPoint: Map<string, DefaultSensorRow> | undefined;
 
 /**
@@ -838,7 +928,7 @@ let _v2ByDataPoint: Map<string, DefaultSensorRow> | undefined;
  */
 export function catalogRowFor(dataPoint: string, catalogAdopted: number): DefaultSensorRow | undefined {
   if (!_v2ByDataPoint) {
-    _v2ByDataPoint = new Map(CATALOG_V2_ROWS.map(r => [r.dataPoint, r]));
+    _v2ByDataPoint = new Map(VERSIONED_CATALOG_ROWS.map(r => [r.dataPoint, r]));
   }
   const row = _v2ByDataPoint.get(dataPoint);
   return row !== undefined && (row.sinceCatalogVersion ?? 1) <= catalogAdopted ? row : undefined;

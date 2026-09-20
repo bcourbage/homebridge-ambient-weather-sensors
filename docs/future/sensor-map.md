@@ -1921,7 +1921,174 @@ Tests: for every non-motion kind, submit an override with each of these fields; 
   inheritance, second-save byte-stability, and the exact mph/fps
   lifecycle through the real pipeline.
 
+- **2026-09-20 (P3)**: §19 added — the P3 design (catalog 3: explicit
+  state decoders, new output kinds, agronomic and AQI measurements,
+  per-field battery polarity). Implemented in the same package; the PR
+  review is the checkpoint. Implementation decisions within the
+  design:
+  - The catalog-3 canonical battery probes (soilhum{n}/battsm{n},
+    leak{n}/batleak{n}) own their sub-service through the CLAIMS
+    adjudication (`canonicalForBattery: false`), not the frozen v1
+    reservation set: reserving statically would block a custom
+    claimant on an un-adopted config, which claims those fields
+    legally today, and an authored claimant deliberately outranks a
+    default one.
+  - The unrecognized-row assignment PICKER withholds the boolean
+    pairs: it resolves choices by measurement alone (PR E round 1 F4)
+    and the boolean measurement now has five kinds. The P4 editor adds
+    the kind selector; boolean assignments meanwhile work through the
+    JSON editor and the catalog-3 default rows, validated like any
+    custom row.
+  - The v1.7.0 graph golden is scoped to its frozen 25 ids; the
+    catalog-3 wrappers pin against their own golden
+    (catalog3-v1.json), generated once from the dist that first
+    shipped them, with the same byte-hash provenance tripwire.
+  - Boolean default rows carry the vocabulary's inert 'count'
+    placeholder units (never consulted; resolution builds unit-less
+    boolean rows).
+  - The new-kind downgrade type strings are deliberately OUTSIDE
+    1.7's vocabulary: 1.7 cannot render these kinds, so their cached
+    accessories strand on downgrade by design (never
+    v1-representable; the mirror excludes them).
+
 - Status: **APPROVED FOR IMPLEMENTATION**. Beta cycle can begin.
+
+## 19. P3 — explicit decoders and new output kinds (catalog 3)
+
+Issue #63 package P3, building strictly on §18's machinery:
+`CURRENT_CATALOG_VERSION` becomes 3, every new definition carries
+`sinceCatalogVersion: 3` with `catalogExposure: 'new'` and
+`defaultEnabled: false` (the F5 floor makes anything else inert on
+older baselines anyway), and nothing here changes behavior for a
+configuration that has not adopted catalog 3.
+
+### 19.1 Explicit state decoding — offline never reads active
+
+The generic boolean coercion collapsed every nonzero number to 1,
+which would report an OFFLINE leak detector (declared encoding
+`0 normal, 1 leak, 2 offline`) as a leak. The correction is a single
+decode contract for every boolean STATE kind:
+
+- `coerceValue` for `measurement: 'boolean'` passes the finite raw
+  number through unchanged (no row is boolean today, so this is
+  behavior-neutral until a boolean row exists).
+- The state wrappers decode explicitly: raw `0` = clear, raw `1` =
+  active, anything else (`>= 2`, negative, non-integer) = FAULT — the
+  wrapper sets `StatusFault: GENERAL_FAULT`, forces the alert
+  characteristic CLEAR, and logs the out-of-contract value. A value
+  outside the declared vocabulary must never read as an alarm.
+- A clean reading (0/1) clears the fault.
+
+One parameterized `BooleanStateAccessory` implements this for leak
+(LeakSensor/LeakDetected), contact (ContactSensor/ContactSensorState,
+raw 1 = open/CONTACT_NOT_DETECTED), occupancy
+(OccupancySensor/OccupancyDetected), smoke (SmokeSensor/SmokeDetected,
+a NEW SensorKind closing the §18 capability gap), and direct boolean
+motion (MotionSensor/MotionDetected — the `motion|boolean` pair,
+distinct from the threshold shell). Genericity per §16: dataPoint,
+name, and battery all come from the row.
+
+### 19.2 Stamp-gated wrapper availability
+
+`WRAPPER_FOR_KIND_AND_MEASUREMENT` entries gain a
+`sinceCatalogVersion`; resolution consults `wrapperFor(kind,
+measurement, catalogAdopted)`. A custom row authored today with
+`kind: leak` fails `no-wrapper` and registers nothing — and it MUST
+keep doing so on upgrade until the config explicitly adopts catalog 3,
+because a dormant authored row silently registering is new exposure.
+Adoption's preview names any such row as `added` (structural, digest
+required), so the exposure is explicit and confirmed. New pairs:
+`leak|boolean`, `contact|boolean`, `occupancy|boolean`,
+`smoke|boolean`, `motion|boolean`, and `co|co`.
+
+### 19.3 CO semantics
+
+No AWN field reports CO; the kind exists for explicit custom
+assignments. The wrapper always writes `CarbonMonoxideLevel` (ppm,
+canonical). `CarbonMonoxideDetected` is a fixed HAP alert-state
+semantic (like CO2's 1000 ppm): the boundary is 400 ppm — the floor of
+UL 2034's shortest alarm window, the concentration at which every
+UL 2034 window alarms. It is deliberately NOT `row.threshold` (that
+stays motion-only per §3.7); the boundary is documented, not
+configurable.
+
+### 19.4 New measurements and units
+
+Five measurements join the vocabulary, each rendered by ONE
+row-parameterized `GenericValueAccessory` on the extended shell
+(canonical value + display-unit formatting + optional motion trigger):
+
+- `soil-moisture` — percent (declared). NOT air humidity; distinct
+  measurement, distinct wrapper identity.
+- `leaf-wetness` — percent (declared).
+- `soil-tension` — `cb` (declared, centibar; new unit, no invented
+  conversions).
+- `evapotranspiration` — `in_per_day` (declared) with `mm_per_day`
+  display conversion (x25.4, the same standard factor as rain).
+- `aqi` — `index` (dimensionless). The honest minimal representation
+  per the catalog: an extended numeric index. A HomeKit AirQuality
+  CATEGORIZATION is deliberately not shipped — mapping AWN's index to
+  EPA buckets assumes which AQI standard the firmware computes, and
+  that is unverified.
+
+### 19.5 Catalog-3 definitions
+
+All `sinceCatalogVersion: 3`, `catalogExposure: 'new'`,
+`defaultEnabled: false`:
+
+- `soilhum1..10` — soil-moisture, battery `battsm{n}` (declared
+  "Soil Moisture Battery"), canonical owner per channel.
+- `leafwetness1..8` — leaf-wetness, battery null (none declared).
+- `soiltens1..4` — soil-tension, battery null (none declared).
+- `etos` / `etrs` — evapotranspiration, battery null (derived values;
+  no declared relationship — battout is NOT assumed).
+- `leak1..4` — kind leak, boolean, battery `batleak{n}` (declared),
+  canonical owner per channel, vendor-inverted polarity (§19.6).
+- The six AQI index fields — `aqi` measurement; the four `_aqin`
+  fields ride `batt_co2` (non-canonical, the AQIN device family), the
+  two `_in` fields null (matching `pm25_in`).
+
+`gdd` STAYS a catalog gap: its declared unit ("Int, days") is
+dimensionally inconsistent with a degree-day accumulation and no
+device evidence resolves it — no conversion may be invented. Relays
+stay `state-unsupported` (no control contract). `batt_25` stays
+deliberately unbound (unchanged policy).
+
+### 19.6 Per-field battery polarity, adoption-gated
+
+The catalog records three separated facts (P1 round 2/4): the vendor
+declares `batt_lightning` and `batleak{n}` as `1=Low, 0=OK` — inverted
+relative to every other field's standard convention — the deployed
+decoder reads 0 as low uniformly, and the live-device observation
+(payload 0, healthy device, plugin shows low) supports the vendor.
+
+The decoder gains a vendor-polarity table for exactly those inverted
+fields, and the correction is ADOPTION-GATED: `readBatteryLow`
+resolves vendor polarity only when `catalogAdopted >= 3`. Un-adopted
+configs, legacy mode, and safe mode keep today's uniform decode —
+including the documented spurious lightning low-battery behavior and
+its README workaround — because silently flipping a battery signal on
+upgrade is a behavior change §18 exists to prevent. `batleak{n}` is
+consumed only by catalog-3 leak rows, so it decodes vendor-correct
+wherever it is reachable at all. The Meteobridge variants stay
+RECORDED, not implemented: the plugin cannot detect the reporting
+path, so no polarity switching is invented for the standard fields.
+
+### 19.7 Required tests
+
+The tri-state decode through the real wrapper for every state kind
+(raw 2 sets the fault and never the alarm; 0/1 decode and clear the
+fault); polarity gating (batt_lightning low/OK at adopted 1, 2, and 3;
+safe mode stays legacy); catalog-3 visibility and disabled-arrival
+arithmetic including adoption from both baseline 1 and 2; the dormant
+authored-kind row (no-wrapper below adopted 3, named as an added
+consequence by the adoption preview at 3); wrapper-pair gating set
+equality per version; the coverage suite's per-key worlds at
+catalog 3; HAP graph pinning for the NEW wrappers in their own golden
+(the v1.7.0 golden stays frozen at its 25); KIND_SUPPORT and editor
+unit-vocabulary updates; and §18.4's preservation invariants re-run
+against catalog 3 (an explicit assignment on a catalog-3 dataPoint
+behaves exactly like the Demeter fixture did for catalog 2).
 
 ## 18. Catalog completion: three decisions and assignment preservation
 

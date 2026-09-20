@@ -179,13 +179,29 @@ export function batteryFieldForSensor(sensorKey: string): string | undefined {
 }
 
 /**
+ * Battery fields the VENDOR declares with INVERTED polarity
+ * (sensor-map.md §19.6): the published dictionary states
+ * "1=Low 0=OK" for the lightning detector and the leak detectors,
+ * opposite to every other field's "1=OK 0=Low". The live-device
+ * observation (payload 0 on a healthy detector, shown low by the
+ * uniform decoder) supports the declaration.
+ */
+export const VENDOR_INVERTED_BATTERY_FIELDS: ReadonlySet<string> = new Set([
+  'batt_lightning', 'batleak1', 'batleak2', 'batleak3', 'batleak4',
+]);
+
+/**
  * Helper: read a battery field's raw value from a lastData object
  * and return the HomeKit-aligned "low" boolean.
  *
- * AWN convention: 0 = low / 1 = good. HomeKit convention: true = low
- * / false = normal. This function inverts AWN's polarity so callers
- * downstream can pass the boolean straight into the
- * `StatusLowBattery` characteristic without further thought.
+ * Standard AWN convention: 0 = low / 1 = good; HomeKit's is true =
+ * low. For the vendor-declared INVERTED fields the correct decode is
+ * the opposite — and applying it is ADOPTION-GATED (§19.6): only a
+ * configuration whose `catalogAdopted` covers catalog 3 gets the
+ * vendor-correct polarity. Un-adopted configs, legacy mode, and safe
+ * mode keep the historical uniform decode (including the documented
+ * spurious lightning low-battery and its README workaround), because
+ * silently flipping a battery signal on upgrade is a behavior change.
  *
  * Returns undefined when the battery field is missing or non-numeric
  * — the wrapper should not add a Battery sub-service in that case.
@@ -193,6 +209,7 @@ export function batteryFieldForSensor(sensorKey: string): string | undefined {
 export function readBatteryLow(
   lastData: Record<string, unknown>,
   batteryField: string | undefined,
+  catalogAdopted = 1,
 ): boolean | undefined {
   if (!batteryField) {
     return undefined;
@@ -200,6 +217,9 @@ export function readBatteryLow(
   const raw = lastData[batteryField];
   if (typeof raw !== 'number') {
     return undefined;
+  }
+  if (catalogAdopted >= 3 && VENDOR_INVERTED_BATTERY_FIELDS.has(batteryField)) {
+    return raw === 1;
   }
   return raw === 0;
 }

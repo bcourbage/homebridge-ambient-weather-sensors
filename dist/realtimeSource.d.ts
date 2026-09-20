@@ -50,6 +50,12 @@ export interface RealtimeOptions {
      * absent, so a bare construction keeps legacy behavior.
      */
     resolveBatteryField?: (stationMac: string, dataPoint: string) => string | null;
+    /**
+     * The config's adopted catalog version (§19.6), gating the
+     * vendor-polarity battery decode. Absent = 1, the legacy uniform
+     * decode — a bare construction keeps historical behavior.
+     */
+    catalogAdopted?: number;
 }
 export declare class RealtimeSource {
     private readonly opts;
