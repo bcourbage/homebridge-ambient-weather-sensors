@@ -65,6 +65,7 @@ export function convertedConfigFor(config: LegacyConfig, stations: RawStation[])
     canonical,
     effectiveMap,
     'legacy',
+    { catalogBaseline: 1, catalogAdopted: 1 },
   );
   return nextConfig as Record<string, unknown>;
 }

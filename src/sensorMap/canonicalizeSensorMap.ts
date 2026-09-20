@@ -60,6 +60,9 @@ export interface CanonicalizeInput {
   stations: StationInventory;
   discovery: DiscoveryStore;
   uiState: UiStateStore;
+  /** Adoption stamps of the config being canonicalized (§18.3). */
+  catalogBaseline?: number;
+  catalogAdopted?: number;
 }
 
 /** §17.4 rule 4 — the fixed field order for byte-stable output. */
@@ -85,6 +88,8 @@ export function canonicalizeSensorMap(input: CanonicalizeInput): SensorMapOverri
     uiState: input.uiState,
     stations: input.stations,
     configMode: 'v2',
+    catalogBaseline: input.catalogBaseline,
+    catalogAdopted: input.catalogAdopted,
   };
   const byKey = (m: { rows: EffectiveSensorRow[] }): Map<string, ConfiguredRow> => {
     const out = new Map<string, ConfiguredRow>();

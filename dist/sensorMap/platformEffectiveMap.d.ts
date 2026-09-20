@@ -39,6 +39,9 @@ export interface EffectiveMapInputs {
     stations: StationInventory;
     discovery: DiscoveryStore;
     uiState: UiStateStore;
+    /** Adoption stamps from mode detection (§18.3); absent = v1 baseline. */
+    catalogBaseline?: number;
+    catalogAdopted?: number;
 }
 /**
  * Detect a malformed v2 `sensorMap` (review finding 6). In v2 mode an

@@ -62,6 +62,8 @@ export function canonicalizeSensorMap(input) {
         uiState: input.uiState,
         stations: input.stations,
         configMode: 'v2',
+        catalogBaseline: input.catalogBaseline,
+        catalogAdopted: input.catalogAdopted,
     };
     const byKey = (m) => {
         const out = new Map();

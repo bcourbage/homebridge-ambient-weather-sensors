@@ -276,6 +276,7 @@ describe('mixed-station rollback keeps the other station whole on real 1.7.3 (re
     const { nextConfig } = composeV2ConfigSave(
       { platform: 'AmbientWeatherSensors', apiKey: 'k', applicationKey: 'k', _sensorMapV2: true, ...legacy },
       canonical, effectiveMap, 'legacy',
+      { catalogBaseline: 1, catalogAdopted: 1 },
     );
     // The mirror scopes the exclusion to station A (review F1): a bare
     // 'barn_temp' would suppress B's valid 1.7 accessory too.
@@ -332,6 +333,7 @@ describe('custom-row downgrade loss boundary on real 1.7.3', () => {
     const { nextConfig } = composeV2ConfigSave(
       { platform: 'AmbientWeatherSensors', apiKey: 'k', applicationKey: 'k', _sensorMapV2: true, ...legacy },
       canonical, effectiveMap, 'legacy',
+      { catalogBaseline: 1, catalogAdopted: 1 },
     );
     const rolledBack = documentedRollback(nextConfig as Record<string, unknown>);
 

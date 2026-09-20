@@ -46,6 +46,9 @@ export interface EffectiveMapInputs {
   stations: StationInventory;
   discovery: DiscoveryStore;
   uiState: UiStateStore;
+  /** Adoption stamps from mode detection (§18.3); absent = v1 baseline. */
+  catalogBaseline?: number;
+  catalogAdopted?: number;
 }
 
 /**
@@ -115,5 +118,7 @@ export function buildPlatformEffectiveMap(inputs: EffectiveMapInputs): Effective
     uiState: inputs.uiState,
     stations: inputs.stations,
     configMode: inputs.configMode,
+    catalogBaseline: inputs.catalogBaseline,
+    catalogAdopted: inputs.catalogAdopted,
   });
 }

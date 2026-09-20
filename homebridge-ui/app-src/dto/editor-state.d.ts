@@ -255,6 +255,17 @@ export interface EditorStateDto {
    * which is exactly why absence-of-warnings was not a safe check).
    */
   mirrorState: 'recognized' | 'absent' | 'stale' | 'invalid';
+  /**
+   * Catalog adoption state (sensor-map.md §18.3). `baseline` and
+   * `adopted` are the block's stamps ((1, 1) for legacy mode and every
+   * unstamped config); `current` is the catalog version this plugin
+   * ships. `adopted < current` means newer definitions exist that this
+   * configuration has not adopted; adoption is an explicit save
+   * carrying `adoptCatalogVersion: current`. Absent when the block is
+   * uninterpretable (safe mode, or the v2-flag/read-only gates that
+   * return before stamps resolve).
+   */
+  catalog?: { baseline: number; adopted: number; current: number };
   /** Server-resolved effective rows (preview view). */
   rows: EditorRowDto[];
   /** Row-validation failures (rejected fragments stay in `authored`). */

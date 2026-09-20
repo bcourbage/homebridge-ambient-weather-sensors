@@ -98,6 +98,7 @@
  */
 import type { LegacyConfig } from './compat.js';
 import type { ConfigMode } from './configMode.js';
+import type { CatalogStamps } from './catalogVersion.js';
 import type { EffectiveSensorMap, EffectiveSensorRow } from './types.js';
 import { type Clock, type Logger } from './persistence/atomicWrite.js';
 /** Metadata key stamped into config.json next to the mirrored fields. */
@@ -214,7 +215,7 @@ export declare function recognizeMirror(config: Record<string, unknown>): Mirror
  * (UI saves are refused, §5), so composing a save from an
  * uninterpretable config is a caller bug, never a valid operation.
  */
-export declare function composeV2ConfigSave(currentConfig: Record<string, unknown>, sensorMap: unknown[], effectiveMap: EffectiveSensorMap, detectedMode: ConfigMode): {
+export declare function composeV2ConfigSave(currentConfig: Record<string, unknown>, sensorMap: unknown[], effectiveMap: EffectiveSensorMap, detectedMode: ConfigMode, stamps: CatalogStamps): {
     snapshot: Record<string, unknown> | undefined;
     nextConfig: Record<string, unknown>;
 };

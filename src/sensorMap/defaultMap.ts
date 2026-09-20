@@ -655,6 +655,7 @@ function makeCatalogV2Rows(): DefaultSensorRow[] {
     canonicalForBattery: false,
     sinceCatalogVersion: 2,
     catalogExposure: 'new',
+    defaultEnabled: false,
   });
   rows.push(newRow({
     dataPoint: 'windgustdir', kind: 'motion', measurement: 'direction',
@@ -876,5 +877,6 @@ export function defaultRowForConfigOverride(
  * definitions the install was born with) defaults to enabled.
  */
 export function defaultEnabledFor(row: DefaultSensorRow, catalogBaseline: number): boolean {
-  return !(row.catalogExposure === 'new' && (row.sinceCatalogVersion ?? 1) > catalogBaseline);
+  return row.defaultEnabled
+    ?? !(row.catalogExposure === 'new' && (row.sinceCatalogVersion ?? 1) > catalogBaseline);
 }

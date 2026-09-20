@@ -105,6 +105,7 @@ import type { LegacyConfig } from './compat.js';
 // Type-only: erased at runtime, so no import cycle with configMode.ts
 // (which imports recognizeMirror from this module).
 import type { ConfigMode } from './configMode.js';
+import type { CatalogStamps } from './catalogVersion.js';
 import { defaultRowFor } from './defaultMap.js';
 import type {
   EffectiveSensorMap,
@@ -576,6 +577,7 @@ export function composeV2ConfigSave(
   sensorMap: unknown[],
   effectiveMap: EffectiveSensorMap,
   detectedMode: ConfigMode,
+  stamps: CatalogStamps,
 ): { snapshot: Record<string, unknown> | undefined; nextConfig: Record<string, unknown> } {
   if (detectedMode === 'safe-mode') {
     throw new Error('composeV2ConfigSave: cannot compose a v2 save from a safe-mode configuration (UI saves are refused in safe mode).');
@@ -600,6 +602,13 @@ export function composeV2ConfigSave(
   Object.assign(next, mirror);
   next.configVersion = 2;
   next.sensorMap = sensorMap;
+  // Catalog stamps (§18.3): the caller passes the block's own valid
+  // pair (preserved verbatim — a fresh settings-only install's birth
+  // stamps are never rewound), the (1, 1) initialization for a fully
+  // unstamped legacy config, or the explicitly adopted pair. This is
+  // the ONLY writer of these fields.
+  next.catalogBaseline = stamps.catalogBaseline;
+  next.catalogAdopted = stamps.catalogAdopted;
   // Hash the assembled config (mirrored fields + sensorMap) so BOTH
   // sides are bound — a hand edit to either reads as STALE.
   next[LEGACY_MIRROR_KEY] = {

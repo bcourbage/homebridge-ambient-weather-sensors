@@ -618,6 +618,7 @@ function makeCatalogV2Rows() {
         canonicalForBattery: false,
         sinceCatalogVersion: 2,
         catalogExposure: 'new',
+        defaultEnabled: false,
     });
     rows.push(newRow({
         dataPoint: 'windgustdir', kind: 'motion', measurement: 'direction',
@@ -815,6 +816,7 @@ export function defaultRowForConfigOverride(dataPoint, catalogAdopted, ...overri
  * definitions the install was born with) defaults to enabled.
  */
 export function defaultEnabledFor(row, catalogBaseline) {
-    return !(row.catalogExposure === 'new' && (row.sinceCatalogVersion ?? 1) > catalogBaseline);
+    return row.defaultEnabled
+        ?? !(row.catalogExposure === 'new' && (row.sinceCatalogVersion ?? 1) > catalogBaseline);
 }
 //# sourceMappingURL=defaultMap.js.map

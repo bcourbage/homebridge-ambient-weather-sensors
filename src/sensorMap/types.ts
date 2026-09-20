@@ -243,6 +243,14 @@ export interface DefaultSensorRow {
    */
   sinceCatalogVersion?: number;
   /**
+   * Explicit default for the row's enabled state, overriding the
+   * §18.3 baseline arithmetic in BOTH directions. The P2 new-exposure
+   * rows ship `false`: they stay non-exposing even on fresh installs
+   * (and conversion equivalence holds trivially); enabling is always
+   * a per-row user decision.
+   */
+  defaultEnabled?: boolean;
+  /**
    * How a later (sinceCatalogVersion >= 2) definition relates to the
    * behavior configs already have (§18.3):
    *   - 'anchored': the legacy fallback already recognizes the key

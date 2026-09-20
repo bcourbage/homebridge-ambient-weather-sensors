@@ -160,6 +160,10 @@ export class AmbientWeatherSensorsPlatform {
         //                     sensors while never destroying user-critical
         //                     HomeKit state under an uninterpretable config.
         this.configMode = 'legacy';
+        // Adoption stamps from mode detection (§18.3). (1, 1) covers legacy
+        // mode and every unstamped v2 config; safe mode never reads them.
+        this.catalogBaseline = 1;
+        this.catalogAdopted = 1;
         this.sleep = (delay) => new Promise((resolve) => setTimeout(resolve, delay));
         this.log.debug('Finished initializing platform:', this.config.platform);
         // Resolve the v2 construction gate once (default ON; explicit
@@ -176,6 +180,8 @@ export class AmbientWeatherSensorsPlatform {
             // full contract.
             const detected = detectConfigMode(this.config);
             this.configMode = detected.mode;
+            this.catalogBaseline = detected.catalogBaseline ?? 1;
+            this.catalogAdopted = detected.catalogAdopted ?? 1;
             for (const w of detected.warnings) {
                 this.log.warn(w);
             }
@@ -967,6 +973,8 @@ export class AmbientWeatherSensorsPlatform {
                 stations,
                 discovery,
                 uiState,
+                catalogBaseline: this.catalogBaseline,
+                catalogAdopted: this.catalogAdopted,
             });
             this.logEffectiveMapDiagnostics(effectiveMap);
             // Index raw stations by uppercased MAC for value/battery reads and

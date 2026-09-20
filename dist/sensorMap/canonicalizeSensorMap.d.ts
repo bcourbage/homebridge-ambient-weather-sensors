@@ -49,6 +49,9 @@ export interface CanonicalizeInput {
     stations: StationInventory;
     discovery: DiscoveryStore;
     uiState: UiStateStore;
+    /** Adoption stamps of the config being canonicalized (§18.3). */
+    catalogBaseline?: number;
+    catalogAdopted?: number;
 }
 export declare function canonicalizeSensorMap(input: CanonicalizeInput): SensorMapOverride[];
 //# sourceMappingURL=canonicalizeSensorMap.d.ts.map

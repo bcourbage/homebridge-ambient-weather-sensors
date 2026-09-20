@@ -472,7 +472,7 @@ describe('/editor-state — mirrorState (review #45 round 4)', () => {
       uiState: { schemaVersion: 1, dismissedNoticeIds: [], forgottenFields: [] } as never,
       stations: [{ macAddress: MAC, name: 'Home' }], configMode: 'v2',
     });
-    const { nextConfig } = composeV2ConfigSave(legacyBase, [], map, 'legacy');
+    const { nextConfig } = composeV2ConfigSave(legacyBase, [], map, 'legacy', { catalogBaseline: 1, catalogAdopted: 1 });
     const rig = makeRig([{ platform: 'AmbientWeatherSensors', ...nextConfig }]);
     discoveryStore(rig, [{ mac: MAC, dataPoint: 'tempf' }]);
     const dto = await handleGetEditorState(rig.deps, {});

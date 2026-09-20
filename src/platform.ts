@@ -314,6 +314,10 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
   //                     sensors while never destroying user-critical
   //                     HomeKit state under an uninterpretable config.
   private configMode: ConfigMode = 'legacy';
+  // Adoption stamps from mode detection (§18.3). (1, 1) covers legacy
+  // mode and every unstamped v2 config; safe mode never reads them.
+  private catalogBaseline = 1;
+  private catalogAdopted = 1;
 
   constructor(
     public readonly log: Logger,
@@ -339,6 +343,8 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
       // full contract.
       const detected = detectConfigMode(this.config as never);
       this.configMode = detected.mode;
+      this.catalogBaseline = detected.catalogBaseline ?? 1;
+      this.catalogAdopted = detected.catalogAdopted ?? 1;
       for (const w of detected.warnings) {
         this.log.warn(w);
       }
@@ -1188,6 +1194,8 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
         stations,
         discovery,
         uiState,
+        catalogBaseline: this.catalogBaseline,
+        catalogAdopted: this.catalogAdopted,
       });
       this.logEffectiveMapDiagnostics(effectiveMap);
 

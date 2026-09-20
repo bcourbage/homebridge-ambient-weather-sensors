@@ -59,7 +59,7 @@ function v2Map(
  * R4-3 — config-mode detection is the single legacy authority).
  */
 function compose(config: Record<string, unknown>, sensorMap: unknown[], map: EffectiveSensorMap) {
-  return composeV2ConfigSave(config, sensorMap, map, detectConfigMode(config as never).mode);
+  return composeV2ConfigSave(config, sensorMap, map, detectConfigMode(config as never).mode, { catalogBaseline: 1, catalogAdopted: 1 });
 }
 
 describe('projectLegacyMirror (finding 5 — reverse projection)', () => {
