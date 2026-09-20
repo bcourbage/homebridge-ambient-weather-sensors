@@ -11,33 +11,26 @@ entries short and user-facing.
 
 ## [2.0.0] — 2026-09-19
 
-The sensor-map release: seventeen betas, general availability. This
-release contains no code changes over 2.0.0-beta.17 — it is the same
-build promoted after a monitored bake on live installations. The
-beta entries below carry the detail; the 2.0 line over v1.7.3 in
-brief:
+The sensor-map release. Coming from v1.7.3, this is what changes:
 
-- **Every sensor is one row in a map.** The plugin's settings page
-  lists every field each station can expose: rename it, convert its
-  display unit (per row or per category), set motion thresholds and
-  trigger direction, or switch it off. Unknown station fields can be
-  assigned as custom sensors, and sensors a station has never
-  reported are labeled and can be hidden or disabled in bulk.
-- **Saving is previewed and guarded.** Preview shows every
-  consequence — each accessory that would register, deregister, or
-  re-register, with per-row Skip — and Save applies exactly what was
-  previewed, verified server-side against the on-disk configuration.
-  API keys are handled as secrets and never leave the server.
-- **Upgrading changes nothing by itself.** A legacy 1.x configuration
-  runs through a compatibility translation proven accessory-identical
-  to v1.7 by a full HAP-graph equivalence gate; the configuration
-  file is untouched until the first save, which preserves the
-  original 1.x settings in a snapshot first. The settings page's
-  Rollback status gives the exact, verified steps back to v1.7.3.
-- **Downgrade safety.** v1.7.1+ freezes safely on a v2 configuration
-  instead of misreading it, and both rollback paths (current
-  settings, or the pre-conversion snapshot) are documented and
-  tested against the real published 1.7.3.
+### Added
+
+- **A sensor-map editor on the plugin settings page.** Every field each station can expose is one row, grouped by station: rename it, choose its display unit, set motion thresholds and trigger direction, or switch it off. Rows show their Apple Home accessory kind, battery source, and whether settings come from the defaults, all stations, or one station; Use defaults returns a row to the defaults plus your page-level unit choices.
+- **Previewed, guarded saving.** Preview lists every consequence of a save — each accessory that would register, deregister, or re-register, with a per-row Skip — and Save applies exactly what was previewed, verified server-side against the on-disk configuration. Nothing is written on any refusal.
+- **Display units for whole categories.** A Units panel sets Barometer, Wind Speed, Rainfall, and Distance units the way AmbientWeather.net does, for every station including future ones; single rows can still differ. New units for AWN parity: pressure in mmHg, wind in ft/sec, and foot-candles as a custom light source unit.
+- **Custom sensors from unrecognized fields.** A station field the plugin doesn't recognize can be assigned a measurement and source unit and becomes a real accessory, editable like any other row.
+- **See what your station actually reports.** Sensors the station has never reported are labeled "no data" (they create no HomeKit accessories even while enabled), with a per-station action to disable them all and a filter to hide them.
+- **Rollback status.** The settings page states whether the manual rollback to v1.7.3 is currently safe and gives the exact steps; a structural-change record lists recent accessory re-registrations.
+
+### Changed
+
+- **The v2 pipeline is on by default — and upgrading changes nothing by itself.** A legacy 1.x configuration runs through a compatibility translation proven accessory-identical to v1.7 by a full HAP-graph equivalence gate. Your configuration file is untouched until the first save on the settings page, which preserves the original 1.x settings in `legacy-config-snapshot.json` first; rolling back and reconverting are both supported, with every intermediate baseline journaled. Opting out: `_sensorMapV2: false` in the config block or `SENSOR_MAP_V2=0` in the environment.
+- **One settings page, one Save.** Platform name, data source, API keys, station filter, and tile-name update interval moved into the plugin's page alongside the sensor map; the standard Homebridge settings form and its Save button are retired for this plugin (the button is disabled by design). API keys are handled as secrets: they display as dots, never leave the server, and sensor-map saves never touch them.
+- **Applying a saved configuration needs only a child-bridge restart.** Homebridge's Restart Child Bridge action re-reads the saved configuration (verified on Homebridge 2.4.0); a full restart also works.
+- **Node.js 22.13 or newer is required** (the Homebridge 2 dependency tree cannot run on 22.0–22.12).
+- **Independently maintained.** The plugin is described as an independent continuation of Deac Karns' original work, sponsorable at [github.com/sponsors/bcourbage](https://github.com/sponsors/bcourbage).
+
+For beta testers: 2.0.0 is the same build as 2.0.0-beta.17, promoted after its bake period; there is nothing new to install beyond the version number.
 
 ## [2.0.0-beta.17] — 2026-09-15
 
