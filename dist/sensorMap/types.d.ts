@@ -149,6 +149,38 @@ export interface DefaultSensorRow {
     triggerEnabled?: boolean;
     triggerDirection?: 'above' | 'below';
     embedName?: boolean;
+    /**
+     * The catalog version this definition arrived in (§18.3). Absent
+     * means 1 — the frozen v1 baseline, whose rows alone participate in
+     * the known-dataPoint validation clamp (§18.4 AP-2) and in the
+     * unconditional defaults-times-stations expansion. Later rows are
+     * visible only to configs whose `catalogAdopted` covers them.
+     */
+    sinceCatalogVersion?: number;
+    /**
+     * Explicit default for the row's enabled state where the §18.3
+     * baseline rule permits one: an install born knowing the definition
+     * uses this value, while a definition adopted onto an OLDER
+     * baseline is always disabled — the floor cannot be overridden
+     * (PR #66 review F5). The P2 new-exposure rows ship `false`: they
+     * stay non-exposing even on fresh installs (and conversion
+     * equivalence holds trivially); enabling is always a per-row user
+     * decision.
+     */
+    defaultEnabled?: boolean;
+    /**
+     * How a later (sinceCatalogVersion >= 2) definition relates to the
+     * behavior configs already have (§18.3):
+     *   - 'anchored': the legacy fallback already recognizes the key
+     *     with this IDENTICAL identity. Resolution-only: never expands
+     *     pairs, never changes enabled semantics — adopting it changes
+     *     no effective row.
+     *   - 'new': previously unrecognized. Expands pairs when visible,
+     *     and defaults to DISABLED when it arrived after the config's
+     *     `catalogBaseline`.
+     * Absent on v1 baseline rows.
+     */
+    catalogExposure?: 'anchored' | 'new';
 }
 /**
  * Stable identifier for the wrapper class implementing a specific

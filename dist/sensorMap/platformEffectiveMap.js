@@ -85,6 +85,8 @@ export function buildPlatformEffectiveMap(inputs) {
         uiState: inputs.uiState,
         stations: inputs.stations,
         configMode: inputs.configMode,
+        catalogBaseline: inputs.catalogBaseline,
+        catalogAdopted: inputs.catalogAdopted,
     });
 }
 //# sourceMappingURL=platformEffectiveMap.js.map

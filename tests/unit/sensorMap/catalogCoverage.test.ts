@@ -17,12 +17,14 @@ import { describe, expect, it } from 'vitest';
 
 import {
   AWN_CATALOG,
+  AWN_CATALOG_VERSION,
   catalogBatteryFieldFor,
   expandCatalogKeys,
   type CatalogEntry,
 } from '../../../src/sensorMap/catalog/awnCatalog';
 import { NATIVE_SENSOR_SERVICES } from '../../../src/sensorMap/catalog/capabilities';
-import { DEFAULT_SENSOR_MAP, defaultRowFor, staticDefaultRowFor } from '../../../src/sensorMap/defaultMap';
+import { CATALOG_V2_ROWS, catalogRowFor, DEFAULT_SENSOR_MAP, defaultRowFor, staticDefaultRowFor } from '../../../src/sensorMap/defaultMap';
+import { CURRENT_CATALOG_VERSION } from '../../../src/sensorMap/catalogVersion';
 import { WRAPPER_FOR_KIND_AND_MEASUREMENT } from '../../../src/sensorMap/wrappers';
 import { instantiateWrapper } from '../../../src/sensorMap/wrapperFactories';
 import { batteryFieldForSensor } from '../../../src/batteryFields';
@@ -37,7 +39,7 @@ import type { AmbientWeatherSensorsPlatform } from '../../../src/platform';
 const NATIVE_KINDS = new Set(['temperature', 'humidity', 'light', 'co2', 'air-quality-pm25', 'air-quality-pm10']);
 
 /** Dispositions whose entries must state (and match) a resolved identity. */
-const RESOLVED_DISPOSITIONS = new Set(['implemented-native', 'implemented-extended', 'compat-fallback']);
+const RESOLVED_DISPOSITIONS = new Set(['implemented-native', 'implemented-extended', 'compat-fallback', 'anchored']);
 
 function indexOf(entry: CatalogEntry, key: string): number | undefined {
   if (!entry.indexed) {
@@ -58,6 +60,27 @@ function expectIdentity(row: { kind: string; measurement: string; sourceUnit?: s
 }
 
 describe('AWN catalog inventory shape', () => {
+  it('the catalog version equals the runtime CURRENT_CATALOG_VERSION', () => {
+    expect(AWN_CATALOG_VERSION).toBe(CURRENT_CATALOG_VERSION);
+  });
+
+  it('every CATALOG_V2_ROWS definition is claimed by a sinceCatalogVersion-2 entry, and vice versa', () => {
+    const entryKeys = new Set(AWN_CATALOG
+      .filter(e => (e.sinceCatalogVersion ?? 1) === 2)
+      .flatMap(expandCatalogKeys));
+    const runtimeKeys = new Set(CATALOG_V2_ROWS.map(r => r.dataPoint));
+    // Runtime rows are exact keys; entries may cover wider audited
+    // families (feelsLike1..10 spans the v1-static 1..4 too).
+    for (const dp of runtimeKeys) {
+      expect(entryKeys.has(dp), `runtime v2 row '${dp}' missing a catalog-2 entry`).toBe(true);
+    }
+    for (const dp of entryKeys) {
+      if (staticDefaultRowFor(dp) === undefined) {
+        expect(runtimeKeys.has(dp), `catalog-2 key '${dp}' has no runtime definition`).toBe(true);
+      }
+    }
+  });
+
   it('covers the audited published inventory (78 entries, 169 keys) plus the supported extra', () => {
     expect(AWN_CATALOG).toHaveLength(79); // 78 published + co2_in
     const keys = AWN_CATALOG.flatMap(expandCatalogKeys);
@@ -92,7 +115,7 @@ describe('AWN catalog inventory shape', () => {
     for (const row of DEFAULT_SENSOR_MAP) {
       const entry = claimed.get(row.dataPoint);
       expect(entry, `static row '${row.dataPoint}' missing from the catalog`).toBeDefined();
-      expect(['implemented-native', 'implemented-extended', 'compat-fallback'],
+      expect(['implemented-native', 'implemented-extended', 'compat-fallback', 'anchored'],
         `static row '${row.dataPoint}' dispositioned '${entry!.disposition}'`).toContain(entry!.disposition);
     }
   });
@@ -104,25 +127,52 @@ describe('dispositions match the production recognizer, key by key', () => {
       for (const key of expandCatalogKeys(entry)) {
         const staticRow = staticDefaultRowFor(key);
         const anyRow = defaultRowFor(key);
+        const since = entry.sinceCatalogVersion ?? 1;
         switch (entry.disposition) {
           case 'implemented-native':
           case 'implemented-extended': {
+            if (since >= 2) {
+              // A catalog-2 definition: stamp-gated, never in the v1
+              // static table, never fallback-recognized (it was a gap),
+              // resolved by catalogRowFor exactly at/after its version.
+              expect(staticRow, `${key} must NOT be in the frozen v1 table`).toBeUndefined();
+              expect(anyRow, `${key} must not be fallback-recognized`).toBeUndefined();
+              expect(catalogRowFor(key, since - 1), `${key} must be invisible below ${since}`).toBeUndefined();
+              const adopted = catalogRowFor(key, since);
+              expect(adopted, `${key} should resolve at catalog ${since}`).toBeDefined();
+              const isNative = NATIVE_KINDS.has(adopted!.kind);
+              expect(isNative, `${key} kind '${adopted!.kind}' vs disposition`).toBe(entry.disposition === 'implemented-native');
+              expectIdentity(adopted!, entry, key);
+              break;
+            }
             expect(staticRow, `${key} should be in the static table`).toBeDefined();
             const isNative = NATIVE_KINDS.has(staticRow!.kind);
             expect(isNative, `${key} kind '${staticRow!.kind}' vs disposition`).toBe(entry.disposition === 'implemented-native');
             expectIdentity(staticRow!, entry, key);
             break;
           }
-          case 'compat-fallback': {
+          case 'compat-fallback':
+          case 'anchored': {
             const idx = indexOf(entry, key);
             const staticThrough = entry.indexed?.staticThrough ?? 0;
             if (idx !== undefined && idx <= staticThrough) {
               expect(staticRow, `${key} should be static (within staticThrough)`).toBeDefined();
               expectIdentity(staticRow!, entry, key);
             } else {
-              expect(staticRow, `${key} must NOT be static yet`).toBeUndefined();
+              expect(staticRow, `${key} must NOT be in the frozen v1 table`).toBeUndefined();
               expect(anyRow, `${key} should resolve via the fallback`).toBeDefined();
               expectIdentity(anyRow!, entry, key);
+              if (entry.disposition === 'anchored') {
+                // The anchored invariant (§18.3): the catalog-2
+                // definition is IDENTICAL to the fallback's synthesis.
+                const anchored = catalogRowFor(key, since);
+                expect(anchored, `${key} should be anchored at catalog ${since}`).toBeDefined();
+                expect(catalogRowFor(key, since - 1), `${key} anchored row invisible below ${since}`).toBeUndefined();
+                expectIdentity(anchored!, entry, key);
+                expect(anchored!.name, `${key} anchored name`).toBe(anyRow!.name);
+                expect(anchored!.batteryField, `${key} anchored battery`).toBe(anyRow!.batteryField);
+                expect(anchored!.wrapper.id, `${key} anchored wrapper`).toBe(anyRow!.wrapper.id);
+              }
             }
             break;
           }
@@ -137,10 +187,16 @@ describe('dispositions match the production recognizer, key by key', () => {
             break;
           }
         }
-        // Battery relationship, where the catalog asserts one.
+        // Battery relationship, where the catalog asserts one. v1
+        // entries bind through the LEGACY battery rules; catalog-2
+        // definitions bind through their own runtime rows.
         if (entry.batteryField !== undefined && entry.class === 'measurement') {
           const expected = catalogBatteryFieldFor(entry, key);
-          expect(batteryFieldForSensor(key) ?? null, `${key} battery relationship`).toBe(expected);
+          if (since >= 2 && staticDefaultRowFor(key) === undefined && defaultRowFor(key) === undefined) {
+            expect(catalogRowFor(key, since)?.batteryField ?? null, `${key} battery relationship`).toBe(expected);
+          } else {
+            expect(batteryFieldForSensor(key) ?? null, `${key} battery relationship`).toBe(expected);
+          }
         }
       }
     });

@@ -1804,6 +1804,123 @@ Tests: for every non-motion kind, submit an override with each of these fields; 
   reference. Round 3 cleared the P1 findings and recommended merging
   the P1 package.
 
+- **2026-09-20 (P2)**: §18 implemented (issue #63 P2). Implementation
+  decisions within the reviewed design:
+  - The stamps are the public fields `catalogBaseline` /
+    `catalogAdopted`, written ONLY by `composeV2ConfigSave`; parsing
+    and the fail-closed rules live in `catalogVersion.ts`
+    (`CURRENT_CATALOG_VERSION = 2`), and an invalid pair routes
+    through the EXISTING safe-mode machinery with a stamp-specific
+    banner — one protective posture, not a second one.
+  - Catalog-2 definitions live in `CATALOG_V2_ROWS`, never in
+    `DEFAULT_SENSOR_MAP`: the frozen v1 table keeps sole ownership of
+    the validation clamp, the battery reservation set, the legacy
+    mirror's universe, and the unconditional pairs expansion.
+    Anchored rows (feelsLike5-10, dewPoint5-10, soiltemp1f-10f,
+    pm25_in_24h) are built from the same primitives as the fallback
+    synthesizer and are resolution-only (no pair expansion — the
+    fallback never expanded pairs either), so adoption changes no
+    effective row; tests pin identity equality per key. New-exposure
+    rows (windgustdir, windspdmph_avg2m, winddir_avg2m,
+    windspdmph_avg10m, 24hourrainin, totalrainin) use the generic
+    per-pair wrappers from the custom table, so removing an
+    equivalent explicit assignment after adoption keeps the
+    structural signature.
+  - The new rows carry an explicit `defaultEnabled: false` overriding
+    the baseline arithmetic in BOTH directions: they stay
+    non-exposing even on fresh installs, which keeps the §11
+    conversion-equivalence gate satisfiable for every baseline
+    (including a fresh settings-only install born at (2, 2) whose
+    first sensor-map save converts). Exposing them is always a
+    per-row previewed decision.
+  - AP-2's third branch reuses the existing branches: an adopted
+    definition with no authored identity validates through the KNOWN
+    branch (its clamp warns are unreachable — nothing to strip), and
+    ANY authored identity routes to the CUSTOM branch verbatim, so a
+    partial identity gets the existing `custom-missing-*` diagnostics
+    and, via the P0 authorship gate generalized in
+    `defaultRowForConfigOverride`, blocks the definition's default in
+    its scope.
+  - Adoption is the pipeline payload field `adoptCatalogVersion`
+    (exactly `CURRENT_CATALOG_VERSION`, v2 configs only, never on
+    conversion or the fresh path), flowing through
+    preview → compose → commit like any save; the editor DTO reports
+    `catalog { baseline, adopted, current }` and stamp-aware
+    `identityScope`. The UI affordance is P4 scope.
+  - Tests: `catalogAdoption.test.ts` (resolution matrix),
+    `adoptionPipeline.test.ts` (pipeline matrix), the stamp-broken
+    platform lifecycle in `safeMode.test.ts` (tempf keeps its binding,
+    the adopted/custom accessory stays frozen, zero registrations),
+    and the two-world coverage suite (`catalogCoverage.test.ts`,
+    AWN_CATALOG_VERSION = 2 pinned to the runtime constant).
+
+  PR #66 review round 1 completed the implementation on six findings:
+  (F1) the canonical serializer's known/custom classification now uses
+  the SAME stamp-aware lookup as the resolver — an inherited adopted
+  row canonicalizes without materializing identity (a global rename
+  had silently become an explicit assignment; the station-scoped
+  variant diverged). (F2) validation and resolution use ONE identity
+  per key: a station fragment is validated with the global layer's raw
+  identity authorship passed into the lookup (a non-identity station
+  exception under a global explicit assignment is rejected exactly as
+  before adoption), and resolveRow gained a displayUnit legality guard
+  for the reverse direction (a valid global fragment's unit meeting a
+  station-authored identity falls back to the measurement default with
+  an `illegal-cross-scope-displayunit` note — an illegal unit never
+  reaches a wrapper). (F3) stamps are validated FIRST in EVERY mode:
+  legacy-shaped blocks (a fresh settings-only install is born stamped
+  before conversion) carry their real stamps in the detection result,
+  and an invalid pair fails closed to safe mode even without
+  configVersion — the legacy pipeline reconciles, and the probe had
+  unregistered a cached accessory. (F4) the consequences digest binds
+  the stamp transition (current AND resolved pairs), and adoption
+  always requires its own preview's digest even with zero structural
+  consequences — an ordinary preview's digest can no longer authorize
+  an adoption. (F5) the baseline arithmetic FLOORS entry defaults: a
+  later new-exposure definition is disabled on an older baseline no
+  matter what `defaultEnabled` declares. (F6) the AP-4 discriminator
+  test renders for real: the saved/reloaded mps assignment routes a
+  raw payload through the actual wind wrapper ("22 mph") against the
+  definition row's unconverted rendering ("10 mph").
+
+  Round 2 closed the last preservation hole: the canonical
+  serializer's `onlyIdentityRestated` shortcut (and the station
+  entry's global-layer reference) treated ANY row resolving in the
+  global-only effective map as an authored global template — but after
+  adoption that map contains inherited catalog defaults, so an
+  explicit station assignment whose values all equal the definition's
+  defaults was silently dropped from the canonical output
+  (`sensorMap: []`), reclassifying it as catalog-owned: the exact
+  provenance-loss case §18.2 outcome 1 forbids, invisible to the
+  effective-value divergence gate. The fix keys every global-template
+  inference on the AUTHORED global layer (`layers.global` presence
+  plus `hasAuthoredIdentity`), creates identity baselines for
+  station-authored customs whose identity the global layer does not
+  author, and leaves genuinely inherited rows canonicalizing without
+  gaining identity. Pinned end to end: adopt, commit, persisted
+  reload (editor scope stays custom-station), second-save
+  byte-stability, the global non-identity-template variant, the
+  authored-template absorption control, and the inherited-row
+  control.
+
+  Round 3 corrected the round-2 baseline itself: comparing a station
+  custom against the IDENTITY-ONLY resolution dropped valid station
+  exceptions to authored global non-identity settings (a station mph
+  choice under a global fps Units template equals the bare identity's
+  default, so it was minimized away; the divergence gate then refused
+  the valid save). The comparison baseline for station customs is now
+  the CANONICAL global entries applied over the station's minimal
+  identity — built from the minimized global OUTPUT, not the input
+  fragments, because reload sees only the output: a global value the
+  global pass drops (it equaled the built-in default) is not
+  inheritable by a custom row whose own default differs, and the
+  station entry then carries the field itself. Pinned table-driven
+  across displayUnit, name, batteryField (null), embedName,
+  triggerEnabled, triggerDirection, and threshold, plus the
+  global-disable inheritance control, sibling/never-seen-station
+  inheritance, second-save byte-stability, and the exact mph/fps
+  lifecycle through the real pipeline.
+
 - Status: **APPROVED FOR IMPLEMENTATION**. Beta cycle can begin.
 
 ## 18. Catalog completion: three decisions and assignment preservation

@@ -31,8 +31,15 @@
  * uncertainty is deliberate: resolving it is P2/P3 work, not this
  * file's job.
  */
-/** Bump when entries/families are added, removed, or re-dispositioned. */
-export declare const AWN_CATALOG_VERSION = 1;
+/**
+ * Bump when entries/families are added, removed, or re-dispositioned.
+ * Version 2 (issue #63 P2): the compat-fallback families gained
+ * ANCHORED static definitions and the wind/rain gaps became
+ * implemented-extended definitions, both stamp-gated behind
+ * `sinceCatalogVersion: 2` (§18.3). Must equal the runtime's
+ * CURRENT_CATALOG_VERSION — the coverage suite pins the equality.
+ */
+export declare const AWN_CATALOG_VERSION = 2;
 /** The published baseline this inventory was audited against. */
 export declare const AWN_WIKI_BASELINE = "e1c13509fdcad8ad7b212e77b8193dac71e241b5";
 export type CatalogClass = 
@@ -50,12 +57,20 @@ export type CatalogDisposition =
 /** In the static table with the extended (threshold-shell) representation. */
  | 'implemented-extended'
 /**
- * Recognized today ONLY through the legacy substring fallback (or
- * partly static, partly fallback for an indexed family). Needs an
- * anchored catalog definition (P2) — landing AFTER the
- * assignment-preservation mechanism, per the design checkpoint.
+ * Recognized only through the legacy substring fallback, with no
+ * anchored definition yet. No catalog-2 entries remain in this
+ * state; a newly discovered fallback-only key would use it until
+ * anchored.
  */
  | 'compat-fallback'
+/**
+ * ANCHORED (§18.3): a static definition since catalog 2 whose
+ * identity is IDENTICAL to what the fallback synthesizes, so
+ * adoption changes no effective row. Both paths stay live until the
+ * compatibility-retirement design; indexes within `staticThrough`
+ * are v1-static.
+ */
+ | 'anchored'
 /** Documented measurement the plugin does not recognize today. */
  | 'catalog-gap'
 /** Battery/status auxiliary: bound to rows, never a standalone accessory. */
@@ -83,6 +98,8 @@ export interface CatalogEntry {
     };
     class: CatalogClass;
     disposition: CatalogDisposition;
+    /** The catalog version the definition arrived in; absent = 1. */
+    sinceCatalogVersion?: number;
     /** What the field means, per the published docs / device evidence. */
     meaning: string;
     /**

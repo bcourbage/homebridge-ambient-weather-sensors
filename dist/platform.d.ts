@@ -55,6 +55,8 @@ export declare class AmbientWeatherSensorsPlatform implements DynamicPlatformPlu
     private readonly loggedPreservedAccessories;
     private v2Tracker;
     private configMode;
+    private catalogBaseline;
+    private catalogAdopted;
     constructor(log: Logger, config: PlatformConfig, api: API);
     configureAccessory(accessory: PlatformAccessory): void;
     determineSensorType(sensor: string): string;

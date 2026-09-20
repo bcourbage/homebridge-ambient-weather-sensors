@@ -508,7 +508,7 @@ function describeMetaShape(v) {
  * (UI saves are refused, §5), so composing a save from an
  * uninterpretable config is a caller bug, never a valid operation.
  */
-export function composeV2ConfigSave(currentConfig, sensorMap, effectiveMap, detectedMode) {
+export function composeV2ConfigSave(currentConfig, sensorMap, effectiveMap, detectedMode, stamps) {
     if (detectedMode === 'safe-mode') {
         throw new Error('composeV2ConfigSave: cannot compose a v2 save from a safe-mode configuration (UI saves are refused in safe mode).');
     }
@@ -530,6 +530,13 @@ export function composeV2ConfigSave(currentConfig, sensorMap, effectiveMap, dete
     Object.assign(next, mirror);
     next.configVersion = 2;
     next.sensorMap = sensorMap;
+    // Catalog stamps (§18.3): the caller passes the block's own valid
+    // pair (preserved verbatim — a fresh settings-only install's birth
+    // stamps are never rewound), the (1, 1) initialization for a fully
+    // unstamped legacy config, or the explicitly adopted pair. This is
+    // the ONLY writer of these fields.
+    next.catalogBaseline = stamps.catalogBaseline;
+    next.catalogAdopted = stamps.catalogAdopted;
     // Hash the assembled config (mirrored fields + sensorMap) so BOTH
     // sides are bound — a hand edit to either reads as STALE.
     next[LEGACY_MIRROR_KEY] = {

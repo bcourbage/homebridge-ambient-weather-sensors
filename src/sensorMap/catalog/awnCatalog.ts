@@ -32,8 +32,15 @@
  * file's job.
  */
 
-/** Bump when entries/families are added, removed, or re-dispositioned. */
-export const AWN_CATALOG_VERSION = 1;
+/**
+ * Bump when entries/families are added, removed, or re-dispositioned.
+ * Version 2 (issue #63 P2): the compat-fallback families gained
+ * ANCHORED static definitions and the wind/rain gaps became
+ * implemented-extended definitions, both stamp-gated behind
+ * `sinceCatalogVersion: 2` (§18.3). Must equal the runtime's
+ * CURRENT_CATALOG_VERSION — the coverage suite pins the equality.
+ */
+export const AWN_CATALOG_VERSION = 2;
 
 /** The published baseline this inventory was audited against. */
 export const AWN_WIKI_BASELINE = 'e1c13509fdcad8ad7b212e77b8193dac71e241b5';
@@ -54,12 +61,20 @@ export type CatalogDisposition =
   /** In the static table with the extended (threshold-shell) representation. */
   | 'implemented-extended'
   /**
-   * Recognized today ONLY through the legacy substring fallback (or
-   * partly static, partly fallback for an indexed family). Needs an
-   * anchored catalog definition (P2) — landing AFTER the
-   * assignment-preservation mechanism, per the design checkpoint.
+   * Recognized only through the legacy substring fallback, with no
+   * anchored definition yet. No catalog-2 entries remain in this
+   * state; a newly discovered fallback-only key would use it until
+   * anchored.
    */
   | 'compat-fallback'
+  /**
+   * ANCHORED (§18.3): a static definition since catalog 2 whose
+   * identity is IDENTICAL to what the fallback synthesizes, so
+   * adoption changes no effective row. Both paths stay live until the
+   * compatibility-retirement design; indexes within `staticThrough`
+   * are v1-static.
+   */
+  | 'anchored'
   /** Documented measurement the plugin does not recognize today. */
   | 'catalog-gap'
   /** Battery/status auxiliary: bound to rows, never a standalone accessory. */
@@ -82,6 +97,8 @@ export interface CatalogEntry {
   indexed?: { prefix: string; suffix?: string; from: number; to: number; staticThrough?: number };
   class: CatalogClass;
   disposition: CatalogDisposition;
+  /** The catalog version the definition arrived in; absent = 1. */
+  sinceCatalogVersion?: number;
   /** What the field means, per the published docs / device evidence. */
   meaning: string;
   /**
@@ -129,19 +146,24 @@ export const AWN_CATALOG: ReadonlyArray<CatalogEntry> = [
   { family: 'maxdailygust', keys: ['maxdailygust'], class: 'measurement', disposition: 'implemented-extended',
     meaning: 'Maximum wind speed since local midnight', kind: 'motion', measurement: 'wind-speed',
     sourceUnit: 'mph', batteryField: 'battout', evidence: WIKI },
-  { family: 'windgustdir', keys: ['windgustdir'], class: 'measurement', disposition: 'catalog-gap',
-    meaning: 'Wind direction at maximum gust', sourceUnit: 'degrees', evidence: WIKI,
-    notes: 'Existing direction wrapper can render (P2).' },
-  { family: 'windspdmph_avg2m', keys: ['windspdmph_avg2m'], class: 'measurement', disposition: 'catalog-gap',
-    meaning: 'Average wind speed, 2-minute window', sourceUnit: 'mph', evidence: WIKI,
-    notes: 'Existing wind wrapper can render (P2).' },
-  { family: 'winddir_avg2m', keys: ['winddir_avg2m'], class: 'measurement', disposition: 'catalog-gap',
-    meaning: 'Average wind direction, 2-minute window', sourceUnit: 'degrees', evidence: WIKI,
-    notes: 'Existing direction wrapper can render (P2).' },
-  { family: 'windspdmph_avg10m', keys: ['windspdmph_avg10m'], class: 'measurement', disposition: 'catalog-gap',
-    meaning: 'Average wind speed, 10-minute window', sourceUnit: 'mph', evidence: WIKI,
-    notes: 'Existing wind wrapper can render (P2). PRESERVATION FIXTURE: a live installation carries an '
-      + 'explicit assignment ("Wind Speed Average"); the P2 definition must not replace it (sensor-map.md §18.4).' },
+  { family: 'windgustdir', keys: ['windgustdir'], class: 'measurement', disposition: 'implemented-extended',
+    sinceCatalogVersion: 2, meaning: 'Wind direction at maximum gust', kind: 'motion', measurement: 'direction',
+    sourceUnit: 'degrees', batteryField: 'battout', evidence: WIKI,
+    notes: 'Catalog-2 definition: visible on adoption, default-disabled everywhere (§18.3).' },
+  { family: 'windspdmph_avg2m', keys: ['windspdmph_avg2m'], class: 'measurement', disposition: 'implemented-extended',
+    sinceCatalogVersion: 2, meaning: 'Average wind speed, 2-minute window', kind: 'motion', measurement: 'wind-speed',
+    sourceUnit: 'mph', batteryField: 'battout', evidence: WIKI,
+    notes: 'Catalog-2 definition: visible on adoption, default-disabled everywhere (§18.3).' },
+  { family: 'winddir_avg2m', keys: ['winddir_avg2m'], class: 'measurement', disposition: 'implemented-extended',
+    sinceCatalogVersion: 2, meaning: 'Average wind direction, 2-minute window', kind: 'motion', measurement: 'direction',
+    sourceUnit: 'degrees', batteryField: 'battout', evidence: WIKI,
+    notes: 'Catalog-2 definition: visible on adoption, default-disabled everywhere (§18.3).' },
+  { family: 'windspdmph_avg10m', keys: ['windspdmph_avg10m'], class: 'measurement', disposition: 'implemented-extended',
+    sinceCatalogVersion: 2, meaning: 'Average wind speed, 10-minute window', kind: 'motion', measurement: 'wind-speed',
+    sourceUnit: 'mph', batteryField: 'battout', evidence: WIKI,
+    notes: 'Catalog-2 definition: visible on adoption, default-disabled everywhere (§18.3). PRESERVATION FIXTURE: '
+      + 'a live installation carries an explicit assignment ("Wind Speed Average"); the definition never replaces '
+      + 'it (sensor-map.md §18.4, pinned in catalogAdoption.test.ts).' },
   { family: 'winddir_avg10m', keys: ['winddir_avg10m'], class: 'measurement', disposition: 'implemented-extended',
     meaning: 'Average wind direction, 10-minute window', kind: 'motion', measurement: 'direction',
     sourceUnit: 'degrees', batteryField: 'battout', evidence: WIKI },
@@ -174,10 +196,10 @@ export const AWN_CATALOG: ReadonlyArray<CatalogEntry> = [
     meaning: 'Indoor feels-like temperature (derived)', kind: 'temperature', measurement: 'temperature',
     sourceUnit: 'fahrenheit', batteryField: 'battin', evidence: WIKI },
   { family: 'feelsLike1...feelsLike10', indexed: { prefix: 'feelsLike', from: 1, to: 10, staticThrough: 4 },
-    class: 'measurement', disposition: 'compat-fallback',
+    class: 'measurement', disposition: 'anchored', sinceCatalogVersion: 2,
     meaning: 'Channel feels-like temperature (derived)', kind: 'temperature', measurement: 'temperature',
     sourceUnit: 'fahrenheit', batteryField: 'batt{n}', evidence: WIKI,
-    notes: 'Indexes 1..4 are static; 5..10 resolve via the fallback. Anchored definition in P2.' },
+    notes: 'Indexes 1..4 are v1-static; 5..10 are anchored at catalog 2, identical to the fallback.' },
   { family: 'dewPoint', keys: ['dewPoint'], class: 'measurement', disposition: 'implemented-native',
     meaning: 'Outdoor dew point (derived)', kind: 'temperature', measurement: 'temperature',
     sourceUnit: 'fahrenheit', batteryField: 'battout', evidence: WIKI },
@@ -185,15 +207,15 @@ export const AWN_CATALOG: ReadonlyArray<CatalogEntry> = [
     meaning: 'Indoor dew point (derived)', kind: 'temperature', measurement: 'temperature',
     sourceUnit: 'fahrenheit', batteryField: 'battin', evidence: WIKI },
   { family: 'dewPoint1...dewPoint10', indexed: { prefix: 'dewPoint', from: 1, to: 10, staticThrough: 4 },
-    class: 'measurement', disposition: 'compat-fallback',
+    class: 'measurement', disposition: 'anchored', sinceCatalogVersion: 2,
     meaning: 'Channel dew point (derived)', kind: 'temperature', measurement: 'temperature',
     sourceUnit: 'fahrenheit', batteryField: 'batt{n}', evidence: WIKI,
-    notes: 'Indexes 1..4 are static; 5..10 resolve via the fallback. Anchored definition in P2.' },
+    notes: 'Indexes 1..4 are v1-static; 5..10 are anchored at catalog 2, identical to the fallback.' },
   { family: 'soiltemp1f...soiltemp10f', indexed: { prefix: 'soiltemp', suffix: 'f', from: 1, to: 10 },
-    class: 'measurement', disposition: 'compat-fallback',
+    class: 'measurement', disposition: 'anchored', sinceCatalogVersion: 2,
     meaning: 'Soil temperature probe', kind: 'temperature', measurement: 'temperature',
     sourceUnit: 'fahrenheit', batteryField: null, evidence: WIKI,
-    notes: 'Recognized only via the fallback today. Anchored definition in P2; battery family (battsm{n}?) needs device evidence.' },
+    notes: 'Anchored at catalog 2, identical to the fallback. Battery family (battsm{n}?) still needs device evidence.' },
 
   // ---- Soil / leaf / agronomic gaps --------------------------------
   { family: 'soilhum1...soilhum10', indexed: { prefix: 'soilhum', from: 1, to: 10 },
@@ -236,9 +258,10 @@ export const AWN_CATALOG: ReadonlyArray<CatalogEntry> = [
   { family: 'dailyrainin', keys: ['dailyrainin'], class: 'measurement', disposition: 'implemented-extended',
     meaning: 'Rain since local midnight', kind: 'motion', measurement: 'rain-accumulation',
     sourceUnit: 'in', batteryField: 'battout', evidence: WIKI },
-  { family: '24hourrainin', keys: ['24hourrainin'], class: 'measurement', disposition: 'catalog-gap',
-    meaning: 'Rain in the last 24 hours (rolling)', sourceUnit: 'in', evidence: WIKI,
-    notes: 'Existing accumulation wrapper can render (P2).' },
+  { family: '24hourrainin', keys: ['24hourrainin'], class: 'measurement', disposition: 'implemented-extended',
+    sinceCatalogVersion: 2, meaning: 'Rain in the last 24 hours (rolling)', kind: 'motion', measurement: 'rain-accumulation',
+    sourceUnit: 'in', batteryField: 'battout', evidence: WIKI,
+    notes: 'Catalog-2 definition: visible on adoption, default-disabled everywhere (§18.3).' },
   { family: 'weeklyrainin', keys: ['weeklyrainin'], class: 'measurement', disposition: 'implemented-extended',
     meaning: 'Rain this week', kind: 'motion', measurement: 'rain-accumulation',
     sourceUnit: 'in', batteryField: 'battout', evidence: WIKI },
@@ -251,9 +274,10 @@ export const AWN_CATALOG: ReadonlyArray<CatalogEntry> = [
   { family: 'eventrainin', keys: ['eventrainin'], class: 'measurement', disposition: 'implemented-extended',
     meaning: 'Rain in the current event', kind: 'motion', measurement: 'rain-accumulation',
     sourceUnit: 'in', batteryField: 'battout', evidence: WIKI },
-  { family: 'totalrainin', keys: ['totalrainin'], class: 'measurement', disposition: 'catalog-gap',
-    meaning: 'Rain since last factory reset (lifetime)', sourceUnit: 'in', evidence: WIKI,
-    notes: 'Existing accumulation wrapper can render (P2).' },
+  { family: 'totalrainin', keys: ['totalrainin'], class: 'measurement', disposition: 'implemented-extended',
+    sinceCatalogVersion: 2, meaning: 'Rain since last factory reset (lifetime)', kind: 'motion', measurement: 'rain-accumulation',
+    sourceUnit: 'in', batteryField: 'battout', evidence: WIKI,
+    notes: 'Catalog-2 definition: visible on adoption, default-disabled everywhere (§18.3).' },
   { family: 'lastRain', keys: ['lastRain'], class: 'measurement', disposition: 'implemented-extended',
     meaning: 'Time of last recorded rain', kind: 'motion', measurement: 'timestamp',
     encoding: 'ISO-8601 string; the plugin parses to epoch ms ("never" invalid-string parses to 0, v1.7 parity)',
@@ -292,10 +316,10 @@ export const AWN_CATALOG: ReadonlyArray<CatalogEntry> = [
   { family: 'pm25_in', keys: ['pm25_in'], class: 'measurement', disposition: 'implemented-native',
     meaning: 'Indoor PM2.5 mass density', kind: 'air-quality-pm25', measurement: 'pm25',
     sourceUnit: 'ugm3', batteryField: null, evidence: WIKI },
-  { family: 'pm25_in_24h', keys: ['pm25_in_24h'], class: 'measurement', disposition: 'compat-fallback',
+  { family: 'pm25_in_24h', keys: ['pm25_in_24h'], class: 'measurement', disposition: 'anchored', sinceCatalogVersion: 2,
     meaning: 'Indoor PM2.5, 24h average', kind: 'air-quality-pm25', measurement: 'pm25',
     sourceUnit: 'ugm3', batteryField: null, evidence: WIKI,
-    notes: 'Recognized only via the fallback today. Anchored definition in P2.' },
+    notes: 'Anchored at catalog 2, identical to the fallback.' },
   { family: 'pm25_in_aqin', keys: ['pm25_in_aqin'], class: 'measurement', disposition: 'implemented-native',
     meaning: 'AQIN indoor PM2.5 mass density', kind: 'air-quality-pm25', measurement: 'pm25',
     sourceUnit: 'ugm3', batteryField: 'batt_co2', evidence: WIKI },
