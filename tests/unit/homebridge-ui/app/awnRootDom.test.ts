@@ -303,8 +303,10 @@ describe('AwnRootComponent (TestBed, jsdom)', () => {
 
     // The tooltip claims stay capability-truthful (pinned in full by
     // kindSupport.test.ts).
-    expect(KIND_HELP).toContain('Currently supported kinds are temperature, humidity, light, motion, CO₂, PM2.5 and PM10');
-    expect(KIND_HELP).toContain('CO, leak, contact and occupancy are reserved for future support');
+    expect(KIND_HELP).toContain('Currently supported kinds are temperature, humidity, light, motion, CO₂, PM2.5, PM10, leak, contact, occupancy and smoke');
+    // CO is reserved (native mapping deferred past P3); newer kinds carry an adoption caveat.
+    expect(KIND_HELP).toContain('CO are reserved for future support');
+    expect(KIND_HELP).toContain('require adopting the current sensor catalog');
 
     // Hover (or keyboard focus) shows the APP's own tooltip - native
     // title tooltips are hijacked by the settings modal's own title

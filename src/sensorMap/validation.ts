@@ -41,12 +41,13 @@ export const STATION_MAC_REGEX = /^([0-9A-F]{2}:){5}[0-9A-F]{2}$/i;
 const KNOWN_KINDS: ReadonlySet<SensorKind> = new Set<SensorKind>([
   'temperature', 'humidity', 'light', 'co2', 'co',
   'air-quality-pm25', 'air-quality-pm10',
-  'motion', 'leak', 'contact', 'occupancy', 'unrecognized',
+  'motion', 'leak', 'contact', 'occupancy', 'smoke', 'unrecognized',
 ]);
 const KNOWN_MEASUREMENTS: ReadonlySet<Measurement> = new Set<Measurement>([
   'temperature', 'humidity', 'illuminance', 'co2', 'co',
   'pm25', 'pm10', 'wind-speed', 'rain-rate', 'rain-accumulation',
   'pressure', 'distance', 'uv-index', 'count', 'direction',
+  'soil-moisture', 'leaf-wetness', 'soil-tension', 'evapotranspiration', 'aqi',
   'timestamp', 'boolean',
 ]);
 // Derived from the single validation authority rather than hand-listed:

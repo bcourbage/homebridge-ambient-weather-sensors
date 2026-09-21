@@ -57,6 +57,15 @@ export declare class AmbientWeatherSensorsPlatform implements DynamicPlatformPlu
     private configMode;
     private catalogBaseline;
     private catalogAdopted;
+    /**
+     * The catalog version the BATTERY DECODER runs at (§19.6, PR #67
+     * review F6). The vendor-inverted polarity is a v2-runtime behavior:
+     * it applies only when the v2 sensor-map is actually driving. The
+     * flag-off (opt-out) path and safe mode keep the frozen legacy
+     * decode (version 1) even when the config retains a catalog-3 stamp
+     * (which survives the documented marker-deletion rollback).
+     */
+    private decoderAdopted;
     constructor(log: Logger, config: PlatformConfig, api: API);
     configureAccessory(accessory: PlatformAccessory): void;
     determineSensorType(sensor: string): string;
@@ -308,9 +317,19 @@ export declare class AmbientWeatherSensorsPlatform implements DynamicPlatformPlu
      * Reshape the realtime source's pre-digested `(uniqueId, value)`
      * updates back into raw per-station payloads so the v2 path routes them
      * through the SAME `distributeViaRouting` boundary the poll path uses.
-     * The realtime source emits every numeric field — including the batt*
-     * fields — as its own update, so the reconstructed `lastData` carries
-     * the battery datapoints the shared battery reader consumes.
+     * The realtime source now forwards every PRESENT field — including the
+     * batt* fields — as its own update, so the reconstructed `lastData`
+     * carries the battery datapoints the shared battery reader consumes.
+     *
+     * The reconstruction uses a NULL-PROTOTYPE record (PR #67 review
+     * R3-F1): a forwarded field literally named `__proto__` (a
+     * prototype-safe own key on the JSON-parsed source) would, on a plain
+     * `{}`, invoke the prototype setter and make an UNRELATED sensor's
+     * value appear as an inherited property — e.g. a crafted
+     * `{"leak1":0,"__proto__":{"batleak1":0}}` could synthesize a healthy
+     * battery reading. A null-prototype record makes every assignment an
+     * own data property with no inheritance, so a battery/state lookup
+     * sees only genuinely reported own fields.
      */
     private updatesToStationPayloads;
     /**

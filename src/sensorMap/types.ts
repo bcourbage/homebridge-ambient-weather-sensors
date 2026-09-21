@@ -19,8 +19,8 @@
  */
 
 /**
- * Twelve values corresponding to HAP-native sensor services the plugin
- * can render. `unrecognized` is a sentinel for auto-discovered
+ * Thirteen values corresponding to HAP-native sensor services the
+ * plugin can render. `unrecognized` is a sentinel for auto-discovered
  * datapoints the plugin doesn't have a default for; those rows do NOT
  * produce a HomeKit accessory until the user assigns a real kind.
  *
@@ -28,7 +28,7 @@
  *   temperature, humidity, light, co2, co, air-quality-pm25, air-quality-pm10
  *
  * State tiles (Apple Home renders a boolean state):
- *   motion, leak, contact, occupancy
+ *   motion, leak, contact, occupancy, smoke (§19, catalog 3)
  */
 export type SensorKind =
   | 'temperature'
@@ -42,6 +42,7 @@ export type SensorKind =
   | 'leak'
   | 'contact'
   | 'occupancy'
+  | 'smoke'
   | 'unrecognized';
 
 /**
@@ -67,6 +68,12 @@ export type Measurement =
   | 'uv-index'
   | 'count'
   | 'direction'
+  // Agronomic + air-quality-index measurements (§19, catalog 3).
+  | 'soil-moisture'
+  | 'leaf-wetness'
+  | 'soil-tension'
+  | 'evapotranspiration'
+  | 'aqi'
   | 'timestamp'
   | 'boolean';
 
@@ -113,6 +120,11 @@ export type SensorUnit =
   | 'index'
   | 'count'
   | 'degrees'
+  // Soil tension (centibar, declared by AWN; §19)
+  | 'cb'
+  // Evapotranspiration (§19)
+  | 'in_per_day'
+  | 'mm_per_day'
   // Timestamp
   | 'ms';
 
@@ -319,7 +331,19 @@ export type WrapperId =
   | 'lightning-day'
   | 'lightning-hour'
   | 'lightning-distance'
-  | 'lightning-last-strike';
+  | 'lightning-last-strike'
+  // Catalog-3 additions (§19): boolean state kinds, CO, and the
+  // agronomic/AQI extended measurements.
+  | 'leak'
+  | 'contact'
+  | 'occupancy'
+  | 'smoke'
+  | 'motion-boolean'
+  | 'soil-moisture'
+  | 'leaf-wetness'
+  | 'soil-tension'
+  | 'evapotranspiration'
+  | 'aqi';
 
 export interface WrapperDescriptor {
   /**

@@ -73,6 +73,9 @@ export declare function defaultRowFor(dataPoint: string): DefaultSensorRow | und
  * the exposure classes.
  */
 export declare const CATALOG_V2_ROWS: ReadonlyArray<DefaultSensorRow>;
+export declare const CATALOG_V3_ROWS: ReadonlyArray<DefaultSensorRow>;
+/** Every catalog-versioned definition, all versions (§18.3/§19.5). */
+export declare const VERSIONED_CATALOG_ROWS: ReadonlyArray<DefaultSensorRow>;
 /**
  * A later-catalog definition for `dataPoint`, when the config's
  * `catalogAdopted` covers it. Never consulted for authored identities

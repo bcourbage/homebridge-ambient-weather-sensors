@@ -18,8 +18,8 @@
  *   `kind` and by measurement shape (Numeric / Timestamp / Boolean).
  */
 /**
- * Twelve values corresponding to HAP-native sensor services the plugin
- * can render. `unrecognized` is a sentinel for auto-discovered
+ * Thirteen values corresponding to HAP-native sensor services the
+ * plugin can render. `unrecognized` is a sentinel for auto-discovered
  * datapoints the plugin doesn't have a default for; those rows do NOT
  * produce a HomeKit accessory until the user assigns a real kind.
  *
@@ -27,9 +27,9 @@
  *   temperature, humidity, light, co2, co, air-quality-pm25, air-quality-pm10
  *
  * State tiles (Apple Home renders a boolean state):
- *   motion, leak, contact, occupancy
+ *   motion, leak, contact, occupancy, smoke (§19, catalog 3)
  */
-export type SensorKind = 'temperature' | 'humidity' | 'light' | 'co2' | 'co' | 'air-quality-pm25' | 'air-quality-pm10' | 'motion' | 'leak' | 'contact' | 'occupancy' | 'unrecognized';
+export type SensorKind = 'temperature' | 'humidity' | 'light' | 'co2' | 'co' | 'air-quality-pm25' | 'air-quality-pm10' | 'motion' | 'leak' | 'contact' | 'occupancy' | 'smoke' | 'unrecognized';
 /**
  * Physical measurement dimension. Determines allowed units, threshold
  * interpretation, conversion, AND wrapper subtype selection when `kind`
@@ -37,13 +37,13 @@ export type SensorKind = 'temperature' | 'humidity' | 'light' | 'co2' | 'co' | '
  * `kind: motion` but span many measurements from wind-speed to pressure
  * to lightning count).
  */
-export type Measurement = 'temperature' | 'humidity' | 'illuminance' | 'co2' | 'co' | 'pm25' | 'pm10' | 'wind-speed' | 'rain-rate' | 'rain-accumulation' | 'pressure' | 'distance' | 'uv-index' | 'count' | 'direction' | 'timestamp' | 'boolean';
+export type Measurement = 'temperature' | 'humidity' | 'illuminance' | 'co2' | 'co' | 'pm25' | 'pm10' | 'wind-speed' | 'rain-rate' | 'rain-accumulation' | 'pressure' | 'distance' | 'uv-index' | 'count' | 'direction' | 'soil-moisture' | 'leaf-wetness' | 'soil-tension' | 'evapotranspiration' | 'aqi' | 'timestamp' | 'boolean';
 /**
  * All the concrete unit values referenced by any measurement's legal
  * set. Kept as a string union rather than an enum so JSON serialization
  * is transparent and no `enum.SOMETHING` lookup is needed.
  */
-export type SensorUnit = 'fahrenheit' | 'celsius' | 'percent' | 'wm2' | 'lux' | 'fc' | 'ppm' | 'ugm3' | 'mph' | 'fps' | 'kph' | 'mps' | 'kts' | 'in_per_hr' | 'mm_per_hr' | 'in' | 'mm' | 'inHg' | 'mmHg' | 'hPa' | 'mi' | 'km' | 'nm' | 'index' | 'count' | 'degrees' | 'ms';
+export type SensorUnit = 'fahrenheit' | 'celsius' | 'percent' | 'wm2' | 'lux' | 'fc' | 'ppm' | 'ugm3' | 'mph' | 'fps' | 'kph' | 'mps' | 'kts' | 'in_per_hr' | 'mm_per_hr' | 'in' | 'mm' | 'inHg' | 'mmHg' | 'hPa' | 'mi' | 'km' | 'nm' | 'index' | 'count' | 'degrees' | 'cb' | 'in_per_day' | 'mm_per_day' | 'ms';
 /**
  * User-authored override entry in `config.json`. Sparse — only fields
  * the user has explicitly set appear.
@@ -208,7 +208,7 @@ export interface DefaultSensorRow {
  * commit as the descriptor. Removing or renaming one is a breaking
  * change and must bump the plugin major.
  */
-export type WrapperId = 'temperature' | 'humidity' | 'solar-radiation' | 'co2' | 'air-quality-pm25' | 'air-quality-pm10' | 'uv' | 'wind-speed' | 'wind-gust' | 'wind-max-daily-gust' | 'wind-direction' | 'wind-direction-10m' | 'pressure-relative' | 'pressure-absolute' | 'rain-rate' | 'rain-event' | 'rain-daily' | 'rain-weekly' | 'rain-monthly' | 'rain-yearly' | 'last-rain' | 'lightning-day' | 'lightning-hour' | 'lightning-distance' | 'lightning-last-strike';
+export type WrapperId = 'temperature' | 'humidity' | 'solar-radiation' | 'co2' | 'air-quality-pm25' | 'air-quality-pm10' | 'uv' | 'wind-speed' | 'wind-gust' | 'wind-max-daily-gust' | 'wind-direction' | 'wind-direction-10m' | 'pressure-relative' | 'pressure-absolute' | 'rain-rate' | 'rain-event' | 'rain-daily' | 'rain-weekly' | 'rain-monthly' | 'rain-yearly' | 'last-rain' | 'lightning-day' | 'lightning-hour' | 'lightning-distance' | 'lightning-last-strike' | 'leak' | 'contact' | 'occupancy' | 'smoke' | 'motion-boolean' | 'soil-moisture' | 'leaf-wetness' | 'soil-tension' | 'evapotranspiration' | 'aqi';
 export interface WrapperDescriptor {
     /**
      * Stable identifier. Refactor-safe (a class rename does NOT change

@@ -44,6 +44,8 @@ import { WindSpeedAccessory, WindGustAccessory, WindMaxDailyGustAccessory, WindD
 import { PressureRelativeAccessory, PressureAbsoluteAccessory, } from '../extendedSensors/pressureAccessory.js';
 import { RainRateAccessory, RainEventAccessory, RainDailyAccessory, RainWeeklyAccessory, RainMonthlyAccessory, RainYearlyAccessory, LastRainAccessory, } from '../extendedSensors/rainAccessory.js';
 import { LightningDayAccessory, LightningHourAccessory, LightningDistanceAccessory, LightningLastStrikeAccessory, } from '../extendedSensors/lightningAccessory.js';
+import { LeakAccessory, ContactAccessory, OccupancyAccessory, SmokeAccessory, MotionBooleanAccessory, } from '../booleanStateAccessory.js';
+import { SoilMoistureAccessory, LeafWetnessAccessory, SoilTensionAccessory, EvapotranspirationAccessory, AqiAccessory, } from '../extendedSensors/genericValueAccessory.js';
 /**
  * The SINGLE source of truth for `WrapperId → (kind, measurement)`.
  * Both `RowForWrapperId` (compile-time factory-parameter narrowing)
@@ -87,6 +89,16 @@ export const WRAPPER_SPEC = {
     'lightning-hour': { kind: 'motion', measurement: 'count' },
     'lightning-distance': { kind: 'motion', measurement: 'distance' },
     'lightning-last-strike': { kind: 'motion', measurement: 'timestamp' },
+    'leak': { kind: 'leak', measurement: 'boolean' },
+    'contact': { kind: 'contact', measurement: 'boolean' },
+    'occupancy': { kind: 'occupancy', measurement: 'boolean' },
+    'smoke': { kind: 'smoke', measurement: 'boolean' },
+    'motion-boolean': { kind: 'motion', measurement: 'boolean' },
+    'soil-moisture': { kind: 'motion', measurement: 'soil-moisture' },
+    'leaf-wetness': { kind: 'motion', measurement: 'leaf-wetness' },
+    'soil-tension': { kind: 'motion', measurement: 'soil-tension' },
+    'evapotranspiration': { kind: 'motion', measurement: 'evapotranspiration' },
+    'aqi': { kind: 'motion', measurement: 'aqi' },
 };
 /**
  * The typed factory registry — a MAPPED type, so TypeScript enforces
@@ -131,6 +143,18 @@ export const FACTORIES = {
     'lightning-hour': (p, a, r) => new LightningHourAccessory(p, a, r),
     'lightning-distance': (p, a, r) => new LightningDistanceAccessory(p, a, r),
     'lightning-last-strike': (p, a, r) => new LightningLastStrikeAccessory(p, a, r),
+    // Catalog-3 wrappers (§19): the row is REQUIRED — these have no
+    // legacy (flag-off) path, so no row-less fallback exists.
+    'leak': (p, a, r) => new LeakAccessory(p, a, r),
+    'contact': (p, a, r) => new ContactAccessory(p, a, r),
+    'occupancy': (p, a, r) => new OccupancyAccessory(p, a, r),
+    'smoke': (p, a, r) => new SmokeAccessory(p, a, r),
+    'motion-boolean': (p, a, r) => new MotionBooleanAccessory(p, a, r),
+    'soil-moisture': (p, a, r) => new SoilMoistureAccessory(p, a, r),
+    'leaf-wetness': (p, a, r) => new LeafWetnessAccessory(p, a, r),
+    'soil-tension': (p, a, r) => new SoilTensionAccessory(p, a, r),
+    'evapotranspiration': (p, a, r) => new EvapotranspirationAccessory(p, a, r),
+    'aqi': (p, a, r) => new AqiAccessory(p, a, r),
 };
 /**
  * Runtime twin of `RowForWrapperId`, checked at the dispatch boundary

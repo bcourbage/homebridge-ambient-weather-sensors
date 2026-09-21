@@ -49,6 +49,38 @@ describe('cached-accessory inference stays on the STATIC catalog (#63 P0)', () =
   });
 });
 
+describe('a positively v2-written cache is inferable when v2 is driving (PR #67 review F1)', () => {
+  // A catalog-3 accessory the v2 platform wrote: novel dataPoint (not
+  // in the static table), novel legacy type (not in the legacy map),
+  // but a v2 kind/measurement/structuralSignature in context.
+  const v2Cache = {
+    context: { device: {
+      uniqueId: 'AA:BB:CC:DD:EE:01-leak1', type: 'Leak',
+      kind: 'leak', measurement: 'boolean', structuralSignature: 'leak|measurement:boolean|battery:1|wrapper:leak:v1',
+    } },
+    services: [],
+  } as never;
+
+  it('is INFERRED (reconcilable, hence removable on an explicit disable) when trustV2Cache is set', () => {
+    expect(inferForCachedAccessory(v2Cache, { trustV2Cache: true }))
+      .toMatchObject({ status: 'inferred', kind: 'leak', measurement: 'boolean' });
+  });
+
+  it('is PRESERVED in compat/legacy mode (trustV2Cache false): a rollback must freeze it, not churn it', () => {
+    expect(inferForCachedAccessory(v2Cache, { trustV2Cache: false }).status).toBe('preserve-cached');
+    // Default (no opts) is the conservative preserve path.
+    expect(inferForCachedAccessory(v2Cache).status).toBe('preserve-cached');
+  });
+
+  it('a v2 cache with NO structuralSignature is never trusted (a genuine v1.x cache stays conservative)', () => {
+    const noSig = {
+      context: { device: { uniqueId: 'AA:BB:CC:DD:EE:01-leak1', type: 'Leak', kind: 'leak', measurement: 'boolean' } },
+      services: [],
+    } as never;
+    expect(inferForCachedAccessory(noSig, { trustV2Cache: true }).status).toBe('preserve-cached');
+  });
+});
+
 describe('dataPointFromUniqueId', () => {
   it('extracts sensorKey after the first hyphen', () => {
     expect(dataPointFromUniqueId(`${MAC}-tempf`)).toBe('tempf');

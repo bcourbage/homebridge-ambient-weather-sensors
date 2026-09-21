@@ -36,10 +36,14 @@
  * Version 2 (issue #63 P2): the compat-fallback families gained
  * ANCHORED static definitions and the wind/rain gaps became
  * implemented-extended definitions, both stamp-gated behind
- * `sinceCatalogVersion: 2` (§18.3). Must equal the runtime's
+ * `sinceCatalogVersion: 2` (§18.3). Version 3 (P3, §19): the
+ * agronomic and AQI gaps became extended definitions, the leak
+ * detectors became native LeakSensor definitions with the explicit
+ * tri-state decode, and the vendor-inverted battery polarities decode
+ * correctly on adoption. Must equal the runtime's
  * CURRENT_CATALOG_VERSION — the coverage suite pins the equality.
  */
-export const AWN_CATALOG_VERSION = 2;
+export const AWN_CATALOG_VERSION = 3;
 /** The published baseline this inventory was audited against. */
 export const AWN_WIKI_BASELINE = 'e1c13509fdcad8ad7b212e77b8193dac71e241b5';
 const WIKI = `AWN Device Data Specs wiki @ ${AWN_WIKI_BASELINE}`;
@@ -127,37 +131,51 @@ export const AWN_CATALOG = [
         sourceUnit: 'fahrenheit', batteryField: null, evidence: WIKI,
         notes: 'Anchored at catalog 2, identical to the fallback. Battery family (battsm{n}?) still needs device evidence.' },
     // ---- Soil / leaf / agronomic gaps --------------------------------
-    { family: 'soilhum1...soilhum10', indexed: { prefix: 'soilhum', from: 1, to: 10 },
-        class: 'measurement', disposition: 'catalog-gap',
-        meaning: 'Soil moisture', sourceUnit: 'percent', evidence: WIKI,
-        notes: 'Soil-moisture semantics and extended output required — NOT air humidity merely because both use %. '
-            + 'The wiki row itself is mislabeled "Temperature 1...10" (source copy error); its declared unit % stands.' },
+    { family: 'soilhum1...soilhum4', indexed: { prefix: 'soilhum', from: 1, to: 4 },
+        class: 'measurement', disposition: 'implemented-extended', sinceCatalogVersion: 3,
+        meaning: 'Soil moisture (channels with a declared battery)', kind: 'motion', measurement: 'soil-moisture',
+        sourceUnit: 'percent', batteryField: 'battsm{n}', evidence: WIKI,
+        notes: 'Catalog-3 definition (§19.5): a DISTINCT soil-moisture measurement, never air humidity. Battery '
+            + 'battsm{n} for channels 1-4, the ONLY range the dictionary declares ("battsm1...battsm4"); ownership '
+            + 'via claims adjudication. The wiki row itself is mislabeled "Temperature 1...10" (source copy error); '
+            + 'its declared unit % stands.' },
+    { family: 'soilhum5...soilhum10', indexed: { prefix: 'soilhum', from: 5, to: 10 },
+        class: 'measurement', disposition: 'implemented-extended', sinceCatalogVersion: 3,
+        meaning: 'Soil moisture (channels beyond the declared battery range)', kind: 'motion', measurement: 'soil-moisture',
+        sourceUnit: 'percent', batteryField: null, evidence: WIKI,
+        notes: 'Catalog-3 definition (§19.5). Channels 5-10 are supported measurements but the dictionary declares '
+            + 'no battery key for them (battsm stops at 4), so NO battery association is fabricated (PR #67 review F8).' },
     { family: 'leafwetness1...leafwetness8', indexed: { prefix: 'leafwetness', from: 1, to: 8 },
-        class: 'measurement', disposition: 'catalog-gap',
-        meaning: 'Leaf wetness', sourceUnit: 'percent', evidence: WIKI,
-        notes: 'Declared "Int, %". Leaf-wetness semantics and extended output required.' },
+        class: 'measurement', disposition: 'implemented-extended', sinceCatalogVersion: 3,
+        meaning: 'Leaf wetness', kind: 'motion', measurement: 'leaf-wetness',
+        sourceUnit: 'percent', batteryField: null, evidence: WIKI,
+        notes: 'Declared "Int, %". Catalog-3 definition; no battery field is declared for the family.' },
     { family: 'soiltens1...soiltens4', indexed: { prefix: 'soiltens', from: 1, to: 4 },
-        class: 'measurement', disposition: 'catalog-gap',
-        meaning: 'Soil tension', sourceUnit: 'cb', evidence: WIKI,
-        notes: 'Declared "Float, cb" (centibar). Soil-tension presentation required — not weather-pressure wording.' },
+        class: 'measurement', disposition: 'implemented-extended', sinceCatalogVersion: 3,
+        meaning: 'Soil tension', kind: 'motion', measurement: 'soil-tension',
+        sourceUnit: 'cb', batteryField: null, evidence: WIKI,
+        notes: 'Declared "Float, cb" (centibar). Catalog-3 definition with soil-tension presentation, not weather-pressure wording; no conversions invented.' },
     { family: 'gdd', keys: ['gdd'], class: 'measurement', disposition: 'catalog-gap',
         meaning: 'Growing degree days (accumulation)', sourceUnit: 'days', evidence: WIKI,
         notes: 'Declared "Int, days" verbatim — dimensionally odd for a degree-day accumulation. '
-            + 'Declared-vs-meaning discrepancy recorded; resolve against device evidence before conversions exist (P3).' },
-    { family: 'etos', keys: ['etos'], class: 'measurement', disposition: 'catalog-gap',
-        meaning: 'Evapotranspiration, short reference crop', sourceUnit: 'in/day', evidence: WIKI,
-        notes: 'Declared "Float, in/day" — a daily rate must not be reinterpreted as hourly (P3).' },
-    { family: 'etrs', keys: ['etrs'], class: 'measurement', disposition: 'catalog-gap',
-        meaning: 'Evapotranspiration, tall reference crop', sourceUnit: 'in/day', evidence: WIKI,
-        notes: 'Declared "Float, in/day" — a daily rate must not be reinterpreted as hourly (P3).' },
+            + 'DELIBERATELY still a gap at catalog 3 (§19.5): no device evidence resolves the discrepancy, so no conversion is invented.' },
+    { family: 'etos', keys: ['etos'], class: 'measurement', disposition: 'implemented-extended', sinceCatalogVersion: 3,
+        meaning: 'Evapotranspiration, short reference crop', kind: 'motion', measurement: 'evapotranspiration',
+        sourceUnit: 'in_per_day', batteryField: null, evidence: WIKI,
+        notes: 'Declared "Float, in/day" (the in_per_day token). A daily rate, never reinterpreted as hourly; mm/day display converts by the standard 25.4.' },
+    { family: 'etrs', keys: ['etrs'], class: 'measurement', disposition: 'implemented-extended', sinceCatalogVersion: 3,
+        meaning: 'Evapotranspiration, tall reference crop', kind: 'motion', measurement: 'evapotranspiration',
+        sourceUnit: 'in_per_day', batteryField: null, evidence: WIKI,
+        notes: 'Declared "Float, in/day" (the in_per_day token). A daily rate, never reinterpreted as hourly; mm/day display converts by the standard 25.4.' },
     // ---- Leak sensors -------------------------------------------------
     { family: 'leak1...leak4', indexed: { prefix: 'leak', from: 1, to: 4 },
-        class: 'measurement', disposition: 'catalog-gap',
-        meaning: 'Leak detector state', encoding: '0 normal, 1 leak, 2 offline (per published docs)',
-        batteryField: null, evidence: WIKI,
-        notes: 'Needs the native LeakSensor wrapper AND an explicit normal/leak/offline decoder: generic boolean '
-            + 'coercion maps 2 to true, which would report an OFFLINE detector as a leak. The documented battery '
-            + 'family is batleak{n}; the production binding is deliberately absent until that design lands (P3).' },
+        class: 'measurement', disposition: 'implemented-native', sinceCatalogVersion: 3,
+        meaning: 'Leak detector state', kind: 'leak', measurement: 'boolean',
+        encoding: '0 normal, 1 leak, 2 offline (per published docs)',
+        batteryField: 'batleak{n}', evidence: WIKI,
+        notes: 'Catalog-3 definition with the explicit §19.1 tri-state decode: 2 (offline) sets StatusFault and '
+            + 'never reads as a leak. Battery batleak{n} with the vendor-declared inverted polarity (§19.6); '
+            + 'ownership via claims adjudication.' },
     // ---- Rain ---------------------------------------------------------
     { family: 'hourlyrainin', keys: ['hourlyrainin'], class: 'measurement', disposition: 'implemented-extended',
         meaning: 'Rain rate (hourly)', kind: 'motion', measurement: 'rain-rate',
@@ -249,19 +267,27 @@ export const AWN_CATALOG = [
     { family: 'pm_in_humidity_aqin', keys: ['pm_in_humidity_aqin'], class: 'measurement', disposition: 'implemented-native',
         meaning: 'AQIN internal relative humidity', kind: 'humidity', measurement: 'humidity',
         sourceUnit: 'percent', batteryField: 'batt_co2', evidence: WIKI },
-    { family: 'aqi_pm25_aqin', keys: ['aqi_pm25_aqin'], class: 'measurement', disposition: 'catalog-gap',
-        meaning: 'AQIN PM2.5 air-quality INDEX', evidence: WIKI,
-        notes: 'Index semantics, not mass density: needs a verified AirQuality categorization and/or an extended numeric index (P3).' },
-    { family: 'aqi_pm25_24h_aqin', keys: ['aqi_pm25_24h_aqin'], class: 'measurement', disposition: 'catalog-gap',
-        meaning: 'AQIN PM2.5 AQI, 24h average', evidence: WIKI, notes: 'Index semantics, not mass density (P3).' },
-    { family: 'aqi_pm10_aqin', keys: ['aqi_pm10_aqin'], class: 'measurement', disposition: 'catalog-gap',
-        meaning: 'AQIN PM10 AQI', evidence: WIKI, notes: 'Index semantics, not mass density (P3).' },
-    { family: 'aqi_pm10_24h_aqin', keys: ['aqi_pm10_24h_aqin'], class: 'measurement', disposition: 'catalog-gap',
-        meaning: 'AQIN PM10 AQI, 24h average', evidence: WIKI, notes: 'Index semantics, not mass density (P3).' },
-    { family: 'aqi_pm25_in', keys: ['aqi_pm25_in'], class: 'measurement', disposition: 'catalog-gap',
-        meaning: 'Indoor PM2.5 AQI', evidence: WIKI, notes: 'Index semantics, not mass density (P3).' },
-    { family: 'aqi_pm25_in_24h', keys: ['aqi_pm25_in_24h'], class: 'measurement', disposition: 'catalog-gap',
-        meaning: 'Indoor PM2.5 AQI, 24h average', evidence: WIKI, notes: 'Index semantics, not mass density (P3).' },
+    { family: 'aqi_pm25_aqin', keys: ['aqi_pm25_aqin'], class: 'measurement', disposition: 'implemented-extended',
+        sinceCatalogVersion: 3, meaning: 'AQIN PM2.5 air-quality INDEX', kind: 'motion', measurement: 'aqi',
+        sourceUnit: 'index', batteryField: 'batt_co2', evidence: WIKI,
+        notes: 'Index semantics, not mass density: rendered as the extended numeric index (§19.4). A HomeKit '
+            + 'AirQuality categorization is deliberately not shipped — which AQI standard the firmware computes is unverified.' },
+    { family: 'aqi_pm25_24h_aqin', keys: ['aqi_pm25_24h_aqin'], class: 'measurement', disposition: 'implemented-extended',
+        sinceCatalogVersion: 3, meaning: 'AQIN PM2.5 AQI, 24h average', kind: 'motion', measurement: 'aqi',
+        sourceUnit: 'index', batteryField: 'batt_co2', evidence: WIKI, notes: 'Extended numeric index (§19.4).' },
+    { family: 'aqi_pm10_aqin', keys: ['aqi_pm10_aqin'], class: 'measurement', disposition: 'implemented-extended',
+        sinceCatalogVersion: 3, meaning: 'AQIN PM10 AQI', kind: 'motion', measurement: 'aqi',
+        sourceUnit: 'index', batteryField: 'batt_co2', evidence: WIKI, notes: 'Extended numeric index (§19.4).' },
+    { family: 'aqi_pm10_24h_aqin', keys: ['aqi_pm10_24h_aqin'], class: 'measurement', disposition: 'implemented-extended',
+        sinceCatalogVersion: 3, meaning: 'AQIN PM10 AQI, 24h average', kind: 'motion', measurement: 'aqi',
+        sourceUnit: 'index', batteryField: 'batt_co2', evidence: WIKI, notes: 'Extended numeric index (§19.4).' },
+    { family: 'aqi_pm25_in', keys: ['aqi_pm25_in'], class: 'measurement', disposition: 'implemented-extended',
+        sinceCatalogVersion: 3, meaning: 'Indoor PM2.5 AQI', kind: 'motion', measurement: 'aqi',
+        sourceUnit: 'index', batteryField: null, evidence: WIKI,
+        notes: 'Extended numeric index (§19.4); no battery relationship, matching pm25_in.' },
+    { family: 'aqi_pm25_in_24h', keys: ['aqi_pm25_in_24h'], class: 'measurement', disposition: 'implemented-extended',
+        sinceCatalogVersion: 3, meaning: 'Indoor PM2.5 AQI, 24h average', kind: 'motion', measurement: 'aqi',
+        sourceUnit: 'index', batteryField: null, evidence: WIKI, notes: 'Extended numeric index (§19.4).' },
     // ---- Lightning -----------------------------------------------------
     { family: 'lightning_day', keys: ['lightning_day'], class: 'measurement', disposition: 'implemented-extended',
         meaning: 'Lightning strikes since local midnight', kind: 'motion', measurement: 'count',
@@ -305,24 +331,27 @@ export const AWN_CATALOG = [
             + 'Device observation: payload 0 with fresh batteries and a healthy AWN dashboard, shown low by the plugin '
             + '— consistent with the vendor declaration, inconsistent with the deployed decoder.',
         evidence: WIKI + '; deployed decoder readBatteryLow (src/batteryFields.ts); live-device observation (README lightning-battery note)',
-        notes: 'No decoder change in P1; per-field polarity is P3 decoder-design input. The README workaround (batteryField: null) stands meanwhile.' },
+        notes: 'Catalog 3 decodes this field vendor-correct WHEN the config has adopted it (§19.6, adoption-gated); '
+            + 'un-adopted configs keep the historical uniform decode and the README workaround (batteryField: null).' },
     { family: 'batleak1...batleak4', indexed: { prefix: 'batleak', from: 1, to: 4 }, class: 'battery-auxiliary', disposition: 'auxiliary',
         meaning: 'Leak detector battery status',
         encoding: 'Vendor declares "1=Low 0=OK" — INVERTED relative to the standard (non-Meteobridge) convention of the other battery fields, like batt_lightning. '
             + 'The uniform deployed decoder would misread it; no production binding exists today.',
         evidence: WIKI + '; deployed decoder readBatteryLow (src/batteryFields.ts)',
-        notes: 'Association/polarity/ownership design pending (with leak support, P3).' },
+        notes: 'Declared "1=Low 0=OK" (inverted). Bound by the catalog-3 leak{n} default rows once adopted; a CUSTOM '
+            + 'row may also reference batleak{n} as its batteryField before catalog 3, but the vendor-correct decode '
+            + 'is adoption-gated (§19.6), so a pre-adoption custom row reads it on the frozen legacy polarity.' },
     { family: 'battsm1...battsm4', indexed: { prefix: 'battsm', from: 1, to: 4 }, class: 'battery-auxiliary', disposition: 'auxiliary',
         meaning: 'Soil-moisture sensor battery status',
         encoding: 'Declared "1=OK, 0=Low"', evidence: WIKI,
-        notes: 'Association/ownership design pending (with soil support, P3).' },
+        notes: 'Bound to the catalog-3 soilhum{n} rows (§19.5); ownership via claims adjudication.' },
     { family: 'batt_co2', keys: ['batt_co2'], class: 'battery-auxiliary', disposition: 'auxiliary',
         meaning: 'AQIN / CO2 sensor battery status',
         encoding: 'Declared "1=OK, 0=Low"; the deployed decoder agrees', evidence: WIKI },
     { family: 'batt_cellgateway', keys: ['batt_cellgateway'], class: 'battery-auxiliary', disposition: 'auxiliary',
         meaning: 'Cellular gateway battery/status',
         encoding: 'Declared "1=OK, 0=Low"', evidence: WIKI,
-        notes: 'Gateway status needs an explicit auxiliary disposition (P3).' },
+        notes: 'Gateway status; auxiliary only, deliberately unbound — no sensor row reports through it.' },
     // ---- Relays ---------------------------------------------------------
     { family: 'relay1...relay10', indexed: { prefix: 'relay', from: 1, to: 10 }, class: 'relay-state', disposition: 'state-unsupported',
         meaning: 'Reported relay state', encoding: 'Read-only reported state; NOT evidence of a writable control API — no switch commands are invented', evidence: WIKI },

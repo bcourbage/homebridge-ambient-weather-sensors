@@ -215,9 +215,13 @@ describe('display families (GA #70 editor layer, PR #53)', () => {
 
   it('families mirror the AWN units page EXACTLY: category names, option labels, and order (round 2 F2)', () => {
     const supported = AWN_UNITS_PAGE.categories.filter(c => c.classification === 'supported');
-    // Same categories, same order, same capitalization.
-    expect(DISPLAY_FAMILIES.map(f => f.label)).toEqual(supported.map(c => c.awnCategory));
-    for (const [i, family] of DISPLAY_FAMILIES.entries()) {
+    // AWN-backed families (any awn: true choice) mirror the page: same
+    // categories, same order, same capitalization. Fully-plugin
+    // families (every choice awn: false — evapotranspiration, §19.4)
+    // have no AWN category to mirror.
+    const awnBacked = DISPLAY_FAMILIES.filter(f => f.choices.some(c => c.awn));
+    expect(awnBacked.map(f => f.label)).toEqual(supported.map(c => c.awnCategory));
+    for (const [i, family] of awnBacked.entries()) {
       const awnChoices = family.choices.filter(c => c.awn);
       const extras = family.choices.filter(c => !c.awn);
       // AWN-mirroring choices reproduce AWN's visible option labels
@@ -259,6 +263,11 @@ describe('MEASUREMENT_LABELS (PR #57 rounds 1-3)', () => {
       'uv-index': 'UV index',
       'count': 'Count',
       'direction': 'Direction',
+      'soil-moisture': 'Soil moisture',
+      'leaf-wetness': 'Leaf wetness',
+      'soil-tension': 'Soil tension',
+      'evapotranspiration': 'Evapotranspiration',
+      'aqi': 'Air quality index',
       'timestamp': 'Timestamp',
       'boolean': 'On/off',
     });

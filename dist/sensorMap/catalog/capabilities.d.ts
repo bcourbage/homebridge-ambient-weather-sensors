@@ -37,6 +37,12 @@ export interface ImplementedPairSpec {
     pair: string;
     /** The frozen WrapperId the registry must resolve for this pair. */
     wrapperId: string;
+    /**
+     * The catalog version the pair arrived in (§19.2); absent = 1, the
+     * frozen v2.0 set. Must equal WRAPPER_PAIR_SINCE — the coverage
+     * suite pins the equality.
+     */
+    since?: number;
 }
 export interface NativeServiceSpec {
     /** HAP service class name, as exposed on `platform.Service`. */

@@ -319,6 +319,28 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
   private catalogBaseline = 1;
   private catalogAdopted = 1;
 
+  /**
+   * The catalog version the BATTERY DECODER runs at (§19.6, PR #67
+   * review F6). The vendor-inverted polarity is a v2-runtime behavior:
+   * it applies only when the v2 sensor-map is actually driving. The
+   * flag-off (opt-out) path and safe mode keep the frozen legacy
+   * decode (version 1) even when the config retains a catalog-3 stamp
+   * (which survives the documented marker-deletion rollback).
+   */
+  private decoderAdopted(): number {
+    // Follow the ACTIVE runtime, not the serialized config SHAPE
+    // (PR #67 review R2-F2). The v2 runtime drives whenever the flag is
+    // on and we are not in safe mode — INCLUDING an opted-in
+    // compat run over a legacy-shaped block (configMode 'legacy',
+    // discoverDevicesV2 executing). Gating on configMode === 'v2'
+    // instead flipped the decoder across a pure conversion (compat run
+    // decoded at 1, the converted run at the same stamp decoded at 3),
+    // silently reversing battery status with no previewed consequence.
+    // Flag-off and safe mode keep the frozen legacy decode (version 1),
+    // matching real 1.7.3 and the protective posture.
+    return this.sensorMapV2 && this.configMode !== 'safe-mode' ? this.catalogAdopted : 1;
+  }
+
   constructor(
     public readonly log: Logger,
     public readonly config: PlatformConfig,
@@ -851,7 +873,7 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
           const batteryLow = (batteryField
                               && isCanonicalSensorForBattery(sensorKey, batteryField)
                               && !suppressedBatteries.has(batteryField))
-            ? readBatteryLow(obj.lastData as Record<string, unknown>, batteryField)
+            ? readBatteryLow(obj.lastData as Record<string, unknown>, batteryField, this.decoderAdopted())
             : undefined;
 
           Devices.push({
@@ -1270,6 +1292,7 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
           batteryLow: readBatteryLow(
             raw.lastData,
             resolveBatteryField(effectiveMap, row.stationMac, row.dataPoint) ?? undefined,
+            this.decoderAdopted(),
           ),
         };
         reconciled.push({ row, device, routingUid: `${row.stationMac}-${row.dataPoint}` });
@@ -1288,7 +1311,7 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
         return !uniqueId || !currentUniqueIds.has(uniqueId);
       });
       for (const orphan of orphans) {
-        if (inferForCachedAccessory(orphan).status === 'preserve-cached') {
+        if (inferForCachedAccessory(orphan, { trustV2Cache: this.configMode === 'v2' }).status === 'preserve-cached') {
           const uid = orphan.context?.device?.uniqueId ?? orphan.displayName;
           if (!this.loggedPreservedAccessories.has(uid)) {
             this.loggedPreservedAccessories.add(uid);
@@ -1853,7 +1876,7 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
       if (!lastData) {
         continue;
       }
-      const low = readBatteryLow(lastData, field);
+      const low = readBatteryLow(lastData, field, this.decoderAdopted());
       if (low !== undefined) {
         entry.wrapper.setBatteryLow(low);
       }
@@ -1864,12 +1887,22 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
    * Reshape the realtime source's pre-digested `(uniqueId, value)`
    * updates back into raw per-station payloads so the v2 path routes them
    * through the SAME `distributeViaRouting` boundary the poll path uses.
-   * The realtime source emits every numeric field — including the batt*
-   * fields — as its own update, so the reconstructed `lastData` carries
-   * the battery datapoints the shared battery reader consumes.
+   * The realtime source now forwards every PRESENT field — including the
+   * batt* fields — as its own update, so the reconstructed `lastData`
+   * carries the battery datapoints the shared battery reader consumes.
+   *
+   * The reconstruction uses a NULL-PROTOTYPE record (PR #67 review
+   * R3-F1): a forwarded field literally named `__proto__` (a
+   * prototype-safe own key on the JSON-parsed source) would, on a plain
+   * `{}`, invoke the prototype setter and make an UNRELATED sensor's
+   * value appear as an inherited property — e.g. a crafted
+   * `{"leak1":0,"__proto__":{"batleak1":0}}` could synthesize a healthy
+   * battery reading. A null-prototype record makes every assignment an
+   * own data property with no inheritance, so a battery/state lookup
+   * sees only genuinely reported own fields.
    */
   private updatesToStationPayloads(
-    updates: ReadonlyArray<{ uniqueId: string; value: number }>,
+    updates: ReadonlyArray<{ uniqueId: string; value: unknown }>,
   ): StationPayload[] {
     const byMac = new Map<string, Record<string, unknown>>();
     for (const u of updates) {
@@ -1881,7 +1914,7 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
       const dataPoint = norm.slice(18);
       let lastData = byMac.get(mac);
       if (!lastData) {
-        lastData = {};
+        lastData = Object.create(null) as Record<string, unknown>;
         byMac.set(mac, lastData);
       }
       lastData[dataPoint] = u.value;
@@ -2190,12 +2223,16 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
       apiKey: this.config.apiKey,
       applicationKey: this.config.applicationKey,
       log: this.log,
+      // Realtime forwards every PRESENT sensor field (not only numeric
+      // ones) so the shared row-aware coercer/decoder handles state
+      // faults and legacy drops uniformly (§19.1, PR #67 review R2-F1).
       onUpdates: (updates) => this.distribute(updates),
       // Shared battery-field reader (lazy: reads the member at each
       // resolution, so a reconcile that rebuilds the effective map is
       // picked up without reconstructing the socket). Flag off →
       // undefined map → the reader IS the legacy static lookup.
       resolveBatteryField: (mac, dp) => resolveBatteryField(this.v2EffectiveMap, mac, dp),
+      catalogAdopted: this.decoderAdopted(),
     });
     this.realtimeSource.start();
   }
@@ -2240,7 +2277,7 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
    * never registered (unknown sensor types, excluded by config, etc.)
    * are silently ignored.
    */
-  private distribute(updates: Array<{ uniqueId: string; value: number; batteryLow?: boolean }>): void {
+  private distribute(updates: Array<{ uniqueId: string; value: unknown; batteryLow?: boolean }>): void {
     // v2 path (realtime): reshape the pre-digested updates into raw
     // station payloads and route them through the SAME distributeViaRouting
     // boundary the poll path uses.
@@ -2249,6 +2286,16 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
       return;
     }
     for (const update of updates) {
+      // The v1 (flag-off) path drops the ENTIRE non-numeric sensor
+      // update — both the value AND its bundled battery side effect —
+      // matching published 1.7.3 (PR #67 review R3-F2). Guarding only
+      // setValue would let a non-numeric update still flip the legacy
+      // wrapper's battery state, which 1.7.3 never does. Independent
+      // legacy battery updates would be a deliberate behavior change,
+      // not an incidental effect of the v2 transport widening.
+      if (typeof update.value !== 'number') {
+        continue;
+      }
       const wrapper = this.wrappers.get(update.uniqueId);
       if (wrapper) {
         wrapper.setValue(update.value);

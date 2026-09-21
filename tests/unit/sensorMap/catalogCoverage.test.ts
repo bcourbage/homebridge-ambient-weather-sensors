@@ -23,9 +23,9 @@ import {
   type CatalogEntry,
 } from '../../../src/sensorMap/catalog/awnCatalog';
 import { NATIVE_SENSOR_SERVICES } from '../../../src/sensorMap/catalog/capabilities';
-import { CATALOG_V2_ROWS, catalogRowFor, DEFAULT_SENSOR_MAP, defaultRowFor, staticDefaultRowFor } from '../../../src/sensorMap/defaultMap';
+import { catalogRowFor, DEFAULT_SENSOR_MAP, defaultRowFor, staticDefaultRowFor, VERSIONED_CATALOG_ROWS } from '../../../src/sensorMap/defaultMap';
 import { CURRENT_CATALOG_VERSION } from '../../../src/sensorMap/catalogVersion';
-import { WRAPPER_FOR_KIND_AND_MEASUREMENT } from '../../../src/sensorMap/wrappers';
+import { WRAPPER_FOR_KIND_AND_MEASUREMENT, WRAPPER_PAIR_SINCE } from '../../../src/sensorMap/wrappers';
 import { instantiateWrapper } from '../../../src/sensorMap/wrapperFactories';
 import { batteryFieldForSensor } from '../../../src/batteryFields';
 import { KIND_SUPPORT } from '../../../homebridge-ui/app-src/kind-support';
@@ -33,10 +33,14 @@ import type { DefaultSensorRow, EffectiveSensorRow, WrapperId } from '../../../s
 // Real-HAP harness (shared with the graph-parity suite).
 // eslint-disable-next-line
 import { makeHapPlatform, makeHapAccessory, contextFor } from '../../helpers/hapGraph.mjs';
-import { makeNumericRow, makeTimestampRow } from '../../helpers/effectiveRow';
+import { makeBooleanRow, makeNumericRow, makeTimestampRow } from '../../helpers/effectiveRow';
 import type { AmbientWeatherSensorsPlatform } from '../../../src/platform';
 
-const NATIVE_KINDS = new Set(['temperature', 'humidity', 'light', 'co2', 'air-quality-pm25', 'air-quality-pm10']);
+const NATIVE_KINDS = new Set([
+  'temperature', 'humidity', 'light', 'co2', 'air-quality-pm25', 'air-quality-pm10',
+  // Catalog-3 native services (§19.1/§19.3).
+  'leak', 'contact', 'occupancy', 'smoke',
+]);
 
 /** Dispositions whose entries must state (and match) a resolved identity. */
 const RESOLVED_DISPOSITIONS = new Set(['implemented-native', 'implemented-extended', 'compat-fallback', 'anchored']);
@@ -64,25 +68,31 @@ describe('AWN catalog inventory shape', () => {
     expect(AWN_CATALOG_VERSION).toBe(CURRENT_CATALOG_VERSION);
   });
 
-  it('every CATALOG_V2_ROWS definition is claimed by a sinceCatalogVersion-2 entry, and vice versa', () => {
-    const entryKeys = new Set(AWN_CATALOG
-      .filter(e => (e.sinceCatalogVersion ?? 1) === 2)
-      .flatMap(expandCatalogKeys));
-    const runtimeKeys = new Set(CATALOG_V2_ROWS.map(r => r.dataPoint));
-    // Runtime rows are exact keys; entries may cover wider audited
-    // families (feelsLike1..10 spans the v1-static 1..4 too).
-    for (const dp of runtimeKeys) {
-      expect(entryKeys.has(dp), `runtime v2 row '${dp}' missing a catalog-2 entry`).toBe(true);
+  it('every versioned runtime definition is claimed by an entry of the SAME catalog version, and vice versa', () => {
+    const entrySince = new Map<string, number>();
+    for (const e of AWN_CATALOG) {
+      for (const key of expandCatalogKeys(e)) {
+        entrySince.set(key, e.sinceCatalogVersion ?? 1);
+      }
     }
-    for (const dp of entryKeys) {
-      if (staticDefaultRowFor(dp) === undefined) {
-        expect(runtimeKeys.has(dp), `catalog-2 key '${dp}' has no runtime definition`).toBe(true);
+    for (const row of VERSIONED_CATALOG_ROWS) {
+      expect(entrySince.get(row.dataPoint), `runtime row '${row.dataPoint}' catalog version`)
+        .toBe(row.sinceCatalogVersion ?? 1);
+    }
+    const runtimeKeys = new Set(VERSIONED_CATALOG_ROWS.map(r => r.dataPoint));
+    for (const [dp, since] of entrySince) {
+      // Runtime rows are exact keys; entries may cover wider audited
+      // families (feelsLike1..10 spans the v1-static 1..4 too).
+      if (since >= 2 && staticDefaultRowFor(dp) === undefined) {
+        expect(runtimeKeys.has(dp), `catalog-${since} key '${dp}' has no runtime definition`).toBe(true);
       }
     }
   });
 
-  it('covers the audited published inventory (78 entries, 169 keys) plus the supported extra', () => {
-    expect(AWN_CATALOG).toHaveLength(79); // 78 published + co2_in
+  it('covers the audited published inventory (79 entries, 169 keys) plus the supported extra', () => {
+    // 78 published families + co2_in, with soilhum split into two
+    // entries (1-4 battery-declared, 5-10 not; PR #67 review F8) = 80.
+    expect(AWN_CATALOG).toHaveLength(80);
     const keys = AWN_CATALOG.flatMap(expandCatalogKeys);
     expect(keys).toHaveLength(170); // 169 published + co2_in
     expect(new Set(keys).size).toBe(keys.length); // no key claimed twice
@@ -260,12 +270,15 @@ describe('output capabilities match the runtime registries', () => {
     expect(specPairs).toEqual(registryPairs);
   });
 
-  it('every spec pair resolves ITS declared wrapper and belongs to its declared kinds', () => {
+  it('every spec pair resolves ITS declared wrapper, version, and kind', () => {
     for (const spec of implementedSpecs) {
-      for (const { pair, wrapperId } of spec.pairs!) {
-        const descriptor = WRAPPER_FOR_KIND_AND_MEASUREMENT[pair as keyof typeof WRAPPER_FOR_KIND_AND_MEASUREMENT];
+      for (const { pair, wrapperId, since } of spec.pairs!) {
+        const key = pair as keyof typeof WRAPPER_FOR_KIND_AND_MEASUREMENT;
+        const descriptor = WRAPPER_FOR_KIND_AND_MEASUREMENT[key];
         expect(descriptor, `${spec.service}: pair '${pair}' missing from the registry`).toBeDefined();
         expect(descriptor!.id, `${spec.service}: pair '${pair}' wrapper`).toBe(wrapperId);
+        expect(WRAPPER_PAIR_SINCE[key] ?? 1, `${spec.service}: pair '${pair}' sinceCatalogVersion`)
+          .toBe(since ?? 1);
         expect(spec.kinds, `${spec.service}: pair '${pair}' kind outside declared kinds`)
           .toContain(pair.split('|')[0]);
       }
@@ -274,10 +287,9 @@ describe('output capabilities match the runtime registries', () => {
 });
 
 describe('implemented pairs instantiate the DECLARED HAP service (real hap-nodejs)', () => {
-  function representativeDefaultRow(wrapperId: WrapperId): DefaultSensorRow {
-    const row = DEFAULT_SENSOR_MAP.find(r => r.wrapper.id === wrapperId);
-    if (!row) throw new Error(`no DEFAULT_SENSOR_MAP row uses wrapper '${wrapperId}'`);
-    return row;
+  function representativeDefaultRow(wrapperId: WrapperId): DefaultSensorRow | undefined {
+    return DEFAULT_SENSOR_MAP.find(r => r.wrapper.id === wrapperId)
+      ?? VERSIONED_CATALOG_ROWS.find(r => r.wrapper.id === wrapperId);
   }
 
   function rowFromDefault(dr: DefaultSensorRow): EffectiveSensorRow {
@@ -289,10 +301,39 @@ describe('implemented pairs instantiate the DECLARED HAP service (real hap-nodej
     if (dr.measurement === 'timestamp') {
       return makeTimestampRow({ ...common });
     }
+    if (dr.measurement === 'boolean') {
+      return makeBooleanRow({ ...common });
+    }
     return makeNumericRow({
       ...common,
       measurement: dr.measurement as Exclude<typeof dr.measurement, 'timestamp' | 'boolean'>,
       sourceUnit: dr.sourceUnit, displayUnit: dr.displayUnit,
+    });
+  }
+
+  /**
+   * Pairs with no default row anywhere (contact/occupancy/smoke/
+   * motion-boolean/co exist for custom assignments only): build a
+   * synthetic row straight from the pair, per §16's genericity
+   * requirement.
+   */
+  function syntheticRowFor(pair: string, wrapperId: WrapperId): EffectiveSensorRow {
+    const [kind, measurement] = pair.split('|') as [DefaultSensorRow['kind'], DefaultSensorRow['measurement']];
+    const common = {
+      kind, dataPoint: `test_${wrapperId.replace(/-/g, '_')}`, name: `Test ${wrapperId}`,
+      wrapperId, hasBatterySubService: false, batteryField: null,
+    } as const;
+    if (measurement === 'boolean') {
+      return makeBooleanRow({ ...common });
+    }
+    if (measurement === 'timestamp') {
+      return makeTimestampRow({ ...common });
+    }
+    return makeNumericRow({
+      ...common,
+      measurement: measurement as Exclude<DefaultSensorRow['measurement'], 'timestamp' | 'boolean'>,
+      sourceUnit: measurement === 'co' ? 'ppm' : 'index',
+      displayUnit: measurement === 'co' ? 'ppm' : 'index',
     });
   }
 
@@ -311,10 +352,11 @@ describe('implemented pairs instantiate the DECLARED HAP service (real hap-nodej
     expect(ServiceCtor, `platform.Service.${service} must exist (spec names a real HAP service)`).toBeDefined();
 
     const accessory = makeHapAccessory(contextFor(wrapperId, { battery: false, type: airQualityType(wrapperId) }));
+    const representative = representativeDefaultRow(wrapperId as WrapperId);
     instantiateWrapper(
       platform as unknown as AmbientWeatherSensorsPlatform,
       accessory as never,
-      rowFromDefault(representativeDefaultRow(wrapperId as WrapperId)),
+      representative ? rowFromDefault(representative) : syntheticRowFor(pair, wrapperId as WrapperId),
     );
     const uuids = (accessory as { services: Array<{ UUID: string }> }).services.map(s => s.UUID);
     expect(uuids, `${pair} must instantiate ${service}`).toContain(ServiceCtor!.UUID);

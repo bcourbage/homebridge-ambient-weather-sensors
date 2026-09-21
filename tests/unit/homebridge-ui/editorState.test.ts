@@ -29,7 +29,7 @@ import { buildEffectiveSensorMap } from '../../../src/sensorMap/buildEffectiveMa
 import { composeV2ConfigSave } from '../../../src/sensorMap/legacyMirror';
 import { MEASUREMENT_LABELS, UNIT_VOCABULARY, unitOptionsFor } from '../../../src/sensorMap/unitVocabulary';
 import { NON_TRIGGERING_MEASUREMENTS } from '../../../src/sensorMap/validation';
-import { WRAPPER_FOR_KIND_AND_MEASUREMENT } from '../../../src/sensorMap/wrappers';
+import { WRAPPER_FOR_KIND_AND_MEASUREMENT, WRAPPER_PAIR_SINCE } from '../../../src/sensorMap/wrappers';
 import type { Measurement } from '../../../src/sensorMap/types';
 
 const MAC = 'AA:BB:CC:DD:EE:01';
@@ -614,7 +614,13 @@ describe('/vocabulary', () => {
     // cannot build would be refused by the pipeline as no-wrapper, so
     // the picker must not offer it), never fewer, each labeled by its
     // measurement. Order follows the vocabulary's measurement order.
-    const tableKeys = Object.keys(WRAPPER_FOR_KIND_AND_MEASUREMENT);
+    // Every STAMP-GATED pair is withheld from the static picker
+    // (PR #67 review F9): the endpoint has no config context, so a
+    // gated pair would offer a dead-end assignment to an unadopted
+    // config. Only the frozen v2.0 pairs (WRAPPER_PAIR_SINCE absent/1)
+    // are offered until the P4 capability-aware editor lands.
+    const tableKeys = Object.keys(WRAPPER_FOR_KIND_AND_MEASUREMENT)
+      .filter(k => (WRAPPER_PAIR_SINCE[k as keyof typeof WRAPPER_PAIR_SINCE] ?? 1) <= 1);
     expect(dto.assignments).toHaveLength(tableKeys.length);
     expect(new Set(dto.assignments.map(a => `${a.kind}|${a.measurement}`))).toEqual(new Set(tableKeys));
     for (const a of dto.assignments) {
@@ -624,9 +630,14 @@ describe('/vocabulary', () => {
     const vocabOrder = Object.keys(UNIT_VOCABULARY);
     const indices = dto.assignments.map(a => vocabOrder.indexOf(a.measurement));
     expect(indices).toEqual([...indices].sort((x, y) => x - y));
-    // The reserved kinds have no wrapper and must never be offered.
-    for (const reserved of ['co', 'leak', 'contact', 'occupancy']) {
-      expect(dto.assignments.some(a => a.kind === reserved)).toBe(false);
+    // Catalog-3 kinds (boolean states) and the catalog-3 numeric
+    // measurements are all stamp-gated, so none are offered by the
+    // static picker; co is deferred entirely (no wrapper).
+    for (const withheld of ['leak', 'contact', 'occupancy', 'smoke', 'co']) {
+      expect(dto.assignments.some(a => a.kind === withheld)).toBe(false);
+    }
+    for (const m of ['soil-moisture', 'leaf-wetness', 'soil-tension', 'evapotranspiration', 'aqi']) {
+      expect(dto.assignments.some(a => a.measurement === m)).toBe(false);
     }
     // Every numeric assignment target has source units to pick from;
     // timestamp deliberately has none (sourceUnit is fixed to 'ms'
@@ -649,6 +660,11 @@ describe('/vocabulary', () => {
     }
     expect(dto.assignments.filter(a => a.kind === 'motion' && !a.triggering).map(a => a.measurement).sort())
       .toEqual(['direction', 'timestamp']);
+    // The catalog-3 numeric motion measurements are stamp-gated and
+    // therefore NOT offered by the static picker (PR #67 review F9).
+    for (const m of ['soil-moisture', 'leaf-wetness', 'soil-tension', 'evapotranspiration', 'aqi']) {
+      expect(dto.assignments.some(a => a.measurement === m), m).toBe(false);
+    }
     // Uniqueness invariant (round 1 F4): the assignment UI tracks and
     // resolves choices BY MEASUREMENT ALONE (one select, kind derived).
     // A second kind for any measurement — e.g. the deferred boolean

@@ -41,6 +41,22 @@ export const LEGACY_TYPE_FOR_WRAPPER_ID = {
     'lightning-hour': 'LightningHour',
     'lightning-distance': 'LightningDistance',
     'lightning-last-strike': 'LightningLastStrike',
+    // Catalog-3 wrappers (§19) have NO v1.7 vocabulary: 1.7 cannot
+    // render these kinds at all, so a downgrade leaves their cached
+    // accessories stranded by design (they are never v1-representable
+    // and the legacy mirror excludes them). The strings below are
+    // distinct, stable markers — deliberately OUTSIDE 1.7's
+    // createSensorWrapper vocabulary.
+    'leak': 'Leak',
+    'contact': 'Contact',
+    'occupancy': 'Occupancy',
+    'smoke': 'Smoke',
+    'motion-boolean': 'MotionBoolean',
+    'soil-moisture': 'SoilMoisture',
+    'leaf-wetness': 'LeafWetness',
+    'soil-tension': 'SoilTension',
+    'evapotranspiration': 'Evapotranspiration',
+    'aqi': 'AQI',
 };
 /** Legacy `context.device.type` for a resolved row's wrapper id. */
 export function legacyTypeForWrapperId(wrapperId) {
