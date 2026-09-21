@@ -22,12 +22,12 @@ import { catalog3Rows, seedFor } from '../helpers/genCatalog3Graph.mjs';
 import golden from '../fixtures/graph/catalog3-v1.json';
 
 const CATALOG3_IDS = [
-  'leak', 'contact', 'occupancy', 'smoke', 'motion-boolean', 'co',
+  'leak', 'contact', 'occupancy', 'smoke', 'motion-boolean',
   'soil-moisture', 'leaf-wetness', 'soil-tension', 'evapotranspiration', 'aqi',
 ] as const;
 
 describe('HAP graph parity vs the catalog-3 golden (§19.7)', () => {
-  it('golden covers all 11 catalog-3 WrapperIds × 2 battery variants', () => {
+  it('golden covers all 10 catalog-3 WrapperIds × 2 battery variants', () => {
     expect(Object.keys(golden).sort()).toEqual([...CATALOG3_IDS].sort());
     for (const id of CATALOG3_IDS) {
       expect((golden as Record<string, unknown>)[id]).toHaveProperty('0');
@@ -61,6 +61,6 @@ describe('HAP graph parity vs the catalog-3 golden (§19.7)', () => {
     // cache-migration decision for the affected wrapper(s).
     const bytes = readFileSync(new URL('../fixtures/graph/catalog3-v1.json', import.meta.url));
     const hash = createHash('sha256').update(bytes).digest('hex');
-    expect(hash).toBe('ab31bbf7b1161efab24deed0100ece51495fbe2e10c69d6e4ff142db4c930a22');
+    expect(hash).toBe('3c2bb0f830c97a51cf1de2032f1406acada40a7aa6a8ededf54e4cc2eecd3943');
   });
 });

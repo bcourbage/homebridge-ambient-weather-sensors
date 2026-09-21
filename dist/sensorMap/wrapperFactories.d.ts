@@ -175,10 +175,6 @@ export declare const WRAPPER_SPEC: {
         readonly kind: "motion";
         readonly measurement: "boolean";
     };
-    readonly co: {
-        readonly kind: "co";
-        readonly measurement: "co";
-    };
     readonly 'soil-moisture': {
         readonly kind: "motion";
         readonly measurement: "soil-moisture";

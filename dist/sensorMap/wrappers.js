@@ -40,7 +40,6 @@ import { PressureRelativeAccessory, PressureAbsoluteAccessory, } from '../extend
 import { RainRateAccessory, RainEventAccessory, RainDailyAccessory, RainWeeklyAccessory, RainMonthlyAccessory, RainYearlyAccessory, LastRainAccessory, } from '../extendedSensors/rainAccessory.js';
 import { LightningDayAccessory, LightningHourAccessory, LightningDistanceAccessory, LightningLastStrikeAccessory, } from '../extendedSensors/lightningAccessory.js';
 import { LeakAccessory, ContactAccessory, OccupancyAccessory, SmokeAccessory, MotionBooleanAccessory, } from '../booleanStateAccessory.js';
-import { CoAccessory } from '../coAccessory.js';
 import { SoilMoistureAccessory, LeafWetnessAccessory, SoilTensionAccessory, EvapotranspirationAccessory, AqiAccessory, } from '../extendedSensors/genericValueAccessory.js';
 // Value-tile wrappers — Apple Home renders reading directly.
 export const TEMPERATURE_WRAPPER = {
@@ -205,9 +204,6 @@ export const SMOKE_WRAPPER = {
 export const MOTION_BOOLEAN_WRAPPER = {
     id: 'motion-boolean', schemaVersion: 1, constructor: MotionBooleanAccessory,
 };
-export const CO_WRAPPER = {
-    id: 'co', schemaVersion: 1, constructor: CoAccessory,
-};
 export const SOIL_MOISTURE_WRAPPER = {
     id: 'soil-moisture', schemaVersion: 1, constructor: SoilMoistureAccessory,
 };
@@ -254,7 +250,6 @@ export const ALL_WRAPPERS = [
     OCCUPANCY_WRAPPER,
     SMOKE_WRAPPER,
     MOTION_BOOLEAN_WRAPPER,
-    CO_WRAPPER,
     SOIL_MOISTURE_WRAPPER,
     LEAF_WETNESS_WRAPPER,
     SOIL_TENSION_WRAPPER,
@@ -317,7 +312,6 @@ export const WRAPPER_FOR_KIND_AND_MEASUREMENT = {
     'occupancy|boolean': OCCUPANCY_WRAPPER,
     'smoke|boolean': SMOKE_WRAPPER,
     'motion|boolean': MOTION_BOOLEAN_WRAPPER,
-    'co|co': CO_WRAPPER,
     'motion|soil-moisture': SOIL_MOISTURE_WRAPPER,
     'motion|leaf-wetness': LEAF_WETNESS_WRAPPER,
     'motion|soil-tension': SOIL_TENSION_WRAPPER,
@@ -336,7 +330,6 @@ export const WRAPPER_PAIR_SINCE = {
     'occupancy|boolean': 3,
     'smoke|boolean': 3,
     'motion|boolean': 3,
-    'co|co': 3,
     'motion|soil-moisture': 3,
     'motion|leaf-wetness': 3,
     'motion|soil-tension': 3,

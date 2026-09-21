@@ -57,6 +57,15 @@ export declare class AmbientWeatherSensorsPlatform implements DynamicPlatformPlu
     private configMode;
     private catalogBaseline;
     private catalogAdopted;
+    /**
+     * The catalog version the BATTERY DECODER runs at (§19.6, PR #67
+     * review F6). The vendor-inverted polarity is a v2-runtime behavior:
+     * it applies only when the v2 sensor-map is actually driving. The
+     * flag-off (opt-out) path and safe mode keep the frozen legacy
+     * decode (version 1) even when the config retains a catalog-3 stamp
+     * (which survives the documented marker-deletion rollback).
+     */
+    private decoderAdopted;
     constructor(log: Logger, config: PlatformConfig, api: API);
     configureAccessory(accessory: PlatformAccessory): void;
     determineSensorType(sensor: string): string;

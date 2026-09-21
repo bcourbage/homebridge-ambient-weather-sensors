@@ -319,6 +319,18 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
   private catalogBaseline = 1;
   private catalogAdopted = 1;
 
+  /**
+   * The catalog version the BATTERY DECODER runs at (§19.6, PR #67
+   * review F6). The vendor-inverted polarity is a v2-runtime behavior:
+   * it applies only when the v2 sensor-map is actually driving. The
+   * flag-off (opt-out) path and safe mode keep the frozen legacy
+   * decode (version 1) even when the config retains a catalog-3 stamp
+   * (which survives the documented marker-deletion rollback).
+   */
+  private decoderAdopted(): number {
+    return this.sensorMapV2 && this.configMode === 'v2' ? this.catalogAdopted : 1;
+  }
+
   constructor(
     public readonly log: Logger,
     public readonly config: PlatformConfig,
@@ -851,7 +863,7 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
           const batteryLow = (batteryField
                               && isCanonicalSensorForBattery(sensorKey, batteryField)
                               && !suppressedBatteries.has(batteryField))
-            ? readBatteryLow(obj.lastData as Record<string, unknown>, batteryField, this.catalogAdopted)
+            ? readBatteryLow(obj.lastData as Record<string, unknown>, batteryField, this.decoderAdopted())
             : undefined;
 
           Devices.push({
@@ -1270,7 +1282,7 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
           batteryLow: readBatteryLow(
             raw.lastData,
             resolveBatteryField(effectiveMap, row.stationMac, row.dataPoint) ?? undefined,
-            this.catalogAdopted,
+            this.decoderAdopted(),
           ),
         };
         reconciled.push({ row, device, routingUid: `${row.stationMac}-${row.dataPoint}` });
@@ -1289,7 +1301,7 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
         return !uniqueId || !currentUniqueIds.has(uniqueId);
       });
       for (const orphan of orphans) {
-        if (inferForCachedAccessory(orphan).status === 'preserve-cached') {
+        if (inferForCachedAccessory(orphan, { trustV2Cache: this.configMode === 'v2' }).status === 'preserve-cached') {
           const uid = orphan.context?.device?.uniqueId ?? orphan.displayName;
           if (!this.loggedPreservedAccessories.has(uid)) {
             this.loggedPreservedAccessories.add(uid);
@@ -1854,7 +1866,7 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
       if (!lastData) {
         continue;
       }
-      const low = readBatteryLow(lastData, field, this.catalogAdopted);
+      const low = readBatteryLow(lastData, field, this.decoderAdopted());
       if (low !== undefined) {
         entry.wrapper.setBatteryLow(low);
       }
@@ -1870,7 +1882,7 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
    * the battery datapoints the shared battery reader consumes.
    */
   private updatesToStationPayloads(
-    updates: ReadonlyArray<{ uniqueId: string; value: number }>,
+    updates: ReadonlyArray<{ uniqueId: string; value: number | boolean }>,
   ): StationPayload[] {
     const byMac = new Map<string, Record<string, unknown>>();
     for (const u of updates) {
@@ -2197,7 +2209,7 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
       // picked up without reconstructing the socket). Flag off →
       // undefined map → the reader IS the legacy static lookup.
       resolveBatteryField: (mac, dp) => resolveBatteryField(this.v2EffectiveMap, mac, dp),
-      catalogAdopted: this.catalogAdopted,
+      catalogAdopted: this.decoderAdopted(),
     });
     this.realtimeSource.start();
   }
@@ -2242,7 +2254,7 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
    * never registered (unknown sensor types, excluded by config, etc.)
    * are silently ignored.
    */
-  private distribute(updates: Array<{ uniqueId: string; value: number; batteryLow?: boolean }>): void {
+  private distribute(updates: Array<{ uniqueId: string; value: number | boolean; batteryLow?: boolean }>): void {
     // v2 path (realtime): reshape the pre-digested updates into raw
     // station payloads and route them through the SAME distributeViaRouting
     // boundary the poll path uses.
@@ -2253,7 +2265,12 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
     for (const update of updates) {
       const wrapper = this.wrappers.get(update.uniqueId);
       if (wrapper) {
-        wrapper.setValue(update.value);
+        // The v1 (flag-off) path has no boolean sensors; a boolean here
+        // cannot correspond to a legacy wrapper, so skip it rather than
+        // pass a non-number to a numeric setValue.
+        if (typeof update.value === 'number') {
+          wrapper.setValue(update.value);
+        }
         if (update.batteryLow !== undefined && wrapper.setBatteryLow) {
           wrapper.setBatteryLow(update.batteryLow);
         }

@@ -25,7 +25,14 @@ import { batteryFieldForSensor, readBatteryLow } from './batteryFields.js';
 
 export interface RealtimeUpdate {
   uniqueId: string;
-  value: number;
+  /**
+   * A supported v2 raw value. Numbers cover every legacy sensor; the
+   * catalog-3 boolean state kinds (§19.1) also report JSON
+   * true/false, which the row-aware coercer decodes downstream. Both
+   * transports must reach the SAME coercion boundary (PR #67 review
+   * F4); arbitrary strings/objects stay filtered out at the source.
+   */
+  value: number | boolean;
   /**
    * HomeKit-aligned low/normal flag for the sensor's physical probe.
    * undefined = no battery reported for this probe; true = low;
@@ -281,7 +288,12 @@ export class RealtimeSource {
       }
 
       for (const [key, value] of Object.entries(lastData)) {
-        if (typeof value !== 'number') {
+        // Forward numbers (every legacy sensor) and booleans (the
+        // catalog-3 state kinds). Everything else — strings, objects,
+        // null — stays dropped at the transport, preserving the legacy
+        // realtime contract; the row-aware coercer/decoder decides the
+        // rest for both transports (PR #67 review F4).
+        if (typeof value !== 'number' && typeof value !== 'boolean') {
           continue;
         }
         if (this.opts.isSensorKey && !this.opts.isSensorKey(key)) {

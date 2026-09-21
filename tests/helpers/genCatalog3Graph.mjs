@@ -39,13 +39,6 @@ export function catalog3Rows() {
     'occupancy':          boolean('occupancy', 'test_occupancy', 'occupancy', 'battout'),
     'smoke':              boolean('smoke', 'test_smoke', 'smoke', 'battout'),
     'motion-boolean':     boolean('motion-boolean', 'test_motion_bool', 'motion', 'battout'),
-    'co': {
-      dataPoint: 'test_co', stationMac: 'AA:BB:CC:DD:EE:01', name: 'Golden co',
-      kind: 'co', measurement: 'co', sourceUnit: 'ppm', displayUnit: 'ppm',
-      triggerEnabled: false, triggerDirection: 'above',
-      batteryField: 'battout', hasBatterySubService: false, embedName: false, enabled: true,
-      structuralSignature: '', wrapperId: 'co',
-    },
     'soil-moisture':      numeric('soil-moisture', 'soilhum1', 'soil-moisture', 'percent', 'battsm1'),
     'leaf-wetness':       numeric('leaf-wetness', 'leafwetness1', 'leaf-wetness', 'percent', 'battout'),
     'soil-tension':       numeric('soil-tension', 'soiltens1', 'soil-tension', 'cb', 'battout'),

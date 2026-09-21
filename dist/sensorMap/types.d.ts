@@ -208,7 +208,7 @@ export interface DefaultSensorRow {
  * commit as the descriptor. Removing or renaming one is a breaking
  * change and must bump the plugin major.
  */
-export type WrapperId = 'temperature' | 'humidity' | 'solar-radiation' | 'co2' | 'air-quality-pm25' | 'air-quality-pm10' | 'uv' | 'wind-speed' | 'wind-gust' | 'wind-max-daily-gust' | 'wind-direction' | 'wind-direction-10m' | 'pressure-relative' | 'pressure-absolute' | 'rain-rate' | 'rain-event' | 'rain-daily' | 'rain-weekly' | 'rain-monthly' | 'rain-yearly' | 'last-rain' | 'lightning-day' | 'lightning-hour' | 'lightning-distance' | 'lightning-last-strike' | 'leak' | 'contact' | 'occupancy' | 'smoke' | 'motion-boolean' | 'co' | 'soil-moisture' | 'leaf-wetness' | 'soil-tension' | 'evapotranspiration' | 'aqi';
+export type WrapperId = 'temperature' | 'humidity' | 'solar-radiation' | 'co2' | 'air-quality-pm25' | 'air-quality-pm10' | 'uv' | 'wind-speed' | 'wind-gust' | 'wind-max-daily-gust' | 'wind-direction' | 'wind-direction-10m' | 'pressure-relative' | 'pressure-absolute' | 'rain-rate' | 'rain-event' | 'rain-daily' | 'rain-weekly' | 'rain-monthly' | 'rain-yearly' | 'last-rain' | 'lightning-day' | 'lightning-hour' | 'lightning-distance' | 'lightning-last-strike' | 'leak' | 'contact' | 'occupancy' | 'smoke' | 'motion-boolean' | 'soil-moisture' | 'leaf-wetness' | 'soil-tension' | 'evapotranspiration' | 'aqi';
 export interface WrapperDescriptor {
     /**
      * Stable identifier. Refactor-safe (a class rename does NOT change

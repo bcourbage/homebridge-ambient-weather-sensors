@@ -8,9 +8,10 @@ import { describe, expect, it } from 'vitest';
 
 import { buildEffectiveSensorMap } from '../../../src/sensorMap/buildEffectiveMap';
 import { buildWrapperRouting, distributeViaRouting } from '../../../src/sensorMap/routing';
+import { instantiateWrapper } from '../../../src/sensorMap/wrapperFactories';
+import { RealtimeSource } from '../../../src/realtimeSource';
 import { readBatteryLow, VENDOR_INVERTED_BATTERY_FIELDS } from '../../../src/batteryFields';
 import { CATALOG_V3_ROWS, catalogRowFor, defaultRowFor, staticDefaultRowFor } from '../../../src/sensorMap/defaultMap';
-import { CO_DETECTED_PPM } from '../../../src/coAccessory';
 import type { AmbientWeatherSensorsPlatform } from '../../../src/platform';
 import {
   MockCharacteristics,
@@ -140,19 +141,109 @@ describe('§19.1 tri-state decode through the real wrappers — offline never re
   });
 });
 
-describe('§19.3 CO semantics', () => {
-  it('level always written; detected flips at the documented fixed boundary', () => {
-    expect(CO_DETECTED_PPM).toBe(400);
+describe('§19.1 present-invalid state faults, and a restart preserves it (PR #67 review F3)', () => {
+  const SERVICES = {
+    leak: MockServices.LeakSensor,
+    contact: MockServices.ContactSensor,
+    occupancy: MockServices.OccupancySensor,
+    smoke: MockServices.SmokeSensor,
+    motion: MockServices.MotionSensor,
+  } as const;
+
+  it.each(['leak', 'contact', 'occupancy', 'smoke', 'motion'] as const)('%s: a valid reading then a present-invalid one raises StatusFault', kind => {
+    const dp = `my_${kind}`;
     const map = buildEffectiveSensorMap(input(
-      [{ dataPoint: 'test_co', kind: 'co', measurement: 'co', sourceUnit: 'ppm', name: 'Test CO' }],
-      { baseline: 1, adopted: 3 }));
+      [{ dataPoint: dp, kind, measurement: 'boolean', name: `My ${kind}` }], { baseline: 1, adopted: 3 }));
     expect(map.errors).toEqual([]);
-    const row = configured(map, 'test_co');
-    const below = routeThrough(row, 399).getService(MockServices.CarbonMonoxideSensor)!;
-    expect(below.readCharacteristic(MockCharacteristics.CarbonMonoxideLevel)).toBe(399);
-    expect(below.readCharacteristic(MockCharacteristics.CarbonMonoxideDetected)).toBe(0);
-    const above = routeThrough(row, 400).getService(MockServices.CarbonMonoxideSensor)!;
-    expect(above.readCharacteristic(MockCharacteristics.CarbonMonoxideDetected)).toBe(1);
+    const row = configured(map, dp);
+    const platform = makeMockPlatform();
+    const accessory = makeMockAccessory({ uniqueId: `${MAC}-${dp}`, displayName: `My ${kind}` });
+    const routing = buildWrapperRouting(
+      platform as unknown as AmbientWeatherSensorsPlatform,
+      { rows: [row], errors: [], warnings: [], notes: [] },
+      () => accessory as never,
+    );
+    const push = (raw: unknown) => distributeViaRouting(
+      platform as unknown as AmbientWeatherSensorsPlatform, routing,
+      [{ macAddress: MAC, lastData: { [dp]: raw } }]);
+    const svc = accessory.getService(SERVICES[kind])!;
+    const fault = () => svc.readCharacteristic(MockCharacteristics.StatusFault);
+    push(1);
+    expect(fault()).toBe(0);
+    // Each present-but-invalid value raises the fault (never dropped).
+    for (const invalid of [null, 'offline', {}, Number.NaN, Infinity]) {
+      push(1); // reset to a clean state first
+      expect(fault()).toBe(0);
+      push(invalid);
+      expect(fault(), `${kind} invalid ${String(invalid)}`).toBe(1);
+    }
+  });
+
+  it('a retained leak fault survives a cached restart with no valid recovery reading', () => {
+    const map = buildEffectiveSensorMap(input(
+      [{ dataPoint: 'leak1', enabled: true }], { baseline: 1, adopted: 3 }));
+    const row = configured(map, 'leak1');
+    const platform = makeMockPlatform();
+    const accessory = makeMockAccessory({ uniqueId: `${MAC}-leak1`, displayName: 'Leak 1' });
+    const routing = buildWrapperRouting(
+      platform as unknown as AmbientWeatherSensorsPlatform,
+      { rows: [row], errors: [], warnings: [], notes: [] },
+      () => accessory as never,
+    );
+    distributeViaRouting(platform as unknown as AmbientWeatherSensorsPlatform, routing,
+      [{ macAddress: MAC, lastData: { leak1: 2 } }]);
+    const leak = accessory.getService(MockServices.LeakSensor)!;
+    expect(leak.readCharacteristic(MockCharacteristics.StatusFault)).toBe(1);
+    // Re-construct the wrapper on the SAME accessory (a restart) with
+    // no valid cached reading: the fault must NOT be cleared.
+    instantiateWrapper(platform as unknown as AmbientWeatherSensorsPlatform, accessory as never, row);
+    expect(leak.readCharacteristic(MockCharacteristics.StatusFault)).toBe(1);
+  });
+});
+
+describe('§19.3 CO is deferred past P3 (native co|co mapping unavailable)', () => {
+  it('an assigned co row fails no-wrapper even at adopted 3 (kind reserved, PR #67 review F2)', () => {
+    const at3 = buildEffectiveSensorMap(input(
+      [{ dataPoint: 'my_co', kind: 'co', measurement: 'co', sourceUnit: 'ppm', name: 'My CO' }],
+      { baseline: 1, adopted: 3 }));
+    expect(at3.errors.map(e => e.code)).toContain('no-wrapper');
+    expect(at3.rows.filter(r => r.dataPoint === 'my_co' && r.kind !== 'unrecognized')).toHaveLength(0);
+  });
+});
+
+describe('§19.1 realtime forwards boolean readings the same as polling (PR #67 review F4)', () => {
+  it('a RealtimeSource true/false event reaches the state wrapper (parity with the poll path)', () => {
+    const dp = 'my_leak';
+    const row = configured(buildEffectiveSensorMap(input(
+      [{ dataPoint: dp, kind: 'leak', measurement: 'boolean', name: 'My Leak' }],
+      { baseline: 1, adopted: 3 })), dp);
+    const platform = makeMockPlatform();
+    const accessory = makeMockAccessory({ uniqueId: `${MAC}-${dp}`, displayName: 'My Leak' });
+    const routing = buildWrapperRouting(
+      platform as unknown as AmbientWeatherSensorsPlatform,
+      { rows: [row], errors: [], warnings: [], notes: [] },
+      () => accessory as never,
+    );
+    const push = (raw: unknown) => distributeViaRouting(
+      platform as unknown as AmbientWeatherSensorsPlatform, routing,
+      [{ macAddress: MAC, lastData: { [dp]: raw } }]);
+    const leak = accessory.getService(MockServices.LeakSensor)!;
+
+    let updateCalls = 0;
+    const source = new RealtimeSource({
+      apiKey: 'k', applicationKey: 'a', log: { info() {}, debug() {}, warn() {}, error() {} } as never,
+      catalogAdopted: 3,
+      onUpdates(updates) { updateCalls++; for (const u of updates) push(u.value); },
+    });
+    // A boolean true must produce an update (pre-fix it was filtered
+    // out at the transport, zero callbacks, HomeKit left clear).
+    (source as unknown as { handleDevicePayload(d: Record<string, unknown>): void })
+      .handleDevicePayload({ macAddress: MAC, [dp]: true });
+    expect(updateCalls).toBe(1);
+    expect(leak.readCharacteristic(MockCharacteristics.LeakDetected)).toBe(1);
+    (source as unknown as { handleDevicePayload(d: Record<string, unknown>): void })
+      .handleDevicePayload({ macAddress: MAC, [dp]: false });
+    expect(leak.readCharacteristic(MockCharacteristics.LeakDetected)).toBe(0);
   });
 });
 

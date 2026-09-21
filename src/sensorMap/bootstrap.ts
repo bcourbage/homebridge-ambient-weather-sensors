@@ -25,7 +25,13 @@
 
 import { staticDefaultRowFor, defaultRowFor } from './defaultMap.js';
 import { LEGACY_TYPE_TO_KIND, LEGACY_TYPE_TO_MEASUREMENT } from './legacyTables.js';
+import { COMPATIBLE_KINDS_FOR_MEASUREMENT } from './units.js';
 import type { Measurement, SensorKind } from './types.js';
+
+/** A measurement this plugin's vocabulary recognizes. */
+function isKnownMeasurement(m: unknown): m is Measurement {
+  return typeof m === 'string' && Object.prototype.hasOwnProperty.call(COMPATIBLE_KINDS_FOR_MEASUREMENT, m);
+}
 
 /**
  * Well-known HAP service UUIDs for sensor types the plugin registers.
@@ -55,11 +61,18 @@ export const HAP_CHARACTERISTIC_UUIDS = {
  * conforms; test doubles can be plain objects.
  */
 export interface CachedAccessoryShape {
-  /** Free-form context bag; we read `device.kind`, `.type`, `.uniqueId`. */
+  /**
+   * Free-form context bag; we read `device.kind`, `.measurement`,
+   * `.structuralSignature`, `.type`, `.uniqueId`. The v2 platform
+   * writes kind/measurement/structuralSignature; a v1.x cache has
+   * only type/uniqueId (and the HAP service graph).
+   */
   context?: {
     device?: {
       uniqueId?: string;
       kind?: SensorKind;
+      measurement?: Measurement;
+      structuralSignature?: unknown;
       type?: string;
     };
   };
@@ -81,7 +94,10 @@ export type BootstrapResult =
  * accessory. Caller is responsible for writing the result back to
  * context (or not, on 'preserve-cached').
  */
-export function inferForCachedAccessory(accessory: CachedAccessoryShape): BootstrapResult {
+export function inferForCachedAccessory(
+  accessory: CachedAccessoryShape,
+  opts: { trustV2Cache?: boolean } = {},
+): BootstrapResult {
   const device = accessory.context?.device;
   const uniqueId = device?.uniqueId ?? '';
   const legacyType = device?.type;
@@ -93,16 +109,38 @@ export function inferForCachedAccessory(accessory: CachedAccessoryShape): Bootst
     return { status: 'preserve-cached' };
   }
 
-  // ---- Measurement: three-level fallback avoiding kind-alone guessing.
-  //      STATIC catalog only (#63 P0): this inference decides whether a
-  //      cached accessory with no live row is reconciled (and possibly
-  //      deregistered) or preserved. Guessing a measurement from the
-  //      dynamic legacy fallback turned preserve-cached custom
-  //      accessories into deletions; the fallback names carry no more
-  //      certainty here than they did before it existed.
+  // ---- Measurement: prefer the identity THIS platform positively
+  //      wrote to the v2 cache, then the STATIC catalog, then the
+  //      legacy type. Never the dynamic legacy fallback (#63 P0):
+  //      guessing from substring names turned preserve-cached custom
+  //      accessories into deletions, and the fallback carries no more
+  //      certainty here than it did before it existed.
+  //
+  //      The v2-written measurement (PR #67 review F1) is authoritative
+  //      and is what lets a DISABLED catalog-2/3 accessory be
+  //      reconciled and removed: its dataPoint is not in the frozen
+  //      static table and its type is not in the legacy map, so without
+  //      this it fell to preserve-cached and evaded explicit removal.
+  //      It is trusted only when ALL of:
+  //        - `trustV2Cache` — the runtime is genuinely v2-driven
+  //          (configMode === 'v2'). In compat/legacy-translated mode a
+  //          custom v2 cache has no compat row and must stay FROZEN,
+  //          not churned on a rollback (downgradeV17 journey); the v2
+  //          identity belongs to a different runtime regime, exactly as
+  //          the battery decoder is gated in §19.6.
+  //        - the cache is POSITIVELY v2-identified: a structuralSignature
+  //          AND a known measurement compatible with the inferred kind.
+  //      A genuinely historical v1.x cache (no signature) always takes
+  //      the conservative static/legacy path, never a widened recognizer.
+  const v2Written = opts.trustV2Cache === true
+    && device?.structuralSignature !== undefined
+    && device?.structuralSignature !== null
+    && isKnownMeasurement(device?.measurement)
+    && COMPATIBLE_KINDS_FOR_MEASUREMENT[device!.measurement as Measurement].includes(kind);
   const defaultRow = dataPoint ? staticDefaultRowFor(dataPoint) : undefined;
   const measurement: Measurement | undefined =
-    defaultRow?.measurement
+    (v2Written ? (device!.measurement as Measurement) : undefined)
+    ?? defaultRow?.measurement
     ?? (legacyType ? LEGACY_TYPE_TO_MEASUREMENT[legacyType] : undefined);
 
   if (!measurement) {

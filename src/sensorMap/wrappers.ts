@@ -71,7 +71,6 @@ import {
   SmokeAccessory,
   MotionBooleanAccessory,
 } from '../booleanStateAccessory.js';
-import { CoAccessory } from '../coAccessory.js';
 import {
   SoilMoistureAccessory,
   LeafWetnessAccessory,
@@ -268,9 +267,6 @@ export const SMOKE_WRAPPER: WrapperDescriptor = {
 export const MOTION_BOOLEAN_WRAPPER: WrapperDescriptor = {
   id: 'motion-boolean', schemaVersion: 1, constructor: MotionBooleanAccessory,
 };
-export const CO_WRAPPER: WrapperDescriptor = {
-  id: 'co', schemaVersion: 1, constructor: CoAccessory,
-};
 export const SOIL_MOISTURE_WRAPPER: WrapperDescriptor = {
   id: 'soil-moisture', schemaVersion: 1, constructor: SoilMoistureAccessory,
 };
@@ -318,7 +314,6 @@ export const ALL_WRAPPERS: ReadonlyArray<WrapperDescriptor> = [
   OCCUPANCY_WRAPPER,
   SMOKE_WRAPPER,
   MOTION_BOOLEAN_WRAPPER,
-  CO_WRAPPER,
   SOIL_MOISTURE_WRAPPER,
   LEAF_WETNESS_WRAPPER,
   SOIL_TENSION_WRAPPER,
@@ -382,7 +377,6 @@ export const WRAPPER_FOR_KIND_AND_MEASUREMENT: Readonly<Partial<Record<`${Exclud
   'occupancy|boolean':            OCCUPANCY_WRAPPER,
   'smoke|boolean':                SMOKE_WRAPPER,
   'motion|boolean':               MOTION_BOOLEAN_WRAPPER,
-  'co|co':                        CO_WRAPPER,
   'motion|soil-moisture':         SOIL_MOISTURE_WRAPPER,
   'motion|leaf-wetness':          LEAF_WETNESS_WRAPPER,
   'motion|soil-tension':          SOIL_TENSION_WRAPPER,
@@ -402,7 +396,6 @@ export const WRAPPER_PAIR_SINCE: Readonly<Partial<Record<keyof typeof WRAPPER_FO
   'occupancy|boolean': 3,
   'smoke|boolean': 3,
   'motion|boolean': 3,
-  'co|co': 3,
   'motion|soil-moisture': 3,
   'motion|leaf-wetness': 3,
   'motion|soil-tension': 3,

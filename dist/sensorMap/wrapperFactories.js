@@ -45,7 +45,6 @@ import { PressureRelativeAccessory, PressureAbsoluteAccessory, } from '../extend
 import { RainRateAccessory, RainEventAccessory, RainDailyAccessory, RainWeeklyAccessory, RainMonthlyAccessory, RainYearlyAccessory, LastRainAccessory, } from '../extendedSensors/rainAccessory.js';
 import { LightningDayAccessory, LightningHourAccessory, LightningDistanceAccessory, LightningLastStrikeAccessory, } from '../extendedSensors/lightningAccessory.js';
 import { LeakAccessory, ContactAccessory, OccupancyAccessory, SmokeAccessory, MotionBooleanAccessory, } from '../booleanStateAccessory.js';
-import { CoAccessory } from '../coAccessory.js';
 import { SoilMoistureAccessory, LeafWetnessAccessory, SoilTensionAccessory, EvapotranspirationAccessory, AqiAccessory, } from '../extendedSensors/genericValueAccessory.js';
 /**
  * The SINGLE source of truth for `WrapperId → (kind, measurement)`.
@@ -95,7 +94,6 @@ export const WRAPPER_SPEC = {
     'occupancy': { kind: 'occupancy', measurement: 'boolean' },
     'smoke': { kind: 'smoke', measurement: 'boolean' },
     'motion-boolean': { kind: 'motion', measurement: 'boolean' },
-    'co': { kind: 'co', measurement: 'co' },
     'soil-moisture': { kind: 'motion', measurement: 'soil-moisture' },
     'leaf-wetness': { kind: 'motion', measurement: 'leaf-wetness' },
     'soil-tension': { kind: 'motion', measurement: 'soil-tension' },
@@ -152,7 +150,6 @@ export const FACTORIES = {
     'occupancy': (p, a, r) => new OccupancyAccessory(p, a, r),
     'smoke': (p, a, r) => new SmokeAccessory(p, a, r),
     'motion-boolean': (p, a, r) => new MotionBooleanAccessory(p, a, r),
-    'co': (p, a, r) => new CoAccessory(p, a, r),
     'soil-moisture': (p, a, r) => new SoilMoistureAccessory(p, a, r),
     'leaf-wetness': (p, a, r) => new LeafWetnessAccessory(p, a, r),
     'soil-tension': (p, a, r) => new SoilTensionAccessory(p, a, r),

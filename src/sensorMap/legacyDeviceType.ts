@@ -55,7 +55,6 @@ export const LEGACY_TYPE_FOR_WRAPPER_ID: Record<WrapperId, string> = {
   'occupancy':             'Occupancy',
   'smoke':                 'Smoke',
   'motion-boolean':        'MotionBoolean',
-  'co':                    'CO',
   'soil-moisture':         'SoilMoisture',
   'leaf-wetness':          'LeafWetness',
   'soil-tension':          'SoilTension',

@@ -20,7 +20,14 @@
 import type { Logger } from 'homebridge';
 export interface RealtimeUpdate {
     uniqueId: string;
-    value: number;
+    /**
+     * A supported v2 raw value. Numbers cover every legacy sensor; the
+     * catalog-3 boolean state kinds (§19.1) also report JSON
+     * true/false, which the row-aware coercer decodes downstream. Both
+     * transports must reach the SAME coercion boundary (PR #67 review
+     * F4); arbitrary strings/objects stay filtered out at the source.
+     */
+    value: number | boolean;
     /**
      * HomeKit-aligned low/normal flag for the sensor's physical probe.
      * undefined = no battery reported for this probe; true = low;

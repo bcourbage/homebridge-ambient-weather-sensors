@@ -72,8 +72,11 @@ export declare const VENDOR_INVERTED_BATTERY_FIELDS: ReadonlySet<string>;
  * spurious lightning low-battery and its README workaround), because
  * silently flipping a battery signal on upgrade is a behavior change.
  *
- * Returns undefined when the battery field is missing or non-numeric
- * — the wrapper should not add a Battery sub-service in that case.
+ * Returns undefined when the battery field is missing, non-numeric,
+ * or (under the new vendor-polarity policy) not one of the declared
+ * 0/1 states — the wrapper should not add or update a Battery
+ * sub-service, and an out-of-contract value must never be manufactured
+ * into a healthy "OK" reading (PR #67 review F7).
  */
 export declare function readBatteryLow(lastData: Record<string, unknown>, batteryField: string | undefined, catalogAdopted?: number): boolean | undefined;
 //# sourceMappingURL=batteryFields.d.ts.map

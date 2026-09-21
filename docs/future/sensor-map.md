@@ -1951,6 +1951,43 @@ Tests: for every non-motion kind, submit an override with each of these fields; 
     accessories strand on downgrade by design (never
     v1-representable; the mirror excludes them).
 
+  PR #67 review round 1 corrected nine findings and settled two scope
+  questions:
+  - F1: `inferForCachedAccessory` trusts a POSITIVELY v2-written
+    `device.measurement` (gated on `structuralSignature`) so a
+    disabled catalog-2/3 accessory reconciles and unregisters instead
+    of dodging removal via preserve-cached — but only when the runtime
+    is genuinely v2-driven (`configMode === 'v2'`); compat/legacy mode
+    keeps the conservative static/legacy path so a rollback freezes a
+    custom rather than churning it. No legacy recognizer was widened.
+  - F2 / CO: native `co|co` is DEFERRED (maintainer decision) — the
+    unjustified fixed-threshold alarm and the HAP 100 ppm clamp are
+    both removed by returning `co` to reserved-no-wrapper; §19.3/§19.8.
+  - F3: `coerceValue` forwards a present-invalid boolean state as
+    INVALID_BOOLEAN_STATE (not dropped) so the wrapper faults, and the
+    state constructor no longer clobbers a cached fault — it clears
+    only on a valid 0/1.
+  - F4: RealtimeSource forwards boolean readings (numbers and booleans
+    only), reaching the same row-aware coercer as polling.
+  - F5: the adoption preview discloses battery-polarity changes as a
+    non-structural `batteryPolarity` consequence and binds it into the
+    digest.
+  - F6: the battery decoder version comes from the ACTIVE runtime path
+    (`decoderAdopted()` = the stamp only when v2 drives), so flag-off
+    and safe mode keep the frozen legacy decode even with a retained
+    catalog-3 stamp.
+  - F7: the vendor-inverted decoder accepts only its declared 0/1
+    states; an invalid value is unknown (no update), never a
+    fabricated OK.
+  - F8: soil battery associations are limited to the dictionary's
+    declared `battsm1..4`; channels 5-10 carry no battery key.
+  - F9: the static assignment picker withholds every stamp-gated pair
+    (not just booleans) until the P4 capability-aware editor, and the
+    kind help copy carries an adoption caveat.
+  - Scope: the generic numeric/raw-unit path is PENDING as package
+    P3.1 (§19.9), mandatory for GA, its public-config design to be
+    approved before implementation — not invented during bug-fixing.
+
 - Status: **APPROVED FOR IMPLEMENTATION**. Beta cycle can begin.
 
 ## 19. P3 — explicit decoders and new output kinds (catalog 3)
@@ -1999,18 +2036,32 @@ because a dormant authored row silently registering is new exposure.
 Adoption's preview names any such row as `added` (structural, digest
 required), so the exposure is explicit and confirmed. New pairs:
 `leak|boolean`, `contact|boolean`, `occupancy|boolean`,
-`smoke|boolean`, `motion|boolean`, and `co|co`.
+`smoke|boolean`, `motion|boolean`. (`co|co` was considered but the
+native CO mapping is deferred, §19.3.)
 
-### 19.3 CO semantics
+### 19.3 CO — native mapping DEFERRED past P3
 
-No AWN field reports CO; the kind exists for explicit custom
-assignments. The wrapper always writes `CarbonMonoxideLevel` (ppm,
-canonical). `CarbonMonoxideDetected` is a fixed HAP alert-state
-semantic (like CO2's 1000 ppm): the boundary is 400 ppm — the floor of
-UL 2034's shortest alarm window, the concentration at which every
-UL 2034 window alarms. It is deliberately NOT `row.threshold` (that
-stays motion-only per §3.7); the boundary is documented, not
-configurable.
+Native CO is deferred (PR #67 review F2, maintainer decision
+2026-09-20). The `co` kind stays RESERVED with no wrapper: an assigned
+`co` row fails `no-wrapper`, exactly as before P3, across the registry,
+vocabulary, help copy, and capability spec. This is recorded as an
+explicit exception to the GA capability matrix (§19.8).
+
+Why: no AWN field reports CO, and an honest alarm cannot be
+manufactured here. The considered fixed-threshold approach (a 400 ppm
+`CarbonMonoxideDetected` boundary) is not a defensible safety
+semantic — UL 2034 alarm points depend on concentration AND exposure
+duration (150 ppm and 70 ppm windows exist, not only 400 ppm) — and
+the stock HAP `CarbonMonoxideLevel` characteristic clamps to 100 ppm,
+silently truncating the reading. A network weather plugin must not be
+presented as a substitute for a certified CO alarm.
+
+Future native CO support (its own reviewed increment) should map an
+actual detector's REPORTED alarm state, with explicit unknown/fault
+handling and an optional correctly-ranged concentration reading — not
+an invented concentration/exposure algorithm. Meanwhile, numeric CO
+readings will be representable through the generic non-alarm numeric
+path (P3.1, §19.9); that path is a measurement, never a CO alarm.
 
 ### 19.4 New measurements and units
 
@@ -2036,8 +2087,11 @@ row-parameterized `GenericValueAccessory` on the extended shell
 All `sinceCatalogVersion: 3`, `catalogExposure: 'new'`,
 `defaultEnabled: false`:
 
-- `soilhum1..10` — soil-moisture, battery `battsm{n}` (declared
-  "Soil Moisture Battery"), canonical owner per channel.
+- `soilhum1..10` — soil-moisture. Battery `battsm{n}` for channels
+  1-4 ONLY (the range the dictionary declares, "battsm1...battsm4");
+  channels 5-10 are supported measurements with NO declared battery
+  key, so none is fabricated (PR #67 review F8). Ownership via claims
+  adjudication, never the frozen v1 reservation set.
 - `leafwetness1..8` — leaf-wetness, battery null (none declared).
 - `soiltens1..4` — soil-tension, battery null (none declared).
 - `etos` / `etrs` — evapotranspiration, battery null (derived values;
@@ -2074,7 +2128,7 @@ wherever it is reachable at all. The Meteobridge variants stay
 RECORDED, not implemented: the plugin cannot detect the reporting
 path, so no polarity switching is invented for the standard fields.
 
-### 19.7 Required tests
+### 19.7 Required tests (as implemented)
 
 The tri-state decode through the real wrapper for every state kind
 (raw 2 sets the fault and never the alarm; 0/1 decode and clear the
@@ -2090,6 +2144,47 @@ unit-vocabulary updates; and §18.4's preservation invariants re-run
 against catalog 3 (an explicit assignment on a catalog-3 dataPoint
 behaves exactly like the Demeter fixture did for catalog 2).
 
+PR #67 review added consumer-level regressions for each finding: the
+full enable → disable → cached-restart → unregister lifecycle for
+every new wrapper type (F1); present-invalid state input raising a
+fault and a retained fault surviving a restart (F3); realtime
+forwarding boolean readings in parity with polling (F4); the adoption
+preview disclosing the battery-polarity change and binding it into the
+digest (F5); the flag-off/legacy decode staying frozen (F6); the
+vendor decoder rejecting invalid values rather than reporting OK (F7);
+soil channels 5-10 carrying no fabricated battery (F8); and the editor
+withholding stamp-gated assignments (F9).
+
+### 19.8 GA capability-matrix exception: native CO
+
+Native CO (`co|co`) is DEFERRED past P3 and recorded here as an
+explicit exception to the GA capability matrix (§19.3). GA does not
+ship a native CO accessory. This is a bounded, documented exception,
+not a silent omission; it is revisited only as its own reviewed
+increment mapping a real detector alarm state.
+
+### 19.9 Generic numeric path — PENDING for GA (package P3.1)
+
+The #63 P3 acceptance list includes an honest generic
+finite-numeric/user-specified-unit extended path for genuinely new
+quantities. P3 ships five NAMED measurements, not that open-ended
+capability, so this item is **PENDING, not complete and not deferred
+beyond v2.0.0** (maintainer decision 2026-09-20). It becomes package
+**P3.1**, sequenced AFTER PR #67 clears and BEFORE P4, and its
+public-config design is presented for approval before implementation.
+
+Intended shape (design to be reviewed, not built during bug-fixing):
+one explicit generic numeric measurement carrying a LITERAL unit
+label, finite-value validation, no invented conversions and no
+category-specific wording, and an optional threshold expressed in the
+same raw unit. The existing typed measurement/unit vocabulary stays
+closed — it is not made unrestricted. All existing identity, layering,
+preview, guarded-save, and rollback contracts are preserved. Numeric
+CO readings may use this non-alarm path once it lands; that does not
+restore the deferred native CO alarm mapping. Sequence of record:
+PR #67 corrections → P3.1 design and implementation → P4 editor
+integration → P5 proofs → GA.
+
 ## 18. Catalog completion: three decisions and assignment preservation
 
 Issue #63 (revised 2026-09-20) reframes the end state as COMPLETING
@@ -2097,9 +2192,12 @@ the sensor-map architecture, not rewriting it. This section is the
 design checkpoint for that work. It separates three decisions that the
 implementation historically blended, defines how later catalog growth
 is prevented from disturbing existing assignments, and fixes the
-boundary of what P1 delivers. Everything below §18.1's artifacts is
-design only — no runtime code implements it yet, and P2 must not start
-until this section is reviewed.
+boundary of what P1 delivers. Written at the P1 design checkpoint, it
+was reviewed and then implemented: packages P2 (adoption stamps and
+anchored/new definitions) and P3 (§19 — state decoders, new kinds,
+agronomic/AQI measurements, battery polarity) are now in the runtime.
+Read §19 and the decision log for the implemented behavior; the
+subsections below remain the governing design.
 
 ### 18.1 The three decisions
 

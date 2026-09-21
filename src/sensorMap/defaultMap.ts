@@ -861,7 +861,11 @@ function makeCatalogV3Rows(): DefaultSensorRow[] {
     rows.push(v3({
       dataPoint: `soilhum${n}`, kind: 'motion', measurement: 'soil-moisture',
       wrapper: SOIL_MOISTURE_WRAPPER, name: `Soil Moisture ${n}`,
-      sourceUnit: 'percent', displayUnit: 'percent', batteryField: `battsm${n}`,
+      sourceUnit: 'percent', displayUnit: 'percent',
+      // The AWN dictionary declares battsm1..battsm4 only (PR #67
+      // review F8). Channels 5..10 exist as measurements but have NO
+      // declared battery key — never fabricate one.
+      batteryField: n <= 4 ? `battsm${n}` : null,
     }));
   }
   for (let n = 1; n <= 8; n++) {

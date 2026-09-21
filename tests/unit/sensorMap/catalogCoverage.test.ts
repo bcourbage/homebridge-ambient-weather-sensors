@@ -39,7 +39,7 @@ import type { AmbientWeatherSensorsPlatform } from '../../../src/platform';
 const NATIVE_KINDS = new Set([
   'temperature', 'humidity', 'light', 'co2', 'air-quality-pm25', 'air-quality-pm10',
   // Catalog-3 native services (§19.1/§19.3).
-  'leak', 'contact', 'occupancy', 'smoke', 'co',
+  'leak', 'contact', 'occupancy', 'smoke',
 ]);
 
 /** Dispositions whose entries must state (and match) a resolved identity. */
@@ -89,8 +89,10 @@ describe('AWN catalog inventory shape', () => {
     }
   });
 
-  it('covers the audited published inventory (78 entries, 169 keys) plus the supported extra', () => {
-    expect(AWN_CATALOG).toHaveLength(79); // 78 published + co2_in
+  it('covers the audited published inventory (79 entries, 169 keys) plus the supported extra', () => {
+    // 78 published families + co2_in, with soilhum split into two
+    // entries (1-4 battery-declared, 5-10 not; PR #67 review F8) = 80.
+    expect(AWN_CATALOG).toHaveLength(80);
     const keys = AWN_CATALOG.flatMap(expandCatalogKeys);
     expect(keys).toHaveLength(170); // 169 published + co2_in
     expect(new Set(keys).size).toBe(keys.length); // no key claimed twice

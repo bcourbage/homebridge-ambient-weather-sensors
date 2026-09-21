@@ -131,13 +131,20 @@ export const AWN_CATALOG = [
         sourceUnit: 'fahrenheit', batteryField: null, evidence: WIKI,
         notes: 'Anchored at catalog 2, identical to the fallback. Battery family (battsm{n}?) still needs device evidence.' },
     // ---- Soil / leaf / agronomic gaps --------------------------------
-    { family: 'soilhum1...soilhum10', indexed: { prefix: 'soilhum', from: 1, to: 10 },
+    { family: 'soilhum1...soilhum4', indexed: { prefix: 'soilhum', from: 1, to: 4 },
         class: 'measurement', disposition: 'implemented-extended', sinceCatalogVersion: 3,
-        meaning: 'Soil moisture', kind: 'motion', measurement: 'soil-moisture',
+        meaning: 'Soil moisture (channels with a declared battery)', kind: 'motion', measurement: 'soil-moisture',
         sourceUnit: 'percent', batteryField: 'battsm{n}', evidence: WIKI,
         notes: 'Catalog-3 definition (§19.5): a DISTINCT soil-moisture measurement, never air humidity. Battery '
-            + 'battsm{n} per the declared "Soil Moisture Battery" family; ownership via claims adjudication. '
-            + 'The wiki row itself is mislabeled "Temperature 1...10" (source copy error); its declared unit % stands.' },
+            + 'battsm{n} for channels 1-4, the ONLY range the dictionary declares ("battsm1...battsm4"); ownership '
+            + 'via claims adjudication. The wiki row itself is mislabeled "Temperature 1...10" (source copy error); '
+            + 'its declared unit % stands.' },
+    { family: 'soilhum5...soilhum10', indexed: { prefix: 'soilhum', from: 5, to: 10 },
+        class: 'measurement', disposition: 'implemented-extended', sinceCatalogVersion: 3,
+        meaning: 'Soil moisture (channels beyond the declared battery range)', kind: 'motion', measurement: 'soil-moisture',
+        sourceUnit: 'percent', batteryField: null, evidence: WIKI,
+        notes: 'Catalog-3 definition (§19.5). Channels 5-10 are supported measurements but the dictionary declares '
+            + 'no battery key for them (battsm stops at 4), so NO battery association is fabricated (PR #67 review F8).' },
     { family: 'leafwetness1...leafwetness8', indexed: { prefix: 'leafwetness', from: 1, to: 8 },
         class: 'measurement', disposition: 'implemented-extended', sinceCatalogVersion: 3,
         meaning: 'Leaf wetness', kind: 'motion', measurement: 'leaf-wetness',
@@ -331,7 +338,9 @@ export const AWN_CATALOG = [
         encoding: 'Vendor declares "1=Low 0=OK" — INVERTED relative to the standard (non-Meteobridge) convention of the other battery fields, like batt_lightning. '
             + 'The uniform deployed decoder would misread it; no production binding exists today.',
         evidence: WIKI + '; deployed decoder readBatteryLow (src/batteryFields.ts)',
-        notes: 'Bound to the catalog-3 leak{n} rows (§19.5); decodes vendor-correct wherever reachable (leak rows exist only at adopted >= 3).' },
+        notes: 'Declared "1=Low 0=OK" (inverted). Bound by the catalog-3 leak{n} default rows once adopted; a CUSTOM '
+            + 'row may also reference batleak{n} as its batteryField before catalog 3, but the vendor-correct decode '
+            + 'is adoption-gated (§19.6), so a pre-adoption custom row reads it on the frozen legacy polarity.' },
     { family: 'battsm1...battsm4', indexed: { prefix: 'battsm', from: 1, to: 4 }, class: 'battery-auxiliary', disposition: 'auxiliary',
         meaning: 'Soil-moisture sensor battery status',
         encoding: 'Declared "1=OK, 0=Low"', evidence: WIKI,

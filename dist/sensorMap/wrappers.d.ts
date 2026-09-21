@@ -74,7 +74,6 @@ export declare const CONTACT_WRAPPER: WrapperDescriptor;
 export declare const OCCUPANCY_WRAPPER: WrapperDescriptor;
 export declare const SMOKE_WRAPPER: WrapperDescriptor;
 export declare const MOTION_BOOLEAN_WRAPPER: WrapperDescriptor;
-export declare const CO_WRAPPER: WrapperDescriptor;
 export declare const SOIL_MOISTURE_WRAPPER: WrapperDescriptor;
 export declare const LEAF_WETNESS_WRAPPER: WrapperDescriptor;
 export declare const SOIL_TENSION_WRAPPER: WrapperDescriptor;

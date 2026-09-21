@@ -203,8 +203,11 @@ export const VENDOR_INVERTED_BATTERY_FIELDS: ReadonlySet<string> = new Set([
  * spurious lightning low-battery and its README workaround), because
  * silently flipping a battery signal on upgrade is a behavior change.
  *
- * Returns undefined when the battery field is missing or non-numeric
- * — the wrapper should not add a Battery sub-service in that case.
+ * Returns undefined when the battery field is missing, non-numeric,
+ * or (under the new vendor-polarity policy) not one of the declared
+ * 0/1 states — the wrapper should not add or update a Battery
+ * sub-service, and an out-of-contract value must never be manufactured
+ * into a healthy "OK" reading (PR #67 review F7).
  */
 export function readBatteryLow(
   lastData: Record<string, unknown>,
@@ -215,11 +218,22 @@ export function readBatteryLow(
     return undefined;
   }
   const raw = lastData[batteryField];
-  if (typeof raw !== 'number') {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) {
     return undefined;
   }
   if (catalogAdopted >= 3 && VENDOR_INVERTED_BATTERY_FIELDS.has(batteryField)) {
-    return raw === 1;
+    // The vendor-inverted policy is an EXPLICIT decode: only its
+    // declared states resolve. 1 = Low, 0 = OK; anything else (2, a
+    // negative, a fraction) is unknown — no update, never a fabricated
+    // OK that would clear a real low condition.
+    if (raw === 1) {
+      return true;
+    }
+    if (raw === 0) {
+      return false;
+    }
+    return undefined;
   }
+  // Frozen legacy/standard policy (parity with v1.7 preserved): 0 = low.
   return raw === 0;
 }

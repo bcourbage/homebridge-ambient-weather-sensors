@@ -339,7 +339,6 @@ export type WrapperId =
   | 'occupancy'
   | 'smoke'
   | 'motion-boolean'
-  | 'co'
   | 'soil-moisture'
   | 'leaf-wetness'
   | 'soil-tension'

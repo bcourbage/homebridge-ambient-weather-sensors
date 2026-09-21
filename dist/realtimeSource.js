@@ -215,7 +215,12 @@ export class RealtimeSource {
                 continue;
             }
             for (const [key, value] of Object.entries(lastData)) {
-                if (typeof value !== 'number') {
+                // Forward numbers (every legacy sensor) and booleans (the
+                // catalog-3 state kinds). Everything else — strings, objects,
+                // null — stays dropped at the transport, preserving the legacy
+                // realtime contract; the row-aware coercer/decoder decides the
+                // rest for both transports (PR #67 review F4).
+                if (typeof value !== 'number' && typeof value !== 'boolean') {
                     continue;
                 }
                 if (this.opts.isSensorKey && !this.opts.isSensorKey(key)) {

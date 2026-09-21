@@ -54,17 +54,21 @@ abstract class BooleanStateAccessory implements SensorAccessory {
     this.service = this.accessory.getService(ServiceCtor)
                 || this.accessory.addService(ServiceCtor as unknown as Service);
     this.service.setCharacteristic(this.platform.Characteristic.Name, accessory.context.device.displayName);
-    // StatusFault is part of the graph from the start so the fault
-    // transition never mutates the service set (§9 signature stability).
-    this.service.updateCharacteristic(
-      this.platform.Characteristic.StatusFault,
-      this.platform.Characteristic.StatusFault.NO_FAULT,
-    );
+    // Ensure StatusFault is in the graph from the start (§9 signature
+    // stability) WITHOUT forcing a value: `getCharacteristic` adds it
+    // on a fresh accessory (default NO_FAULT) and PRESERVES the
+    // restored value on a cached one. A previously retained fault must
+    // survive a restart and clear only on a valid 0/1 observation
+    // (PR #67 review F3) — writing NO_FAULT here would erase it.
+    this.service.getCharacteristic(this.platform.Characteristic.StatusFault);
 
     this.batterySetter = setupBatteryService(
       this.platform, this.accessory, batteryOptionsFor(row, accessory),
     );
 
+    // Seed only from a valid cached reading. An absent or uncoercible
+    // reading leaves the restored characteristics (including any
+    // retained fault) untouched.
     if (typeof accessory.context.device.value === 'number') {
       this.setValue(accessory.context.device.value);
     }

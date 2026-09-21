@@ -393,6 +393,43 @@ describe('catalog-3 adoption through the pipeline (§19)', () => {
     expect(next.catalogAdopted).toBe(CURRENT_CATALOG_VERSION);
   });
 
+  it('adoption discloses the battery-polarity change on affected rows and binds it into the digest (§19.6 / review F5)', async () => {
+    // A catalog-2 config with an enabled lightning row (canonical owner
+    // of the vendor-inverted batt_lightning). Adopting catalog 3 flips
+    // that field's decode with NO structural change — the preview must
+    // still disclose it.
+    const block = { ...V2_BLOCK, catalogBaseline: 1, catalogAdopted: 2, sensorMap: [{ dataPoint: 'lightning_day', enabled: true }] };
+    const rig = makeRig([block]);
+    writeFileSync(path.join(rig.persistDir, 'discovery.json'), JSON.stringify({
+      schemaVersion: 1,
+      entries: ['lightning_day', 'batt_lightning'].map(dataPoint => ({
+        stationMac: MAC, stationName: 'Home', dataPoint,
+        firstSeen: '2026-01-01T00:00:00Z', lastSeen: '2026-01-02T00:00:00Z',
+      })),
+    }));
+
+    const payload = { base: block, proposal: [{ dataPoint: 'lightning_day', enabled: true }], adoptCatalogVersion: CURRENT_CATALOG_VERSION };
+    const preview = await handlePreviewSave(rig.deps, payload);
+    expect(preview.ok, preview.ok ? '' : JSON.stringify((preview as { error: unknown }).error)).toBe(true);
+    if (!preview.ok) return;
+    // No re-registration — a decoder change is non-structural.
+    expect(preview.changes).toEqual([]);
+    // ...but the polarity change IS disclosed on the affected row.
+    expect(preview.batteryPolarity).toEqual([{
+      stationMac: MAC, dataPoint: 'lightning_day', batteryField: 'batt_lightning',
+      from: 'standard', to: 'vendor-inverted',
+    }]);
+
+    // An ORDINARY (non-adoption) save at the same stamp lists none.
+    const ordinary = await handlePreviewSave(rig.deps, { base: block, proposal: [{ dataPoint: 'lightning_day', enabled: true }] });
+    expect(ordinary.ok).toBe(true);
+    if (!ordinary.ok) return;
+    expect(ordinary.batteryPolarity).toEqual([]);
+    // The disclosed adoption is committable with its own digest.
+    const next = await commit(rig, { ...payload, confirmDigest: preview.digest });
+    expect(next.catalogAdopted).toBe(CURRENT_CATALOG_VERSION);
+  });
+
   it("a DORMANT hand-authored leak assignment is named as an ADDED consequence by the adoption preview (§19.2)", async () => {
     // The row fails no-wrapper below catalog 3 (the runtime tolerates
     // it row-level; only the JSON editor can author it), so adopting

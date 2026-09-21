@@ -59,7 +59,7 @@ describe('WrapperDescriptor registry', () => {
   //      (kind, measurement) per WRAPPER_SPEC — a drifted entry would
   //      otherwise be caught only at map-construction time
   //      (wrapper-mismatch note) or registration (throw).
-  it('WRAPPER_FOR_KIND_AND_MEASUREMENT has EXACTLY the 15 restored v2.0 entries plus the 11 catalog-3 pairs', () => {
+  it('WRAPPER_FOR_KIND_AND_MEASUREMENT has EXACTLY the 15 restored v2.0 entries plus the 10 catalog-3 pairs', () => {
     const expected: Record<string, string> = {
       // The frozen v2.0 fifteen.
       'temperature|temperature':  'temperature',
@@ -83,7 +83,6 @@ describe('WrapperDescriptor registry', () => {
       'occupancy|boolean':            'occupancy',
       'smoke|boolean':                'smoke',
       'motion|boolean':               'motion-boolean',
-      'co|co':                        'co',
       'motion|soil-moisture':         'soil-moisture',
       'motion|leaf-wetness':          'leaf-wetness',
       'motion|soil-tension':          'soil-tension',
@@ -94,11 +93,11 @@ describe('WrapperDescriptor registry', () => {
       Object.entries(WRAPPER_FOR_KIND_AND_MEASUREMENT).map(([k, v]) => [k, v!.id]),
     );
     expect(actual).toEqual(expected);
-    expect(Object.keys(WRAPPER_FOR_KIND_AND_MEASUREMENT)).toHaveLength(26);
+    expect(Object.keys(WRAPPER_FOR_KIND_AND_MEASUREMENT)).toHaveLength(25);
     // Version pins: exactly the catalog-3 pairs carry since 3.
     const since3 = Object.entries(WRAPPER_PAIR_SINCE).filter(([, v]) => v === 3).map(([k]) => k).sort();
     expect(since3).toEqual([
-      'contact|boolean', 'co|co', 'leak|boolean',
+      'contact|boolean', 'leak|boolean',
       'motion|aqi', 'motion|boolean', 'motion|evapotranspiration',
       'motion|leaf-wetness', 'motion|soil-moisture', 'motion|soil-tension',
       'occupancy|boolean', 'smoke|boolean',
@@ -126,7 +125,6 @@ describe('WrapperDescriptor registry', () => {
     expect(wrapperFor('leak', 'boolean')).toBeUndefined();
     expect(wrapperFor('leak', 'boolean', 2)).toBeUndefined();
     expect(wrapperFor('motion', 'aqi', 2)).toBeUndefined();
-    expect(wrapperFor('co', 'co', 1)).toBeUndefined();
     // At adopted 3: resolved.
     expect(wrapperFor('leak', 'boolean', 3)?.id).toBe('leak');
     expect(wrapperFor('smoke', 'boolean', 3)?.id).toBe('smoke');
@@ -178,14 +176,13 @@ describe('WrapperDescriptor registry', () => {
       { id: 'occupancy',             schemaVersion: 1 },
       { id: 'smoke',                 schemaVersion: 1 },
       { id: 'motion-boolean',        schemaVersion: 1 },
-      { id: 'co',                    schemaVersion: 1 },
       { id: 'soil-moisture',         schemaVersion: 1 },
       { id: 'leaf-wetness',          schemaVersion: 1 },
       { id: 'soil-tension',          schemaVersion: 1 },
       { id: 'evapotranspiration',    schemaVersion: 1 },
       { id: 'aqi',                   schemaVersion: 1 },
     ]);
-    expect(snapshot.length).toBe(36);
+    expect(snapshot.length).toBe(35);
   });
 
   it('descriptors are frozen at runtime — id mutation throws in strict mode', () => {

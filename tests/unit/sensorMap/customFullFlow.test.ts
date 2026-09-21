@@ -243,17 +243,6 @@ const ENTRIES: Entry[] = [
     assert: booleanState(MockServices.MotionSensor, MockCharacteristics.MotionDetected, true),
   },
   {
-    key: 'co|co',
-    // 450 ppm is above the documented 400 ppm boundary (§19.3).
-    override: { dataPoint: 'barn_co', kind: 'co', measurement: 'co', sourceUnit: 'ppm', name: 'Barn CO' },
-    wrapperId: 'co', value: 450,
-    assert: (_platform, accessory) => {
-      const svc = accessory.getService(MockServices.CarbonMonoxideSensor)!;
-      expect(svc.readCharacteristic(MockCharacteristics.CarbonMonoxideLevel)).toBe(450);
-      expect(svc.readCharacteristic(MockCharacteristics.CarbonMonoxideDetected)).toBe(1);
-    },
-  },
-  {
     key: 'motion|soil-moisture',
     override: { dataPoint: 'barn_soil', kind: 'motion', measurement: 'soil-moisture', sourceUnit: 'percent', name: 'Barn Soil' },
     wrapperId: 'soil-moisture', value: 43,

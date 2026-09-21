@@ -44,7 +44,8 @@ import {
   loadUiStateStore,
 } from '../dist/sensorMap/persistence/uiStateStore.js';
 import { DISPLAY_FAMILIES, MEASUREMENT_LABELS, UNIT_VOCABULARY, unitOptionsFor } from '../dist/sensorMap/unitVocabulary.js';
-import { WRAPPER_FOR_KIND_AND_MEASUREMENT } from '../dist/sensorMap/wrappers.js';
+import { WRAPPER_FOR_KIND_AND_MEASUREMENT, WRAPPER_PAIR_SINCE } from '../dist/sensorMap/wrappers.js';
+import { VENDOR_INVERTED_BATTERY_FIELDS } from '../dist/batteryFields.js';
 import { defaultRowForConfigOverride, defaultRowFor } from '../dist/sensorMap/defaultMap.js';
 import { CURRENT_CATALOG_VERSION, parseCatalogStamps, type CatalogStamps } from '../dist/sensorMap/catalogVersion.js';
 import { PLUGIN_NAME } from '../dist/settings.js';
@@ -68,6 +69,7 @@ import type {
   EditorRowDto,
   EditorStateDto,
   EditorStationDto,
+  BatteryPolarityChangeDto,
   ConfigOnlyChangeDto,
   PreviewChangeDto,
   PreviewResultDto,
@@ -1503,6 +1505,7 @@ export async function handlePreviewSave(
       rows: [],
       changes: [],
       configOnly: [],
+      batteryPolarity: [],
       structuralChangeCount: 0,
       digest: settingsOnlyDigest(block, settingsChanged),
       warnings: [],
@@ -1547,6 +1550,7 @@ export async function handlePreviewSave(
     rows: consequences.proposedRows,
     changes: consequences.changes.map(attach),
     configOnly: consequences.configOnly.map(attach),
+    batteryPolarity: consequences.batteryPolarity,
     structuralChangeCount: consequences.structuralChangeCount,
     digest: consequences.digest,
     warnings: effectiveMap.warnings.map(w => toDiagnosticDto('warning', w)),
@@ -1558,6 +1562,8 @@ export async function handlePreviewSave(
 export interface SaveConsequences {
   changes: PreviewChangeDto[];
   configOnly: ConfigOnlyChangeDto[];
+  /** Adoption battery-decoder polarity changes (§19.6 / F5). */
+  batteryPolarity: BatteryPolarityChangeDto[];
   structuralChangeCount: number;
   /**
    * The confirmation token (review #43 P1-2): sha256 over canonical
@@ -1767,6 +1773,38 @@ export function computeSaveConsequences(ctx: SavePipelineContext): SaveConsequen
       ? (a.dataPoint < b.dataPoint ? -1 : a.dataPoint > b.dataPoint ? 1 : 0)
       : (a.stationMac < b.stationMac ? -1 : 1));
 
+  // Battery-decoder polarity consequences (§19.6 / PR #67 review F5).
+  // The vendor-inverted decode is adoption-gated at catalog 3: an
+  // enabled battery-OWNING row whose field is vendor-inverted flips
+  // its low/normal decode when the save crosses the catalog-3
+  // boundary, with NO structural change. Disclose every affected
+  // existing (enabled, both-sides) row; the reverse transition (a
+  // downgrade save) is disclosed the same way.
+  const policyOf = (adopted: number): 'standard' | 'vendor-inverted' =>
+    adopted >= 3 ? 'vendor-inverted' : 'standard';
+  const fromPolicy = policyOf(stampsCurrent.catalogAdopted);
+  const toPolicy = policyOf(stampsResolved.catalogAdopted);
+  const batteryPolarity: BatteryPolarityChangeDto[] = [];
+  if (fromPolicy !== toPolicy) {
+    for (const [key, a] of after) {
+      if (a.hasBatterySubService
+        && a.batteryField !== null
+        && VENDOR_INVERTED_BATTERY_FIELDS.has(a.batteryField)
+        && before.has(key)) {
+        batteryPolarity.push({
+          stationMac: a.stationMac,
+          dataPoint: a.dataPoint,
+          batteryField: a.batteryField,
+          from: fromPolicy,
+          to: toPolicy,
+        });
+      }
+    }
+    batteryPolarity.sort((x, y) => x.stationMac === y.stationMac
+      ? (x.dataPoint < y.dataPoint ? -1 : x.dataPoint > y.dataPoint ? 1 : 0)
+      : (x.stationMac < y.stationMac ? -1 : 1));
+  }
+
   const setSummary = (set: Map<string, ConfiguredRow>): Array<Record<string, string>> =>
     [...set.values()]
       .map(row => ({
@@ -1814,6 +1852,13 @@ export function computeSaveConsequences(ctx: SavePipelineContext): SaveConsequen
     before: rowProjection(c.before),
     after: rowProjection(c.after),
   }));
+  // Bind the disclosed polarity consequences into the digest (F5): a
+  // preview that lists them authorizes exactly that adoption, and a
+  // commit that would list different ones refuses as stale.
+  const batteryPolarityProjection = batteryPolarity.map(c => ({
+    stationMac: c.stationMac, dataPoint: c.dataPoint,
+    batteryField: c.batteryField, from: c.from, to: c.to,
+  }));
   const digest = createHash('sha256')
     .update(canonicalJsonLocal({
       base: block,
@@ -1822,6 +1867,7 @@ export function computeSaveConsequences(ctx: SavePipelineContext): SaveConsequen
       proposed: setSummary(after),
       changes: changeProjection,
       configOnly: configOnlyProjection,
+      batteryPolarity: batteryPolarityProjection,
       // The visible settings banner is a consequence too (round 4 P2):
       // key NAMES only, never values — a consequence-equivalent switch
       // between settings patches must not reuse the old confirmation.
@@ -1839,6 +1885,7 @@ export function computeSaveConsequences(ctx: SavePipelineContext): SaveConsequen
   return {
     changes,
     configOnly,
+    batteryPolarity,
     structuralChangeCount: changes.filter(c => c.structural).length,
     digest,
     proposedRows,
@@ -2209,23 +2256,28 @@ export function handleGetVocabulary(): VocabularyDto {
     measurements: [...f.measurements],
     choices: f.choices.map(c => ({ id: c.id, label: c.label, units: { ...c.units } })),
   }));
-  // Assignment targets for unrecognized rows (PR E): exactly the
+  // Assignment targets for unrecognized rows (PR E): the frozen v2.0
   // (kind, measurement) pairs WRAPPER_FOR_KIND_AND_MEASUREMENT can
-  // build, in vocabulary measurement order. Anything else — including
-  // compatible-but-unimplemented pairs like (co, co) — would be
-  // refused by the save pipeline as no-wrapper, so the picker never
-  // offers it (§3.9: the table is the only way custom sensors pick a
-  // wrapper).
+  // build TODAY for any config, in vocabulary measurement order. A
+  // pair with no wrapper (e.g. the deferred co|co, §19.3) is never in
+  // the table, and a STAMP-GATED pair (§19.2) is withheld here because
+  // this static endpoint has no adoption context (PR #67 review F9);
+  // both would otherwise be refused by the save pipeline as
+  // no-wrapper. The P4 capability-aware editor restores the gated
+  // choices against the live catalog. §3.9: the table is the only way
+  // custom sensors pick a wrapper.
   const vocabOrder = Object.keys(UNIT_VOCABULARY) as Measurement[];
   const assignments: VocabularyDto['assignments'] = Object.keys(WRAPPER_FOR_KIND_AND_MEASUREMENT)
-    // The assignment picker resolves choices BY MEASUREMENT ALONE (one
-    // select, kind derived — PR E round 1 F4). The boolean measurement
-    // now has FIVE kinds (§19.1), which that resolution cannot
-    // disambiguate, so boolean pairs are deliberately NOT offered here
-    // until the P4 editor adds a kind selector. Boolean assignments
-    // still work through the JSON editor and the catalog-3 default
-    // rows; the pipeline validates them like any custom row.
-    .filter(key => !key.endsWith('|boolean'))
+    // The static /vocabulary endpoint has no config context, so it
+    // cannot know which catalog a given installation has adopted. Any
+    // STAMP-GATED pair (WRAPPER_PAIR_SINCE > 1) would resolve
+    // `no-wrapper` for a config that has not adopted its catalog,
+    // producing a dead-end assignment (PR #67 review F9). Withhold
+    // every gated pair until the P4 capability-aware editor can report
+    // availability against the live catalog context; the frozen v2.0
+    // pairs (since 1) are always executable and stay offered. Gated
+    // assignments still work through the JSON editor once adopted.
+    .filter(key => (WRAPPER_PAIR_SINCE[key as keyof typeof WRAPPER_PAIR_SINCE] ?? 1) <= 1)
     .map(key => {
       const sep = key.indexOf('|');
       const kind = key.slice(0, sep);

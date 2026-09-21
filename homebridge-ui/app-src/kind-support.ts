@@ -30,7 +30,7 @@ export const KIND_SUPPORT: Readonly<Record<Exclude<SensorKind, 'unrecognized'>, 
   'co2':              { label: 'CO₂',         supported: true },
   'air-quality-pm25': { label: 'PM2.5',       supported: true },
   'air-quality-pm10': { label: 'PM10',        supported: true },
-  'co':               { label: 'CO',          supported: true },
+  'co':               { label: 'CO',          supported: false },
   'leak':             { label: 'leak',        supported: true },
   'contact':          { label: 'contact',     supported: true },
   'occupancy':        { label: 'occupancy',   supported: true },
@@ -58,4 +58,6 @@ export const KIND_HELP =
   + (unsupportedLabels.length > 0
     ? `${listJoin(unsupportedLabels)} are reserved for future support. `
     : '')
+  + 'Some newer kinds require adopting the current sensor catalog before '
+  + 'they can be assigned; a later plugin version guides that from this page. '
   + 'Rows marked ? are unrecognized and do not create an accessory.';

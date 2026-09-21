@@ -334,6 +334,23 @@ export interface ConfigOnlyChangeDto {
 }
 
 /**
+ * A NON-STRUCTURAL semantic consequence of catalog adoption
+ * (sensor-map.md §19.6, PR #67 review F5): a row whose battery field
+ * decodes with a DIFFERENT polarity after the adoption because the
+ * field is vendor-inverted and the adoption crosses the catalog-3
+ * boundary. No accessory registers or re-registers, but a low/normal
+ * battery reading can flip, so the preview discloses it and the digest
+ * binds it. `from`/`to` name the decoder policy on each side.
+ */
+export interface BatteryPolarityChangeDto {
+  stationMac: string;
+  dataPoint: string;
+  batteryField: string;
+  from: 'standard' | 'vendor-inverted';
+  to: 'standard' | 'vendor-inverted';
+}
+
+/**
  * Response of request '/preview-save' — a server-authoritative dry
  * run of the save. NO writes happen; the browser never computes
  * signatures or diffs itself. `digest` is the stateless confirmation
@@ -349,6 +366,12 @@ export type PreviewResultDto =
     rows: EditorRowDto[];
     changes: PreviewChangeDto[];
     configOnly: ConfigOnlyChangeDto[];
+    /**
+     * Battery-decoder polarity changes this save causes (adoption
+     * only; §19.6 / PR #67 review F5). Empty for every non-adoption
+     * save. Disclosed and digest-bound though non-structural.
+     */
+    batteryPolarity: BatteryPolarityChangeDto[];
     /** Settings keys this save changes (names only; never values). */
     settingsChanged: string[];
     structuralChangeCount: number;
