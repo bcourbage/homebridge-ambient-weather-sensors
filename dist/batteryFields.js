@@ -211,6 +211,13 @@ export function readBatteryLow(lastData, batteryField, catalogAdopted = 1) {
     if (!batteryField) {
         return undefined;
     }
+    // Read only a GENUINELY REPORTED own field (PR #67 review R3-F1): an
+    // inherited property (e.g. from a crafted `__proto__` payload field)
+    // must never be taken as a battery observation. Belt-and-suspenders
+    // alongside the null-prototype realtime reconstruction.
+    if (!Object.prototype.hasOwnProperty.call(lastData, batteryField)) {
+        return undefined;
+    }
     const raw = lastData[batteryField];
     if (typeof raw !== 'number' || !Number.isFinite(raw)) {
         return undefined;

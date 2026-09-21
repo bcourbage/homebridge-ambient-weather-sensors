@@ -2009,6 +2009,26 @@ Tests: for every non-motion kind, submit an override with each of these fields; 
     `configMode === 'v2'` (distinct from the decoder gate): it governs
     reconciliation/removal, which must not fire in a compat rollback.
 
+  PR #67 review round 3 closed two bounded residuals of the round-2
+  transport widening, both scoped to how the widened realtime path
+  hands raw values to battery consumers (no P1, no redesign):
+  - R3-F1: realtime now forwards arbitrary present object values, so
+    `updatesToStationPayloads` reconstructs each station record with a
+    null-prototype dictionary (`Object.create(null)`), and
+    `readBatteryLow` reads only own reported fields. A JSON `__proto__`
+    field can no longer graft an inherited `batleak{n}` onto the record
+    to clear an established LOW; an absent battery stays absent, ordinary
+    object-valued state readings still fault, and valid readings still
+    recover. Present-invalid booleans stay forwarded (no re-broadening
+    of the R2-F1 type filter).
+  - R3-F2: the flag-off legacy distribute branch drops the ENTIRE
+    non-numeric update before either callback, so a bundled battery
+    change no longer flips a legacy wrapper's battery where published
+    1.7.3 discards the whole update. The v2 branch returns above that
+    loop, so state fault handling is untouched. Any future independent
+    legacy battery update would be an explicit behavior change, not an
+    incidental side effect.
+
 - Status: **APPROVED FOR IMPLEMENTATION**. Beta cycle can begin.
 
 ## 19. P3 — explicit decoders and new output kinds (catalog 3)
@@ -2036,8 +2056,22 @@ decode contract for every boolean STATE kind:
   fields only), keeping missing distinct from present-invalid. BOTH
   transports reach this boundary: realtime forwards every present
   sensor value rather than pre-filtering by type (PR #67 review
-  R2-F1), and the flag-off legacy distribute path guards `typeof
-  number` so a non-number never reaches a legacy numeric wrapper.
+  R2-F1), and the flag-off legacy distribute path drops the ENTIRE
+  non-numeric update — value AND any bundled battery side effect —
+  before either wrapper callback, matching published 1.7.3 exactly
+  (PR #67 review R3-F2). A non-number never reaches a legacy numeric
+  wrapper, and a non-numeric sensor value never flips a legacy
+  wrapper's battery as an incidental side effect.
+- Realtime forwards arbitrary present values, so the platform
+  reconstructs each station's raw-field record with a NULL-prototype
+  dictionary (`Object.create(null)`), never a plain object literal
+  (PR #67 review R3-F1). A JSON field named `__proto__` is then an
+  ordinary own data property, not a prototype setter, so it cannot
+  graft an inherited `batleak{n}`/`batt*` reading onto the record.
+  Every battery read is additionally taken from an OWN reported field
+  (`Object.prototype.hasOwnProperty` guard in `readBatteryLow`), so an
+  inherited value can never be mistaken for reported data and clear an
+  established LOW. Both defenses hold on the polling path too.
 - The state wrappers decode explicitly: raw `0` = clear, raw `1` =
   active, anything else (the invalid marker, `>= 2`, negative,
   non-integer) = FAULT — the wrapper sets `StatusFault:
@@ -2168,6 +2202,10 @@ consumed only by catalog-3 leak rows, so it decodes vendor-correct
 wherever it is reachable at all. The Meteobridge variants stay
 RECORDED, not implemented: the plugin cannot detect the reporting
 path, so no polarity switching is invented for the standard fields.
+`readBatteryLow` reads only OWN reported fields (§19.1): a battery
+field absent from the payload returns `undefined` (no observation, no
+change), and an inherited value from a crafted `__proto__` object can
+never be read as a genuine reading (PR #67 review R3-F1).
 
 ### 19.7 Required tests (as implemented)
 

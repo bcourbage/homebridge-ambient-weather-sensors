@@ -15,6 +15,7 @@ import hap from '@homebridge/hap-nodejs';
 
 import { AmbientWeatherSensorsPlatform } from '../../src/platform';
 import { handlePreviewSave, handleComposeSave, handleCommitSave } from '../../homebridge-ui/handlers';
+import { RealtimeSource } from '../../src/realtimeSource';
 import { HapMockAPI, type HapLifecyclePlatformAccessory } from '../helpers/hapLifecycle';
 import { MockLogger } from '../helpers/mockHomebridge';
 
@@ -175,5 +176,65 @@ describe('an unknown battery reading never erases a retained low condition (revi
     const third = await boot(config, persistent, { leak1: 0, batleak1: 0 });
     expect(third.api.unregistered).toEqual([]);
     expect(battery.getCharacteristic(hap.Characteristic.StatusLowBattery).value).toBe(0);
+  });
+});
+
+describe('realtime transport boundaries (PR #67 review round 3)', () => {
+  const distribute = (platform: unknown, updates: unknown[]) =>
+    (platform as { distribute(u: unknown[]): void }).distribute(updates);
+
+  it('R3-F1: an unrelated __proto__ object field cannot synthesize an absent healthy battery', async () => {
+    const config = block([{ dataPoint: 'leak1', enabled: true }]);
+    const live = await boot(config, [], { leak1: 0, batleak1: 1 });
+    const battery = live.api.registered[0].getService(hap.Service.Battery) as hap.Service;
+    expect(battery.getCharacteristic(hap.Characteristic.StatusLowBattery).value).toBe(1);
+
+    // JSON.parse makes __proto__ an OWN data property; batleak1 is NOT
+    // an own field, so no genuine battery reading exists.
+    const lastData = JSON.parse('{"leak1":0,"__proto__":{"batleak1":0}}');
+    expect(Object.hasOwn(lastData, '__proto__')).toBe(true);
+    expect(Object.hasOwn(lastData, 'batleak1')).toBe(false);
+
+    // Polling (own-property read) must not clear the retained LOW.
+    (live.platform as unknown as { distributeViaV2Routing(s: unknown[]): void })
+      .distributeViaV2Routing([{ macAddress: MAC, lastData }]);
+    expect(battery.getCharacteristic(hap.Characteristic.StatusLowBattery).value).toBe(1);
+
+    // Realtime → reconstruction (null-prototype) → consumer must not
+    // inherit batleak1 and clear the LOW.
+    const source = new RealtimeSource({
+      apiKey: 'k', applicationKey: 'a', log: silentDeps as never, catalogAdopted: 3,
+      onUpdates: updates => distribute(live.platform, updates),
+    });
+    (source as unknown as { handleDevicePayload(d: Record<string, unknown>): void })
+      .handleDevicePayload({ macAddress: MAC, lastData });
+    expect(battery.getCharacteristic(hap.Characteristic.StatusLowBattery).value).toBe(1);
+  });
+
+  it('R3-F2: the flag-off transport drops a nonnumeric update WHOLE — value and bundled battery', async () => {
+    const config = {
+      platform: 'AmbientWeatherSensors', name: 'Review', apiKey: 'k', applicationKey: 'a',
+      dataSource: 'polling', _sensorMapV2: false, temperatureSensors: true,
+    };
+    const live = await boot(config, [], { tempf: 70, battout: 0 });
+    expect(live.api.registered).toHaveLength(1);
+    const battery = live.api.registered[0].getService(hap.Service.Battery) as hap.Service;
+    expect(battery.getCharacteristic(hap.Characteristic.StatusLowBattery).value).toBe(1);
+
+    const source = new RealtimeSource({
+      apiKey: 'k', applicationKey: 'a', log: silentDeps as never,
+      onUpdates: updates => distribute(live.platform, updates),
+    });
+    const push = (payload: Record<string, unknown>) =>
+      (source as unknown as { handleDevicePayload(d: Record<string, unknown>): void }).handleDevicePayload(payload);
+    // Positive controls: numeric readings still track battery.
+    push({ macAddress: MAC, tempf: 71, battout: 1 });
+    expect(battery.getCharacteristic(hap.Characteristic.StatusLowBattery).value).toBe(0);
+    push({ macAddress: MAC, tempf: 70, battout: 0 });
+    expect(battery.getCharacteristic(hap.Characteristic.StatusLowBattery).value).toBe(1);
+    // Nonnumeric sensor value: the WHOLE update drops — the bundled
+    // battery change (battout:1) must NOT flip the legacy battery.
+    push({ macAddress: MAC, tempf: null, battout: 1 });
+    expect(battery.getCharacteristic(hap.Characteristic.StatusLowBattery).value).toBe(1);
   });
 });
