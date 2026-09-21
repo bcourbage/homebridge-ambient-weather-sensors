@@ -39,6 +39,9 @@ export const LEGAL_UNITS_FOR_MEASUREMENT: Readonly<Record<Measurement, ReadonlyA
   'soil-tension':      ['cb'],
   'evapotranspiration': ['in_per_day', 'mm_per_day'],
   'aqi':               ['index'],
+  // Generic numeric passthrough (§19.9): the opaque carrier only. The
+  // user-facing label is the row's `unitLabel`, not a unit here.
+  numeric:             ['raw'],
   timestamp:           ['ms'],
   boolean:             [],
 } as const;
@@ -76,6 +79,7 @@ export const DEFAULT_SOURCE_UNIT_FOR_MEASUREMENT: Readonly<Partial<Record<Measur
   'soil-tension':      'cb',
   'evapotranspiration': 'in_per_day',
   'aqi':               'index',
+  numeric:             'raw',
   timestamp:           'ms',
   // boolean intentionally omitted — no unit applies
 } as const;
@@ -106,6 +110,7 @@ export const DEFAULT_DISPLAY_UNIT_FOR_MEASUREMENT: Readonly<Partial<Record<Measu
   'soil-tension':      'cb',
   'evapotranspiration': 'in_per_day',
   'aqi':               'index',
+  numeric:             'raw',
   // timestamp intentionally omitted — rendered as relative time, no display unit
   // boolean intentionally omitted
 } as const;
@@ -148,6 +153,7 @@ export const COMPATIBLE_KINDS_FOR_MEASUREMENT: Readonly<Record<Measurement, Read
   'soil-tension':      ['motion'],
   'evapotranspiration': ['motion'],
   'aqi':               ['motion'],
+  numeric:             ['motion'],
   timestamp:           ['motion'],
   // Boolean state kinds (§19.1): the user picks the semantics; motion
   // here is the DIRECT boolean mapping, distinct from the threshold

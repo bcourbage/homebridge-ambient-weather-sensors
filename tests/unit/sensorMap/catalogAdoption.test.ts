@@ -684,8 +684,8 @@ describe('entry defaults never bypass the baseline floor (review F5)', () => {
 });
 
 describe('catalog constants', () => {
-  it('the shipped catalog version is 3 and the baseline constant is 1', () => {
-    expect(CURRENT_CATALOG_VERSION).toBe(3);
+  it('the shipped catalog version is 4 and the baseline constant is 1', () => {
+    expect(CURRENT_CATALOG_VERSION).toBe(4);
     expect(CATALOG_V1_BASELINE).toBe(1);
   });
 

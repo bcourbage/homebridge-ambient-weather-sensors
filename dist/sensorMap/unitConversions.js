@@ -66,6 +66,10 @@ export const CANONICAL_UNIT_FOR_MEASUREMENT = {
     'soil-tension': 'cb',
     'evapotranspiration': 'in_per_day',
     'aqi': 'index',
+    // Generic numeric passthrough (§19.9): `raw` is its own canonical
+    // unit, so both toCanonical and toDisplayUnit hit the identity
+    // default below. No conversion is ever applied.
+    'numeric': 'raw',
     'timestamp': 'ms',
     'boolean': 'count',
 };

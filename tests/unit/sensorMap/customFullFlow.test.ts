@@ -274,6 +274,15 @@ const ENTRIES: Entry[] = [
     wrapperId: 'aqi', value: 42,
     assert: extendedState('42', false),
   },
+  {
+    key: 'motion|numeric',
+    // Generic numeric passthrough (§19.9): the literal label is appended,
+    // the finite value is rendered in its ordinary string form (no forced
+    // decimals), and with no threshold the motion tile stays clear.
+    override: { dataPoint: 'barn_flow', kind: 'motion', measurement: 'numeric', sourceUnit: 'raw', unitLabel: 'L/min', name: 'Barn Flow' },
+    wrapperId: 'numeric', value: 5,
+    assert: extendedState('5 L/min', false),
+  },
 ];
 
 /** Boolean state family: alert value + fault clear (§19.1). */
@@ -307,10 +316,11 @@ describe('test_custom_<entry> — full flow through the restored resolution tabl
         uiState: { schemaVersion: 1, dismissedNoticeIds: [], forgottenFields: [] },
         stations: [{ macAddress: MAC, name: 'Home' }],
         configMode: 'v2',
-        // The catalog-3 pairs are stamp-gated (§19.2); the v2.0
-        // fifteen resolve identically at any adopted version.
+        // Catalog-3 pairs are stamp-gated at 3 and the catalog-4 numeric
+        // pair at 4 (§19.2/§19.9); adopting 4 resolves every entry, while
+        // the v2.0 fifteen resolve identically at any adopted version.
         catalogBaseline: 1,
-        catalogAdopted: 3,
+        catalogAdopted: 4,
       });
       expect(map.errors, entry.key).toHaveLength(0);
       const row = map.rows.find(r => r.dataPoint === entry.override.dataPoint);

@@ -45,7 +45,7 @@ import { PressureRelativeAccessory, PressureAbsoluteAccessory, } from '../extend
 import { RainRateAccessory, RainEventAccessory, RainDailyAccessory, RainWeeklyAccessory, RainMonthlyAccessory, RainYearlyAccessory, LastRainAccessory, } from '../extendedSensors/rainAccessory.js';
 import { LightningDayAccessory, LightningHourAccessory, LightningDistanceAccessory, LightningLastStrikeAccessory, } from '../extendedSensors/lightningAccessory.js';
 import { LeakAccessory, ContactAccessory, OccupancyAccessory, SmokeAccessory, MotionBooleanAccessory, } from '../booleanStateAccessory.js';
-import { SoilMoistureAccessory, LeafWetnessAccessory, SoilTensionAccessory, EvapotranspirationAccessory, AqiAccessory, } from '../extendedSensors/genericValueAccessory.js';
+import { SoilMoistureAccessory, LeafWetnessAccessory, SoilTensionAccessory, EvapotranspirationAccessory, AqiAccessory, NumericAccessory, } from '../extendedSensors/genericValueAccessory.js';
 /**
  * The SINGLE source of truth for `WrapperId → (kind, measurement)`.
  * Both `RowForWrapperId` (compile-time factory-parameter narrowing)
@@ -99,6 +99,7 @@ export const WRAPPER_SPEC = {
     'soil-tension': { kind: 'motion', measurement: 'soil-tension' },
     'evapotranspiration': { kind: 'motion', measurement: 'evapotranspiration' },
     'aqi': { kind: 'motion', measurement: 'aqi' },
+    'numeric': { kind: 'motion', measurement: 'numeric' },
 };
 /**
  * The typed factory registry — a MAPPED type, so TypeScript enforces
@@ -155,6 +156,8 @@ export const FACTORIES = {
     'soil-tension': (p, a, r) => new SoilTensionAccessory(p, a, r),
     'evapotranspiration': (p, a, r) => new EvapotranspirationAccessory(p, a, r),
     'aqi': (p, a, r) => new AqiAccessory(p, a, r),
+    // Catalog-4 wrapper (§19.9): row required, no legacy path.
+    'numeric': (p, a, r) => new NumericAccessory(p, a, r),
 };
 /**
  * Runtime twin of `RowForWrapperId`, checked at the dispatch boundary

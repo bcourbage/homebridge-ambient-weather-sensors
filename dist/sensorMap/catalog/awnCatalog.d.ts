@@ -40,10 +40,13 @@
  * agronomic and AQI gaps became extended definitions, the leak
  * detectors became native LeakSensor definitions with the explicit
  * tri-state decode, and the vendor-inverted battery polarities decode
- * correctly on adoption. Must equal the runtime's
- * CURRENT_CATALOG_VERSION — the coverage suite pins the equality.
+ * correctly on adoption. Version 4 (P3.1, §19.9): adds the generic
+ * numeric passthrough capability (motion|numeric); it introduces no new
+ * AWN input entries, so this inventory is unchanged in shape and only
+ * its version advances. Must equal the runtime's CURRENT_CATALOG_VERSION
+ * — the coverage suite pins the equality.
  */
-export declare const AWN_CATALOG_VERSION = 3;
+export declare const AWN_CATALOG_VERSION = 4;
 /** The published baseline this inventory was audited against. */
 export declare const AWN_WIKI_BASELINE = "e1c13509fdcad8ad7b212e77b8193dac71e241b5";
 export type CatalogClass = 

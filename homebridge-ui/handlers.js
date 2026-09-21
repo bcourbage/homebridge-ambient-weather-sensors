@@ -1224,6 +1224,9 @@ export function computeSaveConsequences(ctx) {
         'structuralSignature', 'kind', 'measurement', 'name',
         'sourceUnit', 'displayUnit', 'threshold', 'triggerEnabled',
         'triggerDirection', 'batteryField', 'hasBatterySubService', 'embedName',
+        // Non-structural: a label-only change is a modified-in-place value
+        // change, not a re-registration (§19.9).
+        'unitLabel',
     ];
     // The platform composes HAP display names from the RUNTIME station
     // inventory (station prefix only when multiple stations are
@@ -1391,6 +1394,10 @@ export function computeSaveConsequences(ctx) {
         batteryField: r.batteryField,
         hasBatterySubService: r.hasBatterySubService ?? null,
         embedName: r.embedName ?? null,
+        // §19.9: bind the numeric label into the digest so a label-only
+        // change is a real, confirmable consequence. `null` = absent,
+        // '' = a deliberately cleared label (distinct states).
+        unitLabel: r.unitLabel ?? null,
     } : null;
     const changeProjection = changes.map(c => ({
         stationMac: c.stationMac,
@@ -1913,6 +1920,11 @@ function toEditorRowDto(row, layers, catalogAdopted) {
     if (row.displayUnit !== undefined) {
         dto.displayUnit = row.displayUnit;
     }
+    // §19.9: the generic numeric label. Carried for numeric rows only; an
+    // explicit '' (cleared label) is preserved distinct from absence.
+    if (row.measurement === 'numeric' && row.unitLabel !== undefined) {
+        dto.unitLabel = row.unitLabel;
+    }
     return dto;
 }
 /**
@@ -1923,7 +1935,7 @@ function toEditorRowDto(row, layers, catalogAdopted) {
 const AUTHORED_FRAGMENT_FIELDS = new Set([
     'batteryField', 'displayUnit', 'embedName', 'enabled', 'kind',
     'measurement', 'name', 'sourceUnit', 'threshold', 'triggerDirection',
-    'triggerEnabled',
+    'triggerEnabled', 'unitLabel',
 ]);
 /**
  * Sanitized-but-verbatim projection of one authored override fragment

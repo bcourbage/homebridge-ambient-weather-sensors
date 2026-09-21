@@ -74,6 +74,9 @@ export type Measurement =
   | 'soil-tension'
   | 'evapotranspiration'
   | 'aqi'
+  // Generic finite-numeric passthrough with a literal label (§19.9,
+  // catalog 4). Its only legal unit is the opaque carrier `raw`.
+  | 'numeric'
   | 'timestamp'
   | 'boolean';
 
@@ -125,6 +128,10 @@ export type SensorUnit =
   // Evapotranspiration (§19)
   | 'in_per_day'
   | 'mm_per_day'
+  // Generic numeric passthrough (§19.9, catalog 4). Opaque, unconverted
+  // carrier — NOT a claim the quantity is dimensionless. The user-facing
+  // label lives in the row's `unitLabel`, never here.
+  | 'raw'
   // Timestamp
   | 'ms';
 
@@ -200,6 +207,22 @@ export interface SensorMapOverride {
    * measurements; fixed to 'ms' for timestamp.
    */
   sourceUnit?: SensorUnit;
+
+  /**
+   * Literal display label for the generic `numeric` measurement only
+   * (§19.9, catalog 4). Presentation for identity/conversion purposes:
+   * it never selects a converter, wrapper, or native service, and it is
+   * excluded from the structural signature. It is NOT
+   * serialization-exempt — it round-trips through resolution, canonical
+   * save, DTOs, preview/digest, and committed artifacts.
+   *
+   * Three authored states: absent inherits the applicable global label;
+   * an explicit empty string CLEARS an inherited label at this scope
+   * (the empty presence is preserved, never normalized to omission); a
+   * nonempty string is the validated literal. Rejected on any
+   * measurement other than `numeric`.
+   */
+  unitLabel?: string;
 
   /**
    * AWN batt* field driving the Battery sub-service. `null` explicitly
@@ -343,7 +366,9 @@ export type WrapperId =
   | 'leaf-wetness'
   | 'soil-tension'
   | 'evapotranspiration'
-  | 'aqi';
+  | 'aqi'
+  // Catalog-4 addition (§19.9): the generic numeric passthrough.
+  | 'numeric';
 
 export interface WrapperDescriptor {
   /**
@@ -437,6 +462,12 @@ export interface NumericSensorRow extends ConfiguredRowBase {
   measurement: Exclude<Measurement, 'timestamp' | 'boolean'>;
   sourceUnit: SensorUnit;
   displayUnit: SensorUnit;
+  /**
+   * Resolved literal label for the generic `numeric` measurement
+   * (§19.9). Absent for every other measurement. An empty string is a
+   * deliberate cleared label and is preserved distinct from absence.
+   */
+  unitLabel?: string;
 }
 
 export interface TimestampSensorRow extends ConfiguredRowBase {

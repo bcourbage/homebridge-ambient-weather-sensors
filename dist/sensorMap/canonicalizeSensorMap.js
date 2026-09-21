@@ -48,13 +48,13 @@ import { defaultRowForConfigOverride, hasAuthoredIdentity } from './defaultMap.j
 const FIELD_ORDER = [
     'batteryField', 'dataPoint', 'displayUnit', 'embedName', 'enabled',
     'kind', 'measurement', 'name', 'sourceUnit', 'stationMac',
-    'threshold', 'triggerDirection', 'triggerEnabled',
+    'threshold', 'triggerDirection', 'triggerEnabled', 'unitLabel',
 ];
 /** The user-controllable fields a diff can emit. */
 const DIFF_FIELDS = [
     'kind', 'measurement', 'name', 'threshold', 'triggerEnabled',
     'triggerDirection', 'displayUnit', 'sourceUnit', 'batteryField',
-    'embedName', 'enabled',
+    'embedName', 'enabled', 'unitLabel',
 ];
 export function canonicalizeSensorMap(input) {
     const common = {

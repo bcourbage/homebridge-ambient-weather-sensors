@@ -57,6 +57,10 @@ export const LEGACY_TYPE_FOR_WRAPPER_ID = {
     'soil-tension': 'SoilTension',
     'evapotranspiration': 'Evapotranspiration',
     'aqi': 'AQI',
+    // Catalog-4 (§19.9): same reasoning as the catalog-3 markers above.
+    // 1.7 has no vocabulary for a generic numeric reading, and numeric
+    // assignments are never v1-representable in the legacy mirror.
+    'numeric': 'Numeric',
 };
 /** Legacy `context.device.type` for a resolved row's wrapper id. */
 export function legacyTypeForWrapperId(wrapperId) {

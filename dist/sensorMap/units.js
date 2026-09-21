@@ -36,6 +36,9 @@ export const LEGAL_UNITS_FOR_MEASUREMENT = {
     'soil-tension': ['cb'],
     'evapotranspiration': ['in_per_day', 'mm_per_day'],
     'aqi': ['index'],
+    // Generic numeric passthrough (§19.9): the opaque carrier only. The
+    // user-facing label is the row's `unitLabel`, not a unit here.
+    numeric: ['raw'],
     timestamp: ['ms'],
     boolean: [],
 };
@@ -72,6 +75,7 @@ export const DEFAULT_SOURCE_UNIT_FOR_MEASUREMENT = {
     'soil-tension': 'cb',
     'evapotranspiration': 'in_per_day',
     'aqi': 'index',
+    numeric: 'raw',
     timestamp: 'ms',
     // boolean intentionally omitted — no unit applies
 };
@@ -101,6 +105,7 @@ export const DEFAULT_DISPLAY_UNIT_FOR_MEASUREMENT = {
     'soil-tension': 'cb',
     'evapotranspiration': 'in_per_day',
     'aqi': 'index',
+    numeric: 'raw',
     // timestamp intentionally omitted — rendered as relative time, no display unit
     // boolean intentionally omitted
 };
@@ -141,6 +146,7 @@ export const COMPATIBLE_KINDS_FOR_MEASUREMENT = {
     'soil-tension': ['motion'],
     'evapotranspiration': ['motion'],
     'aqi': ['motion'],
+    numeric: ['motion'],
     timestamp: ['motion'],
     // Boolean state kinds (§19.1): the user picks the semantics; motion
     // here is the DIRECT boolean mapping, distinct from the threshold

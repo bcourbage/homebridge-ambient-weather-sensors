@@ -90,6 +90,7 @@ import {
   SoilTensionAccessory,
   EvapotranspirationAccessory,
   AqiAccessory,
+  NumericAccessory,
 } from '../extendedSensors/genericValueAccessory.js';
 
 /**
@@ -145,6 +146,7 @@ export const WRAPPER_SPEC = {
   'soil-tension':          { kind: 'motion',           measurement: 'soil-tension'      },
   'evapotranspiration':    { kind: 'motion',           measurement: 'evapotranspiration' },
   'aqi':                   { kind: 'motion',           measurement: 'aqi'               },
+  'numeric':               { kind: 'motion',           measurement: 'numeric'           },
 } as const satisfies Record<WrapperId, { kind: SensorKind; measurement: Measurement }>;
 
 /**
@@ -220,6 +222,8 @@ export const FACTORIES: { [K in WrapperId]: Factory<RowForWrapperId[K]> } = {
   'soil-tension':          (p, a, r) => new SoilTensionAccessory(p, a, r),
   'evapotranspiration':    (p, a, r) => new EvapotranspirationAccessory(p, a, r),
   'aqi':                   (p, a, r) => new AqiAccessory(p, a, r),
+  // Catalog-4 wrapper (§19.9): row required, no legacy path.
+  'numeric':               (p, a, r) => new NumericAccessory(p, a, r),
 };
 
 /**
