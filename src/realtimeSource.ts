@@ -26,13 +26,15 @@ import { batteryFieldForSensor, readBatteryLow } from './batteryFields.js';
 export interface RealtimeUpdate {
   uniqueId: string;
   /**
-   * A supported v2 raw value. Numbers cover every legacy sensor; the
-   * catalog-3 boolean state kinds (§19.1) also report JSON
-   * true/false, which the row-aware coercer decodes downstream. Both
-   * transports must reach the SAME coercion boundary (PR #67 review
-   * F4); arbitrary strings/objects stay filtered out at the source.
+   * A PRESENT raw sensor value, forwarded verbatim to the shared
+   * row-aware coercion/decoder boundary (PR #67 review R2-F1). Numbers
+   * and booleans decode normally; a present-invalid value on a boolean
+   * STATE row faults there rather than being dropped at the transport;
+   * a present-invalid value on a numeric row is dropped by the coercer
+   * (legacy contract). The legacy flag-off distribute path guards
+   * `typeof number`, so non-numbers never reach a legacy wrapper.
    */
-  value: number | boolean;
+  value: unknown;
   /**
    * HomeKit-aligned low/normal flag for the sensor's physical probe.
    * undefined = no battery reported for this probe; true = low;
@@ -288,14 +290,17 @@ export class RealtimeSource {
       }
 
       for (const [key, value] of Object.entries(lastData)) {
-        // Forward numbers (every legacy sensor) and booleans (the
-        // catalog-3 state kinds). Everything else — strings, objects,
-        // null — stays dropped at the transport, preserving the legacy
-        // realtime contract; the row-aware coercer/decoder decides the
-        // rest for both transports (PR #67 review F4).
-        if (typeof value !== 'number' && typeof value !== 'boolean') {
-          continue;
-        }
+        // Forward every PRESENT sensor value to the SAME row-aware
+        // boundary polling uses (PR #67 review R2-F1): the v2 route
+        // ends in `coerceValue`, which passes numbers/booleans through,
+        // drops strings/objects for numeric rows (legacy contract), and
+        // faults a present-invalid boolean STATE reading rather than
+        // dropping it. The transport must not pre-filter by type or a
+        // present-invalid state (null/"offline"/object) never reaches
+        // the decoder. `Object.entries` never yields an ABSENT field,
+        // so present-invalid stays distinct from missing. The legacy
+        // (flag-off) distribute path guards `typeof number`, so a
+        // non-number can never reach a legacy numeric wrapper.
         if (this.opts.isSensorKey && !this.opts.isSensorKey(key)) {
           continue;
         }

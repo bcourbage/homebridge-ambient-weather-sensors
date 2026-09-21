@@ -1988,6 +1988,27 @@ Tests: for every non-motion kind, submit an override with each of these fields; 
     P3.1 (§19.9), mandatory for GA, its public-config design to be
     approved before implementation — not invented during bug-fixing.
 
+  PR #67 review round 2 corrected three residuals at the transport,
+  config-mode, and cached-restart boundaries:
+  - R2-F1: the realtime transport forwards EVERY present sensor value
+    to the shared row-aware coercer instead of pre-filtering by type,
+    so a present-invalid boolean state (null/"offline"/object) faults
+    over realtime exactly as over polling; the flag-off distribute
+    path still guards `typeof number`.
+  - R2-F2: `decoderAdopted()` follows the active v2 runtime (flag on,
+    not safe mode) rather than `configMode === 'v2'`, so an opted-in
+    compat run over a legacy-shaped stamped block decodes at its
+    stamp both before and after conversion — a pure conversion no
+    longer silently reverses battery status. Runtime and preview share
+    one `batteryDecoderPolicy(adopted)`.
+  - R2-F3: on a cached restart an unknown/invalid battery reading no
+    longer overwrites a retained low condition — `attachBatteryService`
+    preserves an existing service's characteristics when the reading
+    is unknown and seeds the NORMAL placeholder only on a fresh
+    service; a valid 0/1 still updates. F1's cache-trust gate stays
+    `configMode === 'v2'` (distinct from the decoder gate): it governs
+    reconciliation/removal, which must not fire in a compat rollback.
+
 - Status: **APPROVED FOR IMPLEMENTATION**. Beta cycle can begin.
 
 ## 19. P3 — explicit decoders and new output kinds (catalog 3)
@@ -2006,13 +2027,24 @@ which would report an OFFLINE leak detector (declared encoding
 `0 normal, 1 leak, 2 offline`) as a leak. The correction is a single
 decode contract for every boolean STATE kind:
 
-- `coerceValue` for `measurement: 'boolean'` passes the finite raw
-  number through unchanged (no row is boolean today, so this is
-  behavior-neutral until a boolean row exists).
+- `coerceValue` for `measurement: 'boolean'` (as built): JSON
+  `true`/`false` map to 1/0, a finite number passes through for the
+  wrapper to decode, and a PRESENT-but-invalid value (null, string,
+  object, NaN, Infinity) becomes the explicit `INVALID_BOOLEAN_STATE`
+  marker — forwarded, never dropped, so it reaches the fault path. An
+  ABSENT field is never coerced (routing/transport iterate present
+  fields only), keeping missing distinct from present-invalid. BOTH
+  transports reach this boundary: realtime forwards every present
+  sensor value rather than pre-filtering by type (PR #67 review
+  R2-F1), and the flag-off legacy distribute path guards `typeof
+  number` so a non-number never reaches a legacy numeric wrapper.
 - The state wrappers decode explicitly: raw `0` = clear, raw `1` =
-  active, anything else (`>= 2`, negative, non-integer) = FAULT — the
-  wrapper sets `StatusFault: GENERAL_FAULT`, forces the alert
-  characteristic CLEAR, and logs the out-of-contract value. A value
+  active, anything else (the invalid marker, `>= 2`, negative,
+  non-integer) = FAULT — the wrapper sets `StatusFault:
+  GENERAL_FAULT`, forces the alert characteristic CLEAR, and logs the
+  out-of-contract value. On a CACHED restart the constructor never
+  writes `NO_FAULT` unconditionally: a retained fault survives and
+  clears only on a valid 0/1 (R2-F3's sibling for state). A value
   outside the declared vocabulary must never read as an alarm.
 - A clean reading (0/1) clears the fault.
 
@@ -2119,7 +2151,16 @@ decoder reads 0 as low uniformly, and the live-device observation
 The decoder gains a vendor-polarity table for exactly those inverted
 fields, and the correction is ADOPTION-GATED: `readBatteryLow`
 resolves vendor polarity only when `catalogAdopted >= 3`. Un-adopted
-configs, legacy mode, and safe mode keep today's uniform decode —
+configs keep today's uniform decode. The policy follows the ACTIVE
+RUNTIME, not the config SHAPE (PR #67 review R2-F2): the platform's
+`decoderAdopted()` returns the stamp only when the v2 runtime is
+driving (flag on, not safe mode) — INCLUDING an opted-in compat run
+over a legacy-shaped block — and 1 for the flag-off path and safe
+mode. This is the SAME `batteryDecoderPolicy(adopted)` the adoption
+preview's consequence model uses, so runtime and preview always agree;
+and because a pure conversion preserves the stamp and the compat run
+was already v2-driven, conversion never silently flips a battery
+reading. The flag-off path and safe mode keep today's uniform decode —
 including the documented spurious lightning low-battery behavior and
 its README workaround — because silently flipping a battery signal on
 upgrade is a behavior change §18 exists to prevent. `batleak{n}` is

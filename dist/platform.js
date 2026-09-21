@@ -76,7 +76,17 @@ export class AmbientWeatherSensorsPlatform {
      * (which survives the documented marker-deletion rollback).
      */
     decoderAdopted() {
-        return this.sensorMapV2 && this.configMode === 'v2' ? this.catalogAdopted : 1;
+        // Follow the ACTIVE runtime, not the serialized config SHAPE
+        // (PR #67 review R2-F2). The v2 runtime drives whenever the flag is
+        // on and we are not in safe mode — INCLUDING an opted-in
+        // compat run over a legacy-shaped block (configMode 'legacy',
+        // discoverDevicesV2 executing). Gating on configMode === 'v2'
+        // instead flipped the decoder across a pure conversion (compat run
+        // decoded at 1, the converted run at the same stamp decoded at 3),
+        // silently reversing battery status with no previewed consequence.
+        // Flag-off and safe mode keep the frozen legacy decode (version 1),
+        // matching real 1.7.3 and the protective posture.
+        return this.sensorMapV2 && this.configMode !== 'safe-mode' ? this.catalogAdopted : 1;
     }
     constructor(log, config, api) {
         this.log = log;

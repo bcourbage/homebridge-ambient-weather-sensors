@@ -212,6 +212,39 @@ describe('§19.3 CO is deferred past P3 (native co|co mapping unavailable)', () 
 });
 
 describe('§19.1 realtime forwards boolean readings the same as polling (PR #67 review F4)', () => {
+  it.each([null, 'offline', {} as unknown])('a present-invalid realtime reading %j faults, same as polling (review R2-F1)', invalid => {
+    const dp = 'my_leak';
+    const row = configured(buildEffectiveSensorMap(input(
+      [{ dataPoint: dp, kind: 'leak', measurement: 'boolean', name: 'My Leak' }],
+      { baseline: 1, adopted: 3 })), dp);
+    const platform = makeMockPlatform();
+    const accessory = makeMockAccessory({ uniqueId: `${MAC}-${dp}`, displayName: 'My Leak' });
+    const routing = buildWrapperRouting(
+      platform as unknown as AmbientWeatherSensorsPlatform,
+      { rows: [row], errors: [], warnings: [], notes: [] },
+      () => accessory as never,
+    );
+    const push = (raw: unknown) => distributeViaRouting(
+      platform as unknown as AmbientWeatherSensorsPlatform, routing,
+      [{ macAddress: MAC, lastData: { [dp]: raw } }]);
+    const leak = accessory.getService(MockServices.LeakSensor)!;
+    const source = new RealtimeSource({
+      apiKey: 'k', applicationKey: 'a', log: { info() {}, debug() {}, warn() {}, error() {} } as never,
+      catalogAdopted: 3, onUpdates(updates) { for (const u of updates) push(u.value); },
+    });
+    push(0);
+    expect(leak.readCharacteristic(MockCharacteristics.StatusFault)).toBe(0);
+    // Same present-invalid value through the REALTIME transport must
+    // fault, exactly as the poll path does — not be dropped at source.
+    (source as unknown as { handleDevicePayload(d: Record<string, unknown>): void })
+      .handleDevicePayload({ macAddress: MAC, [dp]: invalid });
+    expect(leak.readCharacteristic(MockCharacteristics.StatusFault)).toBe(1);
+    // A valid recovery clears it, through realtime too.
+    (source as unknown as { handleDevicePayload(d: Record<string, unknown>): void })
+      .handleDevicePayload({ macAddress: MAC, [dp]: 0 });
+    expect(leak.readCharacteristic(MockCharacteristics.StatusFault)).toBe(0);
+  });
+
   it('a RealtimeSource true/false event reaches the state wrapper (parity with the poll path)', () => {
     const dp = 'my_leak';
     const row = configured(buildEffectiveSensorMap(input(

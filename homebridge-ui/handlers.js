@@ -30,7 +30,7 @@ import { loadNoticeStore, } from '../dist/sensorMap/persistence/noticesStore.js'
 import { loadUiStateStore, } from '../dist/sensorMap/persistence/uiStateStore.js';
 import { DISPLAY_FAMILIES, MEASUREMENT_LABELS, UNIT_VOCABULARY, unitOptionsFor } from '../dist/sensorMap/unitVocabulary.js';
 import { WRAPPER_FOR_KIND_AND_MEASUREMENT, WRAPPER_PAIR_SINCE } from '../dist/sensorMap/wrappers.js';
-import { VENDOR_INVERTED_BATTERY_FIELDS } from '../dist/batteryFields.js';
+import { VENDOR_INVERTED_BATTERY_FIELDS, batteryDecoderPolicy } from '../dist/batteryFields.js';
 import { defaultRowForConfigOverride } from '../dist/sensorMap/defaultMap.js';
 import { CURRENT_CATALOG_VERSION, parseCatalogStamps } from '../dist/sensorMap/catalogVersion.js';
 /**
@@ -1335,9 +1335,13 @@ export function computeSaveConsequences(ctx) {
     // boundary, with NO structural change. Disclose every affected
     // existing (enabled, both-sides) row; the reverse transition (a
     // downgrade save) is disclosed the same way.
-    const policyOf = (adopted) => adopted >= 3 ? 'vendor-inverted' : 'standard';
-    const fromPolicy = policyOf(stampsCurrent.catalogAdopted);
-    const toPolicy = policyOf(stampsResolved.catalogAdopted);
+    // The SAME policy function the runtime decoder uses (R2-F2): the
+    // save pipeline always runs v2-driven (saves are refused in safe
+    // mode), so both worlds map their adopted stamp straight to a
+    // policy — matching the runtime's decode exactly, including across a
+    // pure conversion (no stamp change → no polarity change).
+    const fromPolicy = batteryDecoderPolicy(stampsCurrent.catalogAdopted);
+    const toPolicy = batteryDecoderPolicy(stampsResolved.catalogAdopted);
     const batteryPolarity = [];
     if (fromPolicy !== toPolicy) {
         for (const [key, a] of after) {

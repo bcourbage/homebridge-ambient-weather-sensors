@@ -21,13 +21,15 @@ import type { Logger } from 'homebridge';
 export interface RealtimeUpdate {
     uniqueId: string;
     /**
-     * A supported v2 raw value. Numbers cover every legacy sensor; the
-     * catalog-3 boolean state kinds (§19.1) also report JSON
-     * true/false, which the row-aware coercer decodes downstream. Both
-     * transports must reach the SAME coercion boundary (PR #67 review
-     * F4); arbitrary strings/objects stay filtered out at the source.
+     * A PRESENT raw sensor value, forwarded verbatim to the shared
+     * row-aware coercion/decoder boundary (PR #67 review R2-F1). Numbers
+     * and booleans decode normally; a present-invalid value on a boolean
+     * STATE row faults there rather than being dropped at the transport;
+     * a present-invalid value on a numeric row is dropped by the coercer
+     * (legacy contract). The legacy flag-off distribute path guards
+     * `typeof number`, so non-numbers never reach a legacy wrapper.
      */
-    value: number | boolean;
+    value: unknown;
     /**
      * HomeKit-aligned low/normal flag for the sensor's physical probe.
      * undefined = no battery reported for this probe; true = low;

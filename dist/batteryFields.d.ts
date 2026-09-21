@@ -60,6 +60,16 @@ export declare function batteryFieldForSensor(sensorKey: string): string | undef
  */
 export declare const VENDOR_INVERTED_BATTERY_FIELDS: ReadonlySet<string>;
 /**
+ * The battery-decoder polarity policy for a given adopted catalog
+ * version (§19.6). The SINGLE source of truth shared by the runtime
+ * decoder (`readBatteryLow`) and the adoption-preview consequence model
+ * (PR #67 review R2-F2), so the two can never disagree. The caller
+ * decides WHEN the v2 runtime is driving (the platform's
+ * `decoderAdopted()` passes 1 for flag-off / safe mode); this maps the
+ * effective adopted version to a policy.
+ */
+export declare function batteryDecoderPolicy(catalogAdopted: number): 'standard' | 'vendor-inverted';
+/**
  * Helper: read a battery field's raw value from a lastData object
  * and return the HomeKit-aligned "low" boolean.
  *

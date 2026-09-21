@@ -177,6 +177,18 @@ export const VENDOR_INVERTED_BATTERY_FIELDS = new Set([
     'batt_lightning', 'batleak1', 'batleak2', 'batleak3', 'batleak4',
 ]);
 /**
+ * The battery-decoder polarity policy for a given adopted catalog
+ * version (§19.6). The SINGLE source of truth shared by the runtime
+ * decoder (`readBatteryLow`) and the adoption-preview consequence model
+ * (PR #67 review R2-F2), so the two can never disagree. The caller
+ * decides WHEN the v2 runtime is driving (the platform's
+ * `decoderAdopted()` passes 1 for flag-off / safe mode); this maps the
+ * effective adopted version to a policy.
+ */
+export function batteryDecoderPolicy(catalogAdopted) {
+    return catalogAdopted >= 3 ? 'vendor-inverted' : 'standard';
+}
+/**
  * Helper: read a battery field's raw value from a lastData object
  * and return the HomeKit-aligned "low" boolean.
  *
@@ -203,7 +215,7 @@ export function readBatteryLow(lastData, batteryField, catalogAdopted = 1) {
     if (typeof raw !== 'number' || !Number.isFinite(raw)) {
         return undefined;
     }
-    if (catalogAdopted >= 3 && VENDOR_INVERTED_BATTERY_FIELDS.has(batteryField)) {
+    if (batteryDecoderPolicy(catalogAdopted) === 'vendor-inverted' && VENDOR_INVERTED_BATTERY_FIELDS.has(batteryField)) {
         // The vendor-inverted policy is an EXPLICIT decode: only its
         // declared states resolve. 1 = Low, 0 = OK; anything else (2, a
         // negative, a fraction) is unknown — no update, never a fabricated

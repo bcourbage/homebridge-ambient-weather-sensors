@@ -328,7 +328,17 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
    * (which survives the documented marker-deletion rollback).
    */
   private decoderAdopted(): number {
-    return this.sensorMapV2 && this.configMode === 'v2' ? this.catalogAdopted : 1;
+    // Follow the ACTIVE runtime, not the serialized config SHAPE
+    // (PR #67 review R2-F2). The v2 runtime drives whenever the flag is
+    // on and we are not in safe mode — INCLUDING an opted-in
+    // compat run over a legacy-shaped block (configMode 'legacy',
+    // discoverDevicesV2 executing). Gating on configMode === 'v2'
+    // instead flipped the decoder across a pure conversion (compat run
+    // decoded at 1, the converted run at the same stamp decoded at 3),
+    // silently reversing battery status with no previewed consequence.
+    // Flag-off and safe mode keep the frozen legacy decode (version 1),
+    // matching real 1.7.3 and the protective posture.
+    return this.sensorMapV2 && this.configMode !== 'safe-mode' ? this.catalogAdopted : 1;
   }
 
   constructor(
@@ -1882,7 +1892,7 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
    * the battery datapoints the shared battery reader consumes.
    */
   private updatesToStationPayloads(
-    updates: ReadonlyArray<{ uniqueId: string; value: number | boolean }>,
+    updates: ReadonlyArray<{ uniqueId: string; value: unknown }>,
   ): StationPayload[] {
     const byMac = new Map<string, Record<string, unknown>>();
     for (const u of updates) {
@@ -2254,7 +2264,7 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
    * never registered (unknown sensor types, excluded by config, etc.)
    * are silently ignored.
    */
-  private distribute(updates: Array<{ uniqueId: string; value: number | boolean; batteryLow?: boolean }>): void {
+  private distribute(updates: Array<{ uniqueId: string; value: unknown; batteryLow?: boolean }>): void {
     // v2 path (realtime): reshape the pre-digested updates into raw
     // station payloads and route them through the SAME distributeViaRouting
     // boundary the poll path uses.
