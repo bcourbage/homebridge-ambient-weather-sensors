@@ -40,7 +40,7 @@ import { PressureRelativeAccessory, PressureAbsoluteAccessory, } from '../extend
 import { RainRateAccessory, RainEventAccessory, RainDailyAccessory, RainWeeklyAccessory, RainMonthlyAccessory, RainYearlyAccessory, LastRainAccessory, } from '../extendedSensors/rainAccessory.js';
 import { LightningDayAccessory, LightningHourAccessory, LightningDistanceAccessory, LightningLastStrikeAccessory, } from '../extendedSensors/lightningAccessory.js';
 import { LeakAccessory, ContactAccessory, OccupancyAccessory, SmokeAccessory, MotionBooleanAccessory, } from '../booleanStateAccessory.js';
-import { SoilMoistureAccessory, LeafWetnessAccessory, SoilTensionAccessory, EvapotranspirationAccessory, AqiAccessory, } from '../extendedSensors/genericValueAccessory.js';
+import { SoilMoistureAccessory, LeafWetnessAccessory, SoilTensionAccessory, EvapotranspirationAccessory, AqiAccessory, NumericAccessory, } from '../extendedSensors/genericValueAccessory.js';
 // Value-tile wrappers — Apple Home renders reading directly.
 export const TEMPERATURE_WRAPPER = {
     id: 'temperature',
@@ -219,6 +219,10 @@ export const EVAPOTRANSPIRATION_WRAPPER = {
 export const AQI_WRAPPER = {
     id: 'aqi', schemaVersion: 1, constructor: AqiAccessory,
 };
+// ---- Catalog-4 wrapper (§19.9) -----------------------------------
+export const NUMERIC_WRAPPER = {
+    id: 'numeric', schemaVersion: 1, constructor: NumericAccessory,
+};
 export const ALL_WRAPPERS = [
     TEMPERATURE_WRAPPER,
     HUMIDITY_WRAPPER,
@@ -255,6 +259,7 @@ export const ALL_WRAPPERS = [
     SOIL_TENSION_WRAPPER,
     EVAPOTRANSPIRATION_WRAPPER,
     AQI_WRAPPER,
+    NUMERIC_WRAPPER,
 ];
 /**
  * Custom-sensor `(kind, measurement)` → wrapper resolution table —
@@ -317,6 +322,8 @@ export const WRAPPER_FOR_KIND_AND_MEASUREMENT = {
     'motion|soil-tension': SOIL_TENSION_WRAPPER,
     'motion|evapotranspiration': EVAPOTRANSPIRATION_WRAPPER,
     'motion|aqi': AQI_WRAPPER,
+    // Catalog-4 pair (§19.9) — stamp-gated at 4 via WRAPPER_PAIR_SINCE.
+    'motion|numeric': NUMERIC_WRAPPER,
 };
 /**
  * The catalog version each pair arrived in (§19.2). Absent = 1, the
@@ -335,6 +342,7 @@ export const WRAPPER_PAIR_SINCE = {
     'motion|soil-tension': 3,
     'motion|evapotranspiration': 3,
     'motion|aqi': 3,
+    'motion|numeric': 4,
 };
 export function wrapperFor(kind, measurement, catalogAdopted = 1) {
     const key = `${kind}|${measurement}`;

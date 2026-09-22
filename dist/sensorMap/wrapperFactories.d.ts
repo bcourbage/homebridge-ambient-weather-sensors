@@ -195,6 +195,10 @@ export declare const WRAPPER_SPEC: {
         readonly kind: "motion";
         readonly measurement: "aqi";
     };
+    readonly numeric: {
+        readonly kind: "motion";
+        readonly measurement: "numeric";
+    };
 };
 /**
  * Compile-time factory-parameter narrowing, derived from

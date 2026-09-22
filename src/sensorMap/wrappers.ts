@@ -77,6 +77,7 @@ import {
   SoilTensionAccessory,
   EvapotranspirationAccessory,
   AqiAccessory,
+  NumericAccessory,
 } from '../extendedSensors/genericValueAccessory.js';
 
 // Value-tile wrappers — Apple Home renders reading directly.
@@ -282,6 +283,10 @@ export const EVAPOTRANSPIRATION_WRAPPER: WrapperDescriptor = {
 export const AQI_WRAPPER: WrapperDescriptor = {
   id: 'aqi', schemaVersion: 1, constructor: AqiAccessory,
 };
+// ---- Catalog-4 wrapper (§19.9) -----------------------------------
+export const NUMERIC_WRAPPER: WrapperDescriptor = {
+  id: 'numeric', schemaVersion: 1, constructor: NumericAccessory,
+};
 
 export const ALL_WRAPPERS: ReadonlyArray<WrapperDescriptor> = [
   TEMPERATURE_WRAPPER,
@@ -319,6 +324,7 @@ export const ALL_WRAPPERS: ReadonlyArray<WrapperDescriptor> = [
   SOIL_TENSION_WRAPPER,
   EVAPOTRANSPIRATION_WRAPPER,
   AQI_WRAPPER,
+  NUMERIC_WRAPPER,
 ] as const;
 
 /**
@@ -382,6 +388,8 @@ export const WRAPPER_FOR_KIND_AND_MEASUREMENT: Readonly<Partial<Record<`${Exclud
   'motion|soil-tension':          SOIL_TENSION_WRAPPER,
   'motion|evapotranspiration':    EVAPOTRANSPIRATION_WRAPPER,
   'motion|aqi':                   AQI_WRAPPER,
+  // Catalog-4 pair (§19.9) — stamp-gated at 4 via WRAPPER_PAIR_SINCE.
+  'motion|numeric':               NUMERIC_WRAPPER,
 } as const;
 
 /**
@@ -401,6 +409,7 @@ export const WRAPPER_PAIR_SINCE: Readonly<Partial<Record<keyof typeof WRAPPER_FO
   'motion|soil-tension': 3,
   'motion|evapotranspiration': 3,
   'motion|aqi': 3,
+  'motion|numeric': 4,
 } as const;
 
 export function wrapperFor(

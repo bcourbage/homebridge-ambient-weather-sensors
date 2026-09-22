@@ -1060,6 +1060,14 @@ function resolveRow(inp: ResolveInput): ResolvedRow {
     measurement: measurement as NumericSensorRow['measurement'],
     sourceUnit,
     displayUnit: effectiveDisplayUnit,
+    // Generic numeric label (§19.9). Carried ONLY when the RESOLVED
+    // measurement is numeric, so a label inherited from a global
+    // template can never contaminate a station whose explicit identity
+    // is a different measurement. An explicit '' is preserved (a
+    // deliberately cleared label) distinct from absence. Non-structural.
+    ...(measurement === 'numeric' && override?.unitLabel !== undefined
+      ? { unitLabel: override.unitLabel }
+      : {}),
   };
   return { row, batteryClaim };
 }

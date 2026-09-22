@@ -108,6 +108,12 @@ export interface EditorRowDto {
   /** Unit CODES — the vocabulary DTO maps codes to display labels. */
   sourceUnit?: string;
   displayUnit?: string;
+  /**
+   * Literal display label for the generic `numeric` measurement
+   * (§19.9). Present on numeric rows only. An empty string is a
+   * deliberately cleared label, preserved distinct from absence.
+   */
+  unitLabel?: string;
   name?: string;
   enabled: boolean;
   /**

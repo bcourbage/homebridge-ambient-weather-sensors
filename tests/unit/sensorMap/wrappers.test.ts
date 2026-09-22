@@ -59,7 +59,7 @@ describe('WrapperDescriptor registry', () => {
   //      (kind, measurement) per WRAPPER_SPEC — a drifted entry would
   //      otherwise be caught only at map-construction time
   //      (wrapper-mismatch note) or registration (throw).
-  it('WRAPPER_FOR_KIND_AND_MEASUREMENT has EXACTLY the 15 restored v2.0 entries plus the 10 catalog-3 pairs', () => {
+  it('WRAPPER_FOR_KIND_AND_MEASUREMENT has EXACTLY the 15 restored v2.0 entries plus the 10 catalog-3 pairs and the 1 catalog-4 pair', () => {
     const expected: Record<string, string> = {
       // The frozen v2.0 fifteen.
       'temperature|temperature':  'temperature',
@@ -88,12 +88,14 @@ describe('WrapperDescriptor registry', () => {
       'motion|soil-tension':          'soil-tension',
       'motion|evapotranspiration':    'evapotranspiration',
       'motion|aqi':                   'aqi',
+      // Catalog-4 pair (§19.9) — stamp-gated at 4 in wrapperFor.
+      'motion|numeric':               'numeric',
     };
     const actual = Object.fromEntries(
       Object.entries(WRAPPER_FOR_KIND_AND_MEASUREMENT).map(([k, v]) => [k, v!.id]),
     );
     expect(actual).toEqual(expected);
-    expect(Object.keys(WRAPPER_FOR_KIND_AND_MEASUREMENT)).toHaveLength(25);
+    expect(Object.keys(WRAPPER_FOR_KIND_AND_MEASUREMENT)).toHaveLength(26);
     // Version pins: exactly the catalog-3 pairs carry since 3.
     const since3 = Object.entries(WRAPPER_PAIR_SINCE).filter(([, v]) => v === 3).map(([k]) => k).sort();
     expect(since3).toEqual([
@@ -102,6 +104,9 @@ describe('WrapperDescriptor registry', () => {
       'motion|leaf-wetness', 'motion|soil-moisture', 'motion|soil-tension',
       'occupancy|boolean', 'smoke|boolean',
     ]);
+    // Exactly the catalog-4 pair carries since 4.
+    const since4 = Object.entries(WRAPPER_PAIR_SINCE).filter(([, v]) => v === 4).map(([k]) => k).sort();
+    expect(since4).toEqual(['motion|numeric']);
   });
 
   it('every table entry is spec-consistent: the key equals the wrapper\'s (kind, measurement)', () => {
@@ -132,6 +137,14 @@ describe('WrapperDescriptor registry', () => {
     expect(wrapperFor('motion', 'evapotranspiration', 3)?.id).toBe('evapotranspiration');
     // The frozen v2.0 pairs never gate.
     expect(wrapperFor('temperature', 'temperature', 1)?.id).toBe('temperature');
+  });
+
+  it('wrapperFor() stamp-gates the catalog-4 numeric pair (§19.9)', () => {
+    // Unavailable below adopted 4, including at the catalog-3 boundary.
+    expect(wrapperFor('motion', 'numeric')).toBeUndefined();
+    expect(wrapperFor('motion', 'numeric', 3)).toBeUndefined();
+    // Resolved once catalog 4 is adopted.
+    expect(wrapperFor('motion', 'numeric', 4)?.id).toBe('numeric');
   });
 
   // ---- Review finding #14: freeze the wrapper vocabulary ----
@@ -181,8 +194,10 @@ describe('WrapperDescriptor registry', () => {
       { id: 'soil-tension',          schemaVersion: 1 },
       { id: 'evapotranspiration',    schemaVersion: 1 },
       { id: 'aqi',                   schemaVersion: 1 },
+      // Catalog-4 (§19.9).
+      { id: 'numeric',               schemaVersion: 1 },
     ]);
-    expect(snapshot.length).toBe(35);
+    expect(snapshot.length).toBe(36);
   });
 
   it('descriptors are frozen at runtime — id mutation throws in strict mode', () => {

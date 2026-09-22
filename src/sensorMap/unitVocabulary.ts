@@ -140,6 +140,13 @@ export const UNIT_VOCABULARY: Readonly<Record<Measurement, ReadonlyArray<UnitOpt
   'aqi': [
     { unit: 'index', label: 'index', selectableAsCustomSourceUnit: true, selectableAsExtendedDisplayUnit: true },
   ],
+  // Generic numeric passthrough (§19.9): the opaque `raw` carrier is
+  // never user-selectable — the user picks the `numeric` measurement and
+  // supplies a free-text `unitLabel`. Present here only for bijection
+  // completeness against LEGAL_UNITS_FOR_MEASUREMENT.
+  numeric: [
+    { unit: 'raw', label: 'raw', selectableAsCustomSourceUnit: false, selectableAsExtendedDisplayUnit: false },
+  ],
   timestamp: [
     // sourceUnit is FIXED to 'ms' by contract (§3.4) — present in the
     // vocabulary for bijection completeness, never user-selectable.
@@ -190,6 +197,7 @@ export const MEASUREMENT_LABELS: Readonly<Record<Measurement, string>> = {
   'soil-tension': 'Soil tension',
   'evapotranspiration': 'Evapotranspiration',
   'aqi': 'Air quality index',
+  'numeric': 'Numeric value',
   'timestamp': 'Timestamp',
   'boolean': 'On/off',
 };

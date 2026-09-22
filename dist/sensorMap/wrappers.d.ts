@@ -79,6 +79,7 @@ export declare const LEAF_WETNESS_WRAPPER: WrapperDescriptor;
 export declare const SOIL_TENSION_WRAPPER: WrapperDescriptor;
 export declare const EVAPOTRANSPIRATION_WRAPPER: WrapperDescriptor;
 export declare const AQI_WRAPPER: WrapperDescriptor;
+export declare const NUMERIC_WRAPPER: WrapperDescriptor;
 export declare const ALL_WRAPPERS: ReadonlyArray<WrapperDescriptor>;
 /**
  * Custom-sensor `(kind, measurement)` → wrapper resolution table —

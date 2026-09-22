@@ -38,6 +38,7 @@ const KNOWN_MEASUREMENTS = new Set([
     'pm25', 'pm10', 'wind-speed', 'rain-rate', 'rain-accumulation',
     'pressure', 'distance', 'uv-index', 'count', 'direction',
     'soil-moisture', 'leaf-wetness', 'soil-tension', 'evapotranspiration', 'aqi',
+    'numeric',
     'timestamp', 'boolean',
 ]);
 // Derived from the single validation authority rather than hand-listed:
@@ -81,9 +82,31 @@ const ALLOWED_KEYS = new Set([
     'kind', 'measurement',
     'name',
     'threshold', 'triggerEnabled', 'triggerDirection',
-    'displayUnit', 'sourceUnit',
+    'displayUnit', 'sourceUnit', 'unitLabel',
     'batteryField', 'embedName', 'enabled',
 ]);
+/**
+ * Maximum length of a `numeric` measurement's literal `unitLabel`
+ * (§19.9), counted in Unicode code points AFTER trimming so multi-byte
+ * symbols like `µg/m³` are preserved. Presentation only; a longer label
+ * is rejected loudly rather than silently truncated.
+ */
+export const MAX_UNIT_LABEL_CODEPOINTS = 16;
+/**
+ * Characters a `unitLabel` may never contain (§19.9): all control
+ * characters (`\p{Cc}` = C0, DEL, and C1, which includes line breaks
+ * and tab), the COMPLETE Unicode Bidi_Control set (`\p{Bidi_Control}`,
+ * which includes U+061C ARABIC LETTER MARK as well as the LRM/RLM
+ * marks, embeddings, overrides, and isolates), and the line/paragraph
+ * separators (`\p{Zl}`, `\p{Zp}`). Using the Unicode property escapes
+ * rather than a hand-maintained list keeps the set complete as Unicode
+ * evolves. Normal symbols like `µ`, `³`, `°` and ordinary letters are
+ * unaffected; the label renders as plain HAP text, never markup.
+ */
+const DISALLOWED_UNIT_LABEL_CHAR = /\p{Cc}|\p{Bidi_Control}|\p{Zl}|\p{Zp}/u;
+function hasDisallowedUnitLabelChar(label) {
+    return DISALLOWED_UNIT_LABEL_CHAR.test(label);
+}
 /**
  * Small helper: build a field-scoped or row-scope error return in one
  * expression. `field` is the SensorMapOverride field the failure is
@@ -293,6 +316,28 @@ export function validateOverrideBody(merged, identity, defaultRow) {
     const effectiveMeasurement = isCustom
         ? out.measurement
         : defaultRow.measurement;
+    // unitLabel: the generic numeric measurement's literal display label
+    // (§19.9). Valid ONLY when the effective measurement is `numeric`;
+    // authored on any other identity it is an error. Trimmed, bounded to
+    // MAX_UNIT_LABEL_CODEPOINTS code points, single-line, no control or
+    // bidi-control characters. An explicit empty string is a VALID
+    // cleared label and is preserved distinct from omission.
+    if (merged.unitLabel !== undefined) {
+        if (typeof merged.unitLabel !== 'string') {
+            return err('invalid-unitlabel', `unitLabel on ${dp} must be a string.`, warnings, 'unitLabel');
+        }
+        if (effectiveMeasurement !== 'numeric') {
+            return err('invalid-unitlabel', `unitLabel on ${dp} is only valid for the numeric measurement.`, warnings, 'unitLabel');
+        }
+        const trimmed = merged.unitLabel.trim();
+        if (hasDisallowedUnitLabelChar(trimmed)) {
+            return err('invalid-unitlabel', `unitLabel on ${dp} must not contain line breaks or control characters.`, warnings, 'unitLabel');
+        }
+        if ([...trimmed].length > MAX_UNIT_LABEL_CODEPOINTS) {
+            return err('invalid-unitlabel', `unitLabel on ${dp} must be at most ${MAX_UNIT_LABEL_CODEPOINTS} characters.`, warnings, 'unitLabel');
+        }
+        out.unitLabel = trimmed;
+    }
     // Measurement-shape normalization. Applies to both known and
     // custom rows — timestamp rows must have sourceUnit === 'ms' or
     // absent; boolean rows accept no units.

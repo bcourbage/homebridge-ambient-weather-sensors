@@ -2031,6 +2031,32 @@ Tests: for every non-motion kind, submit an override with each of these fields; 
 
 - Status: **APPROVED FOR IMPLEMENTATION**. Beta cycle can begin.
 
+### P3.1 — generic numeric passthrough (catalog 4)
+
+- The honest generic finite-numeric path (§19.9), a separate reviewed
+  package after P3. Design approved over two review rounds; the
+  architecture is one closed measurement `numeric` whose only unit is
+  the opaque carrier `raw`, plus a presentation-only `unitLabel` field
+  that carries the arbitrary label without opening the typed vocabulary.
+- Decisions: catalog 4 (explicit adoption, baseline preserved);
+  `numeric`/`raw`/`unitLabel`; an optional INCLUSIVE-level threshold
+  (not a crossing detector); minimal number formatting (ordinary finite
+  string form, no forced decimals, no new precision control).
+- Corrections folded from design review: downgrade to an older binary is
+  protective safe mode that RETAINS accessories (not destructive
+  reconciliation); `unitLabel` is presentation-only for identity and
+  conversion but round-trips through the whole serialization path
+  (resolver, canonical `FIELD_ORDER`/`DIFF_FIELDS`, DTOs, digest);
+  inheritance has three authored states (absent inherits, explicit empty
+  clears, nonempty is literal) and never contaminates a different-identity
+  station; the threshold field is `threshold` and the compare is
+  inclusive (`>=` / `<=`); no `Intensity` characteristic; the
+  finite-only reading contract is unchanged.
+- No default catalog rows (authored-only). CO may use this non-alarm
+  path; native CO stays deferred (§19.3/§19.8).
+- Status: **APPROVED FOR IMPLEMENTATION**. Editor affordance is P4;
+  GA #62 stays held pending P4 and P5.
+
 ## 19. P3 — explicit decoders and new output kinds (catalog 3)
 
 Issue #63 package P3, building strictly on §18's machinery:
@@ -2242,27 +2268,105 @@ ship a native CO accessory. This is a bounded, documented exception,
 not a silent omission; it is revisited only as its own reviewed
 increment mapping a real detector alarm state.
 
-### 19.9 Generic numeric path — PENDING for GA (package P3.1)
+### 19.9 Generic numeric passthrough (package P3.1, catalog 4)
 
-The #63 P3 acceptance list includes an honest generic
-finite-numeric/user-specified-unit extended path for genuinely new
-quantities. P3 ships five NAMED measurements, not that open-ended
-capability, so this item is **PENDING, not complete and not deferred
-beyond v2.0.0** (maintainer decision 2026-09-20). It becomes package
-**P3.1**, sequenced AFTER PR #67 clears and BEFORE P4, and its
-public-config design is presented for approval before implementation.
+The honest generic finite-numeric path from the #63 P3 acceptance list.
+P3 shipped five NAMED measurements; this is the open-ended quantity a
+user assigns to a field the plugin has no named meaning for. It is
+package **P3.1**, catalog version 4, sequenced after P3 and before the
+P4 editor.
 
-Intended shape (design to be reviewed, not built during bug-fixing):
-one explicit generic numeric measurement carrying a LITERAL unit
-label, finite-value validation, no invented conversions and no
-category-specific wording, and an optional threshold expressed in the
-same raw unit. The existing typed measurement/unit vocabulary stays
-closed — it is not made unrestricted. All existing identity, layering,
-preview, guarded-save, and rollback contracts are preserved. Numeric
-CO readings may use this non-alarm path once it lands; that does not
-restore the deferred native CO alarm mapping. Sequence of record:
-PR #67 corrections → P3.1 design and implementation → P4 editor
-integration → P5 proofs → GA.
+**One closed measurement, one opaque unit, one label field.** The
+tension is that the reading needs an arbitrary unit label while the
+typed vocabulary must stay closed. It is resolved by splitting the two:
+
+- The typed system gains exactly one measurement, `numeric`, whose only
+  legal unit is one opaque carrier, `raw`. `raw` is its own canonical
+  unit, so every conversion over it is the identity — "no invented
+  conversions" is structural, not a promise. `raw` is opaque, NOT a
+  claim the quantity is dimensionless; the plugin simply does not
+  interpret it. A label such as `kWh` never selects a converter,
+  wrapper, or native service.
+- The arbitrary label lives in the row field `unitLabel`. It never
+  influences identity, wrapper resolution, or conversion, and it is
+  excluded from the structural signature. It is presentation-only for
+  those purposes, which is NOT serialization-exempt: it round-trips
+  through the resolver, the canonical serializer (`FIELD_ORDER` and
+  `DIFF_FIELDS`), the DTOs, and the preview/digest projection.
+
+**Authoring.** A numeric row is authored (there are NO default catalog
+rows — a generic reading has no default AWN meaning): `kind: motion`,
+`measurement: numeric`, `sourceUnit: raw`, optional `unitLabel`,
+optional `threshold`. The pair `motion|numeric` is stamp-gated at
+catalog 4 (`WRAPPER_PAIR_SINCE`), so it registers nothing until the
+config adopts 4 through the guarded save. `CURRENT_CATALOG_VERSION` is
+4; adoption advances only the adopted version, preserving the baseline.
+
+**unitLabel validation.** Allowed only when the effective measurement is
+`numeric` (authored on any other identity it is an error, which keeps
+the vocabulary closed). Trimmed; bounded to `MAX_UNIT_LABEL_CODEPOINTS`
+(16) code points AFTER trimming, counted by code point so `µg/m³` is
+preserved; single-line; all control characters (`\p{Cc}`), the complete
+Unicode `Bidi_Control` set (including U+061C), and the line/paragraph
+separators are rejected via Unicode property escapes; rendered as plain
+HAP text. An explicit empty string is a VALID cleared
+label, preserved distinct from omission.
+
+**Inheritance.** Three authored states: absent inherits the applicable
+global label; an explicit empty string clears it at that scope; a
+nonempty string is the literal label. The label is carried onto the
+effective row ONLY when the RESOLVED measurement is `numeric`, so a
+label inherited from a global template can never contaminate a station
+whose explicit identity is a different measurement (for example
+wind-speed); that station keeps its own valid identity and no label.
+
+**HAP surface.** The `numeric` measurement rides the extended-sensor
+shell (`GenericValueAccessory` over `ExtendedSensorBase`, a
+`MotionSensor` carrier) with the existing custom `Value` and
+`Last Updated` characteristics only. No `Intensity` — a raw number has
+no qualitative bucket, so `formatIntensity` is not overridden and the
+characteristic is not attached. `Value` renders the finite reading in
+its ordinary string form (no forced decimals, no preserved trailing
+zeros, scientific notation for extremes) followed by the label, or the
+bare number when the resolved label is empty.
+
+**Threshold.** Optional, finite (validated even when triggering is
+disabled; zero and negative preserved), in the same raw unit (no
+transform). The motion state follows the existing INCLUSIVE LEVEL
+condition: `above` is at-or-above (`>=`), `below` is at-or-below (`<=`).
+It is a level condition on each reading, not a crossing, latch, or
+hysteresis; a first reading already at or past the threshold is active.
+No threshold, or `triggerEnabled: false`, means no trigger. The
+comparison uses the unrounded raw value, so formatting never affects it.
+
+**Reading contract.** Only a finite number becomes a reading (the shared
+coercion default branch); numeric strings, booleans, null, objects, and
+non-finite values are dropped. A dropped tick does not refresh the
+timestamp or clear an earlier motion state, and is never a fabricated
+zero.
+
+**Lifecycle and rollback.** A numeric row honors enable/disable across a
+cached restart. A catalog-4-capable binary reading a not-yet-adopted
+config leaves the pair unavailable. An OLDER binary reading a
+future-stamped config enters the reconciliation-free safe mode: it
+RETAINS the cached accessory, makes zero register/unregister calls, and
+does not delete it as an orphan. The legacy `context.device.type` marker
+is `Numeric`, deliberately outside 1.7's `createSensorWrapper`
+vocabulary, so a numeric assignment is never reconstructable as a legacy
+field on downgrade, and it stays out of the legacy mirror.
+
+**Carbon monoxide.** A numeric CO feed (a third-party ppm reading
+injected as a custom dataPoint) uses this path with `unitLabel: 'ppm'`
+and an optional threshold. It is a measurement with an optional motion
+state, NEVER a `CarbonMonoxideDetected` alarm, and does not restore the
+deferred native CO alarm mapping (§19.3/§19.8).
+
+The editor affordance for authoring a numeric row is P4 (the vocabulary
+endpoint withholds stamp-gated pairs until the capability-aware editor);
+in P3.1 the row is authored config, and the DTO/save path already
+preserve `unitLabel` when a current editor operation edits another
+setting. Sequence of record: P3.1 (this) → P4 editor integration → P5
+proofs → GA.
 
 ## 18. Catalog completion: three decisions and assignment preservation
 

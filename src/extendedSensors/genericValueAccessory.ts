@@ -30,6 +30,8 @@ const DISPLAY_FORMAT: Partial<Record<SensorUnit, { decimals: number; suffix: str
 export class GenericValueAccessory extends ExtendedSensorBase {
   private readonly displayUnit: SensorUnit;
   private readonly rowMeasurement: Measurement;
+  /** Resolved literal label for the generic `numeric` measurement (§19.9). */
+  private readonly unitLabel: string | undefined;
 
   constructor(
     platform: AmbientWeatherSensorsPlatform,
@@ -49,10 +51,19 @@ export class GenericValueAccessory extends ExtendedSensorBase {
     }, row);
     this.displayUnit = row.displayUnit;
     this.rowMeasurement = row.measurement;
+    this.unitLabel = row.unitLabel;
   }
 
   protected formatValue(canonical: number): string {
     const display = toDisplayUnit(this.rowMeasurement, canonical, this.displayUnit);
+    // Generic numeric (§19.9): no invented precision. Render the finite
+    // value's ordinary string form (which drops trailing zeros and uses
+    // scientific notation for extremes) and append the literal label,
+    // if any. `raw` never converts, so `display === canonical`.
+    if (this.rowMeasurement === 'numeric') {
+      const suffix = this.unitLabel && this.unitLabel.length > 0 ? ` ${this.unitLabel}` : '';
+      return `${String(display)}${suffix}`;
+    }
     const format = DISPLAY_FORMAT[this.displayUnit] ?? { decimals: 0, suffix: ` ${this.displayUnit}` };
     return `${display.toFixed(format.decimals)}${format.suffix}`;
   }
@@ -85,5 +96,17 @@ export class EvapotranspirationAccessory extends GenericValueAccessory {
 export class AqiAccessory extends GenericValueAccessory {
   constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory, row: NumericSensorRow) {
     super(platform, accessory, row, 'Air Quality Index');
+  }
+}
+
+/**
+ * Generic numeric passthrough (§19.9, catalog 4). An honest finite
+ * reading with a user-supplied literal label and an optional threshold.
+ * No `formatIntensity` override, so no Intensity characteristic and no
+ * invented qualitative classification.
+ */
+export class NumericAccessory extends GenericValueAccessory {
+  constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory, row: NumericSensorRow) {
+    super(platform, accessory, row, 'Numeric Value');
   }
 }

@@ -23,7 +23,7 @@
  * was measured to unregister it (PR #65 review round 2).
  */
 /** The catalog version this plugin build ships. */
-export const CURRENT_CATALOG_VERSION = 3;
+export const CURRENT_CATALOG_VERSION = 4;
 /** The frozen v1 baseline: today's static table + fallback behavior. */
 export const CATALOG_V1_BASELINE = 1;
 /**

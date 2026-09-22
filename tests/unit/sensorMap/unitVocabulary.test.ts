@@ -268,6 +268,7 @@ describe('MEASUREMENT_LABELS (PR #57 rounds 1-3)', () => {
       'soil-tension': 'Soil tension',
       'evapotranspiration': 'Evapotranspiration',
       'aqi': 'Air quality index',
+      'numeric': 'Numeric value',
       'timestamp': 'Timestamp',
       'boolean': 'On/off',
     });
