@@ -127,6 +127,22 @@ describe('numeric adoption through the guarded pipeline (§19.9)', () => {
     expect(readFileSync(rig.configPath, 'utf8'), 'no durable write on refusal').toBe(before);
   });
 
+  it('rejects a bidi-control (U+061C) label at the real save boundary with zero writes', async () => {
+    const adopted = { ...V2_BLOCK, catalogBaseline: 1, catalogAdopted: CURRENT_CATALOG_VERSION, sensorMap: [NUMERIC] };
+    const rig = makeRig([adopted]);
+    const before = readFileSync(rig.configPath, 'utf8');
+    // U+061C ARABIC LETTER MARK is Bidi_Control; built from a code point
+    // so this source stays reviewable ASCII.
+    const bad = `x${String.fromCodePoint(0x061C)}y`;
+    const payload = { base: adopted, proposal: [{ ...NUMERIC, unitLabel: bad }] };
+    const preview = await handlePreviewSave(rig.deps, payload);
+    expect(preview.ok).toBe(false);
+    if (!preview.ok) expect(preview.error.code).toBe('invalid-rows');
+    const compose = await handleComposeSave(rig.deps, payload);
+    expect(compose.ok).toBe(false);
+    expect(readFileSync(rig.configPath, 'utf8'), 'no durable write on refusal').toBe(before);
+  });
+
   it('a disabled numeric row change is config-only, not a registered change', async () => {
     const disabled = { ...NUMERIC, enabled: false };
     const adopted = { ...V2_BLOCK, catalogBaseline: 1, catalogAdopted: CURRENT_CATALOG_VERSION, sensorMap: [disabled] };

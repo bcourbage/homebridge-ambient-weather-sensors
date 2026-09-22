@@ -2306,8 +2306,10 @@ config adopts 4 through the guarded save. `CURRENT_CATALOG_VERSION` is
 `numeric` (authored on any other identity it is an error, which keeps
 the vocabulary closed). Trimmed; bounded to `MAX_UNIT_LABEL_CODEPOINTS`
 (16) code points AFTER trimming, counted by code point so `µg/m³` is
-preserved; single-line; control and bidi-control characters rejected;
-rendered as plain HAP text. An explicit empty string is a VALID cleared
+preserved; single-line; all control characters (`\p{Cc}`), the complete
+Unicode `Bidi_Control` set (including U+061C), and the line/paragraph
+separators are rejected via Unicode property escapes; rendered as plain
+HAP text. An explicit empty string is a VALID cleared
 label, preserved distinct from omission.
 
 **Inheritance.** Three authored states: absent inherits the applicable

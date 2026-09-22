@@ -110,32 +110,20 @@ const ALLOWED_KEYS: ReadonlySet<string> = new Set([
 export const MAX_UNIT_LABEL_CODEPOINTS = 16;
 
 /**
- * Characters a `unitLabel` may never contain (§19.9): C0 controls
- * (including line breaks and tab), DEL and C1 controls, the LRM/RLM
- * marks, the bidi embeddings/overrides and isolates, and the
- * line/paragraph separators. Normal symbols like `µ`, `³`, `°` are
- * unaffected. The label renders as plain HAP text, never markup.
+ * Characters a `unitLabel` may never contain (§19.9): all control
+ * characters (`\p{Cc}` = C0, DEL, and C1, which includes line breaks
+ * and tab), the COMPLETE Unicode Bidi_Control set (`\p{Bidi_Control}`,
+ * which includes U+061C ARABIC LETTER MARK as well as the LRM/RLM
+ * marks, embeddings, overrides, and isolates), and the line/paragraph
+ * separators (`\p{Zl}`, `\p{Zp}`). Using the Unicode property escapes
+ * rather than a hand-maintained list keeps the set complete as Unicode
+ * evolves. Normal symbols like `µ`, `³`, `°` and ordinary letters are
+ * unaffected; the label renders as plain HAP text, never markup.
  */
+const DISALLOWED_UNIT_LABEL_CHAR = /\p{Cc}|\p{Bidi_Control}|\p{Zl}|\p{Zp}/u;
+
 function hasDisallowedUnitLabelChar(label: string): boolean {
-  for (const ch of label) {
-    const c = ch.codePointAt(0)!;
-    if (c <= 0x1F || (c >= 0x7F && c <= 0x9F)) {
-      return true; // C0 controls (incl. line breaks/tab), DEL, C1 controls
-    }
-    if (c === 0x200E || c === 0x200F) {
-      return true; // LRM / RLM
-    }
-    if (c >= 0x202A && c <= 0x202E) {
-      return true; // bidi embeddings / overrides
-    }
-    if (c >= 0x2066 && c <= 0x2069) {
-      return true; // bidi isolates
-    }
-    if (c === 0x2028 || c === 0x2029) {
-      return true; // line / paragraph separators
-    }
-  }
-  return false;
+  return DISALLOWED_UNIT_LABEL_CHAR.test(label);
 }
 
 /**
