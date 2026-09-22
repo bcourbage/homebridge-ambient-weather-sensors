@@ -27,74 +27,14 @@ import {
 } from '../../../../homebridge-ui/app-src/homebridge.service';
 import type { EditorStateDto, PreviewResultDto, VocabularyDto } from '../../../../homebridge-ui/app-src/dto/editor-state';
 import { KIND_HELP } from '../../../../homebridge-ui/app-src/kind-support';
+import { handleGetVocabulary } from '../../../../homebridge-ui/handlers.js';
 
 const MAC = 'AA:BB:CC:DD:EE:01';
 const OTHER_MAC = 'AA:BB:CC:DD:EE:02';
 
-const VOCAB: VocabularyDto = {
-  measurements: {
-    temperature: {
-      customSource: [{ unit: 'fahrenheit', label: '°F' }, { unit: 'celsius', label: '°C' }],
-      extendedDisplay: [],
-    },
-    'wind-speed': {
-      customSource: [{ unit: 'mph', label: 'mph' }, { unit: 'fps', label: 'ft/sec' }],
-      extendedDisplay: [{ unit: 'mph', label: 'mph' }, { unit: 'fps', label: 'ft/sec' }],
-    },
-    pressure: {
-      customSource: [],
-      extendedDisplay: [{ unit: 'inHg', label: 'inHg' }, { unit: 'mmHg', label: 'mmHg' }, { unit: 'hPa', label: 'hPa' }],
-    },
-    'rain-rate': {
-      customSource: [],
-      extendedDisplay: [{ unit: 'in_per_hr', label: 'in/hr' }, { unit: 'mm_per_hr', label: 'mm/hr' }],
-    },
-    'rain-accumulation': {
-      customSource: [],
-      extendedDisplay: [{ unit: 'in', label: 'in' }, { unit: 'mm', label: 'mm' }],
-    },
-    distance: {
-      customSource: [{ unit: 'mi', label: 'miles' }, { unit: 'km', label: 'km' }],
-      extendedDisplay: [{ unit: 'mi', label: 'miles' }, { unit: 'km', label: 'km' }],
-    },
-    direction: {
-      customSource: [{ unit: 'degrees', label: '°' }],
-      extendedDisplay: [{ unit: 'degrees', label: '°' }],
-    },
-    timestamp: { customSource: [], extendedDisplay: [] },
-  },
-  families: [
-    {
-      key: 'barometer', label: 'Barometer', measurements: ['pressure'],
-      choices: [
-        { id: 'inHg', label: 'inHg', units: { pressure: 'inHg' } },
-        { id: 'mmHg', label: 'mmHg', units: { pressure: 'mmHg' } },
-        { id: 'hPa', label: 'hPa', units: { pressure: 'hPa' } },
-      ],
-    },
-    {
-      key: 'wind-speed', label: 'Wind Speed', measurements: ['wind-speed'],
-      choices: [
-        { id: 'mph', label: 'mph', units: { 'wind-speed': 'mph' } },
-        { id: 'fps', label: 'ft/sec', units: { 'wind-speed': 'fps' } },
-      ],
-    },
-    {
-      key: 'rainfall', label: 'Rainfall', measurements: ['rain-rate', 'rain-accumulation'],
-      choices: [
-        { id: 'imperial', label: 'in/hr', units: { 'rain-rate': 'in_per_hr', 'rain-accumulation': 'in' } },
-        { id: 'metric', label: 'mm/hr', units: { 'rain-rate': 'mm_per_hr', 'rain-accumulation': 'mm' } },
-      ],
-    },
-  ],
-  assignments: [
-    { measurement: 'temperature', kind: 'temperature', label: 'Temperature', triggering: false },
-    { measurement: 'wind-speed', kind: 'motion', label: 'Wind speed', triggering: true },
-    { measurement: 'distance', kind: 'motion', label: 'Distance', triggering: true },
-    { measurement: 'direction', kind: 'motion', label: 'Direction', triggering: false },
-    { measurement: 'timestamp', kind: 'motion', label: 'Timestamp', triggering: false },
-  ],
-};
+// Use the actual wire projection. A second handwritten metadata table can
+// accidentally make a broken bridge/client contract pass every DOM test.
+const VOCAB = handleGetVocabulary({ vocabularyProtocol: 2 }) as VocabularyDto;
 
 function editorState(overrides: Partial<EditorStateDto> = {}): EditorStateDto {
   return {
@@ -108,6 +48,7 @@ function editorState(overrides: Partial<EditorStateDto> = {}): EditorStateDto {
       applicationKeySet: true,
     },
     editorAvailable: true,
+    catalog: { baseline: 1, adopted: 4, current: 4 },
     baseDigest: 'digest-live',
     blockIndex: 0,
     version: 'test',
@@ -241,6 +182,30 @@ describe('AwnRootComponent (TestBed, jsdom)', () => {
     expect(fixture.nativeElement.querySelectorAll('table')).toHaveLength(0);
   });
 
+  it.each(['future pair version', 'old bridge response', 'missing metadata'])(
+    'fails closed at the rendered page for %s', async (scenario) => {
+    const ipc = makeIpc(editorState({ catalog: { baseline: 1, adopted: 4, current: 4 } }), []);
+    const dispatch = ipc.request.bind(ipc);
+    const futurePair = structuredClone(VOCAB);
+    futurePair.assignments.find(a => a.id === 'motion|numeric')!.since = 99;
+    // An old server ignores the new request marker and returns its legacy
+    // measurement-keyed projection; a cached new page must not use it.
+    const incompatible = scenario === 'future pair version' ? futurePair
+      : scenario === 'old bridge response' ? handleGetVocabulary() : undefined;
+    ipc.request = async (endpoint, body) => endpoint === '/vocabulary' ? incompatible : dispatch(endpoint, body);
+    const fixture = await render(ipc);
+    const el = fixture.nativeElement as HTMLElement;
+    expect(el.textContent).toContain('capabilities are unavailable or incompatible');
+    expect(el.textContent).toContain('Editing and saving are disabled');
+    const edits = [...el.querySelectorAll<HTMLButtonElement>('td.actions button')];
+    expect(edits.length).toBeGreaterThan(0);
+    expect(edits.every(b => b.disabled)).toBe(true);
+    for (const edit of edits) edit.click();
+    fixture.detectChanges();
+    expect(el.querySelector('.editor-form')).toBeNull();
+    expect(ipc.requests.some(r => ['/preview-save', '/compose-save', '/commit-save'].includes(r.path))).toBe(false);
+    });
+
   it('loads via the bridge and renders rows grouped by station with vocabulary labels', async () => {
     const ipc = makeIpc(editorState());
     const fixture = await render(ipc);
@@ -268,7 +233,7 @@ describe('AwnRootComponent (TestBed, jsdom)', () => {
     const openBtn = [...el.querySelectorAll('tr')].find(tr => tr.textContent!.includes('tempf'))!.querySelector('button') as HTMLButtonElement;
     openBtn.click();
     fixture.detectChanges();
-    const facts = el.querySelector('.row-facts')!.textContent!;
+    const facts = el.querySelector('.row-facts:not(.capability-help)')!.textContent!;
     expect(facts).toContain('Creates a temperature accessory in Apple Home.');
     expect(facts).toContain("The battery level comes from the station's battout field.");
     expect(facts).toContain('This row has settings saved for all stations.');
@@ -452,6 +417,7 @@ describe('draft editing + preview (PR B — no persistence)', () => {
 
   const PREVIEW_OK: PreviewResultDto = {
     ok: true,
+    batteryPolarity: [], settingsChanged: [],
     canonicalSensorMap: [],
     rows: [],
     changes: [
@@ -496,6 +462,7 @@ describe('draft editing + preview (PR B — no persistence)', () => {
       // getPluginConfig() (beta.13 smoke F1: HB UI X returns the
       // schema form's mutated config, which cannot byte-match disk).
       baseDigest: 'digest-live',
+      blockIndex: 0,
       proposal: [{ dataPoint: 'tempinf', stationMac: OTHER_MAC, name: 'Patio Temp' }],
       cachedAccessoryUniqueIds: [],
     });
@@ -1109,6 +1076,7 @@ describe('draft editing + preview (PR B — no persistence)', () => {
     // draftable fields changed, so a pin cannot represent the skip.
     const batteryOnly: PreviewResultDto = {
       ok: true, canonicalSensorMap: [], rows: [],
+      batteryPolarity: [], settingsChanged: [],
       changes: [{
         stationMac: MAC, dataPoint: 'tempf', change: 'modified', structural: true,
         before: { ...editorState().rows[0], hasBatterySubService: true },
@@ -1137,6 +1105,7 @@ describe('draft editing + preview (PR B — no persistence)', () => {
     };
     const customPreview: PreviewResultDto = {
       ok: true, canonicalSensorMap: [], rows: [],
+      batteryPolarity: [], settingsChanged: [],
       changes: [{
         stationMac: OTHER_MAC, dataPoint: 'barn_wind', change: 'modified', structural: false,
         before: customBefore,
@@ -1379,7 +1348,7 @@ describe('draft editing + preview (PR B — no persistence)', () => {
     }), [], PREVIEW_OK);
     const fixture = await render(ipc);
     const el = openEditor(fixture, 'barn_temp');
-    expect(el.querySelector('.row-facts')!.textContent).toContain('motion accessory');
+    expect(el.querySelector('.row-facts:not(.capability-help)')!.textContent).toContain('motion accessory');
     ([...el.querySelectorAll('button')].find(b => b.textContent === 'Use defaults') as HTMLButtonElement).click();
     await settle(fixture);
     // Closed, never reseeded: a form built for the wind assignment
@@ -1774,6 +1743,7 @@ describe('save flow (PR C / finding 5 — the ONE route is composeAndPersist)', 
 
   const NON_STRUCTURAL_PREVIEW: PreviewResultDto = {
     ok: true, canonicalSensorMap: [], rows: [],
+    batteryPolarity: [], settingsChanged: [],
     changes: [{
       stationMac: OTHER_MAC, dataPoint: 'tempinf', change: 'modified', structural: false,
       before: editorState().rows[2], after: { ...editorState().rows[2], name: 'Patio Temp' },
@@ -2203,16 +2173,17 @@ describe('unrecognized-row assignment (PR E)', () => {
   it('a complete assignment drafts the full identity fragment, enabled authored explicitly', async () => {
     const ipc = makeIpc(stateWithUnrec(), [], {
       ok: true, canonicalSensorMap: [], rows: [], changes: [], configOnly: [],
+      batteryPolarity: [], settingsChanged: [],
       structuralChangeCount: 0, digest: 'cd'.repeat(32), warnings: [], notes: [],
     });
     const fixture = await render(ipc);
     const el = openAssign(fixture, 'xbarnwind');
 
-    choose(formSelect(el, 'measurement'), 'wind-speed');
+    choose(formSelect(el, 'pair'), 'motion|wind-speed');
     await settle(fixture);
     // The fact line names the resulting accessory kind; the source
     // unit is still missing, so nothing is drafted yet.
-    expect(el.textContent).toContain('Creates a motion accessory.');
+    expect(el.textContent).toContain('Creates a motion tile in Apple Home.');
     expect(el.textContent).toContain('Choose the unit the station reports this field in');
     expect(el.textContent).toContain('No draft changes yet.');
 
@@ -2234,9 +2205,9 @@ describe('unrecognized-row assignment (PR E)', () => {
     const ipc = makeIpc(stateWithUnrec(), []);
     const fixture = await render(ipc);
     const el = openAssign(fixture, 'xbarnwind');
-    expect(el.textContent).toContain('Choose a measurement to assign this field');
+    expect(el.textContent).toContain('Choose a sensor type to assign this field');
 
-    choose(formSelect(el, 'measurement'), 'wind-speed');
+    choose(formSelect(el, 'pair'), 'motion|wind-speed');
     await settle(fixture);
     ([...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement).click();
     await settle(fixture);
@@ -2247,7 +2218,7 @@ describe('unrecognized-row assignment (PR E)', () => {
   it('Cancel discards a completed assignment', async () => {
     const fixture = await render(makeIpc(stateWithUnrec(), []));
     const el = openAssign(fixture, 'xbarnwind');
-    choose(formSelect(el, 'measurement'), 'wind-speed');
+    choose(formSelect(el, 'pair'), 'motion|wind-speed');
     await settle(fixture);
     choose(formSelect(el, 'sourceUnit'), 'mph');
     await settle(fixture);
@@ -2261,11 +2232,12 @@ describe('unrecognized-row assignment (PR E)', () => {
   it('a timestamp assignment renders no source-unit control and omits sourceUnit from the fragment', async () => {
     const ipc = makeIpc(stateWithUnrec(), [], {
       ok: true, canonicalSensorMap: [], rows: [], changes: [], configOnly: [],
+      batteryPolarity: [], settingsChanged: [],
       structuralChangeCount: 0, digest: 'cd'.repeat(32), warnings: [], notes: [],
     });
     const fixture = await render(ipc);
     const el = openAssign(fixture, 'xbarnwind');
-    choose(formSelect(el, 'measurement'), 'timestamp');
+    choose(formSelect(el, 'pair'), 'motion|timestamp');
     await settle(fixture);
     expect(formSelect(el, 'sourceUnit')).toBeNull();
     expect(el.textContent).toContain('1 draft change, not saved yet.');
@@ -2283,18 +2255,19 @@ describe('unrecognized-row assignment (PR E)', () => {
   it('switching measurement resets the unit controls and applies the measurement-aware trigger default', async () => {
     const ipc = makeIpc(stateWithUnrec(), [], {
       ok: true, canonicalSensorMap: [], rows: [], changes: [], configOnly: [],
+      batteryPolarity: [], settingsChanged: [],
       structuralChangeCount: 0, digest: 'cd'.repeat(32), warnings: [], notes: [],
     });
     const fixture = await render(ipc);
     const el = openAssign(fixture, 'xbarnwind');
-    choose(formSelect(el, 'measurement'), 'wind-speed');
+    choose(formSelect(el, 'pair'), 'motion|wind-speed');
     await settle(fixture);
     choose(formSelect(el, 'sourceUnit'), 'mph');
     await settle(fixture);
 
     // Switch to distance: the stale mph source unit is reset (mph is
     // not a distance unit) and the trigger default flips to below.
-    choose(formSelect(el, 'measurement'), 'distance');
+    choose(formSelect(el, 'pair'), 'motion|distance');
     await settle(fixture);
     expect(formSelect(el, 'sourceUnit').value).toBe('');
     expect(el.textContent).toContain('No draft changes yet.');
@@ -2317,11 +2290,12 @@ describe('unrecognized-row assignment (PR E)', () => {
   it('threshold and an explicit trigger direction join the fragment', async () => {
     const ipc = makeIpc(stateWithUnrec(), [], {
       ok: true, canonicalSensorMap: [], rows: [], changes: [], configOnly: [],
+      batteryPolarity: [], settingsChanged: [],
       structuralChangeCount: 0, digest: 'cd'.repeat(32), warnings: [], notes: [],
     });
     const fixture = await render(ipc);
     const el = openAssign(fixture, 'xbarnwind');
-    choose(formSelect(el, 'measurement'), 'distance');
+    choose(formSelect(el, 'pair'), 'motion|distance');
     await settle(fixture);
     choose(formSelect(el, 'sourceUnit'), 'km');
     await settle(fixture);
@@ -2397,6 +2371,7 @@ describe('PR #57 round 1: trigger gating and sourceUnit switches', () => {
   it('non-triggering assignments (timestamp, direction) render no trigger controls and author none (F3)', async () => {
     const ipc = makeIpc(state(), [], {
       ok: true, canonicalSensorMap: [], rows: [], changes: [], configOnly: [],
+      batteryPolarity: [], settingsChanged: [],
       structuralChangeCount: 0, digest: 'cd'.repeat(32), warnings: [], notes: [],
     });
     const fixture = await render(ipc);
@@ -2404,12 +2379,12 @@ describe('PR #57 round 1: trigger gating and sourceUnit switches', () => {
     rowBtn(fixture, 'xbarnwind').click();
     fixture.detectChanges();
 
-    choose(formSelect(el, 'measurement'), 'timestamp');
+    choose(formSelect(el, 'pair'), 'motion|timestamp');
     await settle(fixture);
     expect(numberInput(el)).toBeNull();
     expect(formSelect(el, 'triggerDirection')).toBeNull();
 
-    choose(formSelect(el, 'measurement'), 'direction');
+    choose(formSelect(el, 'pair'), 'motion|direction');
     await settle(fixture);
     choose(formSelect(el, 'sourceUnit'), 'degrees');
     await settle(fixture);
@@ -2429,6 +2404,7 @@ describe('PR #57 round 1: trigger gating and sourceUnit switches', () => {
   it('switching the source unit resets a completed assignment threshold (F2)', async () => {
     const ipc = makeIpc(state(), [], {
       ok: true, canonicalSensorMap: [], rows: [], changes: [], configOnly: [],
+      batteryPolarity: [], settingsChanged: [],
       structuralChangeCount: 0, digest: 'cd'.repeat(32), warnings: [], notes: [],
     });
     const fixture = await render(ipc);
@@ -2436,7 +2412,7 @@ describe('PR #57 round 1: trigger gating and sourceUnit switches', () => {
     rowBtn(fixture, 'xbarnwind').click();
     fixture.detectChanges();
 
-    choose(formSelect(el, 'measurement'), 'wind-speed');
+    choose(formSelect(el, 'pair'), 'motion|wind-speed');
     await settle(fixture);
     choose(formSelect(el, 'sourceUnit'), 'mph');
     await settle(fixture);
@@ -2483,6 +2459,7 @@ describe('Connection settings (beta.17, GA #56)', () => {
   }
   const PREVIEW: PreviewResultDto = {
     ok: true, canonicalSensorMap: [], rows: [], changes: [], configOnly: [],
+    batteryPolarity: [],
     settingsChanged: ['name'], structuralChangeCount: 0,
     digest: 'ef'.repeat(32), warnings: [], notes: [],
   };
@@ -2599,6 +2576,7 @@ describe('preview race vs Connection edits (PR #60 round 4 P2)', () => {
   it('a Connection edit while a preview is in flight discards the stale response and never re-arms Save', async () => {
     const PREVIEW: PreviewResultDto = {
       ok: true, canonicalSensorMap: [], rows: [], changes: [], configOnly: [],
+      batteryPolarity: [],
       settingsChanged: ['name'], structuralChangeCount: 0,
       digest: 'aa'.repeat(32), warnings: [], notes: [],
     };

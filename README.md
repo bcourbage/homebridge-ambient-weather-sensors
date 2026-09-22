@@ -58,9 +58,11 @@ re-register an accessory when its structure changes; each such
 change is recorded and shown in the "Recent structural changes"
 disclosure on the plugin's settings page in Homebridge Config UI X.
 
-**Saving from the editor converts your configuration.** The
-sensor-map editor's first save rewrites the plugin's config block to
-the v2 format (`configVersion: 2` plus a `sensorMap`). Before
+**Conversion is explicit and previewed.** Saving a conversion preview
+or the first full sensor-map edit rewrites the plugin's config block
+to the v2 format (`configVersion: 2` plus a `sensorMap`). A
+Connection-only save without a station-filter change does not convert it. A
+station-filter change uses the sensor-map preview and can convert the block. Before
 `config.json` changes, your original 1.x settings are preserved in an
 immutable snapshot: `legacy-config-snapshot.json` in the plugin's
 data directory (`<homebridge storage>/plugin-data/ambient-weather/`).

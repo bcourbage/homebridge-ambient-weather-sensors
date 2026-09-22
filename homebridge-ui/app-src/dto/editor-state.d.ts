@@ -42,6 +42,8 @@ export interface EditorStationDto {
  * `index` is the same override index every diagnostic refers to.
  */
 export interface EditorAuthoredFragmentDto {
+  /** Non-object input could not be faithfully represented by this view. */
+  unreconstructable?: true;
   /** Position in the authored array == diagnostics' overrideIndex. */
   index: number;
   /**
@@ -356,6 +358,12 @@ export interface BatteryPolarityChangeDto {
   to: 'standard' | 'vendor-inverted';
 }
 
+/** Full-map composition facts, projected from already digest-bound state. */
+export interface ConfigurationTransitionDto {
+  before: { mode: 'legacy' | 'v2'; baseline: number; adopted: number; stamped: boolean };
+  after: { mode: 'v2'; baseline: number; adopted: number; stamped: true };
+}
+
 /**
  * Response of request '/preview-save' — a server-authoritative dry
  * run of the save. NO writes happen; the browser never computes
@@ -366,6 +374,8 @@ export interface BatteryPolarityChangeDto {
 export type PreviewResultDto =
   | {
     ok: true;
+    /** Absent for settings-only saves: no birth-stamp confirmation is offered. */
+    configurationTransition?: ConfigurationTransitionDto;
     /** The canonical sensorMap the save would write (§11.3/§17.4). */
     canonicalSensorMap: unknown[];
     /** Proposed effective rows, resolved by the server. */
@@ -451,7 +461,7 @@ export interface AssignmentOptionDto {
  * display families the Units panel offers, in AWN units-page order,
  * plus the assignment targets unrecognized rows may take.
  */
-export interface VocabularyDto {
+export interface LegacyVocabularyDto {
   measurements: {
     [measurement: string]: {
       customSource: UnitOptionDto[];
@@ -461,3 +471,28 @@ export interface VocabularyDto {
   families: DisplayFamilyDto[];
   assignments: AssignmentOptionDto[];
 }
+
+export type SourceUnitPolicyDto =
+  | { type: 'selectable' }
+  | { type: 'fixed-authored'; unit: 'raw' }
+  | { type: 'fixed-implicit'; unit: 'ms' }
+  | { type: 'none' };
+
+/** Complete pair metadata, available only to a negotiated pair-aware editor. */
+export interface CapabilityOptionDto extends AssignmentOptionDto {
+  id: string;
+  since: number;
+  source: SourceUnitPolicyDto;
+  output: 'native-measurement' | 'native-state' | 'extended-numeric';
+  inputHelp: string;
+  outputHelp: string;
+  state?: { normal: string; active: string };
+}
+
+export interface VocabularyDto extends LegacyVocabularyDto {
+  vocabularyProtocol: 2;
+  assignments: CapabilityOptionDto[];
+}
+
+export type VocabularyResponseDto = LegacyVocabularyDto | VocabularyDto
+  | { ok: false; error: { code: 'unsupported-vocabulary-protocol'; message: string } };

@@ -83,6 +83,8 @@ export interface ComposeAndPersistArgs {
    * translation of the on-disk config).
    */
   proposal?: unknown[];
+  /** Explicit, previewed adoption; forwarded identically to both phases. */
+  adoptCatalogVersion?: number;
   /**
    * Live-settings patch (beta.17, GA #56): forwarded verbatim into the
    * guarded transaction; the server validates and applies it. Absent
@@ -382,6 +384,7 @@ async function composeAndPersistFrozen(
     // (review #47 P1-1).
     formBlock: digestSession ? cfgArray[index] : undefined,
     proposal: args.proposal,
+    adoptCatalogVersion: args.adoptCatalogVersion,
     settings: args.settings,
     cachedAccessoryUniqueIds,
     liveStations: args.liveStations,

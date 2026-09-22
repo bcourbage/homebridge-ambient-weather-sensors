@@ -30,11 +30,11 @@ import type { EditorAuthoredFragmentDto, EditorRowDto } from './dto/editor-state
  */
 export type DraftableField =
   | 'enabled' | 'name' | 'displayUnit' | 'threshold' | 'triggerEnabled' | 'triggerDirection'
-  | 'kind' | 'measurement' | 'sourceUnit';
+  | 'kind' | 'measurement' | 'sourceUnit' | 'unitLabel';
 
 const DRAFTABLE_FIELDS: ReadonlySet<string> = new Set<DraftableField>([
   'enabled', 'name', 'displayUnit', 'threshold', 'triggerEnabled', 'triggerDirection',
-  'kind', 'measurement', 'sourceUnit',
+  'kind', 'measurement', 'sourceUnit', 'unitLabel',
 ]);
 
 function isDraftableField(field: string): field is DraftableField {
@@ -160,6 +160,38 @@ export class DraftStore {
     this.dropIfEmpty(key);
   }
 
+  /** Remove authored presence and any pending replacement, including an explicit empty label. */
+  inheritField(row: EditorRowDto, field: DraftableField): void {
+    this.clearField(row, field);
+    this.removeFieldAt(row.origin === 'global' ? undefined : row.stationMac, row.dataPoint, field);
+  }
+
+  /** Authored presence after draft operations, without resolving inheritance or defaults. */
+  fieldIntent(row: EditorRowDto, field: DraftableField): { present: boolean; value?: unknown } {
+    const key = rowDraftKey(row);
+    const e = this.drafts.get(key);
+    if (e?.patches.has(field)) {
+      return { present: true, value: e.patches.get(field) };
+    }
+    if (e?.remove || e?.fieldRemovals.has(field)) {
+      return { present: false };
+    }
+    const baseline = this.authoredBaseline(key);
+    return Object.hasOwn(baseline, field) ? { present: true, value: baseline[field] } : { present: false };
+  }
+
+  /** Sanitized fragments with withheld content cannot authorize an unchanged-map operation. */
+  get faithfullyReconstructable(): boolean {
+    return this.authored.every(f => !f.unreconstructable && !f.unknownKeys?.length);
+  }
+
+  /** Saved, including rejected, identity is not a new assignment. Repair/remapping stays in JSON. */
+  hasAuthoredIdentity(row: EditorRowDto): boolean {
+    return this.authored.some(f => f.dataPoint === row.dataPoint
+      && (f.layer === 'global' || f.layer === 'station' && f.stationMacKey === row.stationMac.toUpperCase())
+      && ['kind', 'measurement', 'sourceUnit'].some(k => Object.hasOwn(f.fields, k)));
+  }
+
   private dropIfEmpty(key: string): void {
     const e = this.drafts.get(key);
     if (e && !e.remove && e.patches.size === 0 && e.fieldRemovals.size === 0) {
@@ -269,6 +301,10 @@ export class DraftStore {
     return this.draftCount > 0;
   }
 
+  hasFieldDraft(field: DraftableField): boolean {
+    return [...this.drafts.values()].some(e => e.patches.has(field) || e.fieldRemovals.has(field));
+  }
+
   /** Number of keys with live drafts. */
   get draftCount(): number {
     let n = 0;
@@ -349,7 +385,7 @@ export class DraftStore {
   }
 
   private fragmentKey(f: EditorAuthoredFragmentDto): string | undefined {
-    if (f.dataPoint === undefined) {
+    if (f.dataPoint === undefined || f.layer === 'invalid') {
       return undefined; // invalid-identity fragment: passes through verbatim
     }
     return keyFor(f.layer === 'station' ? f.stationMacKey : undefined, f.dataPoint);

@@ -59,5 +59,5 @@ export const KIND_HELP =
     ? `${listJoin(unsupportedLabels)} are reserved for future support. `
     : '')
   + 'Some newer kinds require adopting the current sensor catalog before '
-  + 'they can be assigned; a later plugin version guides that from this page. '
+  + 'they can be assigned. Preview catalog adoption separately on this page. '
   + 'Rows marked ? are unrecognized and do not create an accessory.';

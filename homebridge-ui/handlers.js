@@ -1139,6 +1139,18 @@ export async function handlePreviewSave(deps, payload) {
     return {
         ok: true,
         canonicalSensorMap: canonical,
+        configurationTransition: {
+            before: {
+                mode: r.ctx.modeResult.mode === 'legacy' ? 'legacy' : 'v2',
+                baseline: r.ctx.stampsCurrent.catalogBaseline,
+                adopted: r.ctx.stampsCurrent.catalogAdopted,
+                stamped: r.ctx.block.catalogBaseline !== undefined && r.ctx.block.catalogAdopted !== undefined,
+            },
+            after: {
+                mode: 'v2', baseline: r.ctx.stampsResolved.catalogBaseline,
+                adopted: r.ctx.stampsResolved.catalogAdopted, stamped: true,
+            },
+        },
         settingsChanged: r.ctx.settingsChanged,
         rows: consequences.proposedRows,
         changes: consequences.changes.map(attach),
@@ -1768,13 +1780,16 @@ export async function handleGetEditorState(deps, payload) {
         notes: effectiveMap.notes.map(n => toDiagnosticDto('note', n)),
     };
 }
-/**
- * Unit vocabulary for the editor's pickers (#70): per-measurement
- * options per selection context, in vocabulary display order, with
- * human-facing labels. Pure projection of UNIT_VOCABULARY — the
- * server stays the sole validity authority (§3.7).
- */
-export function handleGetVocabulary() {
+export function handleGetVocabulary(payload) {
+    const protocol = payload && typeof payload === 'object' && !Array.isArray(payload)
+        ? payload.vocabularyProtocol : undefined;
+    if ((payload !== undefined && payload !== null && (typeof payload !== 'object' || Array.isArray(payload)))
+        || (protocol !== undefined && protocol !== 2)) {
+        return { ok: false, error: {
+                code: 'unsupported-vocabulary-protocol',
+                message: 'The editor and plugin service use incompatible vocabulary versions. Reload the plugin settings page.',
+            } };
+    }
     const measurements = {};
     for (const m of Object.keys(UNIT_VOCABULARY)) {
         measurements[m] = {
@@ -1790,28 +1805,12 @@ export function handleGetVocabulary() {
         measurements: [...f.measurements],
         choices: f.choices.map(c => ({ id: c.id, label: c.label, units: { ...c.units } })),
     }));
-    // Assignment targets for unrecognized rows (PR E): the frozen v2.0
-    // (kind, measurement) pairs WRAPPER_FOR_KIND_AND_MEASUREMENT can
-    // build TODAY for any config, in vocabulary measurement order. A
-    // pair with no wrapper (e.g. the deferred co|co, §19.3) is never in
-    // the table, and a STAMP-GATED pair (§19.2) is withheld here because
-    // this static endpoint has no adoption context (PR #67 review F9);
-    // both would otherwise be refused by the save pipeline as
-    // no-wrapper. The P4 capability-aware editor restores the gated
-    // choices against the live catalog. §3.9: the table is the only way
-    // custom sensors pick a wrapper.
+    // An old iframe can outlive an in-place package upgrade. Without
+    // negotiation it must retain the measurement-keyed, since-1 list;
+    // sending multiple boolean kinds could silently choose the wrong one.
     const vocabOrder = Object.keys(UNIT_VOCABULARY);
     const assignments = Object.keys(WRAPPER_FOR_KIND_AND_MEASUREMENT)
-        // The static /vocabulary endpoint has no config context, so it
-        // cannot know which catalog a given installation has adopted. Any
-        // STAMP-GATED pair (WRAPPER_PAIR_SINCE > 1) would resolve
-        // `no-wrapper` for a config that has not adopted its catalog,
-        // producing a dead-end assignment (PR #67 review F9). Withhold
-        // every gated pair until the P4 capability-aware editor can report
-        // availability against the live catalog context; the frozen v2.0
-        // pairs (since 1) are always executable and stay offered. Gated
-        // assignments still work through the JSON editor once adopted.
-        .filter(key => (WRAPPER_PAIR_SINCE[key] ?? 1) <= 1)
+        .filter(key => protocol === 2 || (WRAPPER_PAIR_SINCE[key] ?? 1) <= 1)
         .map(key => {
         const sep = key.indexOf('|');
         const kind = key.slice(0, sep);
@@ -1827,7 +1826,44 @@ export function handleGetVocabulary() {
         };
     })
         .sort((a, b) => vocabOrder.indexOf(a.measurement) - vocabOrder.indexOf(b.measurement));
-    return { measurements, families, assignments };
+    if (protocol !== 2) {
+        return { measurements, families, assignments };
+    }
+    const states = {
+        leak: { label: 'Leak', normal: 'No leak', active: 'Leak detected' },
+        contact: { label: 'Contact', normal: 'Closed', active: 'Open' },
+        occupancy: { label: 'Occupancy', normal: 'Unoccupied', active: 'Occupied' },
+        smoke: { label: 'Smoke', normal: 'No smoke detected', active: 'Smoke detected' },
+        motion: { label: 'Motion', normal: 'No motion', active: 'Motion detected' },
+    };
+    const capabilities = assignments.map(a => {
+        const id = `${a.kind}|${a.measurement}`;
+        const state = a.measurement === 'boolean' ? states[a.kind] : undefined;
+        const output = state ? 'native-state' : a.kind === 'motion' ? 'extended-numeric' : 'native-measurement';
+        return {
+            ...a, id, since: WRAPPER_PAIR_SINCE[id] ?? 1,
+            label: state?.label ?? a.label,
+            triggering: a.triggering && !state,
+            source: state ? { type: 'none' }
+                : a.measurement === 'numeric' ? { type: 'fixed-authored', unit: 'raw' }
+                    : a.measurement === 'timestamp' ? { type: 'fixed-implicit', unit: 'ms' }
+                        : { type: 'selectable' },
+            output,
+            inputHelp: state
+                ? `0/false = ${state.normal}; 1/true = ${state.active}. Other reported values, including 2, indicate a fault and clear the alert. Missing data retains the previous state and fault. Reversed encodings and text are not supported.`
+                : a.measurement === 'timestamp'
+                    ? 'Accepts a finite numeric Unix timestamp in milliseconds or a supported date string, including an ISO-8601 date.'
+                    : 'Accepts finite numeric readings, not numeric strings or text.',
+            outputHelp: output === 'extended-numeric'
+                ? 'Creates a motion tile in Apple Home. Compatible controller apps can display the value.'
+                    + (a.triggering ? ' An optional threshold controls the motion state: above means at or above, below means at or below.' : ' This measurement does not trigger motion.')
+                : output === 'native-state'
+                    ? 'Uses the reported detector state for a native Apple Home sensor. The plugin does not derive an alarm from a concentration.'
+                    : 'Uses the corresponding native HomeKit measurement service.',
+            ...(state ? { state: { normal: state.normal, active: state.active } } : {}),
+        };
+    });
+    return { vocabularyProtocol: 2, measurements, families, assignments: capabilities };
 }
 /**
  * Layer/origin metadata must reflect what the resolver ACCEPTED
@@ -1947,6 +1983,7 @@ const AUTHORED_FRAGMENT_FIELDS = new Set([
 function toAuthoredFragmentDto(entry, index) {
     const dto = { index, layer: 'global', fields: {} };
     if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+        dto.unreconstructable = true;
         return dto;
     }
     const frag = entry;
