@@ -123,13 +123,7 @@ interface PreviewIntent {
     }
     .unit-family-controls { display: flex; align-items: center; gap: 8px; }
     .unit-family-controls select { flex: 1; min-width: 0; width: 100%; }
-    .unit-info {
-      flex: 0 0 32px; width: 32px; height: 32px; padding: 0;
-      border: 1px solid var(--btn-edge); border-radius: 50%;
-      background: var(--btn-bg); color: var(--btn-fg); font-weight: 600;
-    }
-    .unit-help { margin: 6px 0 0; padding: 8px; border: 1px solid var(--rule);
-      border-radius: 4px; background: var(--panel-bg); font-size: 0.85rem; }
+    .unit-family-controls .info-q { flex-shrink: 0; }
     .catalog-details { margin: 8px 0; font-size: 0.85rem; }
     /* Same themed control chrome as the row editor's selects: the UA
        default select ignored the page theme entirely (white in dark
@@ -444,9 +438,12 @@ interface PreviewIntent {
           }
           <details class="catalog-details">
             <summary>Technical details</summary>
-            Catalog baseline: {{ state()!.catalog!.baseline }};
-            adopted catalog: {{ state()!.catalog!.adopted }};
-            available catalog: {{ state()!.catalog!.current }}.
+            <p>These numbers track sensor support, not plugin releases.</p>
+            <ul>
+              <li>Starting sensor-support version: {{ state()!.catalog!.baseline }}. Kept unchanged so later sensor definitions default to off.</li>
+              <li>Sensor-support version in use: {{ state()!.catalog!.adopted }}.</li>
+              <li>Latest version included with this plugin: {{ state()!.catalog!.current }}.</li>
+            </ul>
           </details>
         </section>
       }
@@ -466,8 +463,7 @@ interface PreviewIntent {
               <div class="unit-family">
                 <label class="unit-family-name" [for]="'unit-family-' + f.key">{{ f.label }}</label>
                 <div class="unit-family-controls">
-                <select #familySel [id]="'unit-family-' + f.key" (change)="applyFamilyChoice(f.key, familySel.value)" [disabled]="mutationsLocked()"
-                        [attr.aria-describedby]="f.key === 'evapotranspiration' && evapotranspirationHelpOpen() ? 'evapotranspiration-help' : null">
+                <select #familySel [id]="'unit-family-' + f.key" (change)="applyFamilyChoice(f.key, familySel.value)" [disabled]="mutationsLocked()">
                   <!-- Always in the DOM so the select's width never
                        changes when Mixed resolves; hidden keeps it out
                        of the dropdown. -->
@@ -477,14 +473,11 @@ interface PreviewIntent {
                   }
                 </select>
                 @if (f.key === 'evapotranspiration') {
-                  <button type="button" class="unit-info" aria-label="About evapotranspiration units"
-                          aria-controls="evapotranspiration-help" [attr.aria-expanded]="evapotranspirationHelpOpen()"
-                          (click)="evapotranspirationHelpOpen.set(!evapotranspirationHelpOpen())">i</button>
+                  <span class="info-q" tabindex="0" role="img" aria-label="About evapotranspiration units"
+                        aria-describedby="evapotranspiration-help" [attr.data-tip]="EVAPOTRANSPIRATION_HELP">?</span>
+                  <span class="sr-only" id="evapotranspiration-help">{{ EVAPOTRANSPIRATION_HELP }}</span>
                 }
                 </div>
-                @if (f.key === 'evapotranspiration') {
-                  <p class="unit-help" id="evapotranspiration-help" [hidden]="!evapotranspirationHelpOpen()">Evapotranspiration combines evaporation and water released by plants. Displayed in inches or millimeters per day.</p>
-                }
               </div>
             }
           </div>
@@ -524,13 +517,9 @@ interface PreviewIntent {
               <th class="dp">Data point</th><th class="name">Name</th>
               <th class="kind-col">
                 <span class="th-help">Kind
-                  <!-- A small circled ? with a native title tooltip
-                       (Bruno's beta.15 RC feedback replaced the
-                       toggled help card). The browser renders title
-                       outside the layout, so it can never clip; the
-                       persistent aria-describedby keeps the full help
-                       on the element for screen readers (PR #51
-                       review round 2). -->
+                  <!-- Shared hover/focus tooltip, also used for unit
+                       help. The persistent description supplies the
+                       same text to screen readers. -->
                   <span class="info-q" tabindex="0" role="img" aria-label="About the Kind column"
                         [attr.aria-describedby]="kindHelpId(group.mac, 'desc')"
                         [attr.data-tip]="KIND_HELP">?</span>
@@ -777,10 +766,13 @@ interface PreviewIntent {
             @if (pr.configurationTransition; as transition) {
               <details class="catalog-details configuration-transition">
                 <summary>Technical details</summary>
-                Configuration: {{ transition.before.mode }} → {{ transition.after.mode }}.
-                Catalog baseline: {{ transition.before.baseline }} → {{ transition.after.baseline }};
-                adopted catalog: {{ transition.before.adopted }} → {{ transition.after.adopted }}.
-                @if (!transition.before.stamped) { The legacy catalog stamps will be recorded. }
+                <p>These numbers track sensor support, not plugin releases.</p>
+                <ul>
+                  <li>Configuration format: {{ transition.before.mode }} → {{ transition.after.mode }}.</li>
+                  <li>Starting sensor-support version: {{ transition.before.baseline }} → {{ transition.after.baseline }}. Kept unchanged so later sensor definitions default to off.</li>
+                  <li>Sensor-support version in use: {{ transition.before.adopted }} → {{ transition.after.adopted }}.</li>
+                </ul>
+                @if (!transition.before.stamped) { Saving records these sensor-support versions in your configuration. }
               </details>
               @if (transition.before.mode === 'legacy') {
                 <div class="banner info">Saving converts this configuration to individually managed sensors. The preview lists any accessory changes.</div>
@@ -1017,7 +1009,6 @@ export class AwnRootComponent {
   protected readonly previewPending = signal(false);
   protected readonly previewReady = signal(false);
   protected readonly catalogOperation = signal<CatalogOperation | null>(null);
-  protected readonly evapotranspirationHelpOpen = signal(false);
   private previewSerial = 0;
   private previewIntent: PreviewIntent | null = null;
   private displayedIntent: PreviewIntent | null = null;
@@ -2683,6 +2674,7 @@ export class AwnRootComponent {
 
   /** Kind column header help (issue #50), see kind-support.ts. */
   protected readonly KIND_HELP = KIND_HELP;
+  protected readonly EVAPOTRANSPIRATION_HELP = 'Evapotranspiration combines evaporation and water released by plants. Displayed in inches or millimeters per day.';
 
   /**
    * Stable per-station element ids for the Kind help ARIA wiring

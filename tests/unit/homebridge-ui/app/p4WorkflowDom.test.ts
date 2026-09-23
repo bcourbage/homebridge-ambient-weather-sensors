@@ -306,6 +306,11 @@ describe('P4 operation guards and authoritative save outcomes', () => {
     expect(r.el.querySelector('.catalog-panel h3')?.textContent).toBe('Sensor support');
     expect(button(r, 'Review new sensor support')).toBeDefined();
     expect(r.el.querySelector('.catalog-panel details')?.hasAttribute('open')).toBe(false);
+    const currentDetails = r.el.querySelector('.catalog-panel details')?.textContent;
+    expect(currentDetails).toContain('These numbers track sensor support, not plugin releases.');
+    expect(currentDetails).toContain('Starting sensor-support version: 1. Kept unchanged so later sensor definitions default to off.');
+    expect(currentDetails).toContain('Sensor-support version in use: 1.');
+    expect(currentDetails).toContain('Latest version included with this plugin: 4.');
     button(r, 'Review new sensor support')!.click();
     await expect.poll(() => r.app.previewPending()).toBe(false);
     await flush(r);
@@ -324,7 +329,9 @@ describe('P4 operation guards and authoritative save outcomes', () => {
     expect(r.el.querySelector('.preview-block .chip-disabled')?.textContent).toBe('Available, switched off');
     const detail = r.el.querySelector('.configuration-transition') as HTMLDetailsElement;
     expect(detail.open).toBe(false);
-    expect(detail.textContent).toContain('adopted catalog: 1 → 4');
+    expect(detail.textContent).toContain('These numbers track sensor support, not plugin releases.');
+    expect(detail.textContent).toContain('Starting sensor-support version: 1 → 1.');
+    expect(detail.textContent).toContain('Sensor-support version in use: 1 → 4.');
     expect(button(r, 'Enable new sensor support')?.disabled).toBe(false);
     button(r, 'Cancel preview')!.click();
     await flush(r);
@@ -333,9 +340,14 @@ describe('P4 operation guards and authoritative save outcomes', () => {
     expect(r.events).toEqual([]);
   });
 
-  it('reports up-to-date sensor support without offering another update', async () => {
-    const r = await rig({ ...current(), catalogAdopted: 4 });
+  it.each([1, 4])('explains the unchanged starting version %s when sensor support is up to date', async baseline => {
+    const r = await rig({ ...current(), catalogBaseline: baseline, catalogAdopted: 4 });
     expect(r.el.querySelector('.catalog-panel')?.textContent).toContain('Your configuration has the latest sensor support included with this installed plugin.');
+    const details = r.el.querySelector('.catalog-panel details') as HTMLDetailsElement;
+    expect(details.open).toBe(false);
+    expect(details.textContent).toContain(`Starting sensor-support version: ${baseline}.`);
+    expect(details.textContent).toContain('Sensor-support version in use: 4.');
+    expect(details.textContent).toContain('Latest version included with this plugin: 4.');
     expect(button(r, 'Review new sensor support')).toBeUndefined();
     expect(r.requests.some(x => x.path === '/preview-save')).toBe(false);
   });

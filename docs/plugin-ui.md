@@ -213,7 +213,11 @@ separates authored-label intent from effective accessory changes.
 The **Sensor support** section offers **Review new sensor support**
 when the installed plugin supports types and fields not yet available
 in this configuration. Catalog version numbers remain available under
-**Technical details**. A legacy-shaped block first offers **Preview conversion**.
+**Technical details**, with separate labels for the configuration's starting
+sensor-support version, the version in use, and the latest version included
+with the installed plugin. These are not plugin release numbers. The starting
+version stays unchanged so later sensor definitions default to off. A
+legacy-shaped block first offers **Preview conversion**.
 This uses the server's legacy translation, preserving disabled
 categories and existing birth stamps. No fake sensor edit is needed.
 After saving and reloading the converted configuration, **Review new
@@ -238,9 +242,10 @@ nothing. After saving and reloading, the section reports when support is
 up to date for the installed plugin.
 
 The Units panel places measurement labels above their selectors so long
-names remain readable on narrow screens. The **i** button beside the
-evapotranspiration unit selector opens an in-page explanation for touch,
-keyboard, and pointer users. It changes no unit or draft setting.
+names remain readable on narrow screens. The **?** beside the
+evapotranspiration unit selector uses the same hover/focus tooltip as
+**Kind ?**. Its persistent accessible description supplies the same
+explanation to screen readers. It changes no unit or draft setting.
 
 Saved assignments awaiting a newer catalog are preserved unchanged
 for adoption preview, even if the current catalog diagnoses them as

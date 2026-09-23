@@ -245,10 +245,8 @@ describe('AwnRootComponent (TestBed, jsdom)', () => {
     const fixture = await render(ipc);
     const el = fixture.nativeElement as HTMLElement;
 
-    // One ? per station table, keyboard-reachable, whose native title
-    // IS the full explanation (the browser draws it outside the page
-    // layout, so it can never clip). The same text stays exposed to
-    // screen readers through a persistent aria-describedby.
+    // One keyboard-reachable ? per station table. The shared app
+    // tooltip and persistent accessible description have the same text.
     const glyphs = [...el.querySelectorAll('th.kind-col .info-q')] as HTMLElement[];
     expect(glyphs).toHaveLength(el.querySelectorAll('table').length);
     const descIds = new Set<string>();
@@ -658,7 +656,7 @@ describe('draft editing + preview (PR B — no persistence)', () => {
     });
   });
 
-  it('keeps the full evapotranspiration label and toggles adjacent unit help without drafting or requesting a save', async () => {
+  it('keeps the full evapotranspiration label and uses the Kind-style hover/focus tooltip without drafting or saving', async () => {
     const base = editorState();
     const ipc = makeIpc(editorState({ rows: [...base.rows, {
       stationMac: MAC, dataPoint: 'etos', kind: 'motion', measurement: 'evapotranspiration',
@@ -668,30 +666,35 @@ describe('draft editing + preview (PR B — no persistence)', () => {
     const el = fixture.nativeElement as HTMLElement;
     const select = el.querySelector('#unit-family-evapotranspiration') as HTMLSelectElement;
     expect(select.labels?.[0].textContent).toBe('Evapotranspiration');
-    const info = select.parentElement!.querySelector('button')!;
-    expect(info.textContent).toBe('i');
-    expect(info.type).toBe('button');
+    expect(select.parentElement!.querySelector('button')).toBeNull();
+    const info = select.parentElement!.querySelector('.info-q') as HTMLElement;
+    expect(info.textContent).toBe('?');
+    expect(info.getAttribute('tabindex')).toBe('0');
+    expect(info.getAttribute('role')).toBe('img');
     expect(info.getAttribute('aria-label')).toBe('About evapotranspiration units');
-    expect(info.getAttribute('aria-expanded')).toBe('false');
-    const help = el.querySelector('#' + info.getAttribute('aria-controls')) as HTMLElement;
-    expect(help.hidden).toBe(true);
-    const requests = ipc.requests.length;
-    info.focus();
-    info.click();
-    await settle(fixture);
-    expect(help.hidden).toBe(false);
-    expect(info.getAttribute('aria-expanded')).toBe('true');
-    expect(select.getAttribute('aria-describedby')).toBe(help.id);
+    const help = el.querySelector('#' + info.getAttribute('aria-describedby')) as HTMLElement;
+    expect(help.classList.contains('sr-only')).toBe(true);
     expect(help.textContent).toBe('Evapotranspiration combines evaporation and water released by plants. Displayed in inches or millimeters per day.');
+    expect(info.getAttribute('data-tip')).toBe(help.textContent);
+    expect(info.hasAttribute('title')).toBe(false);
+    expect(el.querySelector('.app-tip')).toBeNull();
+    const requests = ipc.requests.length;
+    info.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+    await settle(fixture);
+    expect(el.querySelector('.app-tip')?.textContent).toBe(help.textContent);
+    info.dispatchEvent(new MouseEvent('mouseout', { bubbles: true }));
+    await settle(fixture);
+    expect(el.querySelector('.app-tip')).toBeNull();
+    info.focus();
+    await settle(fixture);
+    expect(el.querySelector('.app-tip')?.textContent).toBe(help.textContent);
     expect(help.closest('.table-scroll')).toBeNull();
+    select.focus();
+    await settle(fixture);
+    expect(el.querySelector('.app-tip')).toBeNull();
     expect(select.value).toBe('imperial');
     expect(fixture.componentInstance.store.draftCount).toBe(0);
     expect(ipc.requests.length).toBe(requests);
-    info.click();
-    await settle(fixture);
-    expect(help.hidden).toBe(true);
-    expect(select.hasAttribute('aria-describedby')).toBe(false);
-    expect(info.getAttribute('aria-expanded')).toBe('false');
   });
 
   it('family selector authors a GLOBAL unit template for the whole family (GA #70 editor layer)', async () => {
