@@ -174,7 +174,7 @@ the station reports. Each choice identifies a complete accessory-kind
 and measurement pair. Leak, contact, occupancy, smoke, and direct
 motion are separate choices even though all consume on/off readings.
 Types requiring a newer adopted catalog remain visible but disabled;
-**Catalog options** leads to the separate catalog workflow. An
+**Review new sensor support** leads to the separate update workflow. An
 incomplete assignment creates no partial identity and blocks Preview
 until completed or cancelled. A diagnosed saved identity requires
 repair in the JSON config editor, not an implicit reassignment.
@@ -210,12 +210,18 @@ separates authored-label intent from effective accessory changes.
 
 ### Conversion and catalog adoption
 
-The **Sensor catalog** section reports the adopted and available
-versions. A legacy-shaped block first offers **Preview conversion**.
+The **Sensor support** section offers **Review new sensor support**
+when the installed plugin supports types and fields not yet available
+in this configuration. Catalog version numbers remain available under
+**Technical details**, with separate labels for the configuration's starting
+sensor-support version, the version in use, and the latest version included
+with the installed plugin. These are not plugin release numbers. The starting
+version stays unchanged so later sensor definitions default to off. A
+legacy-shaped block first offers **Preview conversion**.
 This uses the server's legacy translation, preserving disabled
 categories and existing birth stamps. No fake sensor edit is needed.
-After saving and reloading the converted configuration, **Preview
-catalog adoption** becomes available when a newer catalog exists.
+After saving and reloading the converted configuration, **Review new
+sensor support** becomes available when a newer catalog exists.
 
 Conversion and adoption require clean row and Connection drafts and
 no invalid open editor. They do not save or discard drafts
@@ -225,6 +231,21 @@ other rows and battery interpretation. The preview lists the actual
 configuration transition, accessory and disabled-row changes, and
 every reported battery-polarity change. No accessory changes does not
 mean no configuration changes.
+
+The **Sensor-support update** preview summarizes the server's consequences.
+Newly available disabled rows are labelled **Available, switched off**;
+these are supported sensor fields, not newly detected physical devices.
+The summary promises unchanged accessories only when the preview reports
+no accessory, setting, or battery-reporting changes. **Enable new sensor
+support** saves through the same guarded pipeline; **Cancel preview** saves
+nothing. After saving and reloading, the section reports when support is
+up to date for the installed plugin.
+
+The Units panel places measurement labels above their selectors so long
+names remain readable on narrow screens. The **?** beside the
+evapotranspiration unit selector uses the same hover/focus tooltip as
+**Kind ?**. Its persistent accessible description supplies the same
+explanation to screen readers. It changes no unit or draft setting.
 
 Saved assignments awaiting a newer catalog are preserved unchanged
 for adoption preview, even if the current catalog diagnoses them as

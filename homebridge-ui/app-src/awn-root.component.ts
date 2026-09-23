@@ -108,20 +108,23 @@ interface PreviewIntent {
       background: var(--panel-bg); border: 1px solid var(--rule);
     }
     .draft-bar .grow { flex: 1; }
-    /* Two-up grid of label/select rows under a Units title (Bruno's
-       beta.15 RC feedback: the single wrapped line read poorly).
-       Fixed label column keeps every select left-aligned; the grid
-       collapses to one per row on narrow panels. */
+    /* Labels sit above controls so long measurement names cannot run
+       underneath a select. Even a single column can shrink and wrap. */
     .unit-families { margin: 0 0 4px; }
     .unit-families-title { font-weight: 600; display: block; margin-bottom: 6px; }
     .unit-family-grid {
-      display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr));
       gap: 6px 28px; max-width: 620px;
     }
+    .unit-family { min-width: 0; }
     .unit-family-grid label {
-      display: grid; grid-template-columns: 96px 1fr; align-items: center; gap: 8px;
+      display: block; margin-bottom: 4px; white-space: normal; overflow-wrap: anywhere;
       font-size: 0.85rem; color: var(--fg-sub);
     }
+    .unit-family-controls { display: flex; align-items: center; gap: 8px; }
+    .unit-family-controls select { flex: 1; min-width: 0; width: 100%; }
+    .unit-family-controls .info-q { flex-shrink: 0; }
+    .catalog-details { margin: 8px 0; font-size: 0.85rem; }
     /* Same themed control chrome as the row editor's selects: the UA
        default select ignored the page theme entirely (white in dark
        mode) and sat below the label baseline, reading as a vertical
@@ -412,26 +415,36 @@ interface PreviewIntent {
       </div>
 
       @if (!state()!.freshInstall && validCatalog()) {
-        <section class="catalog-panel" #catalogPanel tabindex="-1" aria-label="Sensor catalog">
-          <h3>Sensor catalog</h3>
-          <p class="sub">Adopted catalog {{ state()!.catalog!.adopted }}; available catalog {{ state()!.catalog!.current }}.
-            New capabilities are a separate, previewed choice. Existing assignments keep their identity.</p>
+        <section class="catalog-panel" #catalogPanel tabindex="-1" aria-label="Sensor support">
+          <h3>Sensor support</h3>
           @if (state()!.configMode === 'legacy') {
             <p class="conversion-note">Conversion keeps known disabled sensors disabled. Future recognized sensors may appear and can be disabled individually.</p>
           }
           @if (catalogOperation(); as operation) {
-            <div class="banner info">{{ operation === 'convert' ? 'Conversion' : 'Catalog adoption' }} preview.
+            <div class="banner info">{{ operation === 'convert' ? 'Configuration conversion' : 'Sensor-support update' }} preview.
               Row and Connection editing are locked until this preview is saved or cancelled. Nothing is saved by previewing.</div>
-            <button type="button" (click)="cancelPreview()" [disabled]="saving() || reloadRequired()">Cancel catalog preview</button>
+            <button type="button" (click)="cancelPreview()" [disabled]="saving() || reloadRequired()">Cancel preview</button>
           } @else if (state()!.configMode === 'legacy') {
-            <p>Convert the legacy configuration first, without adopting newer definitions. Review the server's conversion consequences before saving.</p>
+            <p>Convert the legacy configuration first, without enabling newer sensor support. Review the conversion changes before saving.</p>
             <button type="button" (click)="previewCatalog('convert')" [disabled]="cleanOperationError('convert') !== null">Preview conversion</button>
             @if (cleanOperationError('convert'); as reason) { <p class="muted">{{ reason }}</p> }
           } @else if (state()!.configMode === 'v2' && state()!.catalog!.adopted < state()!.catalog!.current) {
-            <p>Preview the current catalog before adopting it. Adoption may change battery interpretation or make saved assignments available; review every consequence.</p>
-            <button type="button" (click)="previewCatalog('adopt')" [disabled]="cleanOperationError('adopt') !== null">Preview catalog adoption</button>
+            <p>The installed plugin supports additional sensor types and fields. Preview the changes before making that support available in your configuration. Previewing saves nothing.</p>
+            <p>This update can activate previously saved sensor assignments or change battery reporting. Any effects are listed in the preview.</p>
+            <button type="button" (click)="previewCatalog('adopt')" [disabled]="cleanOperationError('adopt') !== null">Review new sensor support</button>
             @if (cleanOperationError('adopt'); as reason) { <p class="muted">{{ reason }}</p> }
+          } @else if (state()!.configMode === 'v2') {
+            <p>Your configuration has the latest sensor support included with this installed plugin.</p>
           }
+          <details class="catalog-details">
+            <summary>Technical details</summary>
+            <p>These numbers track sensor support, not plugin releases.</p>
+            <ul>
+              <li>Starting sensor-support version: {{ state()!.catalog!.baseline }}. Kept unchanged so later sensor definitions default to off.</li>
+              <li>Sensor-support version in use: {{ state()!.catalog!.adopted }}.</li>
+              <li>Latest version included with this plugin: {{ state()!.catalog!.current }}.</li>
+            </ul>
+          </details>
         </section>
       }
 
@@ -447,9 +460,10 @@ interface PreviewIntent {
           <span class="unit-families-title">Units</span>
           <div class="unit-family-grid">
             @for (f of unitFamilies(); track f.key) {
-              <label>
-                <span class="unit-family-name">{{ f.label }}</span>
-                <select #familySel (change)="applyFamilyChoice(f.key, familySel.value)" [disabled]="mutationsLocked()">
+              <div class="unit-family">
+                <label class="unit-family-name" [for]="'unit-family-' + f.key">{{ f.label }}</label>
+                <div class="unit-family-controls">
+                <select #familySel [id]="'unit-family-' + f.key" (change)="applyFamilyChoice(f.key, familySel.value)" [disabled]="mutationsLocked()">
                   <!-- Always in the DOM so the select's width never
                        changes when Mixed resolves; hidden keeps it out
                        of the dropdown. -->
@@ -458,7 +472,13 @@ interface PreviewIntent {
                     <option [value]="c.id" [selected]="c.id === f.current">{{ c.label }}</option>
                   }
                 </select>
-              </label>
+                @if (f.key === 'evapotranspiration') {
+                  <span class="info-q" tabindex="0" role="img" aria-label="About evapotranspiration units"
+                        aria-describedby="evapotranspiration-help" [attr.data-tip]="EVAPOTRANSPIRATION_HELP">?</span>
+                  <span class="sr-only" id="evapotranspiration-help">{{ EVAPOTRANSPIRATION_HELP }}</span>
+                }
+                </div>
+              </div>
             }
           </div>
         </div>
@@ -497,13 +517,9 @@ interface PreviewIntent {
               <th class="dp">Data point</th><th class="name">Name</th>
               <th class="kind-col">
                 <span class="th-help">Kind
-                  <!-- A small circled ? with a native title tooltip
-                       (Bruno's beta.15 RC feedback replaced the
-                       toggled help card). The browser renders title
-                       outside the layout, so it can never clip; the
-                       persistent aria-describedby keeps the full help
-                       on the element for screen readers (PR #51
-                       review round 2). -->
+                  <!-- Shared hover/focus tooltip, also used for unit
+                       help. The persistent description supplies the
+                       same text to screen readers. -->
                   <span class="info-q" tabindex="0" role="img" aria-label="About the Kind column"
                         [attr.aria-describedby]="kindHelpId(group.mac, 'desc')"
                         [attr.data-tip]="KIND_HELP">?</span>
@@ -600,7 +616,7 @@ interface PreviewIntent {
                           <select formControlName="pair">
                             <option value="">Choose…</option>
                             @for (a of assignmentOptions(); track a.id) {
-                              <option [value]="a.id" [disabled]="!pairAvailable(a)">{{ a.label }}{{ pairAvailable(a) ? '' : ' (requires catalog ' + a.since + ')' }}</option>
+                              <option [value]="a.id" [disabled]="!pairAvailable(a)">{{ a.label }}{{ pairAvailable(a) ? '' : ' (requires a sensor-support update)' }}</option>
                             }
                           </select>
                         </label>
@@ -615,8 +631,8 @@ interface PreviewIntent {
                           </label>
                         }
                         @if (assignmentOptions().some(needsAdoption)) {
-                          <span class="muted">Unavailable types require the separate catalog adoption preview.</span>
-                          <button type="button" (click)="showCatalog()">Catalog options</button>
+                          <span class="muted">Unavailable types require a sensor-support update. Review and save that update separately before assigning a sensor.</span>
+                          <button type="button" (click)="showCatalog()">Review new sensor support</button>
                         }
                         @if (assignError()) {
                           <span class="field-error">{{ assignError() }}</span>
@@ -739,26 +755,35 @@ interface PreviewIntent {
       @if (previewResult(); as pr) {
         <div class="preview-block" [class.previewing]="previewPending()">
         @if (pr.ok) {
-          <h3>Preview</h3>
+          <h3>{{ sensorSupportUpdate(pr) ? 'Sensor-support update' : 'Preview' }}</h3>
+          @if (sensorSupportUpdate(pr)) {
+            <div class="banner info sensor-support-summary">{{ sensorSupportSummary(pr) }}</div>
+          }
           @if (pr.settingsChanged.length > 0) {
             <div class="banner info">{{ settingsChangedLabel(pr.settingsChanged) }}</div>
           }
           @if (transitionChanges(pr)) {
             @if (pr.configurationTransition; as transition) {
-              <div class="banner info configuration-transition">
-                Configuration: {{ transition.before.mode }} → {{ transition.after.mode }}.
-                Catalog baseline: {{ transition.before.baseline }} → {{ transition.after.baseline }};
-                adopted catalog: {{ transition.before.adopted }} → {{ transition.after.adopted }}.
-                @if (!transition.before.stamped) { The legacy catalog stamps will be recorded. }
-                The configuration changes even when no accessory changes.
-              </div>
+              <details class="catalog-details configuration-transition">
+                <summary>Technical details</summary>
+                <p>These numbers track sensor support, not plugin releases.</p>
+                <ul>
+                  <li>Configuration format: {{ transition.before.mode }} → {{ transition.after.mode }}.</li>
+                  <li>Starting sensor-support version: {{ transition.before.baseline }} → {{ transition.after.baseline }}. Kept unchanged so later sensor definitions default to off.</li>
+                  <li>Sensor-support version in use: {{ transition.before.adopted }} → {{ transition.after.adopted }}.</li>
+                </ul>
+                @if (!transition.before.stamped) { Saving records these sensor-support versions in your configuration. }
+              </details>
+              @if (transition.before.mode === 'legacy') {
+                <div class="banner info">Saving converts this configuration to individually managed sensors. The preview lists any accessory changes.</div>
+              }
             }
           }
           @if (labelIntentPreview()) {
             <div class="banner info label-intent-preview">The draft changes unit-label authorship or inheritance. Its effective label can remain the same; the server's accessory consequences are listed separately.</div>
           }
           @if (pr.changes.length === 0 && pr.configOnly.length === 0 && pr.settingsChanged.length === 0 && pr.batteryPolarity.length === 0) {
-            <div class="banner info">No accessory or setting-value changes.{{ transitionChanges(pr) || labelIntentPreview() ? ' The configuration intent shown above still changes.' : ' No configuration transition is reported.' }}</div>
+            <div class="banner info">No accessory or setting-value changes.{{ transitionChanges(pr) || labelIntentPreview() ? ' Saving still applies the configuration update shown above.' : ' No configuration transition is reported.' }}</div>
           }
           @if (pr.batteryPolarity.length > 0) {
             <h3>Battery interpretation changes</h3>
@@ -804,13 +829,22 @@ interface PreviewIntent {
             }
           }
           @if (pr.configOnly.length > 0) {
+            @if (sensorSupportUpdate(pr) && onlyNewDisabledFields(pr)) {
+              <h3>Newly supported sensor fields: {{ pr.configOnly.length }}, all off</h3>
+            } @else {
+              <h3>Changes to switched-off sensors</h3>
+            }
             <!-- Saved-configuration changes with no accessory effect
                  right now, listed so the draft count and the preview
                  visibly add up (Bruno's beta.15 RC feedback). -->
             @for (c of pr.configOnly; track c.stationMac + '|' + c.dataPoint + '|' + c.change) {
               <div class="change-row">
-                <span class="change-kind {{ c.change }}">{{ c.change }}</span>
-                <span class="change-kind chip-disabled" data-tip="This row is disabled, so no accessory changes now. The saved settings still change and take effect when the row is enabled.">disabled</span>
+                @if (sensorSupportUpdate(pr) && c.change === 'added') {
+                  <span class="change-kind chip-disabled">Available, switched off</span>
+                } @else {
+                  <span class="change-kind {{ c.change }}">{{ c.change }}</span>
+                  <span class="change-kind chip-disabled" data-tip="This row is switched off, so no accessory changes now. The saved settings still change and take effect when the row is enabled.">switched off</span>
+                }
                 <code>{{ c.dataPoint }}</code>
                 <span class="station-meta">{{ c.stationMac }}</span>
                 @if (c.change === 'modified') {
@@ -854,7 +888,7 @@ interface PreviewIntent {
             }
           }
           @if (state()!.editorAvailable) {
-            <div class="draft-bar">
+            <div class="draft-bar save-bar">
               <span class="grow">
                 @if (pr.structuralChangeCount > 0) {
                   Saving applies the {{ pr.structuralChangeCount }} registration {{ pr.structuralChangeCount === 1 ? 'change' : 'changes' }} above.
@@ -862,7 +896,7 @@ interface PreviewIntent {
                   Saving applies these changes without registering or deregistering any accessory.
                 }
               </span>
-              <button type="button" (click)="saveClicked(pr)" [disabled]="!canSavePreview()">Save changes</button>
+              <button type="button" (click)="saveClicked(pr)" [disabled]="!canSavePreview()">{{ sensorSupportUpdate(pr) ? 'Enable new sensor support' : 'Save changes' }}</button>
             </div>
           }
         } @else {
@@ -1574,7 +1608,7 @@ export class AwnRootComponent {
       return 'Choose a sensor type to assign this field, or Cancel.';
     }
     if (!this.pairAvailable(pair)) {
-      return 'Preview and save catalog adoption separately before assigning this type.';
+      return 'Review and save the sensor-support update separately before assigning this type.';
     }
     if (!sourceSelectionValid(pair, this.editForm.get('sourceUnit')?.value, this.vocab()!)) {
       return 'Choose the unit the station reports this field in, or Cancel.';
@@ -2382,19 +2416,19 @@ export class AwnRootComponent {
     const state = this.state();
     if (!state?.editorAvailable || state.freshInstall || !this.vocab() || !this.validCatalog()
       || this.saving() || this.reloadRequired()) {
-      return 'Catalog actions are unavailable until a writable configuration is loaded.';
+      return 'Sensor-support updates are unavailable until a writable configuration is loaded.';
     }
-    if (this.catalogOperation() !== null) { return 'Finish or cancel the current catalog preview first.'; }
+    if (this.catalogOperation() !== null) { return 'Finish or cancel the current preview first.'; }
     if (this.draftCount() > 0 || this.editFormInvalid() || this.settingsError() !== null) {
       return 'Save or discard row and Connection drafts, and finish or cancel the open editor first.';
     }
     if (operation === 'convert') {
       return state.configMode === 'legacy' ? null : 'This configuration is already converted.';
     }
-    if (state.configMode !== 'v2') { return 'Convert the legacy configuration before adopting the catalog.'; }
-    if (state.catalog!.adopted >= state.catalog!.current) { return 'The current catalog is already adopted.'; }
+    if (state.configMode !== 'v2') { return 'Convert the legacy configuration before enabling newer sensor support.'; }
+    if (state.catalog!.adopted >= state.catalog!.current) { return 'Your configuration already has the latest sensor support included with this installed plugin.'; }
     if (!this.store.faithfullyReconstructable) {
-      return 'Some saved fragments cannot be reproduced without losing content. Repair the reported fragments in the JSON config editor, then reload before adoption.';
+      return 'Some saved fragments cannot be reproduced without losing content. Repair the reported fragments in the JSON config editor, then reload before updating sensor support.';
     }
     return null;
   }
@@ -2482,6 +2516,34 @@ export class AwnRootComponent {
     const t = pr.configurationTransition;
     return !!t && (t.before.mode !== t.after.mode || t.before.baseline !== t.after.baseline
       || t.before.adopted !== t.after.adopted || t.before.stamped !== t.after.stamped);
+  }
+
+  /** Presentation only: the server remains the authority for all consequences. */
+  protected sensorSupportUpdate(pr: Extract<PreviewResultDto, { ok: true }>): boolean {
+    const t = pr.configurationTransition;
+    return !!t && t.after.adopted > t.before.adopted;
+  }
+
+  protected onlyNewDisabledFields(pr: Extract<PreviewResultDto, { ok: true }>): boolean {
+    return pr.configOnly.length > 0 && pr.configOnly.every(c => c.change === 'added' && c.after?.enabled === false);
+  }
+
+  protected sensorSupportSummary(pr: Extract<PreviewResultDto, { ok: true }>): string {
+    const messages: string[] = [];
+    // Zero structural changes is NOT sufficient: value/name and battery
+    // consequences must also be absent before promising unchanged accessories.
+    if (pr.changes.length === 0 && pr.batteryPolarity.length === 0 && pr.settingsChanged.length === 0) {
+      messages.push('Your existing accessories stay unchanged.');
+    }
+    const added = pr.configOnly.filter(c => c.change === 'added' && c.after?.enabled === false).length;
+    if (added > 0) {
+      messages.push(`Support for ${added} additional sensor ${added === 1 ? 'field' : 'fields'} will become available, ${added === 1 ? 'switched off' : 'all switched off'}.`);
+    }
+    if (pr.changes.length === 0) messages.push('No new Apple Home accessories will be created.');
+    if (pr.changes.length > 0 || pr.batteryPolarity.length > 0 || pr.settingsChanged.length > 0) {
+      messages.push('Review the accessory, setting, and battery-reporting changes listed below before enabling new sensor support.');
+    }
+    return messages.join(' ');
   }
 
   protected canSavePreview(): boolean {
@@ -2612,6 +2674,7 @@ export class AwnRootComponent {
 
   /** Kind column header help (issue #50), see kind-support.ts. */
   protected readonly KIND_HELP = KIND_HELP;
+  protected readonly EVAPOTRANSPIRATION_HELP = 'Evapotranspiration combines evaporation and water released by plants. Displayed in inches or millimeters per day.';
 
   /**
    * Stable per-station element ids for the Kind help ARIA wiring

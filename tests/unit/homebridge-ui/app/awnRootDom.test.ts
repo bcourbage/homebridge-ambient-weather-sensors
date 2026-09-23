@@ -245,10 +245,8 @@ describe('AwnRootComponent (TestBed, jsdom)', () => {
     const fixture = await render(ipc);
     const el = fixture.nativeElement as HTMLElement;
 
-    // One ? per station table, keyboard-reachable, whose native title
-    // IS the full explanation (the browser draws it outside the page
-    // layout, so it can never clip). The same text stays exposed to
-    // screen readers through a persistent aria-describedby.
+    // One keyboard-reachable ? per station table. The shared app
+    // tooltip and persistent accessible description have the same text.
     const glyphs = [...el.querySelectorAll('th.kind-col .info-q')] as HTMLElement[];
     expect(glyphs).toHaveLength(el.querySelectorAll('table').length);
     const descIds = new Set<string>();
@@ -270,8 +268,8 @@ describe('AwnRootComponent (TestBed, jsdom)', () => {
     // kindSupport.test.ts).
     expect(KIND_HELP).toContain('Currently supported kinds are temperature, humidity, light, motion, CO₂, PM2.5, PM10, leak, contact, occupancy and smoke');
     // CO is reserved (native mapping deferred past P3); newer kinds carry an adoption caveat.
-    expect(KIND_HELP).toContain('CO are reserved for future support');
-    expect(KIND_HELP).toContain('require adopting the current sensor catalog');
+    expect(KIND_HELP).toContain('CO is reserved for future support');
+    expect(KIND_HELP).toContain('require a sensor-support update');
 
     // Hover (or keyboard focus) shows the APP's own tooltip - native
     // title tooltips are hijacked by the settings modal's own title
@@ -658,6 +656,47 @@ describe('draft editing + preview (PR B — no persistence)', () => {
     });
   });
 
+  it('keeps the full evapotranspiration label and uses the Kind-style hover/focus tooltip without drafting or saving', async () => {
+    const base = editorState();
+    const ipc = makeIpc(editorState({ rows: [...base.rows, {
+      stationMac: MAC, dataPoint: 'etos', kind: 'motion', measurement: 'evapotranspiration',
+      sourceUnit: 'in_per_day', displayUnit: 'in_per_day', enabled: false, origin: 'default', batteryField: null,
+    }] }));
+    const fixture = await render(ipc);
+    const el = fixture.nativeElement as HTMLElement;
+    const select = el.querySelector('#unit-family-evapotranspiration') as HTMLSelectElement;
+    expect(select.labels?.[0].textContent).toBe('Evapotranspiration');
+    expect(select.parentElement!.querySelector('button')).toBeNull();
+    const info = select.parentElement!.querySelector('.info-q') as HTMLElement;
+    expect(info.textContent).toBe('?');
+    expect(info.getAttribute('tabindex')).toBe('0');
+    expect(info.getAttribute('role')).toBe('img');
+    expect(info.getAttribute('aria-label')).toBe('About evapotranspiration units');
+    const help = el.querySelector('#' + info.getAttribute('aria-describedby')) as HTMLElement;
+    expect(help.classList.contains('sr-only')).toBe(true);
+    expect(help.textContent).toBe('Evapotranspiration combines evaporation and water released by plants. Displayed in inches or millimeters per day.');
+    expect(info.getAttribute('data-tip')).toBe(help.textContent);
+    expect(info.hasAttribute('title')).toBe(false);
+    expect(el.querySelector('.app-tip')).toBeNull();
+    const requests = ipc.requests.length;
+    info.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+    await settle(fixture);
+    expect(el.querySelector('.app-tip')?.textContent).toBe(help.textContent);
+    info.dispatchEvent(new MouseEvent('mouseout', { bubbles: true }));
+    await settle(fixture);
+    expect(el.querySelector('.app-tip')).toBeNull();
+    info.focus();
+    await settle(fixture);
+    expect(el.querySelector('.app-tip')?.textContent).toBe(help.textContent);
+    expect(help.closest('.table-scroll')).toBeNull();
+    select.focus();
+    await settle(fixture);
+    expect(el.querySelector('.app-tip')).toBeNull();
+    expect(select.value).toBe('imperial');
+    expect(fixture.componentInstance.store.draftCount).toBe(0);
+    expect(ipc.requests.length).toBe(requests);
+  });
+
   it('family selector authors a GLOBAL unit template for the whole family (GA #70 editor layer)', async () => {
     const ipc = makeIpc(editorState());
     const fixture = await render(ipc);
@@ -717,7 +756,7 @@ describe('draft editing + preview (PR B — no persistence)', () => {
     // resolve imperial, so that choice is current.
     const selects = [...el.querySelectorAll('.unit-families select')] as HTMLSelectElement[];
     expect(selects).toHaveLength(2); // Wind speed + Rainfall
-    const rain = selects.find(s => (s.closest('label') as HTMLElement).textContent!.includes('Rainfall'))!;
+    const rain = selects.find(s => (s.closest('.unit-family') as HTMLElement).textContent!.includes('Rainfall'))!;
     expect(rain.value).toBe('imperial');
 
     // Metric drafts BOTH global templates in one gesture: rate to
@@ -838,7 +877,7 @@ describe('draft editing + preview (PR B — no persistence)', () => {
     const fixture = await render(ipc);
     const el = fixture.nativeElement as HTMLElement;
     const selectFor = (label: string): HTMLSelectElement =>
-      ([...el.querySelectorAll('.unit-families label')] as HTMLElement[])
+      ([...el.querySelectorAll('.unit-family')] as HTMLElement[])
         .find(l => l.textContent!.includes(label))!.querySelector('select')!;
 
     // Wind Speed -> ft/sec changes ONLY the station wind row: the
@@ -1405,7 +1444,7 @@ describe('draft editing + preview (PR B — no persistence)', () => {
     const el = fixture.nativeElement as HTMLElement;
 
     // Pick the family unit first (pending draft on the global key)...
-    const rainSelect = ([...el.querySelectorAll('.unit-families label')] as HTMLElement[])
+    const rainSelect = ([...el.querySelectorAll('.unit-family')] as HTMLElement[])
       .find(l => l.textContent!.includes('Rainfall'))!.querySelector('select')!;
     rainSelect.value = 'metric';
     rainSelect.dispatchEvent(new Event('change'));
@@ -1630,7 +1669,7 @@ describe('draft editing + preview (PR B — no persistence)', () => {
     const el = fixture.nativeElement as HTMLElement;
     // The family choice drafts under the GLOBAL key; the row's own
     // draft key is station-scoped — the filter must consider both.
-    const windSel = ([...el.querySelectorAll('.unit-families label')] as HTMLElement[])
+    const windSel = ([...el.querySelectorAll('.unit-family')] as HTMLElement[])
       .find(l => l.textContent!.includes('Wind Speed'))!.querySelector('select')!;
     windSel.value = 'fps';
     windSel.dispatchEvent(new Event('change'));
