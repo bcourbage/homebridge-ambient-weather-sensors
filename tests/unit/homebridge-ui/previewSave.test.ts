@@ -89,7 +89,7 @@ describe('/preview-save — no writes, ever', () => {
     const configBefore = readFileSync(rig.configPath, 'utf8');
     const filesBefore = readdirSync(rig.persistDir).sort();
 
-    const result = await handlePreviewSave(rig.deps, { base: LEGACY_BLOCK });
+    const result = await handlePreviewSave(rig.deps, { base: LEGACY_BLOCK, cachedAccessoryUniqueIds: [] });
     expect(result.ok).toBe(true);
 
     expect(readFileSync(rig.configPath, 'utf8')).toBe(configBefore);
@@ -102,7 +102,7 @@ describe('/preview-save — diff semantics', () => {
   it('a legacy pure migration previews as change-free (migration equivalence)', async () => {
     const rig = makeRig(LEGACY_BLOCK);
     discoveryStore(rig, ['tempf', 'windspeedmph']);
-    const result = await handlePreviewSave(rig.deps, { base: LEGACY_BLOCK });
+    const result = await handlePreviewSave(rig.deps, { base: LEGACY_BLOCK, cachedAccessoryUniqueIds: [] });
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.changes).toEqual([]);
@@ -293,8 +293,10 @@ describe('/preview-save — pipeline parity with /compose-save', () => {
   it('same input produces the same canonical sensorMap the save composes', async () => {
     const rig = makeRig(LEGACY_BLOCK);
     discoveryStore(rig, ['tempf', 'windspeedmph']);
-    const preview = await handlePreviewSave(rig.deps, { base: LEGACY_BLOCK });
-    const save = await handleComposeSave(rig.deps, { base: LEGACY_BLOCK });
+    // This file-backed fixture has a complete, empty accessory cache.
+    const payload = { base: LEGACY_BLOCK, cachedAccessoryUniqueIds: [] };
+    const preview = await handlePreviewSave(rig.deps, payload);
+    const save = await handleComposeSave(rig.deps, payload);
     expect(preview.ok && save.ok).toBe(true);
     if (preview.ok && save.ok) {
       expect(preview.canonicalSensorMap).toEqual(save.canonicalSensorMap);

@@ -19,7 +19,7 @@
  * Tested by the migration-equivalence property tests (§12.7),
  * scheduled for Stage 9.
  */
-import type { SensorMapOverride, SensorUnit, StationInventory } from './types.js';
+import type { SensorMapOverride, SensorUnit, StationInventory, StationRecord } from './types.js';
 /**
  * v1.6.0 config shape — union of every field the compat layer inspects.
  * Fields the compat layer doesn't consume (stationFilter, dataSource,
@@ -101,7 +101,9 @@ export declare function dynamicDataPointsFrom(discovery: {
     entries: ReadonlyArray<{
         dataPoint: string;
     }>;
-}): string[];
+}, cachedPairs?: ReadonlyArray<{
+    dataPoint: string;
+}>): string[];
 export declare function compatToOverrides(legacy: LegacyConfig, stations?: StationInventory, 
 /**
  * Data points OUTSIDE the static default table that resolve via the
@@ -113,4 +115,11 @@ export declare function compatToOverrides(legacy: LegacyConfig, stations?: Stati
  * created.
  */
 dynamicDataPoints?: Iterable<string>): SensorMapOverride[];
+/**
+ * Legacy selectors match both stable field identities and station-derived
+ * names. Missing station metadata cannot make the latter a definite non-match.
+ * This is an exposure decision only; it does not synthesize row identity or
+ * infer a station name from a cached HomeKit label.
+ */
+export declare function legacyRowFilterState(legacy: LegacyConfig, dataPoint: string, station: StationRecord, isMultiStation: boolean): 'enabled' | 'disabled' | 'unknown' | undefined;
 //# sourceMappingURL=compat.d.ts.map

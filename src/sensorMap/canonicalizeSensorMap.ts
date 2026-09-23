@@ -44,7 +44,7 @@
  */
 
 import { buildEffectiveSensorMap, partitionOverrideLayers, type BuildInput } from './buildEffectiveMap.js';
-import { defaultRowForConfigOverride, hasAuthoredIdentity } from './defaultMap.js';
+import { defaultRowForConfigOverride, hasAuthoredIdentity, isCompatibilityDefinition } from './defaultMap.js';
 import type {
   DiscoveryStore,
   EffectiveSensorRow,
@@ -60,6 +60,8 @@ export interface CanonicalizeInput {
   stations: StationInventory;
   discovery: DiscoveryStore;
   uiState: UiStateStore;
+  /** Factual existing pairs, without fabricated observation timestamps. */
+  cachedPairs?: BuildInput['cachedPairs'];
   /** Adoption stamps of the config being canonicalized (§18.3). */
   catalogBaseline?: number;
   catalogAdopted?: number;
@@ -87,6 +89,7 @@ export function canonicalizeSensorMap(input: CanonicalizeInput): SensorMapOverri
     discovery: input.discovery,
     uiState: input.uiState,
     stations: input.stations,
+    cachedPairs: input.cachedPairs,
     configMode: 'v2',
     catalogBaseline: input.catalogBaseline,
     catalogAdopted: input.catalogAdopted,
@@ -189,6 +192,20 @@ export function canonicalizeSensorMap(input: CanonicalizeInput): SensorMapOverri
     return out;
   };
 
+  const preserveCompatibilityClaim = (
+    fields: Diff, dp: string, authored: SensorMapOverride | undefined,
+    ...identityLayers: ReadonlyArray<unknown>
+  ): void => {
+    const definition = knownRowFor(dp, ...identityLayers);
+    // Authorship grants a claim where the compatibility default only
+    // supplies a battery reference. Keep it at its original scope even
+    // while disabled or losing a collision: either can own it later.
+    if (definition && isCompatibilityDefinition(definition)
+        && typeof authored?.batteryField === 'string' && authored.batteryField === definition.batteryField) {
+      fields.batteryField = authored.batteryField;
+    }
+  };
+
   const entries: Array<{ dataPoint: string; stationMac?: string; fields: Diff }> = [];
 
   // ---- Global entries: the template layer vs the built-in baseline.
@@ -218,6 +235,7 @@ export function canonicalizeSensorMap(input: CanonicalizeInput): SensorMapOverri
       ? identity.get(`${row.stationMac}|${dp}`)
       : defaults.get(`${row.stationMac}|${dp}`);
     const fields = diffRows(row, reference);
+    preserveCompatibilityClaim(fields, dp, layers.global.get(dp), layers.global.get(dp));
     if (isCustom) {
       // Custom templates always re-declare identity.
       fields.kind = row.kind;
@@ -273,6 +291,7 @@ export function canonicalizeSensorMap(input: CanonicalizeInput): SensorMapOverri
         ? stationBaseline.get(key)
         : (globalRow ?? (isCustom ? identity.get(key) : defaults.get(key)));
       const fields = diffRows(proposed, reference);
+      preserveCompatibilityClaim(fields, dp, perDp.get(dp), layers.global.get(dp), perDp.get(dp));
       const onlyIdentityRestated = isCustom && globalRow !== undefined
         && globalAuthorsIdentity(dp)
         && Object.keys(fields).length === 0;

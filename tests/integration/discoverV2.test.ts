@@ -519,8 +519,8 @@ describe('discoverDevicesV2 — malformed AWN responses (failed snapshot, not em
       expect(await fetchRaw.fetchRawStations(), label).toBeUndefined();
       vi.restoreAllMocks();
     }
-    // Contrast: [] is an authoritative empty inventory (AWN healthy, no
-    // devices) — same as v1.7.
+    // Contrast: [] is a valid empty observation. The v2 reconciler still
+    // retains configured cached rows; this is not removal authorization.
     mockFetch([]);
     expect(await fetchRaw.fetchRawStations()).toEqual([]);
   });

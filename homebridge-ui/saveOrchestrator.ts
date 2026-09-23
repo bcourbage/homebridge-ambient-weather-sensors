@@ -322,7 +322,9 @@ async function composeAndPersistFrozen(
         .map(a => (a as { context?: { device?: { uniqueId?: unknown } } })?.context?.device?.uniqueId)
         .filter((u): u is string => typeof u === 'string');
     } catch {
-      cachedAccessoryUniqueIds = undefined; // inventory source is best-effort
+      // Read-only/settings-only paths may degrade; the server refuses a
+      // full legacy conversion without a successful cache snapshot.
+      cachedAccessoryUniqueIds = undefined;
     }
   }
 

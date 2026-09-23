@@ -17,12 +17,13 @@ import * as path from 'path';
 import { fileURLToPath } from 'url';
 import { buildEffectiveSensorMap, partitionOverrideLayers } from '../dist/sensorMap/buildEffectiveMap.js';
 import { canonicalizeSensorMap } from '../dist/sensorMap/canonicalizeSensorMap.js';
-import { compatToOverrides, dynamicDataPointsFrom } from '../dist/sensorMap/compat.js';
+import { compatToOverrides, dynamicDataPointsFrom, legacyRowFilterState } from '../dist/sensorMap/compat.js';
+import { cachedPairsFromUniqueIds } from '../dist/sensorMap/cachedInventory.js';
 import { detectConfigMode } from '../dist/sensorMap/configMode.js';
 import { composeV2ConfigSave, journalConversionBaseline, verifyConversionJournalReadable, recognizeMirror, verifyLegacySnapshot, writeLegacySnapshot, } from '../dist/sensorMap/legacyMirror.js';
 import { sensorMapShapeError } from '../dist/sensorMap/platformEffectiveMap.js';
 import { NON_TRIGGERING_MEASUREMENTS, STATION_MAC_REGEX } from '../dist/sensorMap/validation.js';
-import { filterStationInventory, indeterminateFilterStations } from '../dist/sensorMap/stationMatch.js';
+import { filterStationInventory, indeterminateFilterStations, latestDiscoveryStationNames } from '../dist/sensorMap/stationMatch.js';
 import { composeRowDisplayName } from '../dist/sensorMap/displayName.js';
 import { v2ConstructionEnabled } from '../dist/sensorMap/v2Flag.js';
 import { loadDiscoveryStore, } from '../dist/sensorMap/persistence/discoveryStore.js';
@@ -248,6 +249,7 @@ function settingsOnlyDigest(block, settingsChanged) {
     })).digest('hex');
 }
 async function runSavePipeline(deps, p) {
+    const cachedPairs = cachedPairsFromUniqueIds(p.cachedAccessoryUniqueIds);
     // ---- 1. Authoritative on-disk config (never the client's copy).
     if (!deps.configPath) {
         return { ok: false, error: { code: 'config-unreadable', message: 'No config.json path available to the UI server.' } };
@@ -436,7 +438,7 @@ async function runSavePipeline(deps, p) {
                 cachedAccessoryUniqueIds: p.cachedAccessoryUniqueIds,
                 overrideSources: [Array.isArray(block.sensorMap) ? block.sensorMap : [], overridesForMacs],
             });
-            const seeded = compatToOverrides(block, assembleEq([]), dynamicDataPointsFrom(discoveryEq));
+            const seeded = compatToOverrides(block, assembleEq([]), dynamicDataPointsFrom(discoveryEq, cachedPairs));
             untouched = canonicalJsonLocal(p.proposal) === canonicalJsonLocal(seeded);
         }
         if (untouched) {
@@ -456,6 +458,20 @@ async function runSavePipeline(deps, p) {
     }
     if (p.proposal === undefined && modeResult.mode !== 'legacy') {
         return { ok: false, error: { code: 'invalid-proposal', message: 'proposal is required for a v2-mode save (only a legacy pure migration may omit it).' } };
+    }
+    // Conversion must preserve cached-only legacy fields even if discovery is
+    // partial or gone. An unavailable cache read is not an empty inventory: it
+    // cannot authorize dropping category/exclusion semantics for unseen pairs.
+    // Connection-only repair above remains available without reading the cache.
+    if (modeResult.mode === 'legacy' && !Array.isArray(p.cachedAccessoryUniqueIds)) {
+        return {
+            ok: false,
+            error: {
+                code: 'cache-inventory-unavailable',
+                message: 'The accessory cache could not be read, so conversion cannot safely preserve existing sensors. '
+                    + 'Reconnect to Homebridge UI, reload the plugin settings page, and retry. Connection-only changes remain available. Nothing was written.',
+            },
+        };
     }
     // ---- 5. Station inventory (§8.7 preference order): live response,
     //         discovery registry, cached-accessory MACs, override MACs.
@@ -478,7 +494,7 @@ async function runSavePipeline(deps, p) {
         // Compat seeding is an AUTHORING concern: it translates the
         // legacy config's semantics for every station, unfiltered — the
         // station filter narrows the runtime, never the configuration.
-        proposal = compatToOverrides(block, assemble([]), dynamicDataPointsFrom(discovery));
+        proposal = compatToOverrides(block, assemble([]), dynamicDataPointsFrom(discovery, cachedPairs));
         assembled = assemble(proposal);
     }
     else {
@@ -553,10 +569,32 @@ async function runSavePipeline(deps, p) {
         discovery,
         uiState,
         stations,
+        cachedPairs,
         configMode: 'v2',
         catalogBaseline: stampsResolved.catalogBaseline,
         catalogAdopted: stampsResolved.catalogAdopted,
     });
+    if (modeResult.mode === 'legacy') {
+        const stationByMac = new Map(stations.map(station => [station.macAddress.toUpperCase(), station]));
+        const uncertainMacs = new Set();
+        for (const row of effectiveMap.rows) {
+            const station = stationByMac.get(row.stationMac);
+            if (station && legacyRowFilterState(block, row.dataPoint, station, stations.length > 1) === 'unknown') {
+                uncertainMacs.add(row.stationMac);
+            }
+        }
+        if (uncertainMacs.size > 0) {
+            return {
+                ok: false,
+                error: {
+                    code: 'indeterminate-legacy-filter',
+                    message: `Legacy includeOnly/excludeSensors depend on station names that are not known for ${[...uncertainMacs].join(', ')}. `
+                        + 'Run the plugin until discovery records those station names, then reload and retry conversion. '
+                        + 'Connection-only changes remain available. Nothing was written.',
+                },
+            };
+        }
+    }
     if (effectiveMap.errors.length > 0) {
         return {
             ok: false,
@@ -570,7 +608,7 @@ async function runSavePipeline(deps, p) {
     // ---- 7. The SERVER assembles canonical config (§11.3/§17.4) — the
     //         client is never responsible for canonical serialization.
     const canonical = canonicalizeSensorMap({
-        overrides: proposal, stations, discovery, uiState,
+        overrides: proposal, stations, discovery, uiState, cachedPairs,
         catalogBaseline: stampsResolved.catalogBaseline,
         catalogAdopted: stampsResolved.catalogAdopted,
     });
@@ -598,6 +636,7 @@ async function runSavePipeline(deps, p) {
         discovery,
         uiState,
         stations: gateStations,
+        cachedPairs,
         configMode: 'v2',
         catalogBaseline: stampsResolved.catalogBaseline,
         catalogAdopted: stampsResolved.catalogAdopted,
@@ -607,6 +646,7 @@ async function runSavePipeline(deps, p) {
         discovery,
         uiState,
         stations: gateStations,
+        cachedPairs,
         configMode: 'v2',
         catalogBaseline: stampsResolved.catalogBaseline,
         catalogAdopted: stampsResolved.catalogAdopted,
@@ -628,7 +668,7 @@ async function runSavePipeline(deps, p) {
     }
     return {
         ok: true,
-        ctx: { block, effectiveBlock, settingsChanged, modeResult, proposal, stations, stationsBefore, stationsAfter, discovery, uiState, effectiveMap, canonical, stampsCurrent, stampsResolved },
+        ctx: { block, effectiveBlock, settingsChanged, modeResult, proposal, stations, stationsBefore, stationsAfter, cachedPairs, discovery, uiState, effectiveMap, canonical, stampsCurrent, stampsResolved },
     };
 }
 /**
@@ -1175,7 +1215,7 @@ export async function handlePreviewSave(deps, payload) {
  * digest verification in PR C.
  */
 export function computeSaveConsequences(ctx) {
-    const { block, modeResult, proposal, stationsBefore, stationsAfter, discovery, uiState, canonical, stampsCurrent, stampsResolved } = ctx;
+    const { block, modeResult, proposal, stationsBefore, stationsAfter, discovery, uiState, canonical, stampsCurrent, stampsResolved, cachedPairs = [] } = ctx;
     // The after-side RUNTIME world: the validated proposal evaluated
     // over the PATCHED filter's inventory (round 2 P1: ctx.effectiveMap
     // is the authoring/serialization map over the unfiltered inventory
@@ -1185,6 +1225,7 @@ export function computeSaveConsequences(ctx) {
         discovery,
         uiState,
         stations: stationsAfter,
+        cachedPairs,
         configMode: 'v2',
         catalogBaseline: stampsResolved.catalogBaseline,
         catalogAdopted: stampsResolved.catalogAdopted,
@@ -1195,7 +1236,7 @@ export function computeSaveConsequences(ctx) {
     // sensorMap. Same-inventory comparison keeps the diff about the
     // PROPOSAL, never about station drift.
     const currentOverrides = modeResult.mode === 'legacy'
-        ? compatToOverrides(block, stationsBefore, dynamicDataPointsFrom(discovery))
+        ? compatToOverrides(block, stationsBefore, dynamicDataPointsFrom(discovery, cachedPairs))
         : (Array.isArray(block.sensorMap) ? block.sensorMap : []);
     const currentMap = buildEffectiveSensorMap({
         userOverrides: currentOverrides,
@@ -1205,6 +1246,7 @@ export function computeSaveConsequences(ctx) {
         // save that narrows the filter diffs against what the runtime
         // currently exposes, so the exclusions surface as removals.
         stations: stationsBefore,
+        cachedPairs,
         configMode: 'v2',
         catalogBaseline: stampsCurrent.catalogBaseline,
         catalogAdopted: stampsCurrent.catalogAdopted,
@@ -1493,6 +1535,7 @@ function settingsDtoFor(block) {
 }
 export async function handleGetEditorState(deps, payload) {
     const p = (payload ?? {});
+    const cachedPairs = cachedPairsFromUniqueIds(p.cachedAccessoryUniqueIds);
     if (!deps.configPath) {
         throw new Error('No config.json path available to the UI server.');
     }
@@ -1633,7 +1676,7 @@ export async function handleGetEditorState(deps, payload) {
     let stations;
     if (modeResult.mode === 'legacy') {
         stations = assemble([]);
-        overrides = compatToOverrides(block, stations, dynamicDataPointsFrom(discovery));
+        overrides = compatToOverrides(block, stations, dynamicDataPointsFrom(discovery, cachedPairs));
         stations = assemble(overrides);
     }
     else {
@@ -1649,6 +1692,7 @@ export async function handleGetEditorState(deps, payload) {
         discovery,
         uiState,
         stations,
+        cachedPairs,
         configMode: 'v2',
         catalogBaseline: blockCatalogBaseline,
         catalogAdopted: blockCatalogAdopted,
@@ -1664,6 +1708,7 @@ export async function handleGetEditorState(deps, payload) {
         discovery,
         uiState,
         stations,
+        cachedPairs,
         configMode: 'v2',
         catalogBaseline: blockCatalogBaseline,
         catalogAdopted: blockCatalogAdopted,
@@ -1703,18 +1748,7 @@ export async function handleGetEditorState(deps, payload) {
     // the client sends no key when the cache read failed or timed out,
     // and without a complete read a missing accessory proves nothing.
     const cacheKnown = Array.isArray(p.cachedAccessoryUniqueIds);
-    const cachedKeys = new Set();
-    if (Array.isArray(p.cachedAccessoryUniqueIds)) {
-        for (const id of p.cachedAccessoryUniqueIds) {
-            if (typeof id !== 'string') {
-                continue;
-            }
-            const m = /^([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})-(.+)$/.exec(id);
-            if (m) {
-                cachedKeys.add(`${m[1].toUpperCase()}|${m[2]}`);
-            }
-        }
-    }
+    const cachedKeys = new Set(cachedPairs.map(pair => `${pair.stationMac}|${pair.dataPoint}`));
     const observedStations = new Set();
     for (const entry of discovery.entries) {
         observedStations.add(entry.stationMac.toUpperCase());
@@ -2076,16 +2110,13 @@ function assembleStationInventory(src) {
         }
     }
     // 2. Discovery registry.
+    const names = latestDiscoveryStationNames(src.discovery.entries);
     for (const e of src.discovery.entries) {
-        add(e.stationMac, e.stationName ?? '', 'discovery');
+        add(e.stationMac, names.get(e.stationMac.toUpperCase()) ?? '', 'discovery');
     }
     // 3. Cached-accessory uniqueId prefixes (MAC-dataPoint).
-    if (Array.isArray(src.cachedAccessoryUniqueIds)) {
-        for (const uid of src.cachedAccessoryUniqueIds) {
-            if (typeof uid === 'string' && uid.length >= 17) {
-                add(uid.slice(0, 17), '', 'cached-accessory');
-            }
-        }
+    for (const pair of cachedPairsFromUniqueIds(src.cachedAccessoryUniqueIds)) {
+        add(pair.stationMac, '', 'cached-accessory');
     }
     // 4. stationMac values in current + proposed overrides.
     for (const list of src.overrideSources) {

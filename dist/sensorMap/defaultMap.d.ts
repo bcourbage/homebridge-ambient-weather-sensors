@@ -66,6 +66,8 @@ export declare function hasAuthoredIdentity(override: unknown): boolean;
 export declare function defaultRowForOverride(dataPoint: string, ...overrideLayers: ReadonlyArray<unknown>): DefaultSensorRow | undefined;
 /** The STATIC table lookup only — no dynamic fallback. */
 export declare function staticDefaultRowFor(dataPoint: string): DefaultSensorRow | undefined;
+/** Dynamic compatibility defaults and their value-equivalent anchored definitions. */
+export declare function isCompatibilityDefinition(row: DefaultSensorRow | undefined): boolean;
 export declare function defaultRowFor(dataPoint: string): DefaultSensorRow | undefined;
 /**
  * The catalog-v2 definitions (§18.3, issue #63 P2). Materialized after

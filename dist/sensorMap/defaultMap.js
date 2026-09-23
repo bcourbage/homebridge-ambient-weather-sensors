@@ -752,6 +752,11 @@ export function staticDefaultRowFor(dataPoint) {
     }
     return _byDataPoint.get(dataPoint);
 }
+/** Dynamic compatibility defaults and their value-equivalent anchored definitions. */
+export function isCompatibilityDefinition(row) {
+    return row !== undefined && staticDefaultRowFor(row.dataPoint) === undefined
+        && (row.sinceCatalogVersion === undefined || row.catalogExposure === 'anchored');
+}
 export function defaultRowFor(dataPoint) {
     if (!_byDataPoint) {
         _byDataPoint = new Map(DEFAULT_SENSOR_MAP.map(r => [r.dataPoint, r]));

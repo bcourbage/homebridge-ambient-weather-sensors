@@ -13,7 +13,7 @@ name: Release to npm
 #
 # Authenticates via npm Trusted Publishing (OIDC) — no NPM_TOKEN, no
 # stored secret to rotate or leak. The `id-token: write` permission below
-# and the `npm install -g npm@latest` step (npm >= 11.5.1) are what let
+# and the `npm install -g npm@11` step (npm >= 11.5.1) are what let
 # `npm publish` exchange the workflow's OIDC identity for a short-lived
 # publish credential. This requires a Trusted Publisher to be configured
 # on npmjs.com: package Settings -> Trusted Publisher -> GitHub Actions,
@@ -81,6 +81,14 @@ jobs:
         run: |
           npm run verify:app
           git diff --exit-code
+          artifacts=$(git status --porcelain --untracked-files=all -- dist homebridge-ui)
+          if [ -n "$artifacts" ]; then
+            printf '%s\n' "$artifacts"
+            exit 1
+          fi
+
+      - name: Verify a production-only install of the packed artifact
+        run: npm run verify:package
 
       - name: Determine npm dist-tag from version
         # Semver prerelease versions (anything with a hyphen, e.g.

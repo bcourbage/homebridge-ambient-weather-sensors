@@ -60,9 +60,9 @@ const BATTERY_FIELD_REGEX = /^(?:battout|battin|batt(?:[1-9]|10)|batt_co2|batt_l
  * home (platformEffectiveMap) transitively reaches the accessory
  * classes, which the Angular app's typecheck must never include.
  */
-export function dynamicDataPointsFrom(discovery) {
+export function dynamicDataPointsFrom(discovery, cachedPairs = []) {
     const out = new Set();
-    for (const entry of discovery.entries) {
+    for (const entry of [...discovery.entries, ...cachedPairs]) {
         if (!staticDefaultRowFor(entry.dataPoint) && defaultRowFor(entry.dataPoint)) {
             out.add(entry.dataPoint);
         }
@@ -154,6 +154,46 @@ dynamicDataPoints = []) {
 // to bypass its global-form include/exclude logic (which per-station
 // evaluation below replaces).
 const EMPTY_SET = new Set();
+/**
+ * Legacy selectors match both stable field identities and station-derived
+ * names. Missing station metadata cannot make the latter a definite non-match.
+ * This is an exposure decision only; it does not synthesize row identity or
+ * infer a station name from a cached HomeKit label.
+ */
+export function legacyRowFilterState(legacy, dataPoint, station, isMultiStation) {
+    const row = defaultRowFor(dataPoint);
+    if (!row) {
+        return undefined;
+    }
+    if (!isCategoryEnabled(row, legacy) || !isPerThresholdEnabled(row, legacy)) {
+        return 'disabled';
+    }
+    const excludeSet = toMatcherSet(legacy.excludeSensors);
+    const includeSet = toMatcherSet(legacy.includeOnly);
+    if (normalizeMatchKey(station.name)) {
+        return shouldStationScopeDisable(row, station, isMultiStation, excludeSet, includeSet) ? 'disabled' : 'enabled';
+    }
+    const stableForms = [
+        `${station.macAddress}-${dataPoint}`, station.macAddress, dataPoint, friendlySensorName(dataPoint),
+        // A single-station display name has no station prefix. A multi-station
+        // MAC fallback is NOT evidence that the missing real name was empty.
+        ...(!isMultiStation ? [composeDisplayName(station, dataPoint, false)] : []),
+    ].map(normalizeMatchKey);
+    if (stableForms.some(form => excludeSet.has(form))) {
+        return 'disabled';
+    }
+    // No possible name can satisfy an allowlist wholly shadowed by the denylist.
+    if (includeSet.size > 0 && [...includeSet].every(value => excludeSet.has(value))) {
+        return 'disabled';
+    }
+    if (excludeSet.size > 0) {
+        return 'unknown';
+    }
+    if (includeSet.size === 0 || stableForms.some(form => includeSet.has(form))) {
+        return 'enabled';
+    }
+    return 'unknown';
+}
 // ---- Per-row projection --------------------------------------------
 function compatRowOverride(row, legacy, excludeSet, includeSet, suppressedBatteries) {
     const parts = { dataPoint: row.dataPoint };
