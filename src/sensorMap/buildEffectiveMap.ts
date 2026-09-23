@@ -26,6 +26,7 @@ import {
   defaultEnabledFor,
   defaultRowForConfigOverride,
   hasAuthoredIdentity,
+  isCompatibilityDefinition,
   staticDefaultRowFor,
 } from './defaultMap.js';
 import { computeStructuralSignature } from './structuralSignature.js';
@@ -71,6 +72,8 @@ export interface BuildInput {
   discovery: DiscoveryStore;
   uiState: UiStateStore;
   stations: StationInventory;
+  /** Existing HomeKit pairs are inventory, not fresh telemetry observations. */
+  cachedPairs?: ReadonlyArray<{ stationMac: string; dataPoint: string }>;
   configMode: 'legacy' | 'v2' | 'safe-mode';
   /**
    * The config's adoption stamps (§18.3). Absent means the v1
@@ -383,6 +386,15 @@ export function buildEffectiveSensorMap(input: BuildInput): EffectiveSensorMap {
         dataPoint: e.dataPoint,
         stationName: stationByMac.get(mac) ?? e.stationName,
       });
+    }
+  }
+  // Cache-backed pairs must resolve even when discovery was deleted or the
+  // latest payload omits a field. This supplies no firstSeen/lastSeen evidence.
+  for (const pair of input.cachedPairs ?? []) {
+    const mac = pair.stationMac.toUpperCase();
+    const key = `${mac}|${pair.dataPoint}`;
+    if (!pairs.has(key)) {
+      pairs.set(key, { mac, dataPoint: pair.dataPoint, stationName: stationByMac.get(mac) ?? '' });
     }
   }
   // Station-specific override targets.
@@ -949,12 +961,19 @@ function resolveRow(inp: ResolveInput): ResolvedRow {
   const isCanonicalDefault = defaultRow !== undefined
     && defaultRow.canonicalForBattery
     && defaultRow.batteryField === batteryField;
+  // A compatibility definition carries the legacy battery REFERENCE,
+  // not permission to invent a new owner outside the frozen canonical
+  // table (for example temp11f -> batt11). Catalog-2 anchored rows must
+  // retain this same rule after adoption. An explicitly authored field
+  // may still claim ownership, as may a custom or new-exposure row.
+  const compatibilityBatteryReference = isCompatibilityDefinition(defaultRow);
   let hasBatterySubService = false;
   let batteryClaim: string | undefined;
   if (batteryField !== null && enabled) {
     if (isCanonicalDefault) {
       hasBatterySubService = true;
-    } else if (!RESERVED_BATTERY_FIELDS.has(batteryField)) {
+    } else if (!RESERVED_BATTERY_FIELDS.has(batteryField)
+        && (!compatibilityBatteryReference || override?.batteryField !== undefined)) {
       batteryClaim = batteryField;
     }
   }

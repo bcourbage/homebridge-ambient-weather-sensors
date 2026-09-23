@@ -40,24 +40,30 @@ jobs:
       - name: Lint the project
         run: npm run lint
 
-      - name: Run tests
-        # Vitest suite. Runs against the source tree (not dist/) so no
-        # build is required first. Tests are non-blocking on release
-        # for now — see the corresponding note in release.yml. Once
-        # the suite has proven stable across a few releases, add
-        # `npm test` to prepublishOnly so a broken suite fails npm publish.
-        run: npm test
-
       - name: Build the project
         run: npm run build
 
-      - name: List, audit, fix outdated dependencies and build again
+      - name: Verify committed runtime artifacts match the build
+        # Integration suites import these files, not just TypeScript source.
+        # A stale committed build must fail before those suites run.
         run: |
-          npm list --outdated
-          npm audit || true  # ignore failures
-          npm audit fix || true
-          npm list --outdated
-          npm run build
+          git diff --exit-code
+          artifacts=$(git status --porcelain --untracked-files=all -- dist homebridge-ui)
+          if [ -n "$artifacts" ]; then
+            printf '%s\n' "$artifacts"
+            exit 1
+          fi
+
+      - name: Run tests against the rebuilt artifact
+        run: npm test
+
+      - name: Verify a production-only install of the packed artifact
+        run: npm run verify:package
+
+      - name: Audit production dependencies (read-only)
+        # Never mutate the locked dependency tree after testing it.
+        run: npm audit --omit=dev
+        continue-on-error: true
 
   # The CANONICAL producer of the committed Angular editor artifacts
   # (homebridge-ui/public/app/, GA task #69 / §10.1): exactly Node
@@ -85,4 +91,10 @@ jobs:
         run: npm run verify:app
 
       - name: Verify the rebuild left the working tree clean
-        run: git diff --exit-code
+        run: |
+          git diff --exit-code
+          artifacts=$(git status --porcelain --untracked-files=all -- dist homebridge-ui)
+          if [ -n "$artifacts" ]; then
+            printf '%s\n' "$artifacts"
+            exit 1
+          fi

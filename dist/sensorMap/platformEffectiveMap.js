@@ -61,7 +61,7 @@ export function sensorMapShapeError(config, configMode) {
  */
 export function selectUserOverrides(config, configMode, stations, 
 /** Discovery store, for the compat projection's dynamic data points (GA review P1-1). */
-discovery) {
+discovery, cachedPairs = []) {
     if (configMode === 'safe-mode') {
         return [];
     }
@@ -71,19 +71,20 @@ discovery) {
     }
     // legacy: the compat projection must gate the discovery-observed
     // fields the static table lacks exactly like static rows.
-    return compatToOverrides(config, stations, discovery ? dynamicDataPointsFrom(discovery) : []);
+    return compatToOverrides(config, stations, dynamicDataPointsFrom(discovery ?? { entries: [] }, cachedPairs));
 }
 /**
  * Assemble the effective sensor map at the platform boundary. Pure — the
  * caller has already loaded `discovery` / `uiState` from disk.
  */
 export function buildPlatformEffectiveMap(inputs) {
-    const userOverrides = selectUserOverrides(inputs.config, inputs.configMode, inputs.stations, inputs.discovery);
+    const userOverrides = selectUserOverrides(inputs.config, inputs.configMode, inputs.stations, inputs.discovery, inputs.cachedPairs);
     return buildEffectiveSensorMap({
         userOverrides,
         discovery: inputs.discovery,
         uiState: inputs.uiState,
         stations: inputs.stations,
+        cachedPairs: inputs.cachedPairs,
         configMode: inputs.configMode,
         catalogBaseline: inputs.catalogBaseline,
         catalogAdopted: inputs.catalogAdopted,

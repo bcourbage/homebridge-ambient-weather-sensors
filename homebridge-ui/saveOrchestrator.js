@@ -206,7 +206,9 @@ async function composeAndPersistFrozen(deps, args) {
                 .filter((u) => typeof u === 'string');
         }
         catch {
-            cachedAccessoryUniqueIds = undefined; // inventory source is best-effort
+            // Read-only/settings-only paths may degrade; the server refuses a
+            // full legacy conversion without a successful cache snapshot.
+            cachedAccessoryUniqueIds = undefined;
         }
     }
     // Locate where the composed block will be WRITTEN BACK in the

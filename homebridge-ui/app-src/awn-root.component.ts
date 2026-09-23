@@ -416,6 +416,9 @@ interface PreviewIntent {
           <h3>Sensor catalog</h3>
           <p class="sub">Adopted catalog {{ state()!.catalog!.adopted }}; available catalog {{ state()!.catalog!.current }}.
             New capabilities are a separate, previewed choice. Existing assignments keep their identity.</p>
+          @if (state()!.configMode === 'legacy') {
+            <p class="conversion-note">Conversion keeps known disabled sensors disabled. Future recognized sensors may appear and can be disabled individually.</p>
+          }
           @if (catalogOperation(); as operation) {
             <div class="banner info">{{ operation === 'convert' ? 'Conversion' : 'Catalog adoption' }} preview.
               Row and Connection editing are locked until this preview is saved or cancelled. Nothing is saved by previewing.</div>

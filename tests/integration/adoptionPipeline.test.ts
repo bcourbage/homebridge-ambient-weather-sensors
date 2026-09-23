@@ -98,7 +98,8 @@ describe('birth stamps and preservation (§18.3)', () => {
   it('converting an unstamped legacy config initializes exactly (1, 1)', async () => {
     const rig = makeRig([LEGACY_BLOCK]);
     discoveryStore(rig);
-    const next = await commit(rig, { base: LEGACY_BLOCK });
+    // No lifecycle has run in this fixture: the completed cache read is empty.
+    const next = await commit(rig, { base: LEGACY_BLOCK, cachedAccessoryUniqueIds: [] });
     expect(next.configVersion).toBe(2);
     expect(next.catalogBaseline).toBe(1);
     expect(next.catalogAdopted).toBe(1);
@@ -108,7 +109,7 @@ describe('birth stamps and preservation (§18.3)', () => {
     const born = { ...LEGACY_BLOCK, catalogBaseline: CURRENT_CATALOG_VERSION, catalogAdopted: CURRENT_CATALOG_VERSION };
     const rig = makeRig([born]);
     discoveryStore(rig);
-    const next = await commit(rig, { base: born });
+    const next = await commit(rig, { base: born, cachedAccessoryUniqueIds: [] });
     expect(next.configVersion).toBe(2);
     expect(next.catalogBaseline).toBe(CURRENT_CATALOG_VERSION);
     expect(next.catalogAdopted).toBe(CURRENT_CATALOG_VERSION);

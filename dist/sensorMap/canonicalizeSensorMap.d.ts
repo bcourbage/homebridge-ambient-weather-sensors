@@ -42,6 +42,7 @@
  * Ordering (§17.4): entries sort by `dataPoint`, global before station,
  * MACs ascending case-insensitive; fields in the fixed §17.4 order.
  */
+import { type BuildInput } from './buildEffectiveMap.js';
 import type { DiscoveryStore, SensorMapOverride, StationInventory, UiStateStore } from './types.js';
 export interface CanonicalizeInput {
     /** Proposed overrides — already normalized + validated (zero errors). */
@@ -49,6 +50,8 @@ export interface CanonicalizeInput {
     stations: StationInventory;
     discovery: DiscoveryStore;
     uiState: UiStateStore;
+    /** Factual existing pairs, without fabricated observation timestamps. */
+    cachedPairs?: BuildInput['cachedPairs'];
     /** Adoption stamps of the config being canonicalized (§18.3). */
     catalogBaseline?: number;
     catalogAdopted?: number;

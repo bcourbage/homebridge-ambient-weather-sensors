@@ -4,12 +4,12 @@
  * in ./handlers.ts.
  *
  * v2.0.0-beta.* scope: the OBSERVATION endpoints are read-only; the
- * sensor-map EDITOR IS LIVE (#69 PR C). /compose-save is the guarded
- * write BOUNDARY — the editor's ONLY save route: it never writes
+ * sensor-map EDITOR IS LIVE. Its guarded two-phase save never writes
  * config.json itself (Homebridge provides no server-side config-write
- * API) — it validates against the on-disk config, verifies the
- * structural confirmation digest, snapshots first, and returns the
- * composed config for the CLIENT to persist. See sensor-map.md §5.
+ * API): /compose-save validates without durable side effects, then
+ * /commit-save revalidates the token against disk and writes any required
+ * recovery record before returning the block for the CLIENT to persist.
+ * The preview is the confirmation. See sensor-map.md §5.
  *
  * Endpoints exposed:
  *
@@ -26,9 +26,9 @@
  *                   /compose-save re-run from disk, plus the durable
  *                   snapshot/journal write
  *
- * Ordinary legacy schema settings remain writable through HB UI X's
- * standard form and do NOT flow through /compose-save — the boundary
- * governs sensorMap/configVersion writes only.
+ * Connection settings and sensor-map edits use this same boundary. The
+ * custom page does not show the legacy schema form, and native Save stays
+ * disabled. A connection-only save need not convert a legacy configuration.
  *
  * The bridge runs in a Homebridge-managed subprocess. It doesn't share
  * a running AWN client with the platform — the platform writes the

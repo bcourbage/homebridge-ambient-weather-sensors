@@ -22,6 +22,17 @@ export declare function normalizeMatchKey(s: unknown): string;
  */
 export declare function toMatcherSet(raw: unknown): Set<string>;
 /**
+ * Names are recorded per field. A partial observation after a rename must
+ * outrank older siblings, not whichever entry happens to be iterated last.
+ * Equal-time conflicting names are indeterminate, never a guessed filter
+ * exclusion. Equivalent spellings use a deterministic lexical tie-break.
+ */
+export declare function latestDiscoveryStationNames(entries: ReadonlyArray<{
+    stationMac: string;
+    stationName: string;
+    lastSeen: string;
+}>): Map<string, string>;
+/**
  * Apply a stationFilter to a station INVENTORY with the runtime's
  * matching rules (station name OR MAC, case-insensitive,
  * whitespace-trimmed). An empty or absent filter passes everything —

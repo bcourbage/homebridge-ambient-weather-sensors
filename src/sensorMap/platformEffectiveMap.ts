@@ -46,6 +46,8 @@ export interface EffectiveMapInputs {
   stations: StationInventory;
   discovery: DiscoveryStore;
   uiState: UiStateStore;
+  /** Cache inventory only; never promoted to discovery observations. */
+  cachedPairs?: ReadonlyArray<{ stationMac: string; dataPoint: string }>;
   /** Adoption stamps from mode detection (§18.3); absent = v1 baseline. */
   catalogBaseline?: number;
   catalogAdopted?: number;
@@ -92,6 +94,7 @@ export function selectUserOverrides(
   stations: StationInventory,
   /** Discovery store, for the compat projection's dynamic data points (GA review P1-1). */
   discovery?: DiscoveryStore,
+  cachedPairs: ReadonlyArray<{ dataPoint: string }> = [],
 ): ReadonlyArray<unknown> {
   if (configMode === 'safe-mode') {
     return [];
@@ -103,7 +106,7 @@ export function selectUserOverrides(
   // legacy: the compat projection must gate the discovery-observed
   // fields the static table lacks exactly like static rows.
   return compatToOverrides(config as LegacyConfig, stations,
-    discovery ? dynamicDataPointsFrom(discovery) : []);
+    dynamicDataPointsFrom(discovery ?? { entries: [] }, cachedPairs));
 }
 
 /**
@@ -111,12 +114,13 @@ export function selectUserOverrides(
  * caller has already loaded `discovery` / `uiState` from disk.
  */
 export function buildPlatformEffectiveMap(inputs: EffectiveMapInputs): EffectiveSensorMap {
-  const userOverrides = selectUserOverrides(inputs.config, inputs.configMode, inputs.stations, inputs.discovery);
+  const userOverrides = selectUserOverrides(inputs.config, inputs.configMode, inputs.stations, inputs.discovery, inputs.cachedPairs);
   return buildEffectiveSensorMap({
     userOverrides,
     discovery: inputs.discovery,
     uiState: inputs.uiState,
     stations: inputs.stations,
+    cachedPairs: inputs.cachedPairs,
     configMode: inputs.configMode,
     catalogBaseline: inputs.catalogBaseline,
     catalogAdopted: inputs.catalogAdopted,

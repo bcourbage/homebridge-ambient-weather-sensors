@@ -46,9 +46,10 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "prepublishOnly": "npm run lint && npm test && npm run build",
+    "prepublishOnly": "npm run lint && npm run build && npm test",
     "build:app": "node scripts/build-ui-app.mjs",
-    "verify:app": "node scripts/verify-ui-determinism.mjs"
+    "verify:app": "node scripts/verify-ui-determinism.mjs",
+    "verify:package": "node scripts/verify-package.mjs"
   },
   "keywords": [
     "homebridge-plugin",
@@ -74,6 +75,7 @@
     "@types/node": "^22.10.0",
     "@vitest/coverage-v8": "4.1.11",
     "awn-v1-7-3": "npm:@bcourbage/homebridge-ambient-weather-sensors@1.7.3",
+    "awn-v2-beta17": "npm:@bcourbage/homebridge-ambient-weather-sensors@2.0.0-beta.17",
     "bootstrap": "^5.3.8",
     "eslint": "^9.17.0",
     "homebridge": "^2.0.0",

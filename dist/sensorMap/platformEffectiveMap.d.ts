@@ -39,6 +39,11 @@ export interface EffectiveMapInputs {
     stations: StationInventory;
     discovery: DiscoveryStore;
     uiState: UiStateStore;
+    /** Cache inventory only; never promoted to discovery observations. */
+    cachedPairs?: ReadonlyArray<{
+        stationMac: string;
+        dataPoint: string;
+    }>;
     /** Adoption stamps from mode detection (§18.3); absent = v1 baseline. */
     catalogBaseline?: number;
     catalogAdopted?: number;
@@ -63,7 +68,9 @@ export declare function sensorMapShapeError(config: EffectiveMapConfig, configMo
  */
 export declare function selectUserOverrides(config: EffectiveMapConfig, configMode: ConfigMode, stations: StationInventory, 
 /** Discovery store, for the compat projection's dynamic data points (GA review P1-1). */
-discovery?: DiscoveryStore): ReadonlyArray<unknown>;
+discovery?: DiscoveryStore, cachedPairs?: ReadonlyArray<{
+    dataPoint: string;
+}>): ReadonlyArray<unknown>;
 /**
  * Assemble the effective sensor map at the platform boundary. Pure — the
  * caller has already loaded `discovery` / `uiState` from disk.

@@ -32,6 +32,11 @@ export interface BuildInput {
     discovery: DiscoveryStore;
     uiState: UiStateStore;
     stations: StationInventory;
+    /** Existing HomeKit pairs are inventory, not fresh telemetry observations. */
+    cachedPairs?: ReadonlyArray<{
+        stationMac: string;
+        dataPoint: string;
+    }>;
     configMode: 'legacy' | 'v2' | 'safe-mode';
     /**
      * The config's adoption stamps (§18.3). Absent means the v1

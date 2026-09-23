@@ -160,16 +160,19 @@ describe('P4 full-map-only configuration transition', () => {
     return (async () => {
       const block = { ...legacy, ...stamps };
       const r = rig(block);
-      const preview = await handlePreviewSave(r.deps, { base: block });
+      // This fixture has discovery but no cached accessories. A complete
+      // empty read is distinct from an unavailable cache during conversion.
+      const payload = { base: block, cachedAccessoryUniqueIds: [] };
+      const preview = await handlePreviewSave(r.deps, payload);
       expect(preview.ok).toBe(true);
       if (!preview.ok) return;
       const expected = stamps ? 4 : 1;
       expect(preview.configurationTransition).toEqual({ before: { mode: 'legacy', baseline: expected, adopted: expected, stamped: !!stamps }, after: { mode: 'v2', baseline: expected, adopted: expected, stamped: true } });
       expect(JSON.stringify(preview)).not.toContain('test-secret');
-      const validated = await handleComposeSave(r.deps, { base: block, confirmDigest: preview.digest });
+      const validated = await handleComposeSave(r.deps, { ...payload, confirmDigest: preview.digest });
       expect(validated.ok).toBe(true);
       if (!validated.ok) return;
-      const committed = await handleCommitSave(r.deps, { base: block, confirmDigest: preview.digest, validationToken: validated.validationToken });
+      const committed = await handleCommitSave(r.deps, { ...payload, confirmDigest: preview.digest, validationToken: validated.validationToken });
       expect(committed.ok).toBe(true);
       if (!committed.ok) return;
       expect(committed.nextConfig).toMatchObject({ configVersion: 2, catalogBaseline: expected, catalogAdopted: expected, humiditySensors: false });

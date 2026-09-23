@@ -99,7 +99,7 @@ function discoveryStore(rig: Rig, macs: string[] = [MAC]): void {
  * the way the editor does — by previewing exactly what will be saved.
  */
 async function digestFor(rig: Rig, payload: Record<string, unknown>): Promise<string> {
-  const preview = await handlePreviewSave(rig.deps, payload);
+  const preview = await handlePreviewSave(rig.deps, { cachedAccessoryUniqueIds: [], ...payload });
   if (!preview.ok) {
     throw new Error(`preview refused: ${preview.error.code}`);
   }
@@ -112,11 +112,11 @@ async function digestFor(rig: Rig, payload: Record<string, unknown>): Promise<st
  * orchestrator does.
  */
 async function commitFor(rig: Rig, payload: Record<string, unknown>): Promise<Awaited<ReturnType<typeof handleCommitSave>>> {
-  const validated = await handleComposeSave(rig.deps, payload);
+  const validated = await handleComposeSave(rig.deps, { cachedAccessoryUniqueIds: [], ...payload });
   if (!validated.ok) {
     throw new Error(`validate refused: ${validated.error.code}`);
   }
-  return handleCommitSave(rig.deps, { ...payload, validationToken: validated.validationToken });
+  return handleCommitSave(rig.deps, { cachedAccessoryUniqueIds: [], ...payload, validationToken: validated.validationToken });
 }
 
 /** Event-logging fake of HB UI X's client API, wired to the REAL handler. */
@@ -142,6 +142,9 @@ function makeClient(rig: Rig): {
       state.events.push('commit');
       return handleCommitSave(rig.deps, payload);
     },
+    // This file-backed rig has no HAP accessory cache. Model a complete empty
+    // read, not an unavailable API (covered by offlineRetentionP5).
+    async getCachedAccessories() { return []; },
     async getPluginConfig() {
       return cfg.platforms.filter(b => b.platform === 'AmbientWeatherSensors');
     },
@@ -205,7 +208,7 @@ describe('settings-only guarded save path (GA review P1-2 / P1-3)', () => {
 
   it('FRESH-INSTALL token refuses when a block exists (stale), and sensors cannot precede the first save', async () => {
     const rig = makeRig(LEGACY_BLOCK);
-    const staleFresh = await handlePreviewSave(rig.deps, {
+    const staleFresh = await handlePreviewSave(rig.deps, { cachedAccessoryUniqueIds: [],
       baseDigest: FRESH_INSTALL_DIGEST, proposal: [], settings: { apiKey: { set: 'k2' } },
     });
     expect(staleFresh.ok).toBe(false);
@@ -214,7 +217,7 @@ describe('settings-only guarded save path (GA review P1-2 / P1-3)', () => {
     }
 
     const rig2 = makeRig({ platform: 'SomeOtherPlatform' });
-    const withSensors = await handlePreviewSave(rig2.deps, {
+    const withSensors = await handlePreviewSave(rig2.deps, { cachedAccessoryUniqueIds: [],
       baseDigest: FRESH_INSTALL_DIGEST,
       proposal: [{ dataPoint: 'custom_x', kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph' }],
       settings: { apiKey: { set: 'k' } },
@@ -241,7 +244,7 @@ describe('settings-only guarded save path (GA review P1-2 / P1-3)', () => {
       settings: { apiKey: { set: 'corrected-key' } },
       formBlock: LEGACY_BLOCK,
     };
-    const preview = await handlePreviewSave(rig.deps, payload);
+    const preview = await handlePreviewSave(rig.deps, { cachedAccessoryUniqueIds: [], ...payload });
     expect(preview.ok).toBe(true);
     if (!preview.ok) {
       return;
@@ -278,7 +281,7 @@ describe('settings-only guarded save path (GA review P1-2 / P1-3)', () => {
     const store = new DraftStore();
     store.reset(state.authored);
     store.setFieldFor(undefined, 'tempf', 'name', 'Renamed');
-    const preview = await handlePreviewSave(rig.deps, {
+    const preview = await handlePreviewSave(rig.deps, { cachedAccessoryUniqueIds: [],
       baseDigest: state.baseDigest,
       proposal: store.proposal(),
       settings: { apiKey: { set: 'corrected-key' } },
@@ -324,7 +327,7 @@ describe('structural confirmation digest (PR C / finding 5)', () => {
   it('a structural save WITHOUT a digest is refused with zero writes', async () => {
     const rig = makeRig(LEGACY_BLOCK);
     discoveryStore(rig);
-    const result = await handleComposeSave(rig.deps, STRUCTURAL_PAYLOAD);
+    const result = await handleComposeSave(rig.deps, { cachedAccessoryUniqueIds: [], ...STRUCTURAL_PAYLOAD });
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error.code).toBe('confirmation-required');
@@ -341,7 +344,7 @@ describe('structural confirmation digest (PR C / finding 5)', () => {
     discoveryStore(rig);
     const digest = await digestFor(rig, STRUCTURAL_PAYLOAD);
     discoveryStore(rig, [MAC, 'AA:BB:CC:DD:EE:77']); // world moved on
-    const result = await handleComposeSave(rig.deps, { ...STRUCTURAL_PAYLOAD, confirmDigest: digest });
+    const result = await handleComposeSave(rig.deps, { cachedAccessoryUniqueIds: [], ...STRUCTURAL_PAYLOAD, confirmDigest: digest });
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error.code).toBe('stale-confirmation');
@@ -352,7 +355,7 @@ describe('structural confirmation digest (PR C / finding 5)', () => {
   it('a FRESH digest is accepted', async () => {
     const rig = makeRig(LEGACY_BLOCK);
     discoveryStore(rig);
-    const result = await handleComposeSave(rig.deps, {
+    const result = await handleComposeSave(rig.deps, { cachedAccessoryUniqueIds: [],
       ...STRUCTURAL_PAYLOAD,
       confirmDigest: await digestFor(rig, STRUCTURAL_PAYLOAD),
     });
@@ -375,7 +378,7 @@ describe('structural confirmation digest (PR C / finding 5)', () => {
   it('a mismatched digest is refused even when the save is non-structural (fail closed)', async () => {
     const rig = makeRig(LEGACY_BLOCK);
     discoveryStore(rig);
-    const result = await handleComposeSave(rig.deps, {
+    const result = await handleComposeSave(rig.deps, { cachedAccessoryUniqueIds: [],
       base: LEGACY_BLOCK,
       confirmDigest: 'ab'.repeat(32), // not what the server derives
     });
@@ -391,9 +394,9 @@ describe('v2-flag gate on saves (review #45 P1-1)', () => {
     const flagOff = { ...LEGACY_BLOCK, _sensorMapV2: false } as Record<string, unknown>;
     const rig = makeRig(flagOff);
     discoveryStore(rig);
-    const preview = await handlePreviewSave(rig.deps, { base: flagOff });
+    const preview = await handlePreviewSave(rig.deps, { cachedAccessoryUniqueIds: [], base: flagOff });
     expect(preview.ok).toBe(true); // dry runs are how users decide to remove the opt-out
-    const save = await handleComposeSave(rig.deps, { base: flagOff });
+    const save = await handleComposeSave(rig.deps, { cachedAccessoryUniqueIds: [], base: flagOff });
     expect(save.ok).toBe(false);
     if (!save.ok) {
       expect(save.error.code).toBe('v2-flag-off');
@@ -450,7 +453,7 @@ describe('no-bypass: preview → confirm → compose → update → save (PR C)'
       proposal: [{ dataPoint: 'barn_x', kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph', name: 'Barn X' }],
     };
     // 1. Preview (the REAL handler) issues the digest.
-    const preview = await handlePreviewSave(rig.deps, { base: LEGACY_BLOCK, ...payload });
+    const preview = await handlePreviewSave(rig.deps, { cachedAccessoryUniqueIds: [], base: LEGACY_BLOCK, ...payload });
     expect(preview.ok).toBe(true);
     if (!preview.ok) {
       return;
@@ -515,7 +518,7 @@ describe('ordering: snapshot is durable before the client persistence half runs'
   it('a pure migration preserves the legacy enable/disable state (compat-seeded, not defaults)', async () => {
     const rig = makeRig(LEGACY_BLOCK);
     discoveryStore(rig);
-    const result = await handleComposeSave(rig.deps, { base: LEGACY_BLOCK });
+    const result = await handleComposeSave(rig.deps, { cachedAccessoryUniqueIds: [], base: LEGACY_BLOCK });
     expect(result.ok).toBe(true);
     if (result.ok) {
       // humiditySensors: false must survive as a mirror toggle, not be
@@ -550,7 +553,7 @@ describe('authoritative on-disk config (never the client copy)', () => {
     discoveryStore(rig);
     // The client submits the on-disk block verbatim but BELIEVES it is
     // legacy — the server's own detection (from disk) wins.
-    const result = await handleComposeSave(rig.deps, { base: safeBlock, proposal: [] });
+    const result = await handleComposeSave(rig.deps, { cachedAccessoryUniqueIds: [], base: safeBlock, proposal: [] });
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error.code).toBe('safe-mode');
@@ -562,7 +565,7 @@ describe('authoritative on-disk config (never the client copy)', () => {
     const rig = makeRig(LEGACY_BLOCK);
     discoveryStore(rig);
     const staleBase = { ...LEGACY_BLOCK, windSensors: false }; // client's outdated view
-    const result = await handleComposeSave(rig.deps, { base: staleBase, proposal: [] });
+    const result = await handleComposeSave(rig.deps, { cachedAccessoryUniqueIds: [], base: staleBase, proposal: [] });
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error.code).toBe('stale-base');
@@ -597,7 +600,7 @@ describe('station inventory (§8.7)', () => {
 
   it('all sources empty while the legacy config enables sensors: conversion refused', async () => {
     const rig = makeRig(LEGACY_BLOCK); // no discovery, no cache, no live
-    const result = await handleComposeSave(rig.deps, { base: LEGACY_BLOCK });
+    const result = await handleComposeSave(rig.deps, { cachedAccessoryUniqueIds: [], base: LEGACY_BLOCK });
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error.code).toBe('no-station-inventory');
@@ -617,7 +620,7 @@ describe('proposal normalization (identity-first → merge → body validation)'
         { dataPoint: 'barn_baro', measurement: 'pressure', sourceUnit: 'mmHg' },
       ],
     };
-    const result = await handleComposeSave(rig.deps, { ...payload, confirmDigest: await digestFor(rig, payload) });
+    const result = await handleComposeSave(rig.deps, { cachedAccessoryUniqueIds: [], ...payload, confirmDigest: await digestFor(rig, payload) });
     expect(result.ok).toBe(true);
     if (result.ok) {
       const entry = result.canonicalSensorMap.find(e => e.dataPoint === 'barn_baro');
@@ -648,12 +651,12 @@ describe('canonicalization at the boundary', () => {
   it('repeated compose calls are byte-stable (idempotent canonical output)', async () => {
     const rig = makeRig(LEGACY_BLOCK);
     discoveryStore(rig);
-    const first = await handleComposeSave(rig.deps, { base: LEGACY_BLOCK });
+    const first = await handleComposeSave(rig.deps, { cachedAccessoryUniqueIds: [], base: LEGACY_BLOCK });
     expect(first.ok).toBe(true);
     if (!first.ok) {
       return;
     }
-    const second = await handleComposeSave(rig.deps, {
+    const second = await handleComposeSave(rig.deps, { cachedAccessoryUniqueIds: [],
       base: LEGACY_BLOCK,
       proposal: first.canonicalSensorMap,
     });
@@ -672,7 +675,7 @@ describe('canonical-divergence hard gate (review #67 P1-1)', () => {
     // both signatures would change and HomeKit would re-register.
     const rig = makeRig(LEGACY_BLOCK);
     discoveryStore(rig);
-    return handleComposeSave(rig.deps, {
+    return handleComposeSave(rig.deps, { cachedAccessoryUniqueIds: [],
       base: LEGACY_BLOCK,
       proposal: [
         { dataPoint: 'z_custom', kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph', batteryField: 'barn_batt' },
@@ -701,7 +704,7 @@ describe('canonical-divergence hard gate (review #67 P1-1)', () => {
         { dataPoint: 'a_custom', kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph', batteryField: null },
       ],
     };
-    const result = await handleComposeSave(rig.deps, { ...payload, confirmDigest: await digestFor(rig, payload) });
+    const result = await handleComposeSave(rig.deps, { cachedAccessoryUniqueIds: [], ...payload, confirmDigest: await digestFor(rig, payload) });
     expect(result.ok).toBe(true);
     if (result.ok) {
       const z = result.canonicalSensorMap.find(e => e.dataPoint === 'z_custom');
@@ -721,7 +724,7 @@ describe('global-template preservation (review #67 round 2 P1)', () => {
         { dataPoint: 'barn_x', stationMac: 'AA:BB:CC:DD:EE:02', kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph', name: 'Barn X (Cabin)' },
       ],
     };
-    const result = await handleComposeSave(rig.deps, { ...payload, confirmDigest: await digestFor(rig, payload) });
+    const result = await handleComposeSave(rig.deps, { cachedAccessoryUniqueIds: [], ...payload, confirmDigest: await digestFor(rig, payload) });
     expect(result.ok).toBe(true);
     if (result.ok) {
       const globalEntry = result.canonicalSensorMap.find(e => e.dataPoint === 'barn_x' && e.stationMac === undefined);
@@ -739,7 +742,7 @@ describe('global-template preservation (review #67 round 2 P1)', () => {
     // serializer see (and previously corrupt) the input.
     const rig = makeRig(LEGACY_BLOCK);
     discoveryStore(rig, [MAC, 'AA:BB:CC:DD:EE:02']);
-    const result = await handleComposeSave(rig.deps, {
+    const result = await handleComposeSave(rig.deps, { cachedAccessoryUniqueIds: [],
       base: LEGACY_BLOCK,
       proposal: [
         { dataPoint: 'barn_x', kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph', name: 'Barn X' },
@@ -772,7 +775,7 @@ describe('synthetic probe MAC is genuinely outside the inventory (review #67 rou
     // Order-dependent battery claims must STILL be refused — proving
     // the divergence gate ran with a genuinely fresh probe rather than
     // deduplicating into the existing PROBE0 station.
-    const refused = await handleComposeSave(rig.deps, {
+    const refused = await handleComposeSave(rig.deps, { cachedAccessoryUniqueIds: [],
       base: LEGACY_BLOCK,
       proposal: [
         { dataPoint: 'z_custom', kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph', batteryField: 'barn_batt' },
@@ -788,7 +791,7 @@ describe('synthetic probe MAC is genuinely outside the inventory (review #67 rou
       base: LEGACY_BLOCK,
       proposal: [{ dataPoint: 'barn_x', kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph', name: 'Barn X' }],
     };
-    const saved = await handleComposeSave(rig.deps, { ...cleanPayload, confirmDigest: await digestFor(rig, cleanPayload) });
+    const saved = await handleComposeSave(rig.deps, { cachedAccessoryUniqueIds: [], ...cleanPayload, confirmDigest: await digestFor(rig, cleanPayload) });
     expect(saved.ok).toBe(true);
   });
 });
@@ -802,7 +805,7 @@ describe('successful saves surface warnings (review #67 P2-5)', () => {
       // displayUnit on a native-HAP measurement is warn-and-stripped.
       proposal: [{ dataPoint: 'tempf', name: 'Patio', displayUnit: 'celsius' }],
     };
-    const result = await handleComposeSave(rig.deps, { ...payload, confirmDigest: await digestFor(rig, payload) });
+    const result = await handleComposeSave(rig.deps, { cachedAccessoryUniqueIds: [], ...payload, confirmDigest: await digestFor(rig, payload) });
     expect(result.ok).toBe(true);
     if (result.ok) {
       const codes = result.warnings.map(w => w.code);
@@ -860,7 +863,7 @@ describe('immutable snapshot lifecycle', () => {
     writeFileSync(entryFile, '{not json');
     // Two-phase: the corrupt journal refuses at VALIDATE, before any
     // durable step could run.
-    const result = await handleComposeSave(rig.deps, { base: LEGACY_BLOCK });
+    const result = await handleComposeSave(rig.deps, { cachedAccessoryUniqueIds: [], base: LEGACY_BLOCK });
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error.code).toBe('conversion-journal-error');
@@ -873,7 +876,7 @@ describe('immutable snapshot lifecycle', () => {
     const rig = makeRig(LEGACY_BLOCK);
     discoveryStore(rig);
     writeFileSync(path.join(rig.persistDir, LEGACY_SNAPSHOT_FILE), '{not json');
-    const result = await handleComposeSave(rig.deps, { base: LEGACY_BLOCK });
+    const result = await handleComposeSave(rig.deps, { cachedAccessoryUniqueIds: [], base: LEGACY_BLOCK });
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error.code).toBe('legacy-snapshot-corrupt');
@@ -891,7 +894,7 @@ describe('immutable snapshot lifecycle', () => {
         extendedSensors: true, windSensors: true,
       },
     }, null, 2));
-    const result = await handleComposeSave(rig.deps, { base: LEGACY_BLOCK });
+    const result = await handleComposeSave(rig.deps, { cachedAccessoryUniqueIds: [], base: LEGACY_BLOCK });
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error.code).toBe('legacy-snapshot-corrupt');
@@ -957,7 +960,7 @@ describe('subsequent v2 saves', () => {
     }, null, 2));
 
     // A later v2-mode edit: rename tempf.
-    const second = await handleComposeSave(rig.deps, {
+    const second = await handleComposeSave(rig.deps, { cachedAccessoryUniqueIds: [],
       base: first.nextConfig,
       proposal: [...first.canonicalSensorMap, { dataPoint: 'tempf', name: 'Patio' }],
     });
@@ -1094,17 +1097,17 @@ describe('session-digest staleness (beta.13 smoke F1: getPluginConfig is schema-
     // materializes schema defaults into the in-memory config that
     // getPluginConfig() hands the client.
     const contaminated = { ...LEGACY_BLOCK, includeOnly: [], stationFilter: [] };
-    const viaBase = await handlePreviewSave(rig.deps, { base: contaminated });
+    const viaBase = await handlePreviewSave(rig.deps, { cachedAccessoryUniqueIds: [], base: contaminated });
     expect(viaBase.ok).toBe(false);
     if (!viaBase.ok) {
       expect(viaBase.error.code).toBe('stale-base');
     }
 
     const digest = blockDigest(LEGACY_BLOCK);
-    const viaDigest = await handlePreviewSave(rig.deps, { baseDigest: digest });
+    const viaDigest = await handlePreviewSave(rig.deps, { cachedAccessoryUniqueIds: [], baseDigest: digest });
     expect(viaDigest.ok).toBe(true);
 
-    const composed = await handleComposeSave(rig.deps, { baseDigest: digest, formBlock: LEGACY_BLOCK });
+    const composed = await handleComposeSave(rig.deps, { cachedAccessoryUniqueIds: [], baseDigest: digest, formBlock: LEGACY_BLOCK });
     expect(composed.ok).toBe(true);
     if (composed.ok) {
       expect(composed.nextConfigDigest).toBe(blockDigest(composed.nextConfig));
@@ -1114,14 +1117,14 @@ describe('session-digest staleness (beta.13 smoke F1: getPluginConfig is schema-
   it('a digest that matches no on-disk block refuses stale-base; a matching digest wins over a stale base', async () => {
     const rig = makeRig(LEGACY_BLOCK);
     discoveryStore(rig);
-    const wrong = await handleComposeSave(rig.deps, { baseDigest: 'f'.repeat(64), formBlock: LEGACY_BLOCK });
+    const wrong = await handleComposeSave(rig.deps, { cachedAccessoryUniqueIds: [], baseDigest: 'f'.repeat(64), formBlock: LEGACY_BLOCK });
     expect(wrong.ok).toBe(false);
     if (!wrong.ok) {
       expect(wrong.error.code).toBe('stale-base');
     }
     // baseDigest takes precedence: a contaminated base alongside a
     // valid digest must not re-introduce the refusal.
-    const both = await handlePreviewSave(rig.deps, {
+    const both = await handlePreviewSave(rig.deps, { cachedAccessoryUniqueIds: [],
       base: { ...LEGACY_BLOCK, includeOnly: [] },
       baseDigest: blockDigest(LEGACY_BLOCK),
     });
@@ -1209,21 +1212,21 @@ describe('unsaved settings-form changes (review #47 P1-1)', () => {
 
     const dropped: Record<string, unknown> = { ...LEGACY_BLOCK };
     delete dropped.temperatureSensors;
-    const r1 = await handleComposeSave(rig.deps, { baseDigest: digest, formBlock: dropped });
+    const r1 = await handleComposeSave(rig.deps, { cachedAccessoryUniqueIds: [], baseDigest: digest, formBlock: dropped });
     expect(!r1.ok && r1.error.code).toBe('unsaved-settings-changes');
 
-    const r2 = await handleComposeSave(rig.deps, {
+    const r2 = await handleComposeSave(rig.deps, { cachedAccessoryUniqueIds: [],
       baseDigest: digest,
       formBlock: { ...LEGACY_BLOCK, humiditySensors: true }, // true vs false on disk
     });
     expect(!r2.ok && r2.error.code).toBe('unsaved-settings-changes');
 
-    const r3 = await handleComposeSave(rig.deps, { baseDigest: digest, formBlock: 'not-an-object' });
+    const r3 = await handleComposeSave(rig.deps, { cachedAccessoryUniqueIds: [], baseDigest: digest, formBlock: 'not-an-object' });
     expect(!r3.ok && r3.error.code).toBe('unsaved-settings-changes');
 
     // The exact disk state (with or without tolerated materialization)
     // composes fine.
-    const r4 = await handleComposeSave(rig.deps, {
+    const r4 = await handleComposeSave(rig.deps, { cachedAccessoryUniqueIds: [],
       baseDigest: digest,
       formBlock: { ...LEGACY_BLOCK, includeOnly: [], stationFilter: [] },
     });
@@ -1238,9 +1241,9 @@ describe('multi-block hard refusal (review #47 P1-2)', () => {
     const rig = makeRig(LEGACY_BLOCK, [SECOND_BLOCK]);
     discoveryStore(rig);
     const digest = blockDigest(LEGACY_BLOCK); // uniquely matches block 0
-    const pv = await handlePreviewSave(rig.deps, { baseDigest: digest });
+    const pv = await handlePreviewSave(rig.deps, { cachedAccessoryUniqueIds: [], baseDigest: digest });
     expect(!pv.ok && pv.error.code).toBe('ambiguous-platform-block');
-    const cs = await handleComposeSave(rig.deps, { baseDigest: digest, formBlock: LEGACY_BLOCK });
+    const cs = await handleComposeSave(rig.deps, { cachedAccessoryUniqueIds: [], baseDigest: digest, formBlock: LEGACY_BLOCK });
     expect(!cs.ok && cs.error.code).toBe('ambiguous-platform-block');
     expect(existsSync(path.join(rig.persistDir, LEGACY_SNAPSHOT_FILE))).toBe(false);
   });
@@ -1276,7 +1279,7 @@ describe('settings-form gate hardening (review #47 round 3)', () => {
   it('a digest save WITHOUT formBlock is refused before any snapshot exists (the gate is not optional)', async () => {
     const rig = makeRig(LEGACY_BLOCK);
     discoveryStore(rig);
-    const result = await handleComposeSave(rig.deps, { baseDigest: blockDigest(LEGACY_BLOCK) });
+    const result = await handleComposeSave(rig.deps, { cachedAccessoryUniqueIds: [], baseDigest: blockDigest(LEGACY_BLOCK) });
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error.code).toBe('unsaved-settings-changes');
@@ -1287,7 +1290,7 @@ describe('settings-form gate hardening (review #47 round 3)', () => {
   it('an UNKNOWN field holding an intentionally empty array refuses (allowlist, not a shape rule)', async () => {
     const rig = makeRig(LEGACY_BLOCK);
     discoveryStore(rig);
-    const result = await handleComposeSave(rig.deps, {
+    const result = await handleComposeSave(rig.deps, { cachedAccessoryUniqueIds: [],
       baseDigest: blockDigest(LEGACY_BLOCK),
       formBlock: { ...LEGACY_BLOCK, futureField: [] },
     });
@@ -1338,7 +1341,7 @@ describe('two-phase save: validate writes nothing (review #47 round 4)', () => {
   it('the validate phase reports pending-write with NO snapshot on disk; commit then writes it', async () => {
     const rig = makeRig(LEGACY_BLOCK);
     discoveryStore(rig);
-    const validated = await handleComposeSave(rig.deps, { base: LEGACY_BLOCK });
+    const validated = await handleComposeSave(rig.deps, { cachedAccessoryUniqueIds: [], base: LEGACY_BLOCK });
     expect(validated.ok).toBe(true);
     if (validated.ok) {
       expect(validated.snapshot).toBe('pending-write');
@@ -1363,7 +1366,7 @@ describe('two-phase save: validate writes nothing (review #47 round 4)', () => {
       schemaVersion: 1, savedAt: '2026-01-01T00:00:00Z',
       legacy: { temperatureSensors: false }, // differs -> journal path
     }, null, 2));
-    const validated = await handleComposeSave(rig.deps, { base: LEGACY_BLOCK });
+    const validated = await handleComposeSave(rig.deps, { cachedAccessoryUniqueIds: [], base: LEGACY_BLOCK });
     expect(validated.ok).toBe(true);
     if (validated.ok) {
       expect(validated.snapshot).toBe('pending-journal');
@@ -1380,7 +1383,7 @@ describe('two-phase save: validate writes nothing (review #47 round 4)', () => {
     }, null, 2));
     mkdirSync(journalDir(rig), { recursive: true });
     writeFileSync(path.join(journalDir(rig), 'entry-000001.json'), '{not json');
-    const validated = await handleComposeSave(rig.deps, { base: LEGACY_BLOCK });
+    const validated = await handleComposeSave(rig.deps, { cachedAccessoryUniqueIds: [], base: LEGACY_BLOCK });
     expect(validated.ok).toBe(false);
     if (!validated.ok) {
       expect(validated.error.code).toBe('conversion-journal-error');
@@ -1439,7 +1442,7 @@ describe('server-enforced two-phase protocol (review #47 round 5)', () => {
   it('a DIRECT commit without a validation token refuses with nothing recorded', async () => {
     const rig = makeRig(LEGACY_BLOCK);
     discoveryStore(rig);
-    const result = await handleCommitSave(rig.deps, { base: LEGACY_BLOCK });
+    const result = await handleCommitSave(rig.deps, { cachedAccessoryUniqueIds: [], base: LEGACY_BLOCK });
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error.code).toBe('commit-without-validation');
@@ -1451,7 +1454,7 @@ describe('server-enforced two-phase protocol (review #47 round 5)', () => {
   it('a token presented with a DIFFERENT proposal refuses with nothing recorded', async () => {
     const rig = makeRig(LEGACY_BLOCK);
     discoveryStore(rig);
-    const validated = await handleComposeSave(rig.deps, { base: LEGACY_BLOCK });
+    const validated = await handleComposeSave(rig.deps, { cachedAccessoryUniqueIds: [], base: LEGACY_BLOCK });
     expect(validated.ok).toBe(true);
     if (!validated.ok) {
       return;
@@ -1459,7 +1462,7 @@ describe('server-enforced two-phase protocol (review #47 round 5)', () => {
     // The validated canonical map plus a DISABLED-row edit: zero
     // structural consequences, so no earlier gate
     // (confirmation-required) can mask the token check.
-    const result = await handleCommitSave(rig.deps, {
+    const result = await handleCommitSave(rig.deps, { cachedAccessoryUniqueIds: [],
       base: LEGACY_BLOCK,
       proposal: [...validated.canonicalSensorMap, { dataPoint: 'humidity', enabled: false, name: 'Renamed After Validation' }],
       validationToken: validated.validationToken,
@@ -1476,7 +1479,7 @@ describe('server-enforced two-phase protocol (review #47 round 5)', () => {
     const rig = makeRig(LEGACY_BLOCK);
     discoveryStore(rig);
     const digest = blockDigest(LEGACY_BLOCK);
-    const validated = await handleComposeSave(rig.deps, {
+    const validated = await handleComposeSave(rig.deps, { cachedAccessoryUniqueIds: [],
       baseDigest: digest,
       formBlock: LEGACY_BLOCK,
     });
@@ -1488,7 +1491,7 @@ describe('server-enforced two-phase protocol (review #47 round 5)', () => {
     // validated one (a tolerated materialization appeared in between —
     // still a drift the token must catch, because the token binds the
     // EXACT validated state).
-    const result = await handleCommitSave(rig.deps, {
+    const result = await handleCommitSave(rig.deps, { cachedAccessoryUniqueIds: [],
       baseDigest: digest,
       formBlock: { ...LEGACY_BLOCK, includeOnly: [] },
       validationToken: validated.validationToken,
@@ -1733,7 +1736,7 @@ describe('family unit choice becomes a GLOBAL template future stations inherit (
     store.setFieldFor(undefined, 'windspeedmph', 'displayUnit', 'fps');
 
     const payload = { base: V2_BLOCK, proposal: store.proposal() };
-    const result = await handleComposeSave(rig.deps, { ...payload, confirmDigest: await digestFor(rig, payload) });
+    const result = await handleComposeSave(rig.deps, { cachedAccessoryUniqueIds: [], ...payload, confirmDigest: await digestFor(rig, payload) });
     expect(result.ok).toBe(true);
     if (!result.ok) {
       return;
@@ -1785,7 +1788,7 @@ describe('station disable of a custom row re-declares its identity (review P2-2)
 
     // What disableNoData composes for a custom-global row: the station
     // exception RE-DECLARES the identity.
-    const withIdentity = await handlePreviewSave(rig.deps, {
+    const withIdentity = await handlePreviewSave(rig.deps, { cachedAccessoryUniqueIds: [],
       base: V2_BLOCK,
       proposal: [globalFrag, {
         dataPoint: 'custom_wind', stationMac: MAC,
@@ -1796,7 +1799,7 @@ describe('station disable of a custom row re-declares its identity (review P2-2)
 
     // The reviewer's reproduction: a bare station {enabled:false} on a
     // custom row is an invalid partial fragment and must refuse.
-    const bare = await handlePreviewSave(rig.deps, {
+    const bare = await handlePreviewSave(rig.deps, { cachedAccessoryUniqueIds: [],
       base: V2_BLOCK,
       proposal: [globalFrag, { dataPoint: 'custom_wind', stationMac: MAC, enabled: false }],
     });
@@ -1829,7 +1832,7 @@ describe('preview notes attach to their change rows (beta.17 RC smoke)', () => {
     // engine emits duplicate-battery-owner for the loser, and the
     // loser is itself an 'added' change — so the note renders inline
     // on that change row.
-    const preview = await handlePreviewSave(rig.deps, {
+    const preview = await handlePreviewSave(rig.deps, { cachedAccessoryUniqueIds: [],
       base: V2_BLOCK, proposal: [CUSTOM_A, CUSTOM_B],
     });
     expect(preview.ok).toBe(true);
@@ -1857,7 +1860,7 @@ describe('preview notes attach to their change rows (beta.17 RC smoke)', () => {
     const store = new DraftStore();
     store.reset(state.authored);
     store.setFieldFor(MAC, 'windspeedmph', 'name', 'Roof Wind');
-    const preview = await handlePreviewSave(rig.deps, {
+    const preview = await handlePreviewSave(rig.deps, { cachedAccessoryUniqueIds: [],
       base: V2_BLOCK, proposal: store.proposal(),
     });
     expect(preview.ok).toBe(true);
@@ -1910,7 +1913,7 @@ describe('family unit choice keeps station-only custom rows station-scoped (PR #
     expect(proposal.find(f => f.dataPoint === 'barn_wind' && f.stationMac === undefined)).toBeUndefined();
 
     const payload = { base: V2_BLOCK, proposal };
-    const result = await handleComposeSave(rig.deps, { ...payload, confirmDigest: await digestFor(rig, payload) });
+    const result = await handleComposeSave(rig.deps, { cachedAccessoryUniqueIds: [], ...payload, confirmDigest: await digestFor(rig, payload) });
     expect(result.ok).toBe(true);
     if (!result.ok) {
       return;
@@ -1984,7 +1987,7 @@ describe('per-identity family scope: global pressure custom with a station wind 
     store.setFieldFor(undefined, 'custom_x', 'displayUnit', 'mmHg');
 
     const payload = { base: MIXED_BLOCK, proposal: store.proposal() };
-    const result = await handleComposeSave(rig.deps, { ...payload, confirmDigest: await digestFor(rig, payload) });
+    const result = await handleComposeSave(rig.deps, { cachedAccessoryUniqueIds: [], ...payload, confirmDigest: await digestFor(rig, payload) });
     expect(result.ok).toBe(true);
     if (!result.ok) {
       return;
@@ -2050,7 +2053,7 @@ describe('global custom removal + surviving same-identity station exception (PR 
     store.setFieldFor(MAC, 'custom_x', 'displayUnit', 'fps');
 
     const payload = { base: BLOCK, proposal: store.proposal() };
-    const result = await handleComposeSave(rig.deps, { ...payload, confirmDigest: await digestFor(rig, payload) });
+    const result = await handleComposeSave(rig.deps, { cachedAccessoryUniqueIds: [], ...payload, confirmDigest: await digestFor(rig, payload) });
     expect(result.ok).toBe(true);
     if (!result.ok) {
       return;
@@ -2099,7 +2102,7 @@ describe('Skip on a custom row composes cleanly (PR #53 round 6 F3)', () => {
 
     // The reviewer's repro: a bare station pin on a custom dataPoint
     // is refused as custom-missing-kind...
-    const bare = await handleComposeSave(rig.deps, {
+    const bare = await handleComposeSave(rig.deps, { cachedAccessoryUniqueIds: [],
       base: BLOCK,
       proposal: [
         ...BLOCK.sensorMap,
@@ -2121,7 +2124,7 @@ describe('Skip on a custom row composes cleanly (PR #53 round 6 F3)', () => {
         { dataPoint: 'barn_wind', stationMac: MAC, kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph', displayUnit: 'mph' },
       ],
     };
-    const result = await handleComposeSave(rig.deps, { ...payload, confirmDigest: await digestFor(rig, payload) });
+    const result = await handleComposeSave(rig.deps, { cachedAccessoryUniqueIds: [], ...payload, confirmDigest: await digestFor(rig, payload) });
     expect(result.ok).toBe(true);
     if (result.ok) {
       const pinned = result.canonicalSensorMap.find(e => e.dataPoint === 'barn_wind' && e.stationMac === MAC);
@@ -2157,7 +2160,7 @@ describe('unrecognized-field assignment saves as a new custom sensor (PR E)', ()
 
     // The atomicity backstop: were a partial fragment ever composed
     // (the editor prevents it), the pipeline still refuses it whole.
-    const partial = await handleComposeSave(rig.deps, {
+    const partial = await handleComposeSave(rig.deps, { cachedAccessoryUniqueIds: [],
       base: BLOCK,
       proposal: [{ dataPoint: 'xbarnwind', stationMac: MAC, kind: 'motion', measurement: 'wind-speed', enabled: true }],
     });
@@ -2176,7 +2179,7 @@ describe('unrecognized-field assignment saves as a new custom sensor (PR E)', ()
       }],
     };
 
-    const preview = await handlePreviewSave(rig.deps, payload);
+    const preview = await handlePreviewSave(rig.deps, { cachedAccessoryUniqueIds: [], ...payload });
     expect(preview.ok).toBe(true);
     if (!preview.ok) {
       return;
@@ -2212,7 +2215,7 @@ describe('unrecognized-field assignment saves as a new custom sensor (PR E)', ()
         enabled: true, name: 'Barn Event',
       }],
     };
-    const preview = await handlePreviewSave(rig.deps, payload);
+    const preview = await handlePreviewSave(rig.deps, { cachedAccessoryUniqueIds: [], ...payload });
     expect(preview.ok).toBe(true);
     if (!preview.ok) {
       return;
@@ -2243,11 +2246,11 @@ describe('consolidated-page settings through the guarded save (beta.17, GA #56)'
       proposal: proposal ?? BLOCK.sensorMap,
       settings,
     };
-    const validated = await handleComposeSave(rig.deps, payload);
+    const validated = await handleComposeSave(rig.deps, { cachedAccessoryUniqueIds: [], ...payload });
     if (!validated.ok) {
       return validated;
     }
-    return handleCommitSave(rig.deps, { ...payload, validationToken: validated.validationToken });
+    return handleCommitSave(rig.deps, { cachedAccessoryUniqueIds: [], ...payload, validationToken: validated.validationToken });
   }
 
   it('every moved setting round-trips: name, dataSource, stationFilter, embed interval', async () => {
@@ -2261,15 +2264,15 @@ describe('consolidated-page settings through the guarded save (beta.17, GA #56)'
     };
     // The narrowed station filter is a structural change (review F1),
     // so the save needs the previewed confirmation like any other.
-    const preview = await handlePreviewSave(rig.deps, { base: BLOCK, proposal: BLOCK.sensorMap, settings });
+    const preview = await handlePreviewSave(rig.deps, { cachedAccessoryUniqueIds: [], base: BLOCK, proposal: BLOCK.sensorMap, settings });
     expect(preview.ok).toBe(true);
     const payload = {
       base: BLOCK, proposal: BLOCK.sensorMap, settings,
       confirmDigest: preview.ok ? preview.digest : undefined,
     };
-    const validated0 = await handleComposeSave(rig.deps, payload);
+    const validated0 = await handleComposeSave(rig.deps, { cachedAccessoryUniqueIds: [], ...payload });
     expect(validated0.ok).toBe(true);
-    const result = !validated0.ok ? validated0 : await handleCommitSave(rig.deps, {
+    const result = !validated0.ok ? validated0 : await handleCommitSave(rig.deps, { cachedAccessoryUniqueIds: [],
       ...payload, validationToken: validated0.validationToken,
     });
     expect(result.ok).toBe(true);
@@ -2365,7 +2368,7 @@ describe('consolidated-page settings through the guarded save (beta.17, GA #56)'
     expect(JSON.stringify(state)).not.toContain('secret-app-key-value');
 
     // A preview result never carries the values either.
-    const preview = await handlePreviewSave(rig.deps, { base: LEGACY_WITH_SECRETS });
+    const preview = await handlePreviewSave(rig.deps, { cachedAccessoryUniqueIds: [], base: LEGACY_WITH_SECRETS });
     expect(preview.ok).toBe(true);
     expect(JSON.stringify(preview)).not.toContain('secret-api-key-value');
 
@@ -2373,10 +2376,10 @@ describe('consolidated-page settings through the guarded save (beta.17, GA #56)'
     // secret into either record.
     const payload = { base: LEGACY_WITH_SECRETS };
     const digest = await digestFor(rig, payload);
-    const validated = await handleComposeSave(rig.deps, { ...payload, confirmDigest: digest });
+    const validated = await handleComposeSave(rig.deps, { cachedAccessoryUniqueIds: [], ...payload, confirmDigest: digest });
     expect(validated.ok).toBe(true);
     if (validated.ok) {
-      const committed = await handleCommitSave(rig.deps, {
+      const committed = await handleCommitSave(rig.deps, { cachedAccessoryUniqueIds: [],
         ...payload, confirmDigest: digest, validationToken: validated.validationToken,
       });
       expect(committed.ok).toBe(true);
@@ -2425,7 +2428,7 @@ describe('stationFilter consequences (PR #60 review F1)', () => {
       proposal: [],
       settings: { stationFilter: ['Backyard'] },
     };
-    const preview = await handlePreviewSave(rig.deps, payload);
+    const preview = await handlePreviewSave(rig.deps, { cachedAccessoryUniqueIds: [], ...payload });
     expect(preview.ok).toBe(true);
     if (!preview.ok) {
       return;
@@ -2441,19 +2444,19 @@ describe('stationFilter consequences (PR #60 review F1)', () => {
     expect(preview.structuralChangeCount).toBeGreaterThan(0);
 
     // The structural removal demands confirmation like any other.
-    const unconfirmed = await handleComposeSave(rig.deps, payload);
+    const unconfirmed = await handleComposeSave(rig.deps, { cachedAccessoryUniqueIds: [], ...payload });
     expect(unconfirmed.ok).toBe(false);
     if (!unconfirmed.ok) {
       expect(unconfirmed.error.code).toBe('confirmation-required');
     }
-    const confirmed = await handleComposeSave(rig.deps, { ...payload, confirmDigest: preview.digest });
+    const confirmed = await handleComposeSave(rig.deps, { cachedAccessoryUniqueIds: [], ...payload, confirmDigest: preview.digest });
     expect(confirmed.ok).toBe(true);
   });
 
   it('widening (clearing) the filter previews the returning station as additions', async () => {
     const rig = makeRig({ ...TWO_STATION_BLOCK, stationFilter: ['Backyard'] });
     twoStationDiscovery(rig);
-    const preview = await handlePreviewSave(rig.deps, {
+    const preview = await handlePreviewSave(rig.deps, { cachedAccessoryUniqueIds: [],
       base: { ...TWO_STATION_BLOCK, stationFilter: ['Backyard'] },
       proposal: [],
       settings: { stationFilter: [] },
@@ -2473,7 +2476,7 @@ describe('stationFilter consequences (PR #60 review F1)', () => {
   it('the preview filter matches with the runtime rules: MAC form, case-insensitive, trimmed', async () => {
     const rig = makeRig(TWO_STATION_BLOCK);
     twoStationDiscovery(rig);
-    const preview = await handlePreviewSave(rig.deps, {
+    const preview = await handlePreviewSave(rig.deps, { cachedAccessoryUniqueIds: [],
       base: TWO_STATION_BLOCK,
       proposal: [],
       settings: { stationFilter: ['  aa:bb:cc:dd:ee:01  '] },
@@ -2490,7 +2493,7 @@ describe('stationFilter consequences (PR #60 review F1)', () => {
   it('a deliberately non-matching filter (the documented wipe) previews EVERYTHING as removals rather than refusing', async () => {
     const rig = makeRig(TWO_STATION_BLOCK);
     twoStationDiscovery(rig);
-    const preview = await handlePreviewSave(rig.deps, {
+    const preview = await handlePreviewSave(rig.deps, { cachedAccessoryUniqueIds: [],
       base: TWO_STATION_BLOCK,
       proposal: [],
       settings: { stationFilter: ['CLEAR'] },
@@ -2536,15 +2539,15 @@ describe('stationFilter never shrinks the authored map (PR #60 round 2 P1)', () 
       proposal: (base.sensorMap as unknown[]) ?? [],
       settings: { stationFilter: filter },
     };
-    const preview = await handlePreviewSave(rig.deps, payload);
+    const preview = await handlePreviewSave(rig.deps, { cachedAccessoryUniqueIds: [], ...payload });
     expect(preview.ok).toBe(true);
     const withDigest = { ...payload, confirmDigest: preview.ok ? preview.digest : undefined };
-    const validated = await handleComposeSave(rig.deps, withDigest);
+    const validated = await handleComposeSave(rig.deps, { cachedAccessoryUniqueIds: [], ...withDigest });
     expect(validated.ok).toBe(true);
     if (!validated.ok) {
       throw new Error('validate refused');
     }
-    const committed = await handleCommitSave(rig.deps, { ...withDigest, validationToken: validated.validationToken });
+    const committed = await handleCommitSave(rig.deps, { cachedAccessoryUniqueIds: [], ...withDigest, validationToken: validated.validationToken });
     expect(committed.ok).toBe(true);
     return { preview, committed } as { preview: typeof preview; committed: typeof committed };
   }
@@ -2602,7 +2605,7 @@ describe('stationFilter never shrinks the authored map (PR #60 round 2 P1)', () 
     const rig = makeRig(BLOCK_WITH_B_STATE);
     twoStationDiscovery(rig);
     // 2 -> 1: retained station A rows switch from prefixed to bare names.
-    const preview = await handlePreviewSave(rig.deps, {
+    const preview = await handlePreviewSave(rig.deps, { cachedAccessoryUniqueIds: [],
       base: BLOCK_WITH_B_STATE,
       proposal: BLOCK_WITH_B_STATE.sensorMap,
       settings: { stationFilter: ['Backyard'] },
@@ -2623,7 +2626,7 @@ describe('stationFilter never shrinks the authored map (PR #60 round 2 P1)', () 
     const narrowedBlock = { ...BLOCK_WITH_B_STATE, stationFilter: ['Backyard'] };
     const rig2 = makeRig(narrowedBlock);
     twoStationDiscovery(rig2);
-    const widen = await handlePreviewSave(rig2.deps, {
+    const widen = await handlePreviewSave(rig2.deps, { cachedAccessoryUniqueIds: [],
       base: narrowedBlock,
       proposal: narrowedBlock.sensorMap,
       settings: { stationFilter: [] },
@@ -2661,14 +2664,14 @@ describe('indeterminate station-filter membership fails closed (PR #60 round 3 P
       proposal: [{ dataPoint: 'tempf', stationMac: MAC, enabled: false }],
       cachedAccessoryUniqueIds: [`${MAC}-tempf`],
     };
-    const preview = await handlePreviewSave(rig.deps, payload);
+    const preview = await handlePreviewSave(rig.deps, { cachedAccessoryUniqueIds: [], ...payload });
     expect(preview.ok).toBe(false);
     if (!preview.ok) {
       expect(preview.error.code).toBe('indeterminate-station-filter');
       expect(preview.error.message).toContain(MAC);
       expect(preview.error.message).toContain('MAC form');
     }
-    const save = await handleComposeSave(rig.deps, payload);
+    const save = await handleComposeSave(rig.deps, { cachedAccessoryUniqueIds: [], ...payload });
     expect(save.ok).toBe(false);
     if (!save.ok) {
       expect(save.error.code).toBe('indeterminate-station-filter');
@@ -2692,7 +2695,7 @@ describe('indeterminate station-filter membership fails closed (PR #60 round 3 P
   it('a name filter with discovery-supplied names stays fully usable', async () => {
     const rig = makeRig(BLOCK);
     discoveryStore(rig); // discovery names the station
-    const preview = await handlePreviewSave(rig.deps, {
+    const preview = await handlePreviewSave(rig.deps, { cachedAccessoryUniqueIds: [],
       base: BLOCK,
       proposal: [{ dataPoint: 'tempf', stationMac: MAC, enabled: false }],
     });
@@ -2730,7 +2733,7 @@ describe('the confirmation digest binds every visible consequence (PR #60 round 
       proposal: [],
       settings: { stationFilter: [MAC] }, // narrows 2 -> 1: renames station A's rows in place
     };
-    const preview = await handlePreviewSave(rig.deps, payload);
+    const preview = await handlePreviewSave(rig.deps, { cachedAccessoryUniqueIds: [], ...payload });
     expect(preview.ok).toBe(true);
     if (!preview.ok) {
       return;
@@ -2742,14 +2745,14 @@ describe('the confirmation digest binds every visible consequence (PR #60 round 
     // MACs, the same structural signatures — only the shown rename
     // differs. The old digest must refuse.
     namedDiscovery(rig, 'Garden');
-    const refused = await handleComposeSave(rig.deps, { ...payload, confirmDigest: preview.digest });
+    const refused = await handleComposeSave(rig.deps, { cachedAccessoryUniqueIds: [], ...payload, confirmDigest: preview.digest });
     expect(refused.ok).toBe(false);
     if (!refused.ok) {
       expect(refused.error.code).toBe('stale-confirmation');
     }
 
     // A fresh preview over the new name proceeds.
-    const fresh = await handlePreviewSave(rig.deps, payload);
+    const fresh = await handlePreviewSave(rig.deps, { cachedAccessoryUniqueIds: [], ...payload });
     expect(fresh.ok).toBe(true);
     if (fresh.ok) {
       expect(fresh.digest).not.toBe(preview.digest);

@@ -133,15 +133,19 @@ describe('pure conversion never silently flips battery polarity (§19.6 / review
       const priorLow = battery.getCharacteristic(hap.Characteristic.StatusLowBattery).value;
 
       const deps = rig(base, Object.keys(raw));
-      const preview = await handlePreviewSave(deps, { base });
+      const payload = {
+        base,
+        cachedAccessoryUniqueIds: before.api.registered.map(accessory => accessory.context.device.uniqueId),
+      };
+      const preview = await handlePreviewSave(deps, payload);
       expect(preview.ok, preview.ok ? '' : JSON.stringify((preview as { error: unknown }).error)).toBe(true);
       if (!preview.ok) return;
       expect(preview.changes).toEqual([]);
       expect(preview.batteryPolarity).toEqual([]);
-      const validated = await handleComposeSave(deps, { base, confirmDigest: preview.digest });
+      const validated = await handleComposeSave(deps, { ...payload, confirmDigest: preview.digest });
       expect(validated.ok).toBe(true);
       if (!validated.ok) return;
-      const committed = await handleCommitSave(deps, { base, confirmDigest: preview.digest, validationToken: validated.validationToken });
+      const committed = await handleCommitSave(deps, { ...payload, confirmDigest: preview.digest, validationToken: validated.validationToken });
       expect(committed.ok).toBe(true);
       if (!committed.ok) return;
       expect((committed.nextConfig as Record<string, unknown>).catalogAdopted).toBe(3);

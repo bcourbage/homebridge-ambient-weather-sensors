@@ -505,7 +505,7 @@ Note the `windspeedmph` entry combines `threshold` and `displayUnit` — canonic
 
 This prevents an older plugin's UI from partially rewriting a newer configuration and corrupting it silently.
 
-**Migration event:** first UI save on a legacy config atomically:
+**Migration event:** explicit conversion or the first full sensor-map save on a legacy config atomically:
 0. Writes the **immutable legacy snapshot** (see below) and awaits success BEFORE any config.json mutation — on a reconversion whose legacy fields differ from the surviving snapshot, appends the **conversion-journal baseline** (§5.1b) instead, under the same await-before-mutation rule
 1. Reads effective sensor map (compat-translated)
 2. Computes minimal-diff canonical serialization against v2 baseline (§11.3)
@@ -662,7 +662,9 @@ zero writes:
   the client's view, the save is refused. Safe mode refuses outright.
 - **Pure-migration seeding.** A legacy config with no proposal composes
   from `compatToOverrides` (the compat-translated state), never from
-  defaults — converting cannot silently re-enable disabled categories.
+  defaults. Disabled sensors represented at conversion remain disabled.
+  Legacy category and sensor-name-matcher rules do not become an active
+  policy for future field names in v2 (§21.4).
 - **Same-machinery validation.** Proposals run through
   `buildEffectiveSensorMap` (identity-first → duplicate merge with
   later-field-wins → body validation with provenance); any row error
@@ -715,6 +717,14 @@ Legacy fields translate to internal sensor-map state. Deterministic, one-shot pe
 | `includeOnly: [...]` | | Non-matching rows → `enabled: false`. After `excludeSensors`. |
 | `stationFilter: [...]` | | Not sensor-map related. Top-level field. |
 | `dataSource` | | Not sensor-map related. Top-level field. |
+
+Conversion evaluates these legacy category and sensor-name matchers into
+overrides for the catalog, observed, and cache-backed identities available
+at conversion. It does not retain those matchers as a v2 exposure policy or
+invent a disabled placeholder solely because an otherwise unknown field
+name appears in `excludeSensors`. After conversion, individual sensor-map
+rows and their global/station overrides govern those settings (§21.4).
+The top-level `stationFilter` remains a separate, active station filter.
 
 ## 7. Effective map construction
 
@@ -1178,13 +1188,16 @@ whose canonical form would change meaning: after serialization the
 canonical array is reloaded and every configured row + structural
 signature is compared against the proposal's effective map — over the
 station inventory PLUS a synthetic never-seen station, so global
-TEMPLATE equivalence is proven, not just current-inventory equivalence.
+TEMPLATE equivalence is proven for the current field universe, not just
+the current station inventory. This does not carry legacy category or
+sensor-name-matcher policy onto hypothetical future fields (§21.4).
 Any divergence returns the structured `canonical-divergence` error
 listing the affected rows and both signatures. Supported remediation
 (the error message says this): make ownership explicit — set
 `batteryField: null` on the non-owning claimant(s), or assign distinct
 battery fields — and retry. The gate doubles as a mechanical trap for
-serializer defects: nothing that changes meaning can be persisted.
+serializer defects: a changed resolved meaning within that checked universe
+cannot be persisted.
 
 **Idempotency:**
 
@@ -1197,6 +1210,9 @@ assertEqual(sparse1, serialize(compat(legacyConfig)))  // determinism
 ```
 
 Repeated UI saves produce byte-identical `sensorMap` arrays for the same input.
+The equivalence assertion uses the identities available at conversion;
+the separately tested future-field behavior is the per-sensor contract in
+§21.4, not continued v1 category/matcher evaluation.
 
 ### 11.4 What DOES change on upgrade
 
@@ -2347,10 +2363,13 @@ zero.
 
 **Lifecycle and rollback.** A numeric row honors enable/disable across a
 cached restart. A catalog-4-capable binary reading a not-yet-adopted
-config leaves the pair unavailable. An OLDER binary reading a
+config leaves the pair unavailable. An older CATALOG-AWARE binary reading a
 future-stamped config enters the reconciliation-free safe mode: it
 RETAINS the cached accessory, makes zero register/unregister calls, and
-does not delete it as an orphan. The legacy `context.device.type` marker
+does not delete it as an orphan. Pre-catalog betas, including beta.17, do not
+implement stamp validation and do not offer that protection. Operational
+rollback uses the documented guarded-1.7.3 procedure, not manual stamp lowering.
+The legacy `context.device.type` marker
 is `Numeric`, deliberately outside 1.7's `createSensorWrapper`
 vocabulary, so a numeric assignment is never reconstructable as a legacy
 field on downgrade, and it stays out of the legacy mirror.
@@ -2939,3 +2958,141 @@ no demonstrated harm for today's catalog versions; this editor does not
 extend either digest. The delivery sequence is P4, P5 proofs, the next
 2.0.0 beta, digest hardening, Change mapping, then GA. Final applicable
 proofs and packaged-RC checks run again after those follow-ups.
+
+## 21. Install, upgrade, and retained-accessory proofs
+
+### 21.1 Artifact and installation boundary
+
+The locked dependency tree is built before integration tests run. Runtime
+artifacts in `dist/` and the UI bridge must match their committed versions;
+unexpected untracked build output fails the gate too. The canonical Angular
+job independently performs two cold builds and checks committed bundle
+fidelity. Dependency auditing is read-only and cannot change the artifact
+after it has passed the tests.
+
+`verify:package` packs the actual release file set and installs that tarball
+into an isolated directory with production dependencies only and installation
+scripts disabled. It loads the installed plugin entry point, checks the
+referenced browser bundle, and starts the installed UI server through its
+real IPC channel. Fresh installation and manual legacy-block credential
+repair use preview, compose, and commit there. Opening the page cannot write
+config or recovery records. Connection-only saves without a station-filter
+change preserve unrelated blocks,
+credential intents, legacy toggles, and birth stamps without conversion.
+
+This check does not claim to emulate the Homebridge browser host or hardware.
+The exact candidate package still requires a real-HB-UI smoke and cached
+restart on the deployment host before release.
+
+### 21.2 Executed journeys
+
+| Boundary | Executed evidence |
+|---|---|
+| Fresh installation and credential recovery | A settings-only birth block reaches the real runtime without unsolicited exposure or conversion. Explicit conversion preserves its birth stamps; explicit enablement then produces a real reading and a churn-free cached restart. A failed HTTP 401 startup retains the cache until guarded credential repair and a successful restart. |
+| Published 1.7.3 upgrade | The exact npm-published binary creates a real HAP cache. The candidate boots with the unchanged legacy configuration, then converts through the compiled save boundary and restarts from the same objects. Categories, broad legacy field names, allowlists, exclusions, and station filters remain effective for the observed and cache-backed field corpus. |
+| Future field after conversion | A legacy category disable or speculative exclusion creates no placeholder for a previously unknown compatibility field. Its first report can register it under normal v2 defaults. A real editor draft then disables only that row, with an exact removal preview, persisted `enabled: false`, and stable repeated save/restart. Known disabled temperature identities remain disabled throughout. |
+| Published beta upgrade | Exact beta.17 produces both legacy-shaped and converted caches. The candidate preserves explicit Celsius, lux, wind-source-unit, threshold, and display-unit assignments through startup, save, and reload. |
+| Documented input, native output | A temperature row moves through editor state, persistence, REST, realtime, polling, and repeated cached restarts with actual temperature characteristic assertions. |
+| Documented input, extended output | A soil-moisture row follows the same journey with a real Value characteristic and inclusive threshold behavior. |
+| Undocumented input, native output | An explicit Celsius assignment proves raw 25 remains 25 degrees Celsius, not a guessed Fahrenheit interpretation. |
+| Undocumented input, extended output | A generic numeric assignment preserves raw values, literal label semantics, threshold state, and graph shape across the complete journey. |
+| State output | Contact open/closed/offline readings exercise the real service, fault retention, recovery, and both transports. |
+| Catalog evolution | An existing wind-average assignment retains its source unit, rendered value, authored ownership, UUID, and cached object across previewed adoption. An explicitly conflicting native identity stays explicit too. |
+| Operational downgrade | Real published 1.7.3 freezes a v2-written cache before rollback. After the documented rollback it removes exactly unsupported custom/state/numeric accessories while restoring representable accessories in place. |
+
+Graph comparisons do not widen their deviation allowance to make a proof
+pass. The existing canonical native Battery-service normalization for a
+signature-less legacy cache is tested separately. Compatibility-only battery
+references outside the frozen canonical-owner table cannot acquire a new
+Battery service implicitly. Explicit claims remain authored configuration,
+including claims on disabled rows or arbitration losers, and must survive
+canonicalization for a later enable or ownership change.
+
+### 21.3 Missing observations are not removal instructions
+
+First creation and retention have different evidence requirements. A
+never-reported row requires a reported field before its first registration.
+An already configured cached accessory does not
+require that field or its station to be present in the latest payload.
+
+The runtime and save boundary resolve cache-backed station/field pairs
+alongside discovery and live inventory without manufacturing `firstSeen`,
+`lastSeen`, or a fresh reading. Legacy category and exclusion rules are
+evaluated for these pairs before conversion. Their translated per-row
+enable/disable settings survive conversion, even if discovery has been deleted.
+When the cache read is unavailable, a full legacy conversion refuses rather
+than treating an unknown cache as empty. Connection-only credential repair
+remains available; retry conversion after the cache can be read.
+Missing readings retain characteristic values and establish routing
+for returning samples. A valid empty AWN response is an empty observation,
+not permission to remove every accessory. Deleting discovery history does
+not change that rule.
+
+Explicit disabling, removal of a custom identity, or a definitively excluding
+station filter still removes the affected accessory. An unnamed cache-only
+station under a name-based filter has indeterminate membership; its cache is
+preserved without pretending that the station matched. A MAC filter can
+settle membership without a name. The latest unambiguous recorded station name
+can settle a name filter when a partial payload omits that metadata; equal-time
+conflicting names leave membership unknown. In a legacy-shaped configuration,
+`includeOnly` and
+`excludeSensors` also accept station and prefixed display names. If missing
+metadata leaves their decision indeterminate, affected cached accessories stay
+frozen and full conversion refuses. A category disable or a positive stable
+exclusion still takes effect; Connection-only repair remains available.
+An explicitly configured
+structural replacement of an existing accessory still uses staged replacement
+while offline, without fabricating an initial reading. That is a consequence
+of the configuration change, not of absent telemetry.
+
+When station-name evidence is unavailable, preview and runtime use the
+normalized MAC prefix for multi-station display names. Losing or recovering
+that metadata may change names in place; it never changes the cached
+`uniqueId` or UUID.
+
+### 21.4 Pure sensor identities and the conversion boundary
+
+V2 controls individual sensor identities, not classes of hypothetical future
+sensors. A catalog definition, an actual report, a cached accessory, or an
+explicit field mapping supplies an identity to resolve. A legacy matcher
+token by itself does not. Conversion translates the legacy settings over the
+catalog, observed, and cache-backed identities available at that time. With
+`temperatureSensors: false`, every known temperature-family row in that
+conversion remains disabled, including reported compatibility fields outside
+the static table.
+
+After conversion, v2 has no category-off setting and no continuing
+`includeOnly`/`excludeSensors` exposure rule. Those fields can remain in
+recovery records and the rollback mirror; they are not runtime authority for
+the converted map. A name such as `feelsLike21` that was neither catalogued,
+observed, cached, nor explicitly mapped is not materialized as a speculative
+disabled row, even if an old `excludeSensors` entry named it.
+
+When that field first reports after conversion, it becomes a real sensor and
+follows normal per-row recognition, defaults, and overrides. A recognized,
+enabled compatibility field can register an accessory; the user can disable
+that individual row through the usual previewed save. The resulting
+`enabled: false` persists across canonicalization, reload, and restart. This
+is the intended per-sensor contract, not v1 parity for future field names.
+
+This distinction does not automatically expose every new field. Unrecognized
+fields still require assignment, and newly introduced catalog capabilities
+retain their adoption and default-enablement rules. Explicit per-row authoring
+remains supported before telemetry arrives; conversion simply does not invent
+that authorship from a speculative legacy exclusion. First registration still
+requires a reported field. Global per-data-point templates and the separate
+top-level station filter keep their existing scope.
+
+### 21.5 Remaining release checks
+
+The complete suite retains the recovery-record, concurrent-writer, stale
+preview/token, credential-redaction, and real-1.7.3 rollback proofs. The
+supported Node floor and maintained Node lines run the same rebuilt-artifact
+and production-package checks. Host smoke verifies the installed package,
+live UI, existing custom mappings, first routed values, absence of unrelated
+registrations or removals, and byte-identical config when no save is requested.
+
+These proofs do not authorize a catalog adoption, production configuration
+change, compatibility retirement, or GA publication. The next beta precedes
+the separately reviewed digest-hardening and Change-mapping increments;
+applicable proofs and host smoke run again on the eventual GA candidate.

@@ -43,7 +43,7 @@
  * MACs ascending case-insensitive; fields in the fixed §17.4 order.
  */
 import { buildEffectiveSensorMap, partitionOverrideLayers } from './buildEffectiveMap.js';
-import { defaultRowForConfigOverride, hasAuthoredIdentity } from './defaultMap.js';
+import { defaultRowForConfigOverride, hasAuthoredIdentity, isCompatibilityDefinition } from './defaultMap.js';
 /** §17.4 rule 4 — the fixed field order for byte-stable output. */
 const FIELD_ORDER = [
     'batteryField', 'dataPoint', 'displayUnit', 'embedName', 'enabled',
@@ -61,6 +61,7 @@ export function canonicalizeSensorMap(input) {
         discovery: input.discovery,
         uiState: input.uiState,
         stations: input.stations,
+        cachedPairs: input.cachedPairs,
         configMode: 'v2',
         catalogBaseline: input.catalogBaseline,
         catalogAdopted: input.catalogAdopted,
@@ -155,6 +156,16 @@ export function canonicalizeSensorMap(input) {
         }
         return out;
     };
+    const preserveCompatibilityClaim = (fields, dp, authored, ...identityLayers) => {
+        const definition = knownRowFor(dp, ...identityLayers);
+        // Authorship grants a claim where the compatibility default only
+        // supplies a battery reference. Keep it at its original scope even
+        // while disabled or losing a collision: either can own it later.
+        if (definition && isCompatibilityDefinition(definition)
+            && typeof authored?.batteryField === 'string' && authored.batteryField === definition.batteryField) {
+            fields.batteryField = authored.batteryField;
+        }
+    };
     const entries = [];
     // ---- Global entries: the template layer vs the built-in baseline.
     for (const dp of layers.global.keys()) {
@@ -183,6 +194,7 @@ export function canonicalizeSensorMap(input) {
             ? identity.get(`${row.stationMac}|${dp}`)
             : defaults.get(`${row.stationMac}|${dp}`);
         const fields = diffRows(row, reference);
+        preserveCompatibilityClaim(fields, dp, layers.global.get(dp), layers.global.get(dp));
         if (isCustom) {
             // Custom templates always re-declare identity.
             fields.kind = row.kind;
@@ -236,6 +248,7 @@ export function canonicalizeSensorMap(input) {
                 ? stationBaseline.get(key)
                 : (globalRow ?? (isCustom ? identity.get(key) : defaults.get(key)));
             const fields = diffRows(proposed, reference);
+            preserveCompatibilityClaim(fields, dp, perDp.get(dp), layers.global.get(dp), perDp.get(dp));
             const onlyIdentityRestated = isCustom && globalRow !== undefined
                 && globalAuthorsIdentity(dp)
                 && Object.keys(fields).length === 0;

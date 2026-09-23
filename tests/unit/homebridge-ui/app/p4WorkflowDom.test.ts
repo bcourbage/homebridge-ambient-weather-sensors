@@ -175,10 +175,13 @@ describe('P4 clean catalog workflows through the actual save boundary', () => {
   it('converts a category-off legacy config with no proposal, then adopts, reloads, and assigns numeric', async () => {
     const legacy = { ...BASE, temperatureSensors: false, humiditySensors: true };
     const r = await rig(legacy);
+    const conversionNote = 'Conversion keeps known disabled sensors disabled. Future recognized sensors may appear and can be disabled individually.';
+    expect(r.el.querySelector('.conversion-note')?.textContent).toBe(conversionNote);
     expect(r.requests.map(x => x.path)).not.toContain('/preview-save');
     const original = readFileSync(r.configPath, 'utf8');
     await r.app.previewCatalog('convert');
     await flush(r);
+    expect(r.el.querySelector('.conversion-note')?.textContent).toBe(conversionNote);
     const conversion = r.requests.find(x => x.path === '/preview-save')!.body;
     for (const key of ['proposal', 'settings', 'adoptCatalogVersion']) expect(conversion).not.toHaveProperty(key);
     expect(readFileSync(r.configPath, 'utf8')).toBe(original);
@@ -196,6 +199,7 @@ describe('P4 clean catalog workflows through the actual save boundary', () => {
     };
     await save(r);
     expect(r.readBlock()).toMatchObject({ configVersion: 2, catalogBaseline: 1, catalogAdopted: 1 });
+    expect(r.el.querySelector('.conversion-note')).toBeNull();
     expect(r.app.state()?.rows.find(row => row.dataPoint === 'tempf')?.enabled).toBe(false);
     for (const call of r.requests.filter(x => ['/compose-save', '/commit-save'].includes(x.path))) {
       expect(call.body).not.toHaveProperty('proposal');
@@ -203,6 +207,7 @@ describe('P4 clean catalog workflows through the actual save boundary', () => {
     }
     await r.app.previewCatalog('adopt');
     await flush(r);
+    expect(r.el.querySelector('.conversion-note')).toBeNull();
     const adoption = r.requests.filter(x => x.path === '/preview-save').at(-1)!.body;
     expect(adoption.adoptCatalogVersion).toBe(4);
     expect(adoption).not.toHaveProperty('settings');
