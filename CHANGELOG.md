@@ -17,6 +17,10 @@ entries short and user-facing.
 - **Generic numeric labels.** Assign an otherwise unsupported numeric quantity with a literal unit label and an optional threshold. Labels are display-only, support Unicode, and can inherit, be cleared, or be set independently at the edited scope.
 - **Explicit conversion and catalog previews.** Convert unchanged legacy settings, then review catalog adoption separately from sensor edits. Preview shows configuration transitions and battery interpretation changes as well as accessory effects. No conversion or adoption occurs merely by opening the page.
 
+### Changed
+
+- **Sensors are managed individually after conversion.** Existing disabled sensors stay disabled. V2 does not keep legacy category-wide or sensor-name exclusions as rules for future fields. A newly reporting, recognized sensor may appear after conversion; disable that row individually if unwanted. Unknown fields still need assignment, and new catalog features keep their adoption requirements.
+
 ### Fixed
 
 - **Save stays tied to its preview.** Obsolete preview responses cannot restore Save after edits or cancellation. Failed post-save reloads, mismatched receipts, and save-control restoration failures require reload before further editing.

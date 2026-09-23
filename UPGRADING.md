@@ -19,6 +19,10 @@ Rollback status shows the exact way back to v1.7.3 whenever you want
 it. Until that first save, downgrading is simply installing 1.7.x
 again.
 
+After conversion, v2 manages sensors individually rather than through category-wide toggles. For example, converting with temperature sensors off keeps the known temperature sensors disabled. If a different, recognized temperature field starts reporting later, it can appear as a new accessory. Disable that row in the sensor editor if you do not want it.
+
+An old exclusion that names an otherwise unknown, never-observed field does not create a disabled placeholder during conversion. The station filter still applies. Unknown fields require assignment, and new catalog features still follow their adoption and enablement rules.
+
 Requirements: Node.js 22.13+ within 22.x, or 24.x.
 
 ## v1.5.x → v1.6.0
