@@ -56,8 +56,8 @@ export const KIND_HELP =
   'Kind is the Apple Home accessory type created for this row. Currently '
   + `supported kinds are ${listJoin(entries.filter(e => e.supported).map(e => e.label))}. `
   + (unsupportedLabels.length > 0
-    ? `${listJoin(unsupportedLabels)} are reserved for future support. `
+    ? `${listJoin(unsupportedLabels)} ${unsupportedLabels.length === 1 ? 'is' : 'are'} reserved for future support. `
     : '')
-  + 'Some newer kinds require adopting the current sensor catalog before '
-  + 'they can be assigned. Preview catalog adoption separately on this page. '
+  + 'Some newer kinds require a sensor-support update before they can be assigned. '
+  + 'Use Review new sensor support on this page to preview the update separately. '
   + 'Rows marked ? are unrecognized and do not create an accessory.';

@@ -192,7 +192,7 @@ describe('P4 pair-aware assignment', () => {
     const option = field<HTMLSelectElement>(r, 'pair').querySelector('option[value="motion|numeric"]') as HTMLOptionElement;
     expect(option.disabled).toBe(true);
     set(r, 'pair', 'motion|numeric');
-    expect(r.el.querySelector('.field-error')?.textContent).toContain('catalog');
+    expect(r.el.querySelector('.field-error')?.textContent).toContain('sensor-support update');
     expect(r.requests.filter(q => q.route === '/preview-save')).toHaveLength(0);
     expect([...r.el.querySelectorAll('button')].some(b => b.textContent?.trim() === 'Preview changes' && !b.disabled)).toBe(false);
   });

@@ -163,7 +163,7 @@ async function rig(block: Json | null, fields = ['tempf', 'flow1', 'door1'], add
 }
 
 async function save(r: Rig): Promise<void> {
-  const save = button(r, 'Save changes');
+  const save = r.el.querySelector('.save-bar button') as HTMLButtonElement | null;
   expect(save).toBeDefined();
   expect(save!.disabled).toBe(false);
   save!.click();
@@ -240,6 +240,8 @@ describe('P4 clean catalog workflows through the actual save boundary', () => {
     expect(p?.ok).toBe(true);
     if (!p?.ok) throw new Error('Expected dormant assignment to activate');
     expect(p.changes.some(c => c.dataPoint === assignment.dataPoint && c.change === 'added')).toBe(true);
+    expect(r.el.querySelector('.sensor-support-summary')?.textContent).not.toContain('Your existing accessories stay unchanged.');
+    expect(r.el.querySelector('.sensor-support-summary')?.textContent).not.toContain('No new Apple Home accessories will be created.');
     await save(r);
     expect((r.readBlock().sensorMap as Json[]).find(row => row.dataPoint === assignment.dataPoint)).toMatchObject(assignment);
     expect(r.app.reloadRequired()).toBe(false);
@@ -293,6 +295,90 @@ describe('P4 operation guards and authoritative save outcomes', () => {
     ...BASE, configVersion: 2, catalogBaseline: 1, catalogAdopted: 3, sensorMap,
   });
 
+  it('explains a real disabled-field support update, keeps technical stamps collapsed, and cancels without writes', async () => {
+    // No inverted-battery host in this configuration. The separate battery
+    // lifecycle below must NOT get this unchanged-accessory reassurance.
+    const r = await rig({ ...current([
+      { dataPoint: 'lightning_day', batteryField: null },
+      { dataPoint: 'lightning_hour', batteryField: null },
+    ]), catalogAdopted: 1 });
+    const original = readFileSync(r.configPath, 'utf8');
+    expect(r.el.querySelector('.catalog-panel h3')?.textContent).toBe('Sensor support');
+    expect(button(r, 'Review new sensor support')).toBeDefined();
+    expect(r.el.querySelector('.catalog-panel details')?.hasAttribute('open')).toBe(false);
+    button(r, 'Review new sensor support')!.click();
+    await expect.poll(() => r.app.previewPending()).toBe(false);
+    await flush(r);
+    const p = r.app.previewResult();
+    if (!p?.ok) throw new Error('Expected support update');
+    expect(p.changes).toHaveLength(0);
+    expect(p.batteryPolarity).toHaveLength(0);
+    expect(p.configOnly.length).toBeGreaterThan(0);
+    expect(p.configOnly.every(c => c.change === 'added' && c.after?.enabled === false)).toBe(true);
+    const summary = r.el.querySelector('.sensor-support-summary')?.textContent;
+    expect(summary).toContain('Your existing accessories stay unchanged.');
+    expect(summary).toContain(`Support for ${p.configOnly.length} additional sensor fields will become available, all switched off.`);
+    expect(summary).toContain('No new Apple Home accessories will be created.');
+    expect(r.el.querySelector('.preview-block')?.textContent).toContain(`Newly supported sensor fields: ${p.configOnly.length}, all off`);
+    expect(r.el.querySelectorAll('.preview-block .chip-disabled')).toHaveLength(p.configOnly.length);
+    expect(r.el.querySelector('.preview-block .chip-disabled')?.textContent).toBe('Available, switched off');
+    const detail = r.el.querySelector('.configuration-transition') as HTMLDetailsElement;
+    expect(detail.open).toBe(false);
+    expect(detail.textContent).toContain('adopted catalog: 1 → 4');
+    expect(button(r, 'Enable new sensor support')?.disabled).toBe(false);
+    button(r, 'Cancel preview')!.click();
+    await flush(r);
+    expect(r.app.previewResult()).toBeNull();
+    expect(readFileSync(r.configPath, 'utf8')).toBe(original);
+    expect(r.events).toEqual([]);
+  });
+
+  it('reports up-to-date sensor support without offering another update', async () => {
+    const r = await rig({ ...current(), catalogAdopted: 4 });
+    expect(r.el.querySelector('.catalog-panel')?.textContent).toContain('Your configuration has the latest sensor support included with this installed plugin.');
+    expect(button(r, 'Review new sensor support')).toBeUndefined();
+    expect(r.requests.some(x => x.path === '/preview-save')).toBe(false);
+  });
+
+  it.each(['accessory', 'battery', 'settings', 'single-field', 'mixed-disabled'] as const)(
+    'bases support-update copy on the complete displayed consequences: %s', async scenario => {
+      const r = await rig(current());
+      const p = emptyPreview('copy-probe');
+      if (!p.ok) throw new Error('Expected fixture');
+      p.configurationTransition = { before: { mode: 'v2', baseline: 1, adopted: 3, stamped: true },
+        after: { mode: 'v2', baseline: 1, adopted: 4, stamped: true } };
+      const row = r.app.state()!.rows.find(r => r.dataPoint === 'tempf')!;
+      if (scenario === 'accessory') {
+        // A non-structural change is still an accessory change. Checking
+        // structuralChangeCount alone would falsely promise no change.
+        p.changes = [{ change: 'modified', stationMac: MAC, dataPoint: 'tempf', structural: false,
+          before: row, after: { ...row, name: 'Renamed temperature' } }];
+      } else if (scenario === 'battery') {
+        p.batteryPolarity = [{ stationMac: MAC, dataPoint: 'tempf', batteryField: 'battout', from: 'standard', to: 'vendor-inverted' }];
+      } else if (scenario === 'settings') {
+        p.settingsChanged = ['name'];
+      } else {
+        p.configOnly = [{ change: 'added', stationMac: MAC, dataPoint: 'new_field', after: { ...row, dataPoint: 'new_field', enabled: false } }];
+        if (scenario === 'mixed-disabled') p.configOnly.push({ change: 'removed', stationMac: MAC, dataPoint: 'old_field', before: { ...row, enabled: false } });
+      }
+      r.intercept = endpoint => endpoint === '/preview-save' ? Promise.resolve(p) : undefined;
+      await r.app.previewCatalog('adopt');
+      await flush(r);
+      const text = r.el.querySelector('.sensor-support-summary')?.textContent ?? '';
+      if (['accessory', 'battery', 'settings'].includes(scenario)) {
+        expect(text).not.toContain('Your existing accessories stay unchanged.');
+        expect(text).toContain('Review the accessory, setting, and battery-reporting changes');
+      } else {
+        expect(text).toContain('Support for 1 additional sensor field will become available, switched off.');
+        expect(text).not.toContain('1 additional sensor fields');
+      }
+      if (scenario === 'mixed-disabled') {
+        expect(r.el.querySelector('.preview-block')?.textContent).toContain('Changes to switched-off sensors');
+        expect(r.el.querySelector('.preview-block')?.textContent).not.toContain('Newly supported sensor fields: 2');
+      }
+    },
+  );
+
   it('requires clean row and Connection forms, including a blank invalid row with zero drafts', async () => {
     const r = await rig(current());
     open(r, 'tempf');
@@ -329,6 +415,8 @@ describe('P4 operation guards and authoritative save outcomes', () => {
     expect(r.el.querySelector('.battery-polarity')!.textContent).toContain('Workflow');
     expect(r.el.textContent).not.toContain('saving would change nothing');
     expect(r.el.querySelector('.battery-polarity button')).toBeNull();
+    expect(r.el.querySelector('.sensor-support-summary')?.textContent).not.toContain('Your existing accessories stay unchanged.');
+    expect(r.el.querySelector('.sensor-support-summary')?.textContent).toContain('battery-reporting changes');
     await save(r);
     expect(r.readBlock().catalogAdopted).toBe(4);
   });
@@ -465,7 +553,7 @@ describe('P4 operation guards and authoritative save outcomes', () => {
     const r = await rig(current());
     await r.app.previewCatalog('adopt');
     await flush(r);
-    const saveButton = button(r, 'Save changes')!;
+    const saveButton = button(r, 'Enable new sensor support')!;
     saveButton.click();
     saveButton.click();
     await expect.poll(() => r.app.saving()).toBe(false);
@@ -564,7 +652,7 @@ describe('P4 operation guards and authoritative save outcomes', () => {
       : mode === 'opt-out' ? { ...current(), _sensorMapV2: false } : current();
     const r = await rig(block, ['tempf'], mode === 'multi-home' ? [{ ...BASE, name: 'Other home' }] : []);
     expect(r.app.state()?.editorAvailable).toBe(false);
-    for (const label of ['Preview conversion', 'Preview catalog adoption']) {
+    for (const label of ['Preview conversion', 'Review new sensor support']) {
       const action = button(r, label);
       if (action) expect(action.disabled).toBe(true);
     }
