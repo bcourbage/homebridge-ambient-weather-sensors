@@ -78,9 +78,10 @@ configuration comes from:
   see "Assigning unrecognized fields" below.
 
 On a **legacy** configuration the table renders the compat
-translation of your current settings — the exact sensor map the
-first save will write. Nothing is converted by viewing it; the
-conversion happens only when you save.
+translation of your current settings. Nothing is converted by viewing
+it. Saving an explicit conversion preview or a full sensor-map edit
+converts the block. A Connection-only save without a station-filter change leaves
+it unconverted; a station-filter change uses the sensor-map preview and can convert it.
 
 Warnings, row-validation errors, and ownership notes (for example a
 disabled sensor that owns a battery field other rows reference)
@@ -127,8 +128,10 @@ problems surface as banners), but the editor is the recommended path.
 - **Per-station exceptions**: override a setting for one station
   while a global choice keeps applying to the others, matching the
   layer model shown in the table today.
-- **Guided migration**: on a legacy configuration, the first save
-  converts the config to the v2 format. Your original settings are
+- **Guided migration**: on a legacy configuration, an explicit
+  conversion save or the first full sensor-map save converts the
+  config to the v2 format. Connection-only saves without a station-filter change
+  do not. Station-filter changes use the sensor-map preview and can convert it. Original settings are
   written to an immutable snapshot
   (`legacy-config-snapshot.json` in the plugin's data directory)
   **before** `config.json` changes, so a rollback path always
@@ -140,8 +143,11 @@ problems surface as banners), but the editor is the recommended path.
   procedure as the snapshot, sourcing the fields from the chosen
   entry file's `legacy` object — see the README's rollback section
   for the exact steps.
-- **Opting single rows out of a preview**: every modified row in the
-  preview carries a Skip action. It pins that row's changed fields to
+- **Opting eligible rows out of a preview**: a modified row offers
+  Skip only when its complete before-state can be represented by the
+  supported station-scoped fields. Label changes, indirect ownership
+  changes without a representable pin, and catalog operations do not
+  offer Skip. The action pins that row's changed fields to
   their current values as an ordinary station-scoped draft (the
   preview re-runs by itself), so a broad change - a family unit, for
   example - can go ahead while one or two rows stay as they are.
@@ -163,13 +169,71 @@ problems surface as banners), but the editor is the recommended path.
 ## Assigning unrecognized fields
 
 An unrecognized row (a `?` in the Kind column) offers **Assign**
-instead of Edit: choosing a measurement and the unit the station
-reports turns the field into a custom sensor. The measurement
-determines the accessory kind (shown in the form), the choices offered
-are exactly the combinations this plugin can build, and the assignment
-drafts nothing until it is complete — an unfinished form never blocks
-a save of other rows for missing identity fields, only for being open.
+instead of Edit. Choose the sensor type and, where offered, the unit
+the station reports. Each choice identifies a complete accessory-kind
+and measurement pair. Leak, contact, occupancy, smoke, and direct
+motion are separate choices even though all consume on/off readings.
+Types requiring a newer adopted catalog remain visible but disabled;
+**Catalog options** leads to the separate catalog workflow. An
+incomplete assignment creates no partial identity and blocks Preview
+until completed or cancelled. A diagnosed saved identity requires
+repair in the JSON config editor, not an implicit reassignment.
 The new sensor applies to the one station whose row was assigned, is
 enabled by default, and previews as a registration like any other
 structural change. Display unit, threshold, and trigger direction can
 be set in the same form or edited later like any row.
+
+State types accept numbers `0`/`1` or booleans `false`/`true`, with the
+pair's exact meanings shown in the editor. Contact `0` means closed
+and `1` means open. Other present values report a fault and clear the
+alert; missing data retains the preceding state and fault. Reversed
+encodings and text such as `"open"` are not supported. Smoke consumes
+an existing detector state, not a concentration-derived alarm. Native
+carbon monoxide remains unavailable.
+
+### Generic numeric labels
+
+**Numeric value** consumes a finite number unchanged. It uses a motion
+tile in Apple Home; compatible controller apps can show its numeric
+value and optional literal unit label. A label never converts a
+reading. Optional thresholds use inclusive comparisons, at-or-above
+or at-or-below, rather than detecting a crossing.
+
+**Unit label** supports up to 16 Unicode code points after trimming.
+Leaving an inherited label untouched preserves its absence in the
+edited fragment. **Use no label**, or clearing an edited textbox,
+authors an explicit empty label. **Use inherited label** removes only
+the station-level label; **Use default label** does the same for a
+global template. Identity and other settings are preserved. Invalid
+labels are refused by the server, without truncation. The preview
+separates authored-label intent from effective accessory changes.
+
+### Conversion and catalog adoption
+
+The **Sensor catalog** section reports the adopted and available
+versions. A legacy-shaped block first offers **Preview conversion**.
+This uses the server's legacy translation, preserving disabled
+categories and existing birth stamps. No fake sensor edit is needed.
+After saving and reloading the converted configuration, **Preview
+catalog adoption** becomes available when a newer catalog exists.
+
+Conversion and adoption require clean row and Connection drafts and
+no invalid open editor. They do not save or discard drafts
+automatically. Each operation locks editing until saved or cancelled.
+Adoption is separate from assigning a sensor because it can affect
+other rows and battery interpretation. The preview lists the actual
+configuration transition, accessory and disabled-row changes, and
+every reported battery-polarity change. No accessory changes does not
+mean no configuration changes.
+
+Saved assignments awaiting a newer catalog are preserved unchanged
+for adoption preview, even if the current catalog diagnoses them as
+unavailable. Withheld or unreconstructable saved content requires JSON
+repair first. Neither operation lowers stamps or bypasses the normal
+preview, validation, commit, and persistence pipeline.
+
+An uncertain persistence result, failed authoritative reload, receipt
+mismatch, or failed save-control restoration locks the page until
+reload and inspection. Successfully saved settings still require the
+plugin restart described above. Changing an already-saved custom
+identity is not offered by this editor.

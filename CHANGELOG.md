@@ -9,6 +9,18 @@ entries short and user-facing.
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/
 
+## [Unreleased]
+
+### Added
+
+- **Capability-aware sensor assignment.** The editor offers complete sensor-type choices, including separate leak, contact, occupancy, smoke, and motion states. Types requiring catalog adoption remain visible with their prerequisite. Each choice explains the input encoding and what Apple Home can display.
+- **Generic numeric labels.** Assign an otherwise unsupported numeric quantity with a literal unit label and an optional threshold. Labels are display-only, support Unicode, and can inherit, be cleared, or be set independently at the edited scope.
+- **Explicit conversion and catalog previews.** Convert unchanged legacy settings, then review catalog adoption separately from sensor edits. Preview shows configuration transitions and battery interpretation changes as well as accessory effects. No conversion or adoption occurs merely by opening the page.
+
+### Fixed
+
+- **Save stays tied to its preview.** Obsolete preview responses cannot restore Save after edits or cancellation. Failed post-save reloads, mismatched receipts, and save-control restoration failures require reload before further editing.
+
 ## [2.0.0-beta.17] — 2026-09-15
 
 ### Changed

@@ -2361,12 +2361,10 @@ and an optional threshold. It is a measurement with an optional motion
 state, NEVER a `CarbonMonoxideDetected` alarm, and does not restore the
 deferred native CO alarm mapping (§19.3/§19.8).
 
-The editor affordance for authoring a numeric row is P4 (the vocabulary
-endpoint withholds stamp-gated pairs until the capability-aware editor);
-in P3.1 the row is authored config, and the DTO/save path already
-preserve `unitLabel` when a current editor operation edits another
-setting. Sequence of record: P3.1 (this) → P4 editor integration → P5
-proofs → GA.
+The capability-aware editor (§20) exposes numeric assignment after
+catalog adoption. The legacy vocabulary response still withholds gated
+pairs for cached pre-P4 pages. The negotiated response supplies every
+implemented pair with its required version and source policy.
 
 ## 18. Catalog completion: three decisions and assignment preservation
 
@@ -2793,3 +2791,151 @@ fields (`catalogBaseline` / `catalogAdopted` are designed here, added
 in P2), no automatic conversion, no compatibility retirement, no
 deployment. P2 work starts only after this section is reviewed at the
 checkpoint.
+
+## 20. Capability-aware editor
+
+The editor exposes implemented capabilities without changing runtime
+recognition, row validation, exposure policy, schema, catalog versions,
+configuration stamps, persistence endpoints, or confirmation-digest
+calculations. Effective rows and consequences remain server outputs.
+
+### 20.1 Negotiated pair vocabulary
+
+`/vocabulary` accepts `{ vocabularyProtocol: 2 }` and echoes the
+protocol with every implemented `(kind, measurement)` pair. Each pair
+has a stable `kind|measurement` identifier, label, `since` version,
+source-unit policy, threshold capability, output classification, and
+input/output explanations. State pairs also declare the exact normal
+and active meanings used by the wrapper. Reserved native CO is absent.
+
+Source policies distinguish selectable physical units, numeric's
+fixed-authored `raw`, timestamp's fixed-implicit `ms`, and unitless
+boolean state. Empty option lists do not determine source policy.
+Assignment selection and trigger controls dispatch by complete pair,
+not measurement alone. A new pair choice clears incompatible source,
+display, label, and threshold drafts atomically, including switches
+between two boolean kinds. Saved identity is read-only; non-identity
+editing does not materialize inherited catalog identity.
+
+The page validates the wire shape and the server's catalog metadata.
+Available pairs satisfy `since <= adopted`; newer pairs remain visible
+but disabled with a separate route to catalog options. A version above
+the running catalog or missing negotiation metadata disables mutation
+with reload guidance. The server remains the final assignment gate.
+
+Client assets and handlers ship together. Negotiation protects the
+specific stale-browser-bundle case after an in-place plugin upgrade:
+requests without a protocol marker receive the exact legacy shape and
+single-kind-per-measurement assignment set. Unsupported markers refuse.
+A new page talking to old handlers fails closed instead of treating
+several boolean kinds as the first measurement match.
+
+### 20.2 Numeric authorship and state explanations
+
+`unitLabel` presence is tracked independently of textbox text. Absent
+inherits, explicit empty clears, and nonempty authors a literal label.
+Unrelated form events never materialize an inherited label. Inherit or
+default reset removes only that field across the edited key's fragments
+and cancels any pending replacement; subsequent typing re-authors it.
+Whole-row Use defaults keeps its separate removal behavior. A removed
+custom row cannot be reopened as an identity-less replacement.
+
+The UI counts trimmed Unicode code points without truncation or a
+UTF-16 length limit. Server validation remains authoritative. Numeric
+Units cells show the literal label or `No label`, never `raw` as a
+physical unit. Preview shows effective label changes for enabled and
+disabled rows. Authorship-only edits have a separate local intent note,
+not an invented accessory consequence. Skip is omitted when a label
+also changes, because a partial pin would not preserve the entire row.
+
+Pair help describes native state encoding, invalid-value fault/alert
+behavior, and missing-data retention. Contact's active value means
+open. Smoke consumes a detector state. Extended numeric pairs use a
+motion carrier, not native soil/AQI/CO measurements. Numeric thresholds
+are finite, optional, inclusive level comparisons; saved
+`triggerEnabled: false` is preserved. No new conversion or decoder is
+implemented in the browser.
+
+### 20.3 Explicit clean operations
+
+Fresh installations retain settings-only creation. Existing legacy
+blocks can preview conversion without a sensor edit. Converted blocks
+with an older adopted version can preview adoption to the current
+server-reported version. Invalid stamps, unsafe mode/shape, opt-out,
+multi-Home read-only state, incompatible metadata, and terminal save
+outcomes keep conversion and adoption disabled.
+
+Both actions require no row/Connection drafts and no incomplete or
+invalid open form. An unchanged valid form closes when the action
+starts. The page neither saves nor discards existing drafts implicitly.
+Current-world row errors alone do not disqualify adoption: dormant
+boolean or numeric assignments must reach target-catalog validation.
+The authored DTO must be faithfully reconstructable, including raw
+supported-field values and fragment order. Withheld unknown keys and
+non-object fragments block adoption with JSON-repair guidance.
+
+Conversion sends the session digest and block index, omitting proposal,
+settings, and adoption target. The server alone constructs its compat
+seed; `proposal: []` would not mean conversion. Adoption submits the
+unchanged authored proposal, no settings patch, and
+`adoptCatalogVersion: catalog.current`. Ordinary edits omit adoption.
+All saves use `composeAndPersist`; its typed adoption argument passes
+unchanged through validation and commit. Authoritative reload is
+required before newly adopted pairs become available for assignment.
+
+### 20.4 Preview intent and outcomes
+
+A preview captures its operation, request identifier, row/settings
+versions, session token, target, and complete request arguments before
+any asynchronous work. Only the current request may install success,
+failure, or clear pending state. A new preview retires the old Save
+eligibility even while its earlier effect list remains visible.
+Conversion/adoption lock editing; Cancel preview invalidates the
+operation without touching config or drafts. Save disables cancellation
+and submits exactly the captured preview intent, with a re-entry guard.
+
+Persistence success consumes the preview and reloads the on-disk state.
+Its digest must match the returned-config receipt before further
+editing. Refusal retires the preview and requires a fresh one, without
+automatic retries. Indeterminate persistence, failed reload, receipt
+mismatch, or failed restoration of save controls requires reload and
+inspection while retaining the authoritative outcome message. Recovery
+records can already exist after commit; no later failure claims that
+nothing was written. Native Save stays disabled; restarting remains a
+separate user action.
+
+### 20.5 Server-reported consequences
+
+Successful full-map previews include `configurationTransition`, derived
+from the existing pipeline's on-disk source mode/stamps and composed
+destination. It includes stamp presence for initialization. An unchanged
+projection is explicit. These facts are already covered by the existing
+full-map confirmation contract; the digest's inputs and version do not
+change. Settings-only previews omit this projection and the client does
+not synthesize birth-stamp confirmation.
+
+The page renders accessory changes, disabled/config-only changes,
+Connection changes, battery-polarity changes, warnings, and notes.
+Battery entries name the station, data point, battery field, and both
+interpretations. A catalog-wide decoder policy has no per-row Skip.
+Empty accessory lists never imply that conversion, adoption, authored
+label intent, or canonical serialization would leave config unchanged.
+
+### 20.6 Boundaries and verification
+
+Contract tests retain a stale measurement-only picker across a bridge
+upgrade, verify registry coverage and real source policies, and compare
+full-map transition displays with actual commit results. Component tests
+use the real service, compiled handlers, and temporary files for
+conversion, adoption, and assignment, including dormant identities,
+label presence, stale requests, and terminal save outcomes. State help
+is checked against real coercion/HAP behavior. The plugin and UI builds,
+cold Angular artifacts, deterministic rebuilds, package contents, and
+existing install/upgrade suites remain release gates.
+
+Saved-row Change mapping and settings-only birth-stamp digest hardening
+are separate increments. The latter addresses a binding omission with
+no demonstrated harm for today's catalog versions; this editor does not
+extend either digest. The delivery sequence is P4, P5 proofs, the next
+2.0.0 beta, digest hardening, Change mapping, then GA. Final applicable
+proofs and packaged-RC checks run again after those follow-ups.
