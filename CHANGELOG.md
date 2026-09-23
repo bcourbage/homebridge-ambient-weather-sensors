@@ -9,21 +9,36 @@ entries short and user-facing.
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/
 
-## [Unreleased]
+## [2.0.0-beta.18] - 2026-09-23
+
+Expanded sensor support, preserved custom assignments, and clearer previews before configuration changes.
 
 ### Added
 
-- **Capability-aware sensor assignment.** The editor offers complete sensor-type choices, including separate leak, contact, occupancy, smoke, and motion states. Types requiring catalog adoption remain visible with their prerequisite. Each choice explains the input encoding and what Apple Home can display.
+- **More supported measurements.** Additional wind and rain fields, soil moisture, leaf wetness, soil tension, evapotranspiration, and AQI values are available through the sensor-support update. New definitions do not replace your saved custom assignments.
+- **Complete sensor-type choices.** The editor offers separate leak, contact, occupancy, smoke, and on/off motion choices. Types requiring a sensor-support update remain visible with their prerequisite. Each choice explains the input encoding and what Apple Home can display.
 - **Generic numeric labels.** Assign an otherwise unsupported numeric quantity with a literal unit label and an optional threshold. Labels are display-only, support Unicode, and can inherit, be cleared, or be set independently at the edited scope.
-- **Explicit conversion and catalog previews.** Convert unchanged legacy settings, then review catalog adoption separately from sensor edits. Preview shows configuration transitions and battery interpretation changes as well as accessory effects. No conversion or adoption occurs merely by opening the page.
+- **Explicit conversion and sensor-support previews.** Convert legacy settings, then use **Review new sensor support** to preview newer capabilities separately from sensor edits. The preview lists accessory effects, battery interpretation changes, and newly available fields that remain switched off. Opening the page or previewing does not save anything.
 
 ### Changed
 
 - **Sensors are managed individually after conversion.** Existing disabled sensors stay disabled. V2 does not keep legacy category-wide or sensor-name exclusions as rules for future fields. A newly reporting, recognized sensor may appear after conversion; disable that row individually if unwanted. Unknown fields still need assignment, and new catalog features keep their adoption requirements.
+- **Clearer Units and support details.** Long measurement names stay readable, Evapotranspiration has a **?** explanation, and Technical details distinguish your starting sensor-support version, the version in use, and the latest version included with the plugin.
 
 ### Fixed
 
+- **Legacy upgrades preserve more sensor identities.** Fields recognized by the 1.7.3 matcher, including numbered fields beyond the former fixed tables, remain recognized. Explicit custom assignments keep their measurement and source unit instead of being replaced by a guessed identity.
+- **Connection settings can be saved before sensors are discovered.** First-time setup and credential recovery no longer depend on a populated sensor inventory.
+- **Offline accessories are preserved during temporary discovery gaps.** Cached sensor identities remain available to the resolver instead of being removed merely because a field is missing from a current sample.
+- **State and battery readings are handled consistently.** Invalid or offline state readings report a fault rather than an active alert. Lightning and leak battery-polarity corrections are previewed as part of the sensor-support update, rather than silently changing on upgrade. Unknown battery readings preserve an existing reported state.
+- **Rollback mirrors preserve rainfall units and mixed custom assignments.** Legacy-compatible sensors retain their settings; custom identities that 1.7.3 cannot represent remain outside that compatibility boundary.
 - **Save stays tied to its preview.** Obsolete preview responses cannot restore Save after edits or cancellation. Failed post-save reloads, mismatched receipts, and save-control restoration failures require reload before further editing.
+
+### Upgrade notes
+
+- Existing configurations do not automatically enable newer sensor support. Review and save that update explicitly. Applying saved configuration changes requires Homebridge's **Restart Child Bridge** action or a full Homebridge restart.
+- Extended numeric measurements use a motion accessory in Apple Home, with an optional threshold. Compatible controller apps can show the labelled numeric value. Native carbon-monoxide detection is not included.
+- Back up your Homebridge configuration before upgrading. To revert a converted configuration, follow the [documented rollback procedure](https://github.com/bcourbage/homebridge-ambient-weather-sensors#rollback), rather than simply turning off the v2 flag.
 
 ## [2.0.0-beta.17] — 2026-09-15
 
