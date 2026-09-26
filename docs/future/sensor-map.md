@@ -2953,11 +2953,31 @@ cold Angular artifacts, deterministic rebuilds, package contents, and
 existing install/upgrade suites remain release gates.
 
 Saved-row Change mapping and settings-only birth-stamp digest hardening
-are separate increments. The latter addresses a binding omission with
-no demonstrated harm for today's catalog versions; this editor does not
-extend either digest. The delivery sequence is P4, P5 proofs, the next
+are separate increments from this editor. The settings-only confirmation
+contract is specified in §20.7. The delivery sequence is P4, P5 proofs, the next
 2.0.0 beta, digest hardening, Change mapping, then GA. Final applicable
 proofs and packaged-RC checks run again after those follow-ups.
+
+### 20.7 Settings-only preview binding
+
+A settings-only preview binds the on-disk block, the sorted names of
+changed connection settings, and the destination `catalogBaseline` and
+`catalogAdopted` pair. The projection is versioned `settings-only-2`.
+Absent destination stamps remain absent; they are represented as null in
+the digest, not initialized on disk. Fresh blocks receive the running
+catalog's birth pair, while existing blocks preserve their own pair.
+An upgrade that changes prospective birth stamps invalidates the preview
+before compose or commit can return a persistable configuration. An old
+`settings-only-1` preview requires a fresh preview, with no fallback.
+
+This closes a real binding omission without a demonstrated harmful
+exposure difference at catalog versions 3 and 4. It does not change the
+full-map digest, SHA-256 primitive, stamp policy, configuration schema,
+or preview UI. Plain settings-only previews still omit
+`configurationTransition`. Proposed credential values remain excluded
+from the public confirmation projection; the two-phase validation token
+continues to bind the exact composed output before commit. Settings-only
+saves create neither a legacy snapshot nor a conversion journal.
 
 ## 21. Install, upgrade, and retained-accessory proofs
 
