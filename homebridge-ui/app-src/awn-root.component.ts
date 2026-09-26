@@ -20,12 +20,13 @@
  * and theme variables (light + dark) apply to it as-is. Component
  * styles below add only what the page doesn't define.
  */
-import { ChangeDetectionStrategy, Component, computed, effect, inject, signal, viewChild, type ElementRef } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, effect, ElementRef, inject, signal, viewChild } from '@angular/core';
 import { FormBuilder, ReactiveFormsModule, Validators, type AbstractControl } from '@angular/forms';
 
 import { DraftStore, type DraftableField } from './draft-store';
 import { HomebridgeService } from './homebridge.service';
 import { isCapabilityVocabulary, sourceSelectionValid } from './capability-contract';
+import { customInterpretation, interpretationProposal, type InterpretationChoice } from './interpretation-proposal';
 import { KIND_HELP, KIND_SUPPORT } from './kind-support';
 import { composeAndPersist, type ComposeAndPersistArgs } from '../saveOrchestrator';
 import type {
@@ -140,6 +141,9 @@ interface PreviewIntent {
       padding: 10px 14px;
     }
     .editor-form label { display: inline-flex; align-items: center; gap: 6px; margin: 4px 16px 4px 0; font-size: 0.88rem; }
+    .interpretation-panel { margin: 12px 0; border: 1px solid var(--rule); border-radius: 6px; }
+    .interpretation-panel fieldset { border: 0; padding: 0; min-width: 0; }
+    .interpretation-panel select, .interpretation-panel input { max-width: 100%; box-sizing: border-box; }
     .row-facts { display: inline-block; margin-left: 12px; font-size: 0.82rem; }
     .capability-help { display: block; margin: 6px 0; }
     .editor-form input[type="text"], .editor-form input[type="number"], .editor-form select {
@@ -448,6 +452,63 @@ interface PreviewIntent {
         </section>
       }
 
+      @if (interpretationRow(); as row) {
+        <section class="editor-form interpretation-panel" aria-labelledby="interpretation-heading">
+          <h3 id="interpretation-heading" #interpretationHeading tabindex="-1">Change interpretation</h3>
+          <p id="interpretation-warning">Choose how this field is interpreted. This can replace its Apple Home accessory, which may affect rooms and automations. Review the preview before saving.</p>
+          <p>Field: <code>{{ row.dataPoint }}</code></p>
+          <p>Scope: {{ row.origin === 'global' ? 'Edits the all-stations template for this field. Station overrides still apply.' : 'Changes this field on this station only.' }}</p>
+          <form [formGroup]="interpretationForm!" aria-labelledby="interpretation-heading" aria-describedby="interpretation-warning" (submit)="$event.preventDefault()">
+            <fieldset [disabled]="saving() || reloadRequired()">
+              <label>Sensor type
+                <select formControlName="pair">
+                  @for (a of assignmentOptions(); track a.id) {
+                    <option [value]="a.id" [disabled]="!pairAvailable(a)">{{ a.label }}{{ pairAvailable(a) ? '' : ' (requires a sensor-support update)' }}</option>
+                  }
+                </select>
+              </label>
+              @if (interpretationCapability(); as capability) {
+                @if (capability.source.type === 'selectable') {
+                  <label>Source unit
+                    <select formControlName="sourceUnit">
+                      <option value="">Choose…</option>
+                      @for (u of vocab()!.measurements[capability.measurement].customSource; track u.unit) {
+                        <option [value]="u.unit">{{ u.label }}</option>
+                      }
+                    </select>
+                  </label>
+                }
+                <div class="row-facts capability-help">
+                  {{ capability.inputHelp }} {{ capability.outputHelp }}
+                  @if (capability.state; as encoding) { <span>0 / false: {{ encoding.normal }}. 1 / true: {{ encoding.active }}.</span> }
+                </div>
+                @if (vocab()!.measurements[capability.measurement].extendedDisplay.length > 0) {
+                  <label>Display unit
+                    <select formControlName="displayUnit">
+                      @for (u of vocab()!.measurements[capability.measurement].extendedDisplay; track u.unit) {
+                        <option [value]="u.unit">{{ u.label }}</option>
+                      }
+                    </select>
+                  </label>
+                }
+                @if (capability.measurement === 'numeric') {
+                  <label>Unit label <input type="text" formControlName="unitLabel" aria-describedby="interpretation-label-help" /></label>
+                  <p class="muted" id="interpretation-label-help">This label is display text only. It does not convert the reading. Leave it blank for no label.</p>
+                }
+                @if (capability.triggering) {
+                  <label>Threshold (optional) <input type="number" step="any" formControlName="threshold" aria-describedby="interpretation-threshold-help" /></label>
+                  <label>Trigger <select formControlName="triggerDirection"><option value="above">above</option><option value="below">below</option></select></label>
+                  <p class="muted" id="interpretation-threshold-help">Changing the sensor type or source unit clears the threshold. Leave it blank to keep threshold triggering off.</p>
+                }
+              }
+              @if (interpretationError(); as error) { <p class="field-error" role="status">{{ error }}</p> }
+              <button type="button" (click)="previewInterpretation()" [disabled]="interpretationError() !== null || previewPending()">Preview interpretation</button>
+            </fieldset>
+          </form>
+          <button type="button" (click)="cancelInterpretation()" [disabled]="saving() || reloadRequired()">Cancel</button>
+        </section>
+      }
+
       <!-- Family display units (GA task #70's editor layer): one
            selector per display family from the server's canonical
            metadata, drafting a GLOBAL template per dataPoint (so
@@ -591,7 +652,7 @@ interface PreviewIntent {
                        assignment shape. -->
                   @if (!isExpanded(row)) {
                     @if (row.kind !== 'unrecognized' || newAssignmentAllowed(row)) {
-                      <button type="button" (click)="toggleEdit(row)" [disabled]="mutationsLocked() || !canOpenRow(row)">{{ row.kind === 'unrecognized' ? 'Assign' : 'Edit' }}</button>
+                      <button type="button" [id]="rowEditId(row)" (click)="toggleEdit(row)" [disabled]="mutationsLocked() || !canOpenRow(row)">{{ row.kind === 'unrecognized' ? 'Assign' : 'Edit' }}</button>
                     } @else {
                       <span class="muted">Saved assignment needs repair in the JSON config editor.</span>
                     }
@@ -670,12 +731,15 @@ interface PreviewIntent {
                         </label>
                       }
                       @if (showsTriggerControls(row)) {
-                        @if (row.triggerEnabled === false) {
-                          <span class="muted">Threshold triggering is disabled for this saved row. Editing another setting does not enable it.</span>
+                        @if (row.kind !== 'unrecognized') {
+                          <label><input type="checkbox" formControlName="triggerEnabled" /> Threshold triggering</label>
+                          @if (editForm!.get('triggerEnabled')!.value === false) {
+                            <span class="muted">Threshold triggering is off. A stored threshold has no effect until it is enabled.</span>
+                          }
                         }
-                        <label>Threshold <input type="number" step="any" formControlName="threshold" /></label>
+                        <label>Threshold <input type="number" step="any" formControlName="threshold" [readOnly]="row.kind !== 'unrecognized' && editForm!.get('triggerEnabled')!.value === false" /></label>
                         @if (editForm!.get('threshold')?.invalid) {
-                          <span class="field-error">Threshold is required for this row. Restore a value or choose Cancel.</span>
+                          <span class="field-error">Enter a finite threshold, or turn threshold triggering off.</span>
                         }
                         <label>Trigger
                           <select formControlName="triggerDirection">
@@ -710,6 +774,10 @@ interface PreviewIntent {
                            the row's authored settings (previewable
                            and savable like any edit). -->
                       <div class="editor-footer">
+                        @if (customInterpretation(row)) {
+                          <button type="button" (click)="startInterpretation(row)" [disabled]="!canStartInterpretation(row)">Change interpretation</button>
+                          @if (draftCount() > 0) { <span class="muted">Save or discard existing drafts before changing an interpretation.</span> }
+                        }
                         @if (useDefaultsAvailable(row)) {
                           <button type="button" (click)="useDefaults(row)" [disabled]="mutationsLocked()">Use defaults</button>
                         }
@@ -816,7 +884,7 @@ interface PreviewIntent {
                        rendered when nothing is representably
                        pinnable (an indirect battery-ownership
                        re-registration, for example). -->
-                  @if (skippableFields(c).length > 0) {
+                  @if (!interpretationRow() && skippableFields(c).length > 0) {
                     <button type="button" class="exclude-change" data-tip="This row keeps its current settings; everything else still changes."
                             [disabled]="previewPending() || mutationsLocked()"
                             (click)="excludeChange(c)">Skip</button>
@@ -850,7 +918,7 @@ interface PreviewIntent {
                 @if (c.change === 'modified') {
                   <span class="muted"> {{ changeSummary(c.before!, c.after!) }}</span>
                 }
-                @if (skippableFields(c).length > 0) {
+                @if (!interpretationRow() && skippableFields(c).length > 0) {
                   <button type="button" class="exclude-change" data-tip="This row keeps its current settings; everything else still changes."
                           [disabled]="previewPending() || mutationsLocked()"
                           (click)="excludeChange(c)">Skip</button>
@@ -1009,6 +1077,12 @@ export class AwnRootComponent {
   protected readonly previewPending = signal(false);
   protected readonly previewReady = signal(false);
   protected readonly catalogOperation = signal<CatalogOperation | null>(null);
+  protected readonly interpretationRow = signal<EditorRowDto | null>(null);
+  /** Keep the return target visible until the next row/filter interaction. */
+  private readonly interpretationReturnKey = signal<string | null>(null);
+  protected interpretationForm: ReturnType<FormBuilder['group']> | null = null;
+  protected readonly customInterpretation = customInterpretation;
+  private readonly hostElement = inject<ElementRef<HTMLElement>>(ElementRef);
   private previewSerial = 0;
   private previewIntent: PreviewIntent | null = null;
   private displayedIntent: PreviewIntent | null = null;
@@ -1228,7 +1302,7 @@ export class AwnRootComponent {
   }
 
   protected mutationsLocked(): boolean {
-    return this.saving() || this.reloadRequired() || this.catalogOperation() !== null || !this.vocab() || !this.validCatalog();
+    return this.saving() || this.reloadRequired() || this.catalogOperation() !== null || this.interpretationRow() !== null || !this.vocab() || !this.validCatalog();
   }
 
   protected settingsChangedLabel(keys: string[]): string {
@@ -1348,6 +1422,7 @@ export class AwnRootComponent {
     // default-origin row's own edits draft station-scoped.
     const hidable = (r: EditorRowDto): boolean =>
       this.neverReported(r) && !this.isExpanded(r)
+      && this.rowKey(r) !== this.interpretationReturnKey()
       && !this.store.hasDraftFor(undefined, r.dataPoint)
       && !this.store.hasDraftFor(r.stationMac, r.dataPoint)
       && this.rowNotes(r).length === 0;
@@ -1379,6 +1454,7 @@ export class AwnRootComponent {
   })());
 
   protected setHideNoData(checked: boolean): void {
+    if (!this.interpretationRow()) this.interpretationReturnKey.set(null);
     this.hideNoData.set(checked);
     try {
       localStorage.setItem('awn.hideNoData', checked ? '1' : '0');
@@ -1399,6 +1475,10 @@ export class AwnRootComponent {
       this.vocab();
       this.catalogOperation();
       this.syncSettingsControlState();
+      if (this.interpretationForm) {
+        if (this.saving() || this.reloadRequired()) this.interpretationForm.disable({ emitEvent: false });
+        else this.interpretationForm.enable({ emitEvent: false });
+      }
     });
     if (this.hb.available) {
       void this.load();
@@ -1932,8 +2012,113 @@ export class AwnRootComponent {
       this.editFormInvalid.set(false);
       return;
     }
+    this.interpretationReturnKey.set(null);
     this.openRowEditor(row, (field: DraftableField): unknown =>
       this.store.draftedValue(row, field) ?? (row as unknown as Record<string, unknown>)[field]);
+  }
+
+  protected rowEditId(row: EditorRowDto): string {
+    return `edit-${encodeURIComponent(this.rowKey(row))}`;
+  }
+
+  protected canStartInterpretation(row: EditorRowDto): boolean {
+    return customInterpretation(row) && this.state()?.configMode === 'v2' && !!this.state()?.editorAvailable
+      && !this.mutationsLocked() && !this.previewPending() && this.draftCount() === 0
+      && !this.editFormInvalid() && this.settingsError() === null && this.store.faithfullyReconstructable;
+  }
+
+  protected interpretationCapability(): CapabilityOptionDto | undefined {
+    return this.assignmentFor(this.interpretationForm?.get('pair')?.value);
+  }
+
+  protected startInterpretation(row: EditorRowDto): void {
+    if (!this.canStartInterpretation(row)) { return; }
+    this.invalidatePreview();
+    this.saveResult.set(null);
+    this.expandedKey.set(null);
+    this.editForm = null;
+    this.editFormInvalid.set(false);
+    const form = this.fb.group({
+      pair: [`${row.kind}|${row.measurement}`], sourceUnit: [row.sourceUnit ?? ''],
+      displayUnit: [row.displayUnit ?? ''], unitLabel: [row.unitLabel ?? ''],
+      threshold: [row.threshold ?? null], triggerDirection: [row.triggerDirection ?? 'above'],
+    });
+    this.interpretationForm = form;
+    let lastPair = form.value.pair;
+    let lastSource = form.value.sourceUnit;
+    form.valueChanges.subscribe(v => {
+      if (this.interpretationForm !== form || this.saving() || this.reloadRequired()) { return; }
+      if (v.pair !== lastPair) {
+        const selected = this.assignmentFor(v.pair);
+        form.patchValue({
+          sourceUnit: '',
+          displayUnit: selected ? this.vocab()?.measurements[selected.measurement].extendedDisplay[0]?.unit ?? '' : '',
+          unitLabel: '', threshold: null,
+          triggerDirection: this.assignmentDefaultDirection(selected?.measurement),
+        }, { emitEvent: false });
+      } else if (v.sourceUnit !== lastSource) {
+        form.patchValue({ threshold: null }, { emitEvent: false });
+      }
+      lastPair = form.value.pair;
+      lastSource = form.value.sourceUnit;
+      this.invalidatePreview();
+      this.saveResult.set(null);
+    });
+    this.interpretationRow.set(row);
+    this.interpretationReturnKey.set(this.rowKey(row));
+    this.syncSettingsControlState();
+    setTimeout(() => {
+      if (this.interpretationForm === form) {
+        const heading = this.hostElement.nativeElement.querySelector<HTMLElement>('#interpretation-heading');
+        heading?.scrollIntoView?.({ block: 'center' });
+        heading?.focus({ preventScroll: true });
+      }
+    }, 0);
+  }
+
+  protected interpretationError(): string | null {
+    const row = this.interpretationRow();
+    const form = this.interpretationForm;
+    const pair = this.interpretationCapability();
+    if (!row || !form || !pair) return 'Choose a sensor type to assign this field, or Cancel.';
+    if (!this.pairAvailable(pair)) return 'Review and save the sensor-support update separately before assigning this type.';
+    const v = form.getRawValue() as InterpretationChoice;
+    if (!sourceSelectionValid(pair, v.sourceUnit, this.vocab()!)) return 'Choose the unit the station reports this field in, or Cancel.';
+    if (v.threshold !== null && (typeof v.threshold !== 'number' || !Number.isFinite(v.threshold))) return 'Enter a finite threshold, or turn threshold triggering off.';
+    const source = pair.source.type === 'selectable' ? v.sourceUnit
+      : pair.source.type === 'fixed-authored' || pair.source.type === 'fixed-implicit' ? pair.source.unit : undefined;
+    if (pair.id === `${row.kind}|${row.measurement}` && source === row.sourceUnit) {
+      return 'Choose a different sensor type or source unit. Use Edit for other settings.';
+    }
+    return null;
+  }
+
+  protected async previewInterpretation(): Promise<void> {
+    const state = this.state();
+    const row = this.interpretationRow();
+    if (!state?.editorAvailable || state.configMode !== 'v2' || !row || !this.vocab() || !this.validCatalog()
+      || this.saving() || this.reloadRequired() || this.previewPending() || this.interpretationError() !== null
+      || this.draftCount() !== 0 || !this.store.faithfullyReconstructable) { return; }
+    const proposal = interpretationProposal(state.authored, row,
+      this.interpretationForm!.getRawValue() as InterpretationChoice, this.vocab()!, state.catalog!.adopted);
+    if (!proposal) { return; }
+    await this.requestPreview({ baseDigest: state.baseDigest, blockIndex: state.blockIndex, proposal }, null);
+  }
+
+  protected cancelInterpretation(): void {
+    if (this.saving() || this.reloadRequired()) { return; }
+    const row = this.interpretationRow();
+    this.invalidatePreview();
+    this.interpretationRow.set(null);
+    this.interpretationForm = null;
+    this.syncSettingsControlState();
+    setTimeout(() => {
+      if (row && !this.interpretationRow() && !this.saving()) {
+        const button = [...this.hostElement.nativeElement.querySelectorAll<HTMLButtonElement>('button[id]')]
+          .find(b => b.id === this.rowEditId(row));
+        button?.focus({ preventScroll: true });
+      }
+    }, 0);
   }
 
   /**
@@ -1947,11 +2132,11 @@ export class AwnRootComponent {
     const draftedMeasurement = typeof current('measurement') === 'string' ? current('measurement') as string : '';
     // Blank-control policy (review #43 round 2): a blanked required
     // value is an INVALID form state — inline error, Preview blocked —
-    // never a silent no-draft. `name` is always required; `threshold`
-    // is required exactly when the row currently displays one (a
-    // threshold-less row may stay blank; removing an authored value
-    // is Use defaults' job, and a default-sourced value cannot be
-    // removed by an override at all). An unrecognized row's form
+    // never a silent no-draft. `name` is always required. A triggering
+    // row requires a finite threshold when its existing threshold is
+    // enabled or the user explicitly switches triggering on. Switching
+    // off retains an inactive threshold. Pristine threshold-less rows
+    // remain valid on open and unrelated edits. An unrecognized row's form
     // additionally carries measurement + sourceUnit, and the group
     // validator holds the form invalid until the identity is complete
     // (measurement chosen, plus a source unit when the measurement is
@@ -1963,6 +2148,13 @@ export class AwnRootComponent {
     const label = this.store.fieldIntent(row, 'unitLabel');
     this.labelAuthored = label.present;
     this.lastLabelText = typeof label.value === 'string' ? label.value : '';
+    let lastTriggerEnabled = current('triggerEnabled') !== false;
+    let requireThreshold = typeof current('threshold') === 'number';
+    const thresholdValidator = (c: AbstractControl): { finiteThreshold: true } | null => {
+      const required = lastTriggerEnabled && requireThreshold;
+      return (c.value === null || c.value === '') ? (required ? { finiteThreshold: true } : null)
+        : typeof c.value === 'number' && Number.isFinite(c.value) ? null : { finiteThreshold: true };
+    };
     this.editForm = this.fb.group({
       ...(isAssign ? {
         pair: [draftedPair],
@@ -1978,9 +2170,10 @@ export class AwnRootComponent {
       ],
       displayUnit: [typeof current('displayUnit') === 'string' ? current('displayUnit') : ''],
       unitLabel: [this.lastLabelText],
+      triggerEnabled: [lastTriggerEnabled],
       threshold: [
         typeof current('threshold') === 'number' ? current('threshold') : null,
-        typeof current('threshold') === 'number' ? Validators.required : [],
+        isAssign ? (typeof current('threshold') === 'number' ? Validators.required : []) : thresholdValidator,
       ],
       triggerDirection: [
         current('triggerDirection') === 'below' ? 'below'
@@ -2000,6 +2193,11 @@ export class AwnRootComponent {
     this.editFormInvalid.set(this.editForm.invalid);
     this.editForm.valueChanges.subscribe((v: Record<string, unknown>) => {
       if (this.mutationsLocked()) { return; }
+      if (!isAssign && this.showsTriggerControls(row)) {
+        if (v.triggerEnabled === true && !lastTriggerEnabled) requireThreshold = true;
+        lastTriggerEnabled = v.triggerEnabled === true;
+        this.editForm?.get('threshold')?.updateValueAndValidity({ emitEvent: false });
+      }
       if (isAssign && v.pair !== this.lastAssignPair) {
         // A measurement switch invalidates every measurement-scoped
         // choice: the previous units would be illegal for the new
@@ -2129,6 +2327,7 @@ export class AwnRootComponent {
     syncR('displayUnit', v.displayUnit, row.displayUnit,
       typeof v.displayUnit === 'string' && v.displayUnit !== '');
     if (row.kind === 'motion' && this.triggeringFor(row.measurement)) {
+      syncR('triggerEnabled', v.triggerEnabled === true, row.triggerEnabled, true);
       syncR('threshold', v.threshold, row.threshold, typeof v.threshold === 'number' && Number.isFinite(v.threshold));
       syncR('triggerDirection', v.triggerDirection, row.triggerDirection,
         v.triggerDirection === 'above' || v.triggerDirection === 'below');
@@ -2418,7 +2617,7 @@ export class AwnRootComponent {
       || this.saving() || this.reloadRequired()) {
       return 'Sensor-support updates are unavailable until a writable configuration is loaded.';
     }
-    if (this.catalogOperation() !== null) { return 'Finish or cancel the current preview first.'; }
+    if (this.catalogOperation() !== null || this.interpretationRow() !== null) { return 'Finish or cancel the current preview first.'; }
     if (this.draftCount() > 0 || this.editFormInvalid() || this.settingsError() !== null) {
       return 'Save or discard row and Connection drafts, and finish or cancel the open editor first.';
     }
@@ -2451,6 +2650,7 @@ export class AwnRootComponent {
 
   protected cancelPreview(): void {
     if (this.saving() || this.reloadRequired()) { return; }
+    if (this.interpretationRow()) { this.cancelInterpretation(); return; }
     this.invalidatePreview();
     this.catalogOperation.set(null);
     this.syncSettingsControlState();
@@ -2549,6 +2749,7 @@ export class AwnRootComponent {
   protected canSavePreview(): boolean {
     return !!this.state()?.editorAvailable && !!this.vocab() && this.validCatalog() && this.previewReady()
       && !this.previewPending() && !this.saving() && !this.reloadRequired() && !this.editFormInvalid()
+      && (!this.interpretationRow() || this.interpretationError() === null)
       && this.settingsError() === null && !!this.previewIntent && this.currentIntent(this.previewIntent);
   }
 
@@ -2598,6 +2799,9 @@ export class AwnRootComponent {
         this.reloadRequired.set(true);
       }
       if (result.ok) {
+        this.interpretationReturnKey.set(null);
+        this.interpretationRow.set(null);
+        this.interpretationForm = null;
         this.saveResult.set({ ok: true, snapshot: result.snapshot });
         // Reload the authoritative state: the config on disk changed,
         // so drafts and the preview are consumed, not merely stale.
@@ -2737,6 +2941,19 @@ export class AwnRootComponent {
 
   protected changeSummary(before: EditorRowDto, after: EditorRowDto): string {
     const parts: string[] = [];
+    if (before.kind !== after.kind || before.measurement !== after.measurement) {
+      const pairLabel = (r: EditorRowDto): string => this.assignmentFor(`${r.kind}|${r.measurement}`)?.label ?? `${r.kind} (${r.measurement ?? 'none'})`;
+      parts.push(`sensor type ${pairLabel(before)} → ${pairLabel(after)}`);
+    }
+    if (before.sourceUnit !== after.sourceUnit) {
+      parts.push(`source unit ${before.sourceUnit ? this.unitLabel(before.sourceUnit) : 'none'} → ${after.sourceUnit ? this.unitLabel(after.sourceUnit) : 'none'}`);
+    }
+    if (before.triggerEnabled !== after.triggerEnabled) {
+      parts.push(`threshold triggering ${before.triggerEnabled ? 'on' : 'off'} → ${after.triggerEnabled ? 'on' : 'off'}`);
+    }
+    if (before.embedName !== after.embedName) {
+      parts.push(`value in name ${before.embedName ? 'on' : 'off'} → ${after.embedName ? 'on' : 'off'}`);
+    }
     if (before.unitLabel !== after.unitLabel) {
       const label = (v: string | undefined): string => v === undefined ? 'no inherited label' : v === '' ? 'no label' : JSON.stringify(v);
       parts.push(`unit label ${label(before.unitLabel)} → ${label(after.unitLabel)}`);
@@ -2754,7 +2971,7 @@ export class AwnRootComponent {
       parts.push(`threshold ${before.threshold ?? 'none'} → ${after.threshold ?? 'none'}`);
     }
     if (before.triggerDirection !== after.triggerDirection) {
-      parts.push(`trigger ${after.triggerDirection}`);
+      parts.push(`trigger ${before.triggerDirection ?? 'none'} → ${after.triggerDirection ?? 'none'}`);
     }
     if (before.batteryField !== after.batteryField) {
       parts.push(`battery ${before.batteryField ?? 'none'} → ${after.batteryField ?? 'none'}`);

@@ -28,9 +28,9 @@
  *   - global entries diff the GLOBAL-LAYER effective map against the
  *     pure-defaults baseline (known dps) or the row's minimal identity
  *     declaration (custom dps);
- *   - station exceptions diff the FULL effective map against the
- *     global-layer map (falling back to defaults/identity when the
- *     dataPoint has no global layer).
+ *   - custom station exceptions diff the FULL effective map against
+ *     canonical global settings resolved with that station's identity;
+ *     known station exceptions use the global/default baseline.
  * Custom rows always re-declare their identity (kind, measurement,
  * numeric sourceUnit) in the layer that introduces them.
  *
@@ -107,6 +107,7 @@ export function canonicalizeSensorMap(input) {
     // STATION-SCOPED identity (review round-1 P1-2: identities are
     // per-station facts, never borrowed across stations).
     const identityOverrides = [];
+    const stationIdentities = [];
     const identityFor = (row, stationMac) => {
         const identity = {
             dataPoint: row.dataPoint,
@@ -134,13 +135,15 @@ export function canonicalizeSensorMap(input) {
     }
     for (const [mac, perDp] of layers.station) {
         for (const dp of perDp.keys()) {
-            if (knownRowFor(dp, layers.global.get(dp), perDp.get(dp))
-                || (globalAuthorsIdentity(dp) && globalLayer.get(`${mac}|${dp}`) !== undefined)) {
-                continue; // known, or identity AUTHORED by the global layer
+            if (knownRowFor(dp, layers.global.get(dp), perDp.get(dp))) {
+                continue;
             }
             const row = full.get(`${mac}|${dp}`);
             if (row) {
-                identityOverrides.push(identityFor(row, mac));
+                stationIdentities.push(identityFor(row, mac));
+                if (!globalAuthorsIdentity(dp) || globalLayer.get(`${mac}|${dp}`) === undefined) {
+                    identityOverrides.push(identityFor(row, mac));
+                }
             }
         }
     }
@@ -220,13 +223,15 @@ export function canonicalizeSensorMap(input) {
     // the output — a global value the global pass dropped (it equaled
     // the built-in default) is not inheritable by a custom row whose own
     // default differs, and the station entry must then carry the field
-    // itself. Same resolver as everything else.
+    // itself. This also applies when the global layer authors a DIFFERENT
+    // identity. Its effective non-triggering/native defaults are not what a
+    // station's motion identity inherits. Same resolver as everything else.
     const canonicalGlobalFragments = entries
         .filter(e => e.stationMac === undefined)
         .map(e => ({ dataPoint: e.dataPoint, ...e.fields }));
     const stationBaseline = byKey(buildEffectiveSensorMap({
         ...common,
-        userOverrides: [...canonicalGlobalFragments, ...identityOverrides],
+        userOverrides: [...canonicalGlobalFragments, ...stationIdentities],
     }));
     // ---- Station entries: exceptions relative to the global layer
     //      (falling back to defaults/identity when no global layer
@@ -244,13 +249,16 @@ export function canonicalizeSensorMap(input) {
             // default resolving in globalLayer is the built-in baseline, not
             // a template (round 2 F1).
             const globalRow = layers.global.has(dp) ? globalLayer.get(key) : undefined;
-            const reference = (isCustom && !globalAuthorsIdentity(dp))
+            const reference = isCustom
                 ? stationBaseline.get(key)
-                : (globalRow ?? (isCustom ? identity.get(key) : defaults.get(key)));
+                : (globalRow ?? defaults.get(key));
             const fields = diffRows(proposed, reference);
             preserveCompatibilityClaim(fields, dp, perDp.get(dp), layers.global.get(dp), perDp.get(dp));
             const onlyIdentityRestated = isCustom && globalRow !== undefined
                 && globalAuthorsIdentity(dp)
+                && proposed.kind === globalRow.kind && proposed.measurement === globalRow.measurement
+                && ('sourceUnit' in proposed ? proposed.sourceUnit : undefined)
+                    === ('sourceUnit' in globalRow ? globalRow.sourceUnit : undefined)
                 && Object.keys(fields).length === 0;
             if (isCustom) {
                 // Custom station entries ALWAYS re-declare identity — the

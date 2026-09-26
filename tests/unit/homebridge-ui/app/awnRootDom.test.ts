@@ -621,7 +621,7 @@ describe('draft editing + preview (PR B — no persistence)', () => {
     const threshold = el.querySelector('.editor-form input[type="number"]') as HTMLInputElement;
     typeInto(threshold, '');
     await settle(fixture);
-    expect(el.textContent).toContain('Threshold is required');
+    expect(el.textContent).toContain('Enter a finite threshold, or turn threshold triggering off.');
     const previewBtn = [...el.querySelectorAll('button')].find(b => b.textContent === 'Preview changes') as HTMLButtonElement;
     expect(previewBtn.disabled).toBe(true);
 

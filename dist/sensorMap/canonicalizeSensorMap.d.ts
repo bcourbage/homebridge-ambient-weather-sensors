@@ -28,9 +28,9 @@
  *   - global entries diff the GLOBAL-LAYER effective map against the
  *     pure-defaults baseline (known dps) or the row's minimal identity
  *     declaration (custom dps);
- *   - station exceptions diff the FULL effective map against the
- *     global-layer map (falling back to defaults/identity when the
- *     dataPoint has no global layer).
+ *   - custom station exceptions diff the FULL effective map against
+ *     canonical global settings resolved with that station's identity;
+ *     known station exceptions use the global/default baseline.
  * Custom rows always re-declare their identity (kind, measurement,
  * numeric sourceUnit) in the layer that introduces them.
  *
