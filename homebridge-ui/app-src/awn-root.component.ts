@@ -126,30 +126,20 @@ interface PreviewIntent {
     .unit-family-controls select { flex: 1; min-width: 0; width: 100%; }
     .unit-family-controls .info-q { flex-shrink: 0; }
     .catalog-details { margin: 8px 0; font-size: 0.85rem; }
-    /* Same themed control chrome as the row editor's selects: the UA
-       default select ignored the page theme entirely (white in dark
-       mode) and sat below the label baseline, reading as a vertical
-       jump against the label text (Bruno's beta.15 RC feedback). */
-    .unit-families select {
-      background: var(--btn-bg); color: var(--btn-fg);
-      border: 1px solid var(--btn-edge); border-radius: 4px;
-      padding: 3px 6px; font-size: 0.85rem; vertical-align: middle;
-    }
+    /* Control metrics and theme chrome are shared in public/index.html. */
     .unit-families-note { margin-bottom: 10px; }
     .editor-form {
       background: var(--panel-bg); border-top: 2px solid var(--rule);
       padding: 10px 14px;
     }
-    .editor-form label { display: inline-flex; align-items: center; gap: 6px; margin: 4px 16px 4px 0; font-size: 0.88rem; }
+    .editor-form label {
+      display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px;
+      max-width: 100%; margin: 4px 16px 4px 0; font-size: 0.88rem;
+    }
     .interpretation-panel { margin: 12px 0; border: 1px solid var(--rule); border-radius: 6px; }
     .interpretation-panel fieldset { border: 0; padding: 0; min-width: 0; }
-    .interpretation-panel select, .interpretation-panel input { max-width: 100%; box-sizing: border-box; }
     .row-facts { display: inline-block; margin-left: 12px; font-size: 0.82rem; }
     .capability-help { display: block; margin: 6px 0; }
-    .editor-form input[type="text"], .editor-form input[type="number"], .editor-form select {
-      background: var(--btn-bg); color: var(--btn-fg);
-      border: 1px solid var(--btn-edge); border-radius: 4px; padding: 4px 8px;
-    }
     /* Dialog-shaped footer: Use defaults on the left (the one action
        that changes saved configuration), OK / Cancel on the right. */
     .editor-footer { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
@@ -267,7 +257,7 @@ interface PreviewIntent {
     td.actions button { width: 72px; box-sizing: border-box; text-align: center; }
     .connection { border: 1px solid var(--rule); border-radius: 6px; margin: 10px 0; }
     .conn-summary {
-      display: flex; align-items: baseline; gap: 8px; width: 100%;
+      display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; width: 100%;
       background: none; border: none; color: var(--fg);
       padding: 8px 12px; cursor: pointer; text-align: left; font-weight: 600;
     }
@@ -295,10 +285,6 @@ interface PreviewIntent {
       .conn-grid { grid-template-columns: 1fr; }
     }
     .conn-grid label { display: flex; flex-direction: column; gap: 4px; color: var(--fg-sub); font-size: 0.9em; }
-    .conn-grid input, .conn-grid select, .conn-grid textarea {
-      font: inherit; color: var(--fg); background: var(--panel-bg);
-      border: 1px solid var(--rule); border-radius: 4px; padding: 4px 8px;
-    }
     .notices-block { margin-top: 16px; }
     .notices-list { margin: 0; padding: 4px 12px 12px 28px; color: var(--fg-sub); }
     .rollback-line { padding: 4px 12px 12px; color: var(--fg-sub); font-size: 0.85rem; line-height: 1.45; max-width: 76ch; }

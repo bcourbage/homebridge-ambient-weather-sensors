@@ -83,6 +83,21 @@
     #awn th, #awn td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--row-rule); color: var(--fg); }
     #awn th     { background: var(--panel-bg); font-weight: 600; }
     #awn .empty { color: var(--fg-empty); font-style: italic; padding: 8px 0; }
+    /* One set of metrics for Connection, Units and every row editor.
+       ID specificity also wins over the host's later-injected reset.
+       Keep native arrows, steppers and focus rings. Textareas share
+       the typography, but retain their multiline height. */
+    #awn input[type="text"], #awn input[type="password"], #awn input[type="number"],
+    #awn select, #awn textarea {
+      box-sizing: border-box; min-width: 0; max-width: 100%;
+      font-family: inherit; font-size: 1rem; font-weight: 400; line-height: 1.5;
+      padding: 4px 8px; border: 1px solid var(--btn-edge); border-radius: 4px;
+      background: var(--btn-bg); color: var(--btn-fg);
+    }
+    #awn input[type="text"], #awn input[type="password"], #awn input[type="number"],
+    #awn select { height: 2.25rem; }
+    #awn textarea { resize: vertical; }
+    #awn input:disabled, #awn select:disabled, #awn textarea:disabled { opacity: 0.55; }
     #awn button {
       padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 0.88rem;
       background: var(--btn-bg); color: var(--btn-fg); border: 1px solid var(--btn-edge);
@@ -134,7 +149,7 @@
     </p>
   </div>
   <!-- awn-app:assets:begin -->
-  <script type="module" src="app/main-K7SRB6O2.js"></script>
+  <script type="module" src="app/main-OSXSAXQE.js"></script>
   <!-- awn-app:assets:end -->
 
   <script>
