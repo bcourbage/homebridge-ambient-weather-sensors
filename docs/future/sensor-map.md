@@ -2952,11 +2952,9 @@ is checked against real coercion/HAP behavior. The plugin and UI builds,
 cold Angular artifacts, deterministic rebuilds, package contents, and
 existing install/upgrade suites remain release gates.
 
-Saved-row Change mapping and settings-only birth-stamp digest hardening
-are separate increments from this editor. The settings-only confirmation
-contract is specified in §20.7. The delivery sequence is P4, P5 proofs, the next
-2.0.0 beta, digest hardening, Change mapping, then GA. Final applicable
-proofs and packaged-RC checks run again after those follow-ups.
+Saved-row interpretation changes are specified in §22. The settings-only
+confirmation contract is specified in §20.7. Final applicable proofs and
+packaged-RC checks run again before release.
 
 ### 20.7 Settings-only preview binding
 
@@ -3113,6 +3111,104 @@ live UI, existing custom mappings, first routed values, absence of unrelated
 registrations or removals, and byte-identical config when no save is requested.
 
 These proofs do not authorize a catalog adoption, production configuration
-change, compatibility retirement, or GA publication. The next beta precedes
-the separately reviewed digest-hardening and Change-mapping increments;
-applicable proofs and host smoke run again on the eventual GA candidate.
+change, compatibility retirement, or GA publication. Applicable proofs and
+host smoke run again on the eventual GA candidate.
+
+## 22. Changing a saved custom interpretation
+
+### 22.1 Eligibility and scope
+
+**Change interpretation** edits the complete `(kind, measurement, sourceUnit)`
+identity of a saved custom field. The field name and edit scope stay fixed.
+The server must classify the row as recognized `custom-global` or
+`custom-station`, in a writable v2 configuration with valid negotiated
+vocabulary and catalog stamps. Known rows and unresolved or rejected
+assignments are not remapping targets. Repairing an invalid assignment remains
+a JSON-editor operation.
+
+The page must have no row or Connection drafts, invalid form, or pending
+operation, and the authored map must be faithfully reconstructable. A global
+origin edits the all-stations template; a station origin edits only that
+station key, with a complete explicit identity. A station settings exception
+under a global custom identity therefore stays station-scoped.
+
+### 22.2 Isolated proposal and field handling
+
+The in-flow form uses the negotiated pair picker and its source policies.
+Unadopted pairs remain visible but unavailable. Numeric labels, input and
+output explanations, and boolean encoding help use the existing capability
+contract. Choosing a pair or source unit saves nothing and does not modify
+ordinary drafts. Other mutation controls remain locked for this operation.
+
+The proposal builder starts from the authored fragments and edits their
+presence using the existing DraftStore. It is not an effective-map resolver.
+Identity-dependent fields are removed from every duplicate fragment at the
+target key before the complete selected identity is authored. Untargeted
+keys, fragment order, and authored name, enabled, and battery settings remain
+intact. Motion-to-motion changes retain authored embedding; a non-motion
+target removes that field. Boolean and timestamp targets omit source-unit
+authorship; generic numeric explicitly uses `raw` and the chosen literal
+label, including empty text.
+
+Changing a pair or source unit clears the threshold without conversion.
+A triggering motion target with a blank threshold authors
+`triggerEnabled: false`, so an inherited threshold cannot become active in
+the new units. A finite threshold explicitly enables triggering and authors
+the selected direction. Non-triggering targets author no trigger fields.
+The normal row editor provides a threshold-triggering checkbox for recovery:
+switching it off retains an inactive threshold; intentionally switching it on
+requires a finite number. Unrelated edits never enable it, and opening a
+pristine threshold-less row does not create a draft or invalid form.
+
+### 22.3 Preview, persistence, and accessibility
+
+The server computes every consequence through `/preview-save`. The preview
+shows the old and new sensor types, source units, trigger state, embedding,
+and the existing row consequences. A source-only change is in-place because
+source unit is not part of the structural signature. Kind or measurement
+changes can replace an accessory and affect its rooms or automations.
+Complete station identities beneath a changed global template keep their
+identity, but inherited settings may change and are included in the preview.
+
+This isolated preview has no per-row Skip action. Its exact proposal and
+digest go through the existing two-phase save orchestrator. Form changes
+invalidate both pending and displayed previews, including late transport
+errors. Cancel is safe during a read-only request and restores the unchanged
+page, but is disabled and guarded during persistence. Repeated Save
+activation starts only one transaction. Success reloads the authoritative
+state and checks the receipt; refusal requires a new preview; uncertain
+persistence or failed recovery retains the terminal reload lock.
+
+Controls have associated labels and ordinary keyboard tab stops. Entry
+focuses the form heading, and Cancel returns focus to the target's Edit
+button. A never-reported target stays visible under the no-data filter
+through this return, until another row/filter interaction or successful save.
+No focus trap or keyboard-only action is introduced.
+
+### 22.4 Canonical station baseline
+
+Canonicalization compares custom station settings against the canonical
+global output resolved with that station's own minimal identity. It must not
+borrow defaults from a different global identity. For example, a global
+humidity row resolves triggering to false, but a station motion row without
+an authored value defaults to true. Comparing those two effective rows would
+incorrectly discard the station's explicit false. The identity-aware
+baseline preserves it, and the existing divergence gate remains unchanged.
+
+A station entry can be absorbed as redundant only when its complete identity
+matches an authored global identity and it adds no settings. Equal effective
+settings alone cannot erase a distinct kind, measurement, or source unit.
+The canonical global layer remains the reload reference, preserving sibling
+and never-seen-station inheritance and byte-stable subsequent saves.
+
+### 22.5 Boundaries and proofs
+
+The UI adds no capabilities, schema fields, catalog version, stamp policy,
+persistence endpoint, or digest calculation. The canonical station baseline
+correction is the only engine change. Real-component tests exercise labels,
+focus, locks, invalidation, cancellation, numeric validation, and guarded
+save outcomes against compiled handlers and files. Pair and scope tests
+exercise canonical reload, duplicate fragments, explicit identity retention,
+and subsequent-save stability. Real HAP lifecycle tests distinguish in-place
+source reinterpretation from Contact-to-Leak replacement, and verify that
+disabled triggering remains off until explicitly recovered.
