@@ -40,7 +40,13 @@ interface Rig {
   failSave?: boolean; failRestore?: boolean;
 }
 beforeAll(() => TestBed.initTestEnvironment(BrowserTestingModule, platformBrowserTesting()));
-afterEach(() => { TestBed.resetTestingModule(); localStorage.clear(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true, maxRetries: 3 }); });
+afterEach(() => {
+  TestBed.resetTestingModule();
+  // Storage may be absent or throw in a restricted jsdom environment,
+  // just as in a browser. Its availability must not prevent file cleanup.
+  try { localStorage.clear(); } catch { /* optional per-viewer storage */ }
+  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true, maxRetries: 3 });
+});
 async function flush(r: Rig) { await new Promise(resolve => setTimeout(resolve, 0)); await r.fixture.whenStable(); r.fixture.detectChanges(); }
 async function tick(r: Rig) { await new Promise(resolve => setTimeout(resolve, 0)); r.fixture.detectChanges(); }
 const buttons = (r: Rig, text: string) => [...r.el.querySelectorAll<HTMLButtonElement>('button')].filter(b => b.textContent?.trim() === text);
