@@ -241,11 +241,21 @@ export const FRESH_INSTALL_DIGEST = 'fresh-install:no-platform-block';
 const CONSEQUENCE_FREE_SETTINGS = new Set([
     'name', 'apiKey', 'applicationKey', 'dataSource', 'embedNameUpdateMinIntervalMinutes',
 ]);
-function settingsOnlyDigest(block, settingsChanged) {
+function settingsOnlyDigest({ block, effectiveBlock, settingsChanged }) {
     return createHash('sha256').update(canonicalJsonLocal({
-        v: 'settings-only-1',
+        v: 'settings-only-2',
         base: block,
         settingsChanged: [...settingsChanged].sort(),
+        // Bind the stamps actually destined for disk, not the binary version:
+        // fresh blocks are born at that version; existing blocks preserve their
+        // pair (including absence). A package upgrade between preview and compose
+        // must not silently change the birth pair. Proposed credential values
+        // remain outside this public projection; the commit token binds the exact
+        // composed output after validation as before.
+        catalog: {
+            baseline: effectiveBlock.catalogBaseline ?? null,
+            adopted: effectiveBlock.catalogAdopted ?? null,
+        },
     })).digest('hex');
 }
 async function runSavePipeline(deps, p) {
@@ -743,7 +753,7 @@ function composeSettingsOnly(deps, p, ctx, persist) {
             }
         }
     }
-    const digest = settingsOnlyDigest(block, settingsChanged);
+    const digest = settingsOnlyDigest(ctx);
     if (p.confirmDigest !== undefined && p.confirmDigest !== digest) {
         return {
             ok: false,
@@ -1141,7 +1151,7 @@ export async function handlePreviewSave(deps, payload) {
             configOnly: [],
             batteryPolarity: [],
             structuralChangeCount: 0,
-            digest: settingsOnlyDigest(block, settingsChanged),
+            digest: settingsOnlyDigest(r.settingsOnly),
             warnings: [],
             notes: [],
         };
