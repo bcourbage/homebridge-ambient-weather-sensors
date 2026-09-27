@@ -68,7 +68,12 @@ function open(r: Rig, point = 'custom_x', mac = A) {
 }
 async function begin(r: Rig, point = 'custom_x', mac = A) { open(r, point, mac); click(r, 'Change interpretation'); await flush(r); }
 async function preview(r: Rig) { await r.app.previewInterpretation(); await flush(r); expect(r.app.previewResult(), JSON.stringify(r.app.previewResult())).toMatchObject({ ok: true }); return r.app.previewResult() as Extract<PreviewResultDto, { ok: true }>; }
-async function save(r: Rig) { click(r, 'Save changes'); await expect.poll(() => r.app.saving()).toBe(false); await flush(r); }
+async function save(r: Rig) {
+  click(r, 'Save changes');
+  // Compose, commit, persistence and reload include real disk I/O, not a UI tick.
+  await expect.poll(() => r.app.saving(), { timeout: 5000 }).toBe(false);
+  await flush(r);
+}
 function deferred() { let resolve!: (v: unknown) => void; let reject!: (e: Error) => void; const promise = new Promise<unknown>((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; }
 
 async function rig(map: Json[] = [WIND], overrides: Json = {}, reported = ['custom_x', 'tempf']): Promise<Rig> {
@@ -101,11 +106,37 @@ async function rig(map: Json[] = [WIND], overrides: Json = {}, reported = ['cust
   TestBed.configureTestingModule({ providers: [provideZonelessChangeDetection(), { provide: HOMEBRIDGE_IPC, useValue: ipc }] });
   r.fixture = TestBed.createComponent(AwnRootComponent); r.el = r.fixture.nativeElement;
   r.app = r.fixture.componentInstance as unknown as App; r.fixture.detectChanges();
-  await expect.poll(() => r.app.state()).toBeDefined(); await flush(r);
+  // Initial disk reads can outlast Vitest's default one-second polling budget.
+  await expect.poll(() => r.app.state(), { timeout: 5000 }).toBeDefined(); await flush(r);
   return r;
 }
 
 describe('Change interpretation through real editor and guarded pipeline', () => {
+  it('waits for a delayed commit without retrying or leaving a terminal lock', async () => {
+    const r = await rig();
+    await begin(r); set(r, 'sourceUnit', 'mps'); await preview(r);
+    r.intercept = (endpoint, payload) => endpoint === '/commit-save'
+      ? new Promise(resolve => setTimeout(() => resolve(handleCommitSave(r.deps, payload)), 1500))
+      : undefined;
+    try {
+      await save(r);
+    } finally {
+      // Even a failed wait must drain the real transaction before fixture cleanup.
+      await expect.poll(() => r.app.saving(), { timeout: 5000 }).toBe(false);
+      await flush(r);
+    }
+    expect(r.requests.filter(x => x.endpoint === '/compose-save')).toHaveLength(1);
+    expect(r.requests.filter(x => x.endpoint === '/commit-save')).toHaveLength(1);
+    expect(r.writes).toBe(1);
+    expect((r.read().sensorMap as Json[]).find(x => x.dataPoint === 'custom_x')).toMatchObject({
+      kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mps', triggerEnabled: false,
+    });
+    expect(r.app.state().rows.find(x => x.dataPoint === 'custom_x' && x.stationMac === A)).toMatchObject({
+      sourceUnit: 'mps', identityScope: 'custom-station', triggerEnabled: false,
+    });
+    expect(r.app.reloadRequired()).toBe(false);
+  }, 15000);
+
   it('previews a source-only change in place, clears its threshold, preserves scope and reloads byte-stably', async () => {
     const r = await rig(); const before = readFileSync(r.configPath, 'utf8'); const proposal = r.app.store.proposal();
     await begin(r); set(r, 'sourceUnit', 'mps');
