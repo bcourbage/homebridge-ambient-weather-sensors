@@ -9,6 +9,29 @@ entries short and user-facing.
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/
 
+## [2.0.0-beta.19] - 2026-09-26
+
+Change how saved custom sensors are interpreted, with clearer previews and consistent editor controls.
+
+### Added
+
+- **Change interpretation for saved custom sensors.** Choose a different sensor type or source unit without first deleting the saved assignment. Preview shows whether the Apple Home accessory updates in place or is replaced. Replacement may affect rooms and automations.
+- **Explicit threshold control.** Switch threshold triggering off or back on in the row editor. Changing the sensor type or source unit clears the threshold rather than guessing a conversion; leaving it blank keeps triggering off.
+
+### Fixed
+
+- **Custom-sensor saves with shared settings.** Changing a custom sensor's interpretation no longer causes a valid save to be refused when it also inherits settings shared across stations.
+- **First-time setup saves stay tied to their preview.** Saving after a plugin update now requires a fresh preview if that update changes the new configuration's starting sensor-support version. Existing configurations keep their saved versions.
+
+### Changed
+
+- **Consistent editor controls.** Dropdowns and single-line fields now share the same height and text size across Connection, Units, and sensor editing. Labels and status badges wrap on narrow screens.
+
+### Upgrade notes
+
+- Installing this beta leaves saved sensor interpretations and sensor-support adoption unchanged. After saving configuration changes, use Homebridge's **Restart Child Bridge** action or a full Homebridge restart.
+- Runtime dependency ranges and locked dependency versions are unchanged. The release candidate's production install resolved `socket.io-client` 4.8.4, an in-range patch update from 4.8.3; a fresh beta.18 install can resolve the same version.
+
 ## [2.0.0-beta.18] - 2026-09-23
 
 Expanded sensor support, preserved custom assignments, and clearer previews before configuration changes.
