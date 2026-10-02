@@ -9,28 +9,106 @@ entries short and user-facing.
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/
 
-## [2.0.0] — 2026-09-19
+## [2.0.0] - Unreleased
 
-The sensor-map release. Coming from v1.7.3, this is what changes:
+Version 2.0 brings individual sensor control to the Homebridge settings page, with broader sensor support and a preview of changes before they reach Apple Home.
 
 ### Added
 
-- **A sensor-map editor on the plugin settings page.** Every field each station can expose is one row, grouped by station: rename it, choose its display unit, set motion thresholds and trigger direction, or switch it off. Rows show their Apple Home accessory kind, battery source, and whether settings come from the defaults, all stations, or one station; Use defaults returns a row to the defaults plus your page-level unit choices.
-- **Previewed, guarded saving.** Preview lists every consequence of a save — each accessory that would register, deregister, or re-register, with a per-row Skip — and Save applies exactly what was previewed, verified server-side against the on-disk configuration. Nothing is written on any refusal.
-- **Display units for whole categories.** A Units panel sets Barometer, Wind Speed, Rainfall, and Distance units the way AmbientWeather.net does, for every station including future ones; single rows can still differ. New units for AWN parity: pressure in mmHg, wind in ft/sec, and foot-candles as a custom light source unit.
-- **Custom sensors from unrecognized fields.** A station field the plugin doesn't recognize can be assigned a measurement and source unit and becomes a real accessory, editable like any other row.
-- **See what your station actually reports.** Sensors the station has never reported are labeled "no data" (they create no HomeKit accessories even while enabled), with a per-station action to disable them all and a filter to hide them.
-- **Rollback status.** The settings page states whether the manual rollback to v1.7.3 is currently safe and gives the exact steps; a structural-change record lists recent accessory re-registrations.
+- **An editor for individual sensors and Connection settings.** Rename sensors, choose units and thresholds, or disable unwanted readings without editing JSON. The preview explains accessory additions, removals, replacements, and settings changes before saving.
+- **More measurements and sensor types.** New support covers additional wind and rain readings, soil and leaf measurements, evapotranspiration, AQI values, and leak sensors. Custom assignments include contact, occupancy, smoke, and on/off motion, plus a generic numeric option with your own unit label and an optional threshold.
+- **Change interpretation for saved custom sensors.** Revise a sensor's type or source unit without deleting its assignment first. The preview identifies any accessory replacement, which may affect rooms and automations.
+
+### Fixed
+
+Legacy fields beyond the former fixed tables remain recognized, saved custom
+assignments survive sensor-support updates, and temporarily offline accessories
+are retained. Invalid state readings report a fault rather than an alert, while
+unknown battery readings keep the last reported state. Connection settings can
+also be saved before discovery, and setup saves remain tied to their preview
+even if the plugin is updated in between.
+
+### Upgrade notes
+
+Back up your Homebridge configuration before upgrading. Installation does not
+rewrite it or automatically enable newer sensor support. Conversion preserves
+your original sensor settings, and **Review new sensor support** separately
+previews additional capabilities and corrected lightning/leak battery readings.
+New definitions start disabled, although an enabled custom assignment awaiting
+support can become active; the preview lists that addition.
+
+After conversion, known disabled sensors stay disabled, but legacy category-wide
+and sensor-name exclusions no longer govern fields that first report later.
+A newly reporting, recognized sensor may appear; disable its row if unwanted.
+
+Extended numeric readings use motion accessories in Apple Home, with labelled
+values in compatible controller apps. AQI is shown as a number, not a health
+category, and native carbon-monoxide detection is not included.
+
+The minimum Homebridge version is now 1.9, correcting the earlier 1.8 claim.
+Use Node.js 22.13+ within 22.x or 24.x, provided your Homebridge version also
+supports it; Homebridge 1.9.0 requires the Node 22 option. See the
+[upgrade guide](https://github.com/bcourbage/homebridge-ambient-weather-sensors/blob/main/UPGRADING.md)
+for conversion, restart, and rollback instructions. Disabling the v2 flag alone
+is not a safe rollback after conversion.
+
+If you already use beta.19, the runtime is unchanged apart from the version
+number; this release prepares the documentation and release notes for general
+availability.
+
+## [2.0.0-beta.19] - 2026-09-26
+
+Change how saved custom sensors are interpreted, with clearer previews and consistent editor controls.
+
+### Added
+
+- **Change interpretation for saved custom sensors.** Choose a different sensor type or source unit without first deleting the saved assignment. Preview shows whether the Apple Home accessory updates in place or is replaced. Replacement may affect rooms and automations.
+- **Explicit threshold control.** Switch threshold triggering off or back on in the row editor. Changing the sensor type or source unit clears the threshold rather than guessing a conversion; leaving it blank keeps triggering off.
+
+### Fixed
+
+- **Custom-sensor saves with shared settings.** Changing a custom sensor's interpretation no longer causes a valid save to be refused when it also inherits settings shared across stations.
+- **First-time setup saves stay tied to their preview.** Saving after a plugin update now requires a fresh preview if that update changes the new configuration's starting sensor-support version. Existing configurations keep their saved versions.
 
 ### Changed
 
-- **The v2 pipeline is on by default — and upgrading changes nothing by itself.** A legacy 1.x configuration runs through a compatibility translation proven accessory-identical to v1.7 by a full HAP-graph equivalence gate. Your configuration file is untouched until the first save on the settings page, which preserves the original 1.x settings in `legacy-config-snapshot.json` first; rolling back and reconverting are both supported, with every intermediate baseline journaled. Opting out — safe ONLY for a configuration that was never converted (no `configVersion: 2` / `sensorMap` in the block): set `_sensorMapV2: false` in the config block or `SENSOR_MAP_V2=0` in the environment. After a conversion, the flag alone activates the legacy runtime against a configuration it cannot read and can remove accessories; use the settings page's Rollback status steps instead.
-- **One settings page, one Save.** Platform name, data source, API keys, station filter, and tile-name update interval moved into the plugin's page alongside the sensor map; the standard Homebridge settings form and its Save button are retired for this plugin (the button is disabled by design). API keys are handled as secrets: they display as dots, are excluded from previews, diagnostics, logs, and the snapshot/journal records, and sensor-map saves never touch them.
-- **Applying a saved configuration needs only a child-bridge restart.** Homebridge's Restart Child Bridge action re-reads the saved configuration (verified on Homebridge 2.4.0); a full restart also works.
-- **Node.js 22.13+ within 22.x, or 24.x, is required** (the Homebridge 2 dependency tree cannot run on 22.0–22.12).
-- **Independently maintained.** The plugin is described as an independent continuation of Deac Karns' original work, sponsorable at [github.com/sponsors/bcourbage](https://github.com/sponsors/bcourbage).
+- **Consistent editor controls.** Dropdowns and single-line fields now share the same height and text size across Connection, Units, and sensor editing. Labels and status badges wrap on narrow screens.
 
-For beta testers: 2.0.0 is the same build as 2.0.0-beta.17, promoted after its bake period; there is nothing new to install beyond the version number.
+### Upgrade notes
+
+- Installing this beta leaves saved sensor interpretations and sensor-support adoption unchanged. After saving configuration changes, use Homebridge's **Restart Child Bridge** action or a full Homebridge restart.
+- Runtime dependency ranges and locked dependency versions are unchanged. The release candidate's production install resolved `socket.io-client` 4.8.4, an in-range patch update from 4.8.3; a fresh beta.18 install can resolve the same version.
+
+## [2.0.0-beta.18] - 2026-09-23
+
+Expanded sensor support, preserved custom assignments, and clearer previews before configuration changes.
+
+### Added
+
+- **More supported measurements.** Additional wind and rain fields, soil moisture, leaf wetness, soil tension, evapotranspiration, and AQI values are available through the sensor-support update. New definitions do not replace your saved custom assignments.
+- **Complete sensor-type choices.** The editor offers separate leak, contact, occupancy, smoke, and on/off motion choices. Types requiring a sensor-support update remain visible with their prerequisite. Each choice explains the input encoding and what Apple Home can display.
+- **Generic numeric labels.** Assign an otherwise unsupported numeric quantity with a literal unit label and an optional threshold. Labels are display-only, support Unicode, and can inherit, be cleared, or be set independently at the edited scope.
+- **Explicit conversion and sensor-support previews.** Convert legacy settings, then use **Review new sensor support** to preview newer capabilities separately from sensor edits. The preview lists accessory effects, battery interpretation changes, and newly available fields that remain switched off. Opening the page or previewing does not save anything.
+
+### Changed
+
+- **Sensors are managed individually after conversion.** Existing disabled sensors stay disabled. V2 does not keep legacy category-wide or sensor-name exclusions as rules for future fields. A newly reporting, recognized sensor may appear after conversion; disable that row individually if unwanted. Unknown fields still need assignment, and new catalog features keep their adoption requirements.
+- **Clearer Units and support details.** Long measurement names stay readable, Evapotranspiration has a **?** explanation, and Technical details distinguish your starting sensor-support version, the version in use, and the latest version included with the plugin.
+
+### Fixed
+
+- **Legacy upgrades preserve more sensor identities.** Fields recognized by the 1.7.3 matcher, including numbered fields beyond the former fixed tables, remain recognized. Explicit custom assignments keep their measurement and source unit instead of being replaced by a guessed identity.
+- **Connection settings can be saved before sensors are discovered.** First-time setup and credential recovery no longer depend on a populated sensor inventory.
+- **Offline accessories are preserved during temporary discovery gaps.** Cached sensor identities remain available to the resolver instead of being removed merely because a field is missing from a current sample.
+- **State and battery readings are handled consistently.** Invalid or offline state readings report a fault rather than an active alert. Lightning and leak battery-polarity corrections are previewed as part of the sensor-support update, rather than silently changing on upgrade. Unknown battery readings preserve an existing reported state.
+- **Rollback mirrors preserve rainfall units and mixed custom assignments.** Legacy-compatible sensors retain their settings; custom identities that 1.7.3 cannot represent remain outside that compatibility boundary.
+- **Save stays tied to its preview.** Obsolete preview responses cannot restore Save after edits or cancellation. Failed post-save reloads, mismatched receipts, and save-control restoration failures require reload before further editing.
+
+### Upgrade notes
+
+- Existing configurations do not automatically enable newer sensor support. Review and save that update explicitly. Applying saved configuration changes requires Homebridge's **Restart Child Bridge** action or a full Homebridge restart.
+- Extended numeric measurements use a motion accessory in Apple Home, with an optional threshold. Compatible controller apps can show the labelled numeric value. Native carbon-monoxide detection is not included.
+- Back up your Homebridge configuration before upgrading. To revert a converted configuration, follow the [documented rollback procedure](https://github.com/bcourbage/homebridge-ambient-weather-sensors#rollback), rather than simply turning off the v2 flag.
 
 ## [2.0.0-beta.17] — 2026-09-15
 

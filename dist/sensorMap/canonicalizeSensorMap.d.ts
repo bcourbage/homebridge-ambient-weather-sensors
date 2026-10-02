@@ -28,9 +28,9 @@
  *   - global entries diff the GLOBAL-LAYER effective map against the
  *     pure-defaults baseline (known dps) or the row's minimal identity
  *     declaration (custom dps);
- *   - station exceptions diff the FULL effective map against the
- *     global-layer map (falling back to defaults/identity when the
- *     dataPoint has no global layer).
+ *   - custom station exceptions diff the FULL effective map against
+ *     canonical global settings resolved with that station's identity;
+ *     known station exceptions use the global/default baseline.
  * Custom rows always re-declare their identity (kind, measurement,
  * numeric sourceUnit) in the layer that introduces them.
  *
@@ -42,6 +42,7 @@
  * Ordering (§17.4): entries sort by `dataPoint`, global before station,
  * MACs ascending case-insensitive; fields in the fixed §17.4 order.
  */
+import { type BuildInput } from './buildEffectiveMap.js';
 import type { DiscoveryStore, SensorMapOverride, StationInventory, UiStateStore } from './types.js';
 export interface CanonicalizeInput {
     /** Proposed overrides — already normalized + validated (zero errors). */
@@ -49,6 +50,11 @@ export interface CanonicalizeInput {
     stations: StationInventory;
     discovery: DiscoveryStore;
     uiState: UiStateStore;
+    /** Factual existing pairs, without fabricated observation timestamps. */
+    cachedPairs?: BuildInput['cachedPairs'];
+    /** Adoption stamps of the config being canonicalized (§18.3). */
+    catalogBaseline?: number;
+    catalogAdopted?: number;
 }
 export declare function canonicalizeSensorMap(input: CanonicalizeInput): SensorMapOverride[];
 //# sourceMappingURL=canonicalizeSensorMap.d.ts.map

@@ -106,6 +106,7 @@ describe('downgrade journeys: editor-generated v2 config + v2-written cache', ()
     const { nextConfig } = composeV2ConfigSave(
       { apiKey: 'k', applicationKey: 'k', _sensorMapV2: true }, sensorMap, v2Map,
       detectConfigMode({ } as never).mode,
+      { catalogBaseline: 1, catalogAdopted: 1 },
     );
     expect((nextConfig as Record<string, unknown>)._sensorMapV2).toBe(true);
 
@@ -240,6 +241,7 @@ describe('downgrade journeys: editor-generated v2 config + v2-written cache', ()
     const { nextConfig } = composeV2ConfigSave(
       { apiKey: 'k', applicationKey: 'k' }, sensorMap, v2Map,
       detectConfigMode({} as never).mode,
+      { catalogBaseline: 1, catalogAdopted: 1 },
     );
     expect('_sensorMapV2' in (nextConfig as Record<string, unknown>)).toBe(false);
     const rolledBack = { ...nextConfig } as Record<string, unknown>;
@@ -330,6 +332,7 @@ describe('downgrade journeys: editor-generated v2 config + v2-written cache', ()
     const { nextConfig } = composeV2ConfigSave(
       { apiKey: 'k', applicationKey: 'k' }, sensorMap, v2Map,
       detectConfigMode({} as never).mode,
+      { catalogBaseline: 1, catalogAdopted: 1 },
     );
     // Markers deliberately LEFT IN PLACE — the v1.7.0-era scenario.
     expect(nextConfig.configVersion).toBe(2);

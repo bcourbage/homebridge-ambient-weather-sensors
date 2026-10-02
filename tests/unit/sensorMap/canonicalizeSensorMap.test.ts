@@ -166,6 +166,43 @@ describe('layering preservation (§11.3 as amended by review #67 round 2)', () =
   });
 });
 
+describe('custom station identity-aware reload baseline', () => {
+  const common = { stations: TWO, discovery: discovery(), uiState: uiState(), configMode: 'v2' as const, catalogBaseline: 1, catalogAdopted: 4 };
+  const identities: SensorMapOverride[] = [
+    { dataPoint: 'probe', kind: 'humidity', measurement: 'humidity', sourceUnit: 'percent' },
+    { dataPoint: 'probe', kind: 'contact', measurement: 'boolean' },
+    { dataPoint: 'probe', kind: 'motion', measurement: 'timestamp' },
+  ];
+  it.each(identities)('retains motion-off beneath a $measurement template and is byte-stable', global => {
+    const input: SensorMapOverride[] = [global, {
+      dataPoint: 'probe', stationMac: MAC1, kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph',
+      triggerEnabled: false, threshold: 0, batteryField: null, embedName: false, enabled: false, name: 'Station custom',
+    }];
+    const canonical = canonicalizeSensorMap({ ...common, overrides: input });
+    expect(canonical.find(x => x.stationMac === MAC1)).toMatchObject({ kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph', triggerEnabled: false });
+    const fields = ['kind', 'measurement', 'sourceUnit', 'displayUnit', 'threshold', 'triggerDirection', 'triggerEnabled', 'batteryField', 'embedName', 'enabled', 'name'];
+    const future = 'AA:BB:CC:DD:EE:03';
+    const resolve = (userOverrides: SensorMapOverride[]) => buildEffectiveSensorMap({ ...common, stations: [...TWO, { macAddress: future }], userOverrides }).rows;
+    const before = resolve(input), after = resolve(canonical);
+    for (const mac of [MAC1, MAC2, future]) {
+      const b = before.find(r => r.stationMac === mac && r.dataPoint === 'probe')!;
+      const a = after.find(r => r.stationMac === mac && r.dataPoint === 'probe')!;
+      for (const field of fields) expect((a as unknown as Record<string, unknown>)[field], `${mac}/${field}`).toEqual((b as unknown as Record<string, unknown>)[field]);
+    }
+    expect(canonicalizeSensorMap({ ...common, overrides: canonical })).toEqual(canonical);
+  });
+
+  it.each([
+    [{ dataPoint: 'probe', kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph' }, { kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mps' }],
+    [{ dataPoint: 'probe', kind: 'contact', measurement: 'boolean' }, { kind: 'leak', measurement: 'boolean' }],
+  ])('never absorbs a different station identity merely because settings equal its baseline', (global, station) => {
+    const overrides = [global, { dataPoint: 'probe', stationMac: MAC1, ...station }] as SensorMapOverride[];
+    const canonical = canonicalizeSensorMap({ ...common, overrides });
+    expect(canonical.find(r => r.stationMac === MAC1)).toMatchObject(station);
+    expect(canonicalizeSensorMap({ ...common, overrides: canonical })).toEqual(canonical);
+  });
+});
+
 describe('ordering (§17.4 rules 3–4)', () => {
   it('entries sort by dataPoint, global before station, MACs ascending', () => {
     const out = canon([

@@ -22,7 +22,15 @@
  */
 
 import type { DefaultSensorRow } from './types.js';
+import { batteryFieldForSensor, isCanonicalSensorForBattery } from '../batteryFields.js';
+import { friendlySensorName } from '../sensorNames.js';
 import {
+  AQI_WRAPPER,
+  EVAPOTRANSPIRATION_WRAPPER,
+  LEAF_WETNESS_WRAPPER,
+  LEAK_WRAPPER,
+  SOIL_MOISTURE_WRAPPER,
+  SOIL_TENSION_WRAPPER,
   TEMPERATURE_WRAPPER,
   HUMIDITY_WRAPPER,
   SOLAR_RADIATION_WRAPPER,
@@ -596,14 +604,391 @@ export const DEFAULT_SENSOR_MAP: ReadonlyArray<DefaultSensorRow> = [
   ...makeNumberedRows(),
 ];
 
+/*
+ * Catalog-v2 definitions (§18.3, issue #63 P2). DELIBERATELY not part
+ * of DEFAULT_SENSOR_MAP: that array is the frozen v1 baseline — the
+ * validation clamp's domain (§18.4 AP-2), the battery reservation set,
+ * the legacy mirror's universe, and the unconditional pairs expansion
+ * all key off it and must not grow.
+ *
+ * Two exposure classes:
+ *
+ *   ANCHORED — keys the legacy substring fallback already recognizes.
+ *   Each row must be IDENTICAL to what `synthesizeLegacyRow` produces
+ *   for the key (identity, units, name, battery, canonicality), so an
+ *   adopted config resolves the same effective row the fallback gave —
+ *   asserted by tests, and by construction here: the rows are built
+ *   from the same primitives the fallback uses. Resolution-only.
+ *
+ *   NEW — previously unrecognized wind/rain fields. Wrappers are the
+ *   generic per-(kind, measurement) choices from the custom table, so
+ *   a user who authored the same identity as a custom row before
+ *   adopting keeps the same wrapper (and structural signature) if they
+ *   later remove the assignment in favor of the definition.
+ */
+function makeAnchoredRow(dataPoint: string, shapeKind: keyof typeof SYNTH_SHAPE): DefaultSensorRow {
+  const battery = batteryFieldForSensor(dataPoint) ?? null;
+  return {
+    dataPoint,
+    ...SYNTH_SHAPE[shapeKind],
+    name: friendlySensorName(dataPoint),
+    batteryField: battery,
+    canonicalForBattery: battery !== null && isCanonicalSensorForBattery(dataPoint, battery),
+    sinceCatalogVersion: 2,
+    catalogExposure: 'anchored',
+  };
+}
+
+function makeCatalogV2Rows(): DefaultSensorRow[] {
+  const rows: DefaultSensorRow[] = [];
+  // Anchored: channel feels-like / dew-point beyond the static 1..4,
+  // soil-temperature probes, indoor PM2.5 24h average.
+  for (let n = 5; n <= 10; n++) {
+    rows.push(makeAnchoredRow(`feelsLike${n}`, 'temperature'));
+    rows.push(makeAnchoredRow(`dewPoint${n}`, 'temperature'));
+  }
+  for (let n = 1; n <= 10; n++) {
+    rows.push(makeAnchoredRow(`soiltemp${n}f`, 'temperature'));
+  }
+  rows.push(makeAnchoredRow('pm25_in_24h', 'air-quality-pm25'));
+
+  // New exposure: the published wind/rain fields the plugin never
+  // recognized. Default-disabled on installs whose baseline predates
+  // them (§18.3 arithmetic in the resolver).
+  const newRow = (r: Omit<DefaultSensorRow, 'sinceCatalogVersion' | 'catalogExposure' | 'canonicalForBattery' | 'batteryField'>): DefaultSensorRow => ({
+    ...r,
+    batteryField: 'battout',
+    canonicalForBattery: false,
+    sinceCatalogVersion: 2,
+    catalogExposure: 'new',
+    defaultEnabled: false,
+  });
+  rows.push(newRow({
+    dataPoint: 'windgustdir', kind: 'motion', measurement: 'direction',
+    wrapper: WIND_DIRECTION_WRAPPER, name: 'Wind Gust Direction',
+    sourceUnit: 'degrees', displayUnit: 'degrees',
+  }));
+  rows.push(newRow({
+    dataPoint: 'windspdmph_avg2m', kind: 'motion', measurement: 'wind-speed',
+    wrapper: WIND_SPEED_WRAPPER, name: 'Wind Speed 2m Avg',
+    sourceUnit: 'mph', displayUnit: 'mph',
+  }));
+  rows.push(newRow({
+    dataPoint: 'winddir_avg2m', kind: 'motion', measurement: 'direction',
+    wrapper: WIND_DIRECTION_WRAPPER, name: 'Wind Direction 2m Avg',
+    sourceUnit: 'degrees', displayUnit: 'degrees',
+  }));
+  rows.push(newRow({
+    dataPoint: 'windspdmph_avg10m', kind: 'motion', measurement: 'wind-speed',
+    wrapper: WIND_SPEED_WRAPPER, name: 'Wind Speed 10m Avg',
+    sourceUnit: 'mph', displayUnit: 'mph',
+  }));
+  rows.push(newRow({
+    dataPoint: '24hourrainin', kind: 'motion', measurement: 'rain-accumulation', threshold: 0.01,
+    wrapper: RAIN_EVENT_WRAPPER, name: 'Rain Last 24h',
+    sourceUnit: 'in', displayUnit: 'in',
+  }));
+  rows.push(newRow({
+    dataPoint: 'totalrainin', kind: 'motion', measurement: 'rain-accumulation', threshold: 0.01,
+    wrapper: RAIN_EVENT_WRAPPER, name: 'Rain Total',
+    sourceUnit: 'in', displayUnit: 'in',
+  }));
+  return rows;
+}
+
 /**
  * O(1) lookup by dataPoint. Built lazily on first access so tests
  * can validate the array shape before the index is constructed.
  */
+/**
+ * The LEGACY field-shape matchers, in the exact order and with the
+ * exact predicates of v1.7's `determineSensorType` (GA review P1-1 /
+ * issue #63 Option A): one shared acceptance source of truth, so the
+ * v2 recognizer cannot drift from what the legacy runtime registers.
+ * `determineSensorType` consumes this list for its value-tile half;
+ * `defaultRowFor` synthesizes rows from it for fields outside the
+ * static table. Extended sensors (wind/rain/pressure/uv/lightning)
+ * match by exact name and are fully covered by the static table.
+ *
+ * Scope note: real AWN vocabulary has no key matching two families at
+ * once, so first-match identity is well-defined; a hypothetical
+ * multi-family key would follow this order, as v1.7 does with all
+ * category toggles on.
+ */
+export const LEGACY_FIELD_MATCHERS: ReadonlyArray<{
+  kind: DefaultSensorRow['kind'];
+  legacyType: string;
+  test: (dataPoint: string) => boolean;
+}> = [
+  {
+    kind: 'temperature', legacyType: 'Temperature',
+    test: dp => dp.includes('temp') || dp.includes('feelsLike') || dp.includes('dewPoint'),
+  },
+  { kind: 'humidity', legacyType: 'Humidity', test: dp => dp.includes('humid') },
+  { kind: 'light', legacyType: 'Solar Radiation', test: dp => dp.includes('solar') },
+  { kind: 'co2', legacyType: 'CO2', test: dp => /^co2($|_)/.test(dp) },
+  { kind: 'air-quality-pm25', legacyType: 'PM2.5', test: dp => /^pm25($|_)/.test(dp) },
+  { kind: 'air-quality-pm10', legacyType: 'PM10', test: dp => /^pm10($|_)/.test(dp) },
+];
+
+/** Row-shape ingredients per legacy-matched kind. */
+const SYNTH_SHAPE: Record<string, Pick<DefaultSensorRow, 'kind' | 'measurement' | 'wrapper' | 'sourceUnit' | 'displayUnit'>> = {
+  'temperature':      { kind: 'temperature', measurement: 'temperature', wrapper: TEMPERATURE_WRAPPER, sourceUnit: 'fahrenheit', displayUnit: 'fahrenheit' },
+  'humidity':         { kind: 'humidity', measurement: 'humidity', wrapper: HUMIDITY_WRAPPER, sourceUnit: 'percent', displayUnit: 'percent' },
+  'light':            { kind: 'light', measurement: 'illuminance', wrapper: SOLAR_RADIATION_WRAPPER, sourceUnit: 'wm2', displayUnit: 'lux' },
+  'co2':              { kind: 'co2', measurement: 'co2', wrapper: CO2_WRAPPER, sourceUnit: 'ppm', displayUnit: 'ppm' },
+  'air-quality-pm25': { kind: 'air-quality-pm25', measurement: 'pm25', wrapper: AIR_QUALITY_PM25_WRAPPER, sourceUnit: 'ugm3', displayUnit: 'ugm3' },
+  'air-quality-pm10': { kind: 'air-quality-pm10', measurement: 'pm10', wrapper: AIR_QUALITY_PM10_WRAPPER, sourceUnit: 'ugm3', displayUnit: 'ugm3' },
+};
+
+/**
+ * Synthesize the default row for a field the legacy matcher accepts
+ * but the static table lacks (a WH31 channel beyond the table's
+ * range, a soil-probe temperature, any future AWN field a substring
+ * family covers). Name, battery field, and battery canonicality come
+ * from the SAME legacy functions the v1.7 runtime uses, so the
+ * synthesized row registers exactly what v1.7 registers.
+ */
+function synthesizeLegacyRow(dataPoint: string): DefaultSensorRow | undefined {
+  const match = LEGACY_FIELD_MATCHERS.find(m => m.test(dataPoint));
+  if (!match) {
+    return undefined;
+  }
+  const battery = batteryFieldForSensor(dataPoint) ?? null;
+  return {
+    dataPoint,
+    ...SYNTH_SHAPE[match.kind],
+    name: friendlySensorName(dataPoint),
+    batteryField: battery,
+    canonicalForBattery: battery !== null && isCanonicalSensorForBattery(dataPoint, battery),
+  };
+}
+
+/**
+ * Whether an authored override carries EXPLICIT identity intent: any
+ * presence of kind, measurement, or sourceUnit — wrong-typed and null
+ * values included, because an invalid explicit assignment must surface
+ * as a diagnostic, never be silently replaced by a guess (#63 P0).
+ */
+export function hasAuthoredIdentity(override: unknown): boolean {
+  return !!override && typeof override === 'object'
+    && ('kind' in override || 'measurement' in override || 'sourceUnit' in override);
+}
+
+/**
+ * The default row RESOLUTION may consult for a dataPoint given the
+ * authored override layers that apply to it (#63 P0 — authored
+ * identities must win): the static catalog always applies (explicit
+ * identity against it stays the long-standing diagnosed conflict);
+ * the dynamic legacy-compatibility fallback applies ONLY when no
+ * passed layer authors identity. An explicitly assigned name that the
+ * fallback also recognizes therefore resolves exactly as it did
+ * before the fallback existed — the assignment is authoritative.
+ */
+export function defaultRowForOverride(
+  dataPoint: string,
+  ...overrideLayers: ReadonlyArray<unknown>
+): DefaultSensorRow | undefined {
+  const staticRow = staticDefaultRowFor(dataPoint);
+  if (staticRow) {
+    return staticRow;
+  }
+  if (overrideLayers.some(hasAuthoredIdentity)) {
+    return undefined;
+  }
+  return defaultRowFor(dataPoint);
+}
+
 let _byDataPoint: Map<string, DefaultSensorRow> | undefined;
-export function defaultRowFor(dataPoint: string): DefaultSensorRow | undefined {
+const _synthesized = new Map<string, DefaultSensorRow | undefined>();
+
+/** The STATIC table lookup only — no dynamic fallback. */
+export function staticDefaultRowFor(dataPoint: string): DefaultSensorRow | undefined {
   if (!_byDataPoint) {
     _byDataPoint = new Map(DEFAULT_SENSOR_MAP.map(r => [r.dataPoint, r]));
   }
   return _byDataPoint.get(dataPoint);
+}
+
+/** Dynamic compatibility defaults and their value-equivalent anchored definitions. */
+export function isCompatibilityDefinition(row: DefaultSensorRow | undefined): boolean {
+  return row !== undefined && staticDefaultRowFor(row.dataPoint) === undefined
+    && (row.sinceCatalogVersion === undefined || row.catalogExposure === 'anchored');
+}
+
+export function defaultRowFor(dataPoint: string): DefaultSensorRow | undefined {
+  if (!_byDataPoint) {
+    _byDataPoint = new Map(DEFAULT_SENSOR_MAP.map(r => [r.dataPoint, r]));
+  }
+  const staticRow = _byDataPoint.get(dataPoint);
+  if (staticRow) {
+    return staticRow;
+  }
+  // Dynamic fallback (GA review P1-1): the legacy matcher's
+  // acceptance is substring-based and unbounded; a finite table
+  // cannot mirror it. Synthesized rows are cached so repeated
+  // resolution sees one stable object per dataPoint.
+  if (!_synthesized.has(dataPoint)) {
+    _synthesized.set(dataPoint, synthesizeLegacyRow(dataPoint));
+  }
+  return _synthesized.get(dataPoint);
+}
+
+/**
+ * The catalog-v2 definitions (§18.3, issue #63 P2). Materialized after
+ * SYNTH_SHAPE exists (module init order); see makeCatalogV2Rows for
+ * the exposure classes.
+ */
+export const CATALOG_V2_ROWS: ReadonlyArray<DefaultSensorRow> = makeCatalogV2Rows();
+
+/*
+ * Catalog-3 definitions (§19.5): the agronomic and AQI extended
+ * measurements plus the leak detectors. All NEW exposure,
+ * default-disabled everywhere. Battery ownership note: the catalog-3
+ * canonical probes (soilhum{n} for battsm{n}, leak{n} for batleak{n})
+ * deliberately carry `canonicalForBattery: false` and own their
+ * sub-service through the CLAIMS adjudication instead of the frozen
+ * v1 reservation set — reserving the fields statically would block a
+ * custom claimant on an UN-adopted config, which claims them legally
+ * today. Each field has exactly one catalog claimant, and an authored
+ * custom claimant outranks a default one by the earliest-authored
+ * rule, which is the intended precedence.
+ */
+function makeCatalogV3Rows(): DefaultSensorRow[] {
+  const rows: DefaultSensorRow[] = [];
+  const v3 = (r: Omit<DefaultSensorRow, 'sinceCatalogVersion' | 'catalogExposure' | 'canonicalForBattery' | 'defaultEnabled'>): DefaultSensorRow => ({
+    ...r,
+    canonicalForBattery: false,
+    sinceCatalogVersion: 3,
+    catalogExposure: 'new',
+    defaultEnabled: false,
+  });
+  for (let n = 1; n <= 10; n++) {
+    rows.push(v3({
+      dataPoint: `soilhum${n}`, kind: 'motion', measurement: 'soil-moisture',
+      wrapper: SOIL_MOISTURE_WRAPPER, name: `Soil Moisture ${n}`,
+      sourceUnit: 'percent', displayUnit: 'percent',
+      // The AWN dictionary declares battsm1..battsm4 only (PR #67
+      // review F8). Channels 5..10 exist as measurements but have NO
+      // declared battery key — never fabricate one.
+      batteryField: n <= 4 ? `battsm${n}` : null,
+    }));
+  }
+  for (let n = 1; n <= 8; n++) {
+    rows.push(v3({
+      dataPoint: `leafwetness${n}`, kind: 'motion', measurement: 'leaf-wetness',
+      wrapper: LEAF_WETNESS_WRAPPER, name: `Leaf Wetness ${n}`,
+      sourceUnit: 'percent', displayUnit: 'percent', batteryField: null,
+    }));
+  }
+  for (let n = 1; n <= 4; n++) {
+    rows.push(v3({
+      dataPoint: `soiltens${n}`, kind: 'motion', measurement: 'soil-tension',
+      wrapper: SOIL_TENSION_WRAPPER, name: `Soil Tension ${n}`,
+      sourceUnit: 'cb', displayUnit: 'cb', batteryField: null,
+    }));
+  }
+  rows.push(v3({
+    dataPoint: 'etos', kind: 'motion', measurement: 'evapotranspiration',
+    wrapper: EVAPOTRANSPIRATION_WRAPPER, name: 'Evapotranspiration Short',
+    sourceUnit: 'in_per_day', displayUnit: 'in_per_day', batteryField: null,
+  }));
+  rows.push(v3({
+    dataPoint: 'etrs', kind: 'motion', measurement: 'evapotranspiration',
+    wrapper: EVAPOTRANSPIRATION_WRAPPER, name: 'Evapotranspiration Tall',
+    sourceUnit: 'in_per_day', displayUnit: 'in_per_day', batteryField: null,
+  }));
+  for (let n = 1; n <= 4; n++) {
+    rows.push(v3({
+      dataPoint: `leak${n}`, kind: 'leak', measurement: 'boolean',
+      wrapper: LEAK_WRAPPER, name: `Leak Detector ${n}`,
+      // Boolean rows carry no units at resolution; 'count' is the
+      // vocabulary's inert boolean placeholder (never consulted).
+      sourceUnit: 'count', displayUnit: 'count', batteryField: `batleak${n}`,
+    }));
+  }
+  const aqi = (dataPoint: string, name: string, batteryField: string | null): DefaultSensorRow => v3({
+    dataPoint, kind: 'motion', measurement: 'aqi',
+    wrapper: AQI_WRAPPER, name,
+    sourceUnit: 'index', displayUnit: 'index', batteryField,
+  });
+  rows.push(aqi('aqi_pm25_aqin', 'AQIN PM2.5 AQI', 'batt_co2'));
+  rows.push(aqi('aqi_pm25_24h_aqin', 'AQIN PM2.5 AQI 24h', 'batt_co2'));
+  rows.push(aqi('aqi_pm10_aqin', 'AQIN PM10 AQI', 'batt_co2'));
+  rows.push(aqi('aqi_pm10_24h_aqin', 'AQIN PM10 AQI 24h', 'batt_co2'));
+  rows.push(aqi('aqi_pm25_in', 'Indoor PM2.5 AQI', null));
+  rows.push(aqi('aqi_pm25_in_24h', 'Indoor PM2.5 AQI 24h', null));
+  return rows;
+}
+
+export const CATALOG_V3_ROWS: ReadonlyArray<DefaultSensorRow> = makeCatalogV3Rows();
+
+/** Every catalog-versioned definition, all versions (§18.3/§19.5). */
+export const VERSIONED_CATALOG_ROWS: ReadonlyArray<DefaultSensorRow> = [
+  ...CATALOG_V2_ROWS,
+  ...CATALOG_V3_ROWS,
+];
+
+let _v2ByDataPoint: Map<string, DefaultSensorRow> | undefined;
+
+/**
+ * A later-catalog definition for `dataPoint`, when the config's
+ * `catalogAdopted` covers it. Never consulted for authored identities
+ * (§18.4 AP-1/AP-2 — the callers gate on authorship first).
+ */
+export function catalogRowFor(dataPoint: string, catalogAdopted: number): DefaultSensorRow | undefined {
+  if (!_v2ByDataPoint) {
+    _v2ByDataPoint = new Map(VERSIONED_CATALOG_ROWS.map(r => [r.dataPoint, r]));
+  }
+  const row = _v2ByDataPoint.get(dataPoint);
+  return row !== undefined && (row.sinceCatalogVersion ?? 1) <= catalogAdopted ? row : undefined;
+}
+
+/**
+ * Stamp-aware default resolution for a dataPoint given the authored
+ * override layers that apply to it (§18.3 + §18.4 AP-2, generalizing
+ * the P0 rule): the v1 static table always applies; ANY authored
+ * identity — complete, partial, valid, or rejected — blocks both the
+ * later-catalog definitions and the dynamic fallback in its scope, so
+ * an explicit assignment (or a diagnosed attempt at one) is never
+ * answered with a substituted default; otherwise adopted definitions
+ * resolve before the fallback (anchored ones identically to it).
+ */
+export function defaultRowForConfigOverride(
+  dataPoint: string,
+  catalogAdopted: number,
+  ...overrideLayers: ReadonlyArray<unknown>
+): DefaultSensorRow | undefined {
+  const staticRow = staticDefaultRowFor(dataPoint);
+  if (staticRow) {
+    return staticRow;
+  }
+  if (overrideLayers.some(hasAuthoredIdentity)) {
+    return undefined;
+  }
+  return catalogRowFor(dataPoint, catalogAdopted) ?? defaultRowFor(dataPoint);
+}
+
+/**
+ * The default `enabled` value a default row contributes under a
+ * config's stamps (§18.3 exposure arithmetic): a NEW-exposure
+ * definition that arrived after the config's baseline is DISABLED,
+ * unconditionally. Everywhere else the entry's own `defaultEnabled`
+ * decides (absent = enabled) — v1 baseline and anchored rows carry no
+ * value and stay enabled, while all six current new-exposure
+ * definitions deliberately declare false, so they are off even on
+ * installs born knowing them.
+ */
+export function defaultEnabledFor(row: DefaultSensorRow, catalogBaseline: number): boolean {
+  // The baseline rule FLOORS the entry's own default (PR #66 review
+  // F5): a NEW-exposure definition that arrived after this install's
+  // birth is disabled no matter what the entry declares — an entry
+  // shipping defaultEnabled: true must never expose accessories on an
+  // older installation just because it adopted. Where the install was
+  // born knowing the definition, the ENTRY default decides — and all
+  // six current definitions deliberately declare false.
+  if (row.catalogExposure === 'new' && (row.sinceCatalogVersion ?? 1) > catalogBaseline) {
+    return false;
+  }
+  return row.defaultEnabled ?? true;
 }

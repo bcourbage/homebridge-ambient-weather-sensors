@@ -42,6 +42,8 @@ export interface EditorStationDto {
  * `index` is the same override index every diagnostic refers to.
  */
 export interface EditorAuthoredFragmentDto {
+  /** Non-object input could not be faithfully represented by this view. */
+  unreconstructable?: true;
   /** Position in the authored array == diagnostics' overrideIndex. */
   index: number;
   /**
@@ -108,6 +110,12 @@ export interface EditorRowDto {
   /** Unit CODES — the vocabulary DTO maps codes to display labels. */
   sourceUnit?: string;
   displayUnit?: string;
+  /**
+   * Literal display label for the generic `numeric` measurement
+   * (§19.9). Present on numeric rows only. An empty string is a
+   * deliberately cleared label, preserved distinct from absence.
+   */
+  unitLabel?: string;
   name?: string;
   enabled: boolean;
   /**
@@ -201,6 +209,13 @@ export interface EditorSettingsDto {
 }
 
 export interface EditorStateDto {
+  /**
+   * No platform block exists yet (a fresh installation): the page
+   * renders the Connection section for first-time credential entry,
+   * and the settings-only save creates the block. baseDigest is the
+   * fresh-install sentinel in this state.
+   */
+  freshInstall?: boolean;
   configMode: 'legacy' | 'v2' | 'safe-mode';
   v2FlagEnabled: boolean;
   /** Live settings rendered by the Connection section. */
@@ -248,6 +263,17 @@ export interface EditorStateDto {
    * which is exactly why absence-of-warnings was not a safe check).
    */
   mirrorState: 'recognized' | 'absent' | 'stale' | 'invalid';
+  /**
+   * Catalog adoption state (sensor-map.md §18.3). `baseline` and
+   * `adopted` are the block's stamps ((1, 1) for legacy mode and every
+   * unstamped config); `current` is the catalog version this plugin
+   * ships. `adopted < current` means newer definitions exist that this
+   * configuration has not adopted; adoption is an explicit save
+   * carrying `adoptCatalogVersion: current`. Absent when the block is
+   * uninterpretable (safe mode, or the v2-flag/read-only gates that
+   * return before stamps resolve).
+   */
+  catalog?: { baseline: number; adopted: number; current: number };
   /** Server-resolved effective rows (preview view). */
   rows: EditorRowDto[];
   /** Row-validation failures (rejected fragments stay in `authored`). */
@@ -316,6 +342,29 @@ export interface ConfigOnlyChangeDto {
 }
 
 /**
+ * A NON-STRUCTURAL semantic consequence of catalog adoption
+ * (sensor-map.md §19.6, PR #67 review F5): a row whose battery field
+ * decodes with a DIFFERENT polarity after the adoption because the
+ * field is vendor-inverted and the adoption crosses the catalog-3
+ * boundary. No accessory registers or re-registers, but a low/normal
+ * battery reading can flip, so the preview discloses it and the digest
+ * binds it. `from`/`to` name the decoder policy on each side.
+ */
+export interface BatteryPolarityChangeDto {
+  stationMac: string;
+  dataPoint: string;
+  batteryField: string;
+  from: 'standard' | 'vendor-inverted';
+  to: 'standard' | 'vendor-inverted';
+}
+
+/** Full-map composition facts, projected from already digest-bound state. */
+export interface ConfigurationTransitionDto {
+  before: { mode: 'legacy' | 'v2'; baseline: number; adopted: number; stamped: boolean };
+  after: { mode: 'v2'; baseline: number; adopted: number; stamped: true };
+}
+
+/**
  * Response of request '/preview-save' — a server-authoritative dry
  * run of the save. NO writes happen; the browser never computes
  * signatures or diffs itself. `digest` is the stateless confirmation
@@ -325,12 +374,20 @@ export interface ConfigOnlyChangeDto {
 export type PreviewResultDto =
   | {
     ok: true;
+    /** Absent for settings-only saves: no birth-stamp confirmation is offered. */
+    configurationTransition?: ConfigurationTransitionDto;
     /** The canonical sensorMap the save would write (§11.3/§17.4). */
     canonicalSensorMap: unknown[];
     /** Proposed effective rows, resolved by the server. */
     rows: EditorRowDto[];
     changes: PreviewChangeDto[];
     configOnly: ConfigOnlyChangeDto[];
+    /**
+     * Battery-decoder polarity changes this save causes (adoption
+     * only; §19.6 / PR #67 review F5). Empty for every non-adoption
+     * save. Disclosed and digest-bound though non-structural.
+     */
+    batteryPolarity: BatteryPolarityChangeDto[];
     /** Settings keys this save changes (names only; never values). */
     settingsChanged: string[];
     structuralChangeCount: number;
@@ -404,7 +461,7 @@ export interface AssignmentOptionDto {
  * display families the Units panel offers, in AWN units-page order,
  * plus the assignment targets unrecognized rows may take.
  */
-export interface VocabularyDto {
+export interface LegacyVocabularyDto {
   measurements: {
     [measurement: string]: {
       customSource: UnitOptionDto[];
@@ -414,3 +471,28 @@ export interface VocabularyDto {
   families: DisplayFamilyDto[];
   assignments: AssignmentOptionDto[];
 }
+
+export type SourceUnitPolicyDto =
+  | { type: 'selectable' }
+  | { type: 'fixed-authored'; unit: 'raw' }
+  | { type: 'fixed-implicit'; unit: 'ms' }
+  | { type: 'none' };
+
+/** Complete pair metadata, available only to a negotiated pair-aware editor. */
+export interface CapabilityOptionDto extends AssignmentOptionDto {
+  id: string;
+  since: number;
+  source: SourceUnitPolicyDto;
+  output: 'native-measurement' | 'native-state' | 'extended-numeric';
+  inputHelp: string;
+  outputHelp: string;
+  state?: { normal: string; active: string };
+}
+
+export interface VocabularyDto extends LegacyVocabularyDto {
+  vocabularyProtocol: 2;
+  assignments: CapabilityOptionDto[];
+}
+
+export type VocabularyResponseDto = LegacyVocabularyDto | VocabularyDto
+  | { ok: false; error: { code: 'unsupported-vocabulary-protocol'; message: string } };

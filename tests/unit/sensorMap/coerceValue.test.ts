@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { coerceValue } from '../../../src/sensorMap/coerceValue';
+import { coerceValue, INVALID_BOOLEAN_STATE } from '../../../src/sensorMap/coerceValue';
 import { makeNumericRow, makeTimestampRow } from '../../helpers/effectiveRow';
 import type { UnrecognizedRow } from '../../../src/sensorMap/types';
 
@@ -56,12 +56,26 @@ describe('coerceValue', () => {
     // Re-tag measurement to boolean for the coercer's dispatch.
     const asBool = { ...boolRow, measurement: 'boolean' } as unknown as typeof boolRow;
 
-    it('maps AWN 0/1 to 0/1', () => {
+    it('decodes valid states and forwards PRESENT-invalid as the fault marker (§19.1, PR #67 review F3)', () => {
       expect(coerceValue(asBool, 1)).toBe(1);
       expect(coerceValue(asBool, 0)).toBe(0);
-      expect(coerceValue(asBool, 5)).toBe(1);
+      // Out-of-contract finite values reach the wrapper UNCOLLAPSED —
+      // the leak family's documented 2 = offline arrives as 2, never
+      // as a truthy 1 (which read as a leak before P3).
+      expect(coerceValue(asBool, 2)).toBe(2);
+      expect(coerceValue(asBool, 5)).toBe(5);
       expect(coerceValue(asBool, true)).toBe(1);
       expect(coerceValue(asBool, false)).toBe(0);
+      // PRESENT-but-invalid (NaN, null, string, object, Infinity) is
+      // forwarded as INVALID_BOOLEAN_STATE so the state wrapper faults
+      // rather than the value being silently dropped and looking
+      // healthy. (Routing only calls coerceValue for PRESENT fields;
+      // an absent field is never coerced.)
+      expect(coerceValue(asBool, Number.NaN)).toBe(INVALID_BOOLEAN_STATE);
+      expect(coerceValue(asBool, null)).toBe(INVALID_BOOLEAN_STATE);
+      expect(coerceValue(asBool, 'offline')).toBe(INVALID_BOOLEAN_STATE);
+      expect(coerceValue(asBool, {})).toBe(INVALID_BOOLEAN_STATE);
+      expect(coerceValue(asBool, Infinity)).toBe(INVALID_BOOLEAN_STATE);
     });
   });
 

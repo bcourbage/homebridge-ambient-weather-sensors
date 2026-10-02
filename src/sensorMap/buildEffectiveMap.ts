@@ -20,7 +20,15 @@
  * add/remove decisions happen.
  */
 
-import { DEFAULT_SENSOR_MAP, defaultRowFor } from './defaultMap.js';
+import {
+  DEFAULT_SENSOR_MAP,
+  VERSIONED_CATALOG_ROWS,
+  defaultEnabledFor,
+  defaultRowForConfigOverride,
+  hasAuthoredIdentity,
+  isCompatibilityDefinition,
+  staticDefaultRowFor,
+} from './defaultMap.js';
 import { computeStructuralSignature } from './structuralSignature.js';
 import type {
   BooleanSensorRow,
@@ -44,12 +52,12 @@ import type {
   UnrecognizedRow,
   WrapperDescriptor,
 } from './types.js';
-import { DEFAULT_DISPLAY_UNIT_FOR_MEASUREMENT } from './units.js';
+import { DEFAULT_DISPLAY_UNIT_FOR_MEASUREMENT, LEGAL_UNITS_FOR_MEASUREMENT } from './units.js';
 import {
   validateOverrideBody,
   validateOverrideIdentity,
 } from './validation.js';
-import { WRAPPER_FOR_KIND_AND_MEASUREMENT, wrapperById } from './wrappers.js';
+import { wrapperById, wrapperFor } from './wrappers.js';
 import { WRAPPER_SPEC } from './wrapperFactories.js';
 
 export interface BuildInput {
@@ -64,7 +72,17 @@ export interface BuildInput {
   discovery: DiscoveryStore;
   uiState: UiStateStore;
   stations: StationInventory;
+  /** Existing HomeKit pairs are inventory, not fresh telemetry observations. */
+  cachedPairs?: ReadonlyArray<{ stationMac: string; dataPoint: string }>;
   configMode: 'legacy' | 'v2' | 'safe-mode';
+  /**
+   * The config's adoption stamps (§18.3). Absent means the v1
+   * baseline (1, 1) — every unstamped config in the field. Callers
+   * with an INVALID stamp pair never reach this builder: config-mode
+   * detection routes them to the safe-mode protective posture.
+   */
+  catalogBaseline?: number;
+  catalogAdopted?: number;
 }
 
 export function buildEffectiveSensorMap(input: BuildInput): EffectiveSensorMap {
@@ -75,6 +93,20 @@ export function buildEffectiveSensorMap(input: BuildInput): EffectiveSensorMap {
   const errors: RowValidationError[] = [];
   const warnings: RowValidationWarning[] = [];
   const notes: InternalInvariantNote[] = [];
+  const catalogBaseline = input.catalogBaseline ?? 1;
+  const catalogAdopted = input.catalogAdopted ?? 1;
+  // Where RAW fragments author identity (kind, measurement, or
+  // sourceUnit), rejected fragments included (#63 P0): an invalid
+  // explicit assignment must stay an unrecognized row with its
+  // diagnostic, never resolve through the legacy fallback as a guess.
+  // Scoped like custom identities themselves: a GLOBAL identity blocks
+  // the fallback for the dataPoint everywhere; a STATION identity
+  // blocks it for that (station, dataPoint) only — other stations'
+  // rows keep the compatibility identity.
+  const identityAuthoredGlobal = new Set<string>();
+  const identityAuthoredStation = new Set<string>();
+  const identityAuthoredAt = (mac: string, dp: string): boolean =>
+    identityAuthoredGlobal.has(dp) || identityAuthoredStation.has(`${mac}|${dp}`);
 
   // ---- 1. Identity-only validation. Reject entries with missing or
   //         invalid dataPoint / stationMac BEFORE dedup. Everything
@@ -152,6 +184,28 @@ export function buildEffectiveSensorMap(input: BuildInput): EffectiveSensorMap {
   // reserved canonical owner.
   const enabledProvenance = new Map<string, number>();
 
+  // Raw merged view per bucket, for CROSS-SCOPE identity gating at
+  // validation time (PR #66 review F2): a station-scoped fragment must
+  // be validated against the SAME identity resolution will use. When
+  // the GLOBAL layer authors an identity for the dataPoint (valid or
+  // rejected — raw presence, like the P0 sets), the station fragment
+  // must not inherit a catalog/fallback identity instead: validating
+  // it against the definition while resolution applies the authored
+  // identity signed rows whose displayUnit was illegal for the real
+  // measurement (the wrapper then throws on a reading).
+  const rawMergedByBucket = new Map<string, Record<string, unknown>>();
+  for (const [bucketKey, bucket] of pendingMerges) {
+    const m: Record<string, unknown> = {};
+    for (const frag of bucket.fragments) {
+      for (const [k, v] of Object.entries(frag.record)) {
+        if (v !== undefined) {
+          m[k] = v;
+        }
+      }
+    }
+    rawMergedByBucket.set(bucketKey, m);
+  }
+
   for (const { key, fragments } of pendingMerges.values()) {
     // Merge fragments field-by-field, later wins on conflict. Record
     // which fragment provided each field's final value.
@@ -195,7 +249,17 @@ export function buildEffectiveSensorMap(input: BuildInput): EffectiveSensorMap {
       });
     }
 
-    const defaultRow = defaultRowFor(key.dataPoint);
+    if (hasAuthoredIdentity(merged)) {
+      if (key.stationMac === undefined) {
+        identityAuthoredGlobal.add(key.dataPoint);
+      } else {
+        identityAuthoredStation.add(`${key.stationMac.toUpperCase()}|${key.dataPoint}`);
+      }
+    }
+    const globalRawForDp = key.stationMac !== undefined
+      ? rawMergedByBucket.get(`*|${key.dataPoint}`)
+      : undefined;
+    const defaultRow = defaultRowForConfigOverride(key.dataPoint, catalogAdopted, merged, globalRawForDp);
     const result = validateOverrideBody(merged, key, defaultRow);
 
     // Body validation warnings — attribute each to the fragment
@@ -288,10 +352,24 @@ export function buildEffectiveSensorMap(input: BuildInput): EffectiveSensorMap {
     stationByMac.set(s.macAddress.toUpperCase(), s.name);
   }
 
-  // Defaults × stations.
+  // Defaults × stations — the v1 baseline unconditionally, plus the
+  // ADOPTED NEW-exposure definitions (§18.3). Anchored definitions
+  // deliberately do NOT expand pairs: the fallback they anchor never
+  // did either, so adopting them adds no rows — they take effect only
+  // at resolution, replacing the synthesized row with the identical
+  // anchored one.
   for (const station of input.stations) {
     const mac = station.macAddress.toUpperCase();
     for (const row of DEFAULT_SENSOR_MAP) {
+      const key = `${mac}|${row.dataPoint}`;
+      if (!pairs.has(key)) {
+        pairs.set(key, { mac, dataPoint: row.dataPoint, stationName: station.name });
+      }
+    }
+    for (const row of VERSIONED_CATALOG_ROWS) {
+      if (row.catalogExposure !== 'new' || (row.sinceCatalogVersion ?? 1) > catalogAdopted) {
+        continue;
+      }
       const key = `${mac}|${row.dataPoint}`;
       if (!pairs.has(key)) {
         pairs.set(key, { mac, dataPoint: row.dataPoint, stationName: station.name });
@@ -308,6 +386,15 @@ export function buildEffectiveSensorMap(input: BuildInput): EffectiveSensorMap {
         dataPoint: e.dataPoint,
         stationName: stationByMac.get(mac) ?? e.stationName,
       });
+    }
+  }
+  // Cache-backed pairs must resolve even when discovery was deleted or the
+  // latest payload omits a field. This supplies no firstSeen/lastSeen evidence.
+  for (const pair of input.cachedPairs ?? []) {
+    const mac = pair.stationMac.toUpperCase();
+    const key = `${mac}|${pair.dataPoint}`;
+    if (!pairs.has(key)) {
+      pairs.set(key, { mac, dataPoint: pair.dataPoint, stationName: stationByMac.get(mac) ?? '' });
     }
   }
   // Station-specific override targets.
@@ -336,7 +423,7 @@ export function buildEffectiveSensorMap(input: BuildInput): EffectiveSensorMap {
   // feedback ("waiting for station" rows, per §3.3.4 of
   // sensor-map.md), instead of a silent nothing.
   for (const dp of globalOverrides.keys()) {
-    if (defaultRowFor(dp)) {
+    if (identityAuthoredGlobal.has(dp) ? staticDefaultRowFor(dp) : defaultRowForConfigOverride(dp, catalogAdopted, globalOverrides.get(dp))) {
       // Global row for a known dataPoint — the defaults × stations
       // pass above already emitted a pair for every station.
       continue;
@@ -371,15 +458,23 @@ export function buildEffectiveSensorMap(input: BuildInput): EffectiveSensorMap {
   for (const { mac, dataPoint } of pairs.values()) {
     const key = `${mac}|${dataPoint}`;
 
-    // Skip forgotten unrecognized fields.
-    if (forgotten.has(key) && !defaultRowFor(dataPoint)) {
-      continue;
-    }
-
-    const defaultRow = defaultRowFor(dataPoint);
     const globalOv = globalOverrides.get(dataPoint);
     const stationOv = stationOverrides.get(mac)?.get(dataPoint);
     const merged = mergeOverrides(globalOv, stationOv);
+    // Authored identity blocks the dynamic fallback (#63 P0): the
+    // explicit assignment resolves exactly as before the fallback
+    // existed — including when the assignment is INVALID and its
+    // fragments were rejected (the raw set above), so a diagnosed
+    // entry never degrades into a guessed row. The static catalog is
+    // unaffected.
+    const defaultRow = identityAuthoredAt(mac, dataPoint)
+      ? staticDefaultRowFor(dataPoint)
+      : defaultRowForConfigOverride(dataPoint, catalogAdopted, merged);
+
+    // Skip forgotten unrecognized fields.
+    if (forgotten.has(key) && !defaultRow) {
+      continue;
+    }
     const discovered = discoveryByStationDp.get(key);
 
     // Row-scope (last-fragment) provenance — used for row-scope failures
@@ -393,6 +488,8 @@ export function buildEffectiveSensorMap(input: BuildInput): EffectiveSensorMap {
       defaultRow,
       override: merged,
       discovered,
+      catalogBaseline,
+      catalogAdopted,
       onNoWrapper: (kind, measurement) => {
         // A custom (no-default) row is authored entirely by overrides, so
         // rowScopeProvenance always has its last-fragment index. Attribute
@@ -410,6 +507,18 @@ export function buildEffectiveSensorMap(input: BuildInput): EffectiveSensorMap {
           message: `Custom dataPoint '${dataPoint}' has no wrapper for `
             + `(${kind}, ${measurement}). Custom sensors are not available in this `
             + 'plugin version.',
+        });
+      },
+      onIllegalDisplayUnit: (displayUnit, rowMeasurement) => {
+        notes.push({
+          code: 'illegal-cross-scope-displayunit',
+          source: 'override',
+          overrideIndex: rowScopeIndex,
+          dataPoint,
+          stationMac: mac,
+          message: `displayUnit '${displayUnit}' on ${mac}|${dataPoint} is not legal for the row's resolved `
+            + `measurement '${rowMeasurement}' (it was authored in a different scope against a different identity). `
+            + 'The row loads with the measurement\'s default display unit.',
         });
       },
       onWrapperMismatch: (wrapperId, kind, measurement, fromDefaultMap) => {
@@ -722,6 +831,10 @@ interface ResolveInput {
   defaultRow: DefaultSensorRow | undefined;
   override: SensorMapOverride | undefined;
   discovered: DiscoveredFieldRecord | undefined;
+  /** The config's baseline stamp, for §18.3's default-enabled arithmetic. */
+  catalogBaseline: number;
+  /** The adopted stamp, gating catalog-versioned wrapper pairs (§19.2). */
+  catalogAdopted: number;
   /**
    * Called when a CUSTOM row (no `defaultRow`) resolves no wrapper —
    * i.e. its `(kind, measurement)` isn't in
@@ -743,6 +856,16 @@ interface ResolveInput {
   onWrapperMismatch: (
     wrapperId: string, kind: string, measurement: string, fromDefaultMap: boolean,
   ) => void;
+  /**
+   * Called when a CROSS-SCOPE merge hands the row a displayUnit that
+   * is illegal for its resolved measurement (PR #66 review F2: a valid
+   * global fragment's displayUnit, legal against the identity IT was
+   * validated with, meeting a station-authored custom identity). The
+   * row loads with the measurement's default display unit instead —
+   * an illegal unit must never reach a wrapper, which throws on the
+   * first reading.
+   */
+  onIllegalDisplayUnit: (displayUnit: string, measurement: string) => void;
 }
 
 /**
@@ -776,7 +899,7 @@ interface ResolvedRow {
 function resolveRow(inp: ResolveInput): ResolvedRow {
   const {
     stationMac, dataPoint, defaultRow, override, discovered,
-    onNoWrapper, onWrapperMismatch,
+    catalogBaseline, catalogAdopted, onNoWrapper, onWrapperMismatch, onIllegalDisplayUnit,
   } = inp;
 
   // ---- Unrecognized: no default, no user override with kind+measurement.
@@ -797,7 +920,7 @@ function resolveRow(inp: ResolveInput): ResolvedRow {
     defaultRow?.measurement ?? override?.measurement ?? 'temperature';
 
   // ---- Resolve wrapper.
-  const wrapper = defaultRow?.wrapper ?? WRAPPER_FOR_KIND_AND_MEASUREMENT[`${kind}|${measurement}`];
+  const wrapper = defaultRow?.wrapper ?? wrapperFor(kind, measurement, catalogAdopted);
   if (!wrapper) {
     // Custom row (no defaultRow) whose (kind, measurement) has no
     // wrapper. With the table restored (Stage 4) only kinds without a
@@ -823,8 +946,12 @@ function resolveRow(inp: ResolveInput): ResolvedRow {
     ?? sourceUnit;
 
   // ---- Resolve enabled BEFORE battery ownership. A disabled row
-  //       must never consume a claim slot.
-  const enabled = override?.enabled !== false;
+  //       must never consume a claim slot. The default derives from
+  //       the config's baseline (§18.3): a NEW-exposure definition
+  //       that arrived after this install's birth defaults to
+  //       disabled; everything else defaults to enabled, as always.
+  const enabled = override?.enabled
+    ?? (defaultRow !== undefined ? defaultEnabledFor(defaultRow, catalogBaseline) : true);
 
   // ---- Resolve battery attachment (Stage-4 ownership pass; see the
   //       ResolvedRow doc-comment). Canonical defaults own outright;
@@ -834,12 +961,19 @@ function resolveRow(inp: ResolveInput): ResolvedRow {
   const isCanonicalDefault = defaultRow !== undefined
     && defaultRow.canonicalForBattery
     && defaultRow.batteryField === batteryField;
+  // A compatibility definition carries the legacy battery REFERENCE,
+  // not permission to invent a new owner outside the frozen canonical
+  // table (for example temp11f -> batt11). Catalog-2 anchored rows must
+  // retain this same rule after adoption. An explicitly authored field
+  // may still claim ownership, as may a custom or new-exposure row.
+  const compatibilityBatteryReference = isCompatibilityDefinition(defaultRow);
   let hasBatterySubService = false;
   let batteryClaim: string | undefined;
   if (batteryField !== null && enabled) {
     if (isCanonicalDefault) {
       hasBatterySubService = true;
-    } else if (!RESERVED_BATTERY_FIELDS.has(batteryField)) {
+    } else if (!RESERVED_BATTERY_FIELDS.has(batteryField)
+        && (!compatibilityBatteryReference || override?.batteryField !== undefined)) {
       batteryClaim = batteryField;
     }
   }
@@ -928,11 +1062,31 @@ function resolveRow(inp: ResolveInput): ResolvedRow {
     // Underspecified custom row that slipped past validation. Skip.
     return { row: null };
   }
+  // Cross-scope legality guard (PR #66 review F2): per-fragment
+  // validation checked displayUnit against the identity of ITS scope;
+  // the RESOLVED measurement can differ when a station-authored
+  // identity meets a global fragment. Never sign a row whose
+  // displayUnit its wrapper would reject — fall back to the
+  // measurement's documented default and surface a note.
+  let effectiveDisplayUnit = displayUnit;
+  const legal = LEGAL_UNITS_FOR_MEASUREMENT[measurement as NumericSensorRow['measurement']];
+  if (!legal.includes(effectiveDisplayUnit)) {
+    onIllegalDisplayUnit(effectiveDisplayUnit, measurement);
+    effectiveDisplayUnit = DEFAULT_DISPLAY_UNIT_FOR_MEASUREMENT[measurement] ?? sourceUnit;
+  }
   const row: NumericSensorRow = {
     ...base,
     measurement: measurement as NumericSensorRow['measurement'],
     sourceUnit,
-    displayUnit,
+    displayUnit: effectiveDisplayUnit,
+    // Generic numeric label (§19.9). Carried ONLY when the RESOLVED
+    // measurement is numeric, so a label inherited from a global
+    // template can never contaminate a station whose explicit identity
+    // is a different measurement. An explicit '' is preserved (a
+    // deliberately cleared label) distinct from absence. Non-structural.
+    ...(measurement === 'numeric' && override?.unitLabel !== undefined
+      ? { unitLabel: override.unitLabel }
+      : {}),
   };
   return { row, batteryClaim };
 }

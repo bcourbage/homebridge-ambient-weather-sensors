@@ -67,7 +67,26 @@ function legacyCtor(wrapperId: WrapperId): new (p: unknown, a: unknown) => unkno
   return desc.constructor as new (p: unknown, a: unknown) => unknown;
 }
 
-const wrapperIds = Object.keys(WRAPPER_SPEC) as WrapperId[];
+/**
+ * The FROZEN v1.7.0 wrapper vocabulary — exactly the 25 ids the golden
+ * was generated from. Catalog-3 wrappers (§19) pin against their own
+ * golden in catalog3GraphParity.test.ts; they must never join this
+ * list (there is no v1.7.0 graph for them to match).
+ */
+const V17_WRAPPER_IDS: ReadonlyArray<WrapperId> = [
+  'temperature', 'humidity', 'solar-radiation', 'co2',
+  'air-quality-pm25', 'air-quality-pm10', 'uv',
+  'wind-speed', 'wind-gust', 'wind-max-daily-gust',
+  'wind-direction', 'wind-direction-10m',
+  'pressure-relative', 'pressure-absolute',
+  'rain-rate', 'rain-event', 'rain-daily', 'rain-weekly',
+  'rain-monthly', 'rain-yearly', 'last-rain',
+  'lightning-day', 'lightning-hour', 'lightning-distance',
+  'lightning-last-strike',
+];
+// Every v1.7 id is still in the live spec (a removal would be its own
+// cache-migration event).
+const wrapperIds = V17_WRAPPER_IDS.filter(id => WRAPPER_SPEC[id] !== undefined);
 const cases: Array<[WrapperId, Variant]> = wrapperIds.flatMap(id => [[id, 0], [id, 1]] as Array<[WrapperId, Variant]>);
 
 describe('HAP graph parity vs the v1.7.0 golden (finding-#4 review P1-C)', () => {

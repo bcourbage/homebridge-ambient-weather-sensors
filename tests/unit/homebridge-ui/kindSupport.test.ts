@@ -32,14 +32,16 @@ describe('kind-support vocabulary', () => {
   });
 
   it('the derived help copy lists every kind under the correct capability claim', () => {
-    // Slice out the two lists by their fixed anchors. A '. ' search
-    // is safe as a sentence boundary here: no label contains a period
-    // followed by a space (PM2.5's period is mid-token).
+    // Slice out the lists by their fixed anchors. A '. ' search is
+    // safe as a sentence boundary here: no label contains a period
+    // followed by a space (PM2.5's period is mid-token). The reserved
+    // sentence uses singular/plural grammar and only appears when needed.
     const splitList = (list: string): string[] => list.split(' and ').flatMap(part => part.split(', '));
-    const head = KIND_HELP.slice(0, KIND_HELP.indexOf(' are reserved for future support'));
-    const reserved = splitList(head.slice(head.lastIndexOf('. ') + 2));
     const supportedAnchor = 'Currently supported kinds are ';
-    const supported = splitList(head.slice(head.indexOf(supportedAnchor) + supportedAnchor.length, head.lastIndexOf('. ')));
+    const afterAnchor = KIND_HELP.slice(KIND_HELP.indexOf(supportedAnchor) + supportedAnchor.length);
+    const supported = splitList(afterAnchor.slice(0, afterAnchor.indexOf('. ')));
+    const reservedSentence = KIND_HELP.split('. ').find(s => s.endsWith(' reserved for future support'));
+    const reserved = reservedSentence ? splitList(reservedSentence.replace(/ (?:is|are) reserved for future support$/, '')) : [];
 
     const entries = Object.values(KIND_SUPPORT);
     expect(new Set(supported)).toEqual(new Set(entries.filter(e => e.supported).map(e => e.label)));

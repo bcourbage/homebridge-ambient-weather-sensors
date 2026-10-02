@@ -20,7 +20,16 @@
 import type { Logger } from 'homebridge';
 export interface RealtimeUpdate {
     uniqueId: string;
-    value: number;
+    /**
+     * A PRESENT raw sensor value, forwarded verbatim to the shared
+     * row-aware coercion/decoder boundary (PR #67 review R2-F1). Numbers
+     * and booleans decode normally; a present-invalid value on a boolean
+     * STATE row faults there rather than being dropped at the transport;
+     * a present-invalid value on a numeric row is dropped by the coercer
+     * (legacy contract). The legacy flag-off distribute path guards
+     * `typeof number`, so non-numbers never reach a legacy wrapper.
+     */
+    value: unknown;
     /**
      * HomeKit-aligned low/normal flag for the sensor's physical probe.
      * undefined = no battery reported for this probe; true = low;
@@ -50,6 +59,12 @@ export interface RealtimeOptions {
      * absent, so a bare construction keeps legacy behavior.
      */
     resolveBatteryField?: (stationMac: string, dataPoint: string) => string | null;
+    /**
+     * The config's adopted catalog version (§19.6), gating the
+     * vendor-polarity battery decode. Absent = 1, the legacy uniform
+     * decode — a bare construction keeps historical behavior.
+     */
+    catalogAdopted?: number;
 }
 export declare class RealtimeSource {
     private readonly opts;

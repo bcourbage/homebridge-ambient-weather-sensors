@@ -224,7 +224,8 @@ export class HomebridgeService {
    * answers with a non-array (review round-2 P1): a failed read is
    * the ABSENCE of a cache snapshot, never an empty one — the server
    * must not take a missing key as evidence that no accessory exists.
-   * Inventory still degrades to the server-side sources.
+   * Read-only rendering and Connection-only repair can use server-side
+   * sources. Full legacy conversion requires a successful cache snapshot.
    */
   async cachedAccessoryUniqueIds(): Promise<string[] | undefined> {
     if (!this.ipc?.getCachedAccessories) {

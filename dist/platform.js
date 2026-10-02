@@ -18,9 +18,11 @@ import { RealtimeSource } from './realtimeSource.js';
 import { bindSafeMode } from './safeModeBinding.js';
 import { inferForCachedAccessory } from './sensorMap/bootstrap.js';
 import { coerceValue } from './sensorMap/coerceValue.js';
+import { legacyRowFilterState } from './sensorMap/compat.js';
 import { detectConfigMode } from './sensorMap/configMode.js';
 import { composeDisplayName as sharedComposeDisplayName, composeRowDisplayName, hapClean as sharedHapClean, } from './sensorMap/displayName.js';
 import { legacyTypeForWrapperId } from './sensorMap/legacyDeviceType.js';
+import { LEGACY_FIELD_MATCHERS } from './sensorMap/defaultMap.js';
 import { DISCOVERY_FILE, DiscoveryTracker, cleanupStaleTempFiles, loadDiscoveryStore, } from './sensorMap/persistence/discoveryStore.js';
 import { NOTICES_FILE, appendNotice, loadNoticeStore, } from './sensorMap/persistence/noticesStore.js';
 import { UI_STATE_FILE, loadUiStateStore } from './sensorMap/persistence/uiStateStore.js';
@@ -44,7 +46,8 @@ export const hapClean = sharedHapClean;
 // normalizeMatchKey / toMatcherSet moved to sensorMap/stationMatch.ts
 // (shared with the editor save pipeline since beta.17); re-exported
 // here so existing importers and tests keep working.
-import { normalizeMatchKey, toMatcherSet } from './sensorMap/stationMatch.js';
+import { filterStationInventory, indeterminateFilterStations, latestDiscoveryStationNames, normalizeMatchKey, toMatcherSet } from './sensorMap/stationMatch.js';
+import { cachedPairFromUniqueId } from './sensorMap/cachedInventory.js';
 export { normalizeMatchKey, toMatcherSet };
 // Polling cadence for the AWN REST API. AWN's documented rate limit is
 // 1 req/sec per apiKey, so any cadence above that is safe; 2 minutes
@@ -66,6 +69,27 @@ function normalizeUniqueId(uniqueId) {
     return uniqueId.slice(0, 17).toUpperCase() + uniqueId.slice(17);
 }
 export class AmbientWeatherSensorsPlatform {
+    /**
+     * The catalog version the BATTERY DECODER runs at (§19.6, PR #67
+     * review F6). The vendor-inverted polarity is a v2-runtime behavior:
+     * it applies only when the v2 sensor-map is actually driving. The
+     * flag-off (opt-out) path and safe mode keep the frozen legacy
+     * decode (version 1) even when the config retains a catalog-3 stamp
+     * (which survives the documented marker-deletion rollback).
+     */
+    decoderAdopted() {
+        // Follow the ACTIVE runtime, not the serialized config SHAPE
+        // (PR #67 review R2-F2). The v2 runtime drives whenever the flag is
+        // on and we are not in safe mode — INCLUDING an opted-in
+        // compat run over a legacy-shaped block (configMode 'legacy',
+        // discoverDevicesV2 executing). Gating on configMode === 'v2'
+        // instead flipped the decoder across a pure conversion (compat run
+        // decoded at 1, the converted run at the same stamp decoded at 3),
+        // silently reversing battery status with no previewed consequence.
+        // Flag-off and safe mode keep the frozen legacy decode (version 1),
+        // matching real 1.7.3 and the protective posture.
+        return this.sensorMapV2 && this.configMode !== 'safe-mode' ? this.catalogAdopted : 1;
+    }
     constructor(log, config, api) {
         this.log = log;
         this.config = config;
@@ -159,6 +183,10 @@ export class AmbientWeatherSensorsPlatform {
         //                     sensors while never destroying user-critical
         //                     HomeKit state under an uninterpretable config.
         this.configMode = 'legacy';
+        // Adoption stamps from mode detection (§18.3). (1, 1) covers legacy
+        // mode and every unstamped v2 config; safe mode never reads them.
+        this.catalogBaseline = 1;
+        this.catalogAdopted = 1;
         this.sleep = (delay) => new Promise((resolve) => setTimeout(resolve, delay));
         this.log.debug('Finished initializing platform:', this.config.platform);
         // Resolve the v2 construction gate once (default ON; explicit
@@ -175,6 +203,8 @@ export class AmbientWeatherSensorsPlatform {
             // full contract.
             const detected = detectConfigMode(this.config);
             this.configMode = detected.mode;
+            this.catalogBaseline = detected.catalogBaseline ?? 1;
+            this.catalogAdopted = detected.catalogAdopted ?? 1;
             for (const w of detected.warnings) {
                 this.log.warn(w);
             }
@@ -243,24 +273,24 @@ export class AmbientWeatherSensorsPlatform {
         // pre-computed AQI values, not raw PM concentrations, and they
         // can carry sentinel values that would mislead HomeKit users.
         // If a future change loosens the regex, re-check this guard.
-        if ((sensor.includes('temp') || sensor.includes('feelsLike') || sensor.includes('dewPoint'))
-            && this.config.temperatureSensors) {
-            return 'Temperature';
-        }
-        else if (sensor.includes('humid') && this.config.humiditySensors) {
-            return 'Humidity';
-        }
-        else if (sensor.includes('solar') && this.config.solarRadiationSensors) {
-            return 'Solar Radiation';
-        }
-        else if (/^co2($|_)/.test(sensor) && this.config.co2Sensors) {
-            return 'CO2';
-        }
-        else if (/^pm25($|_)/.test(sensor) && this.config.airQualitySensors) {
-            return 'PM2.5';
-        }
-        else if (/^pm10($|_)/.test(sensor) && this.config.airQualitySensors) {
-            return 'PM10';
+        // Value-tile matching consumes the SHARED matcher list (GA review
+        // P1-1 / issue #63): the v2 recognizer synthesizes rows from the
+        // same list, so legacy registration and v2 recognition cannot
+        // drift. Semantics preserved exactly: each matcher is tried in
+        // order, and a shape match whose category toggle is off falls
+        // through to the next matcher, as the original else-if chain did.
+        const categoryToggles = {
+            'temperature': this.config.temperatureSensors,
+            'humidity': this.config.humiditySensors,
+            'light': this.config.solarRadiationSensors,
+            'co2': this.config.co2Sensors,
+            'air-quality-pm25': this.config.airQualitySensors,
+            'air-quality-pm10': this.config.airQualitySensors,
+        };
+        for (const matcher of LEGACY_FIELD_MATCHERS) {
+            if (matcher.test(sensor) && categoryToggles[matcher.kind]) {
+                return matcher.legacyType;
+            }
         }
         // Extended sensors (v1.5.0). Gated by the master toggle
         // `extendedSensors` AND a per-category sub-toggle. Both must be
@@ -649,7 +679,7 @@ export class AmbientWeatherSensorsPlatform {
                     const batteryLow = (batteryField
                         && isCanonicalSensorForBattery(sensorKey, batteryField)
                         && !suppressedBatteries.has(batteryField))
-                        ? readBatteryLow(obj.lastData, batteryField)
+                        ? readBatteryLow(obj.lastData, batteryField, this.decoderAdopted())
                         : undefined;
                     Devices.push({
                         macAddress: obj.macAddress,
@@ -936,38 +966,84 @@ export class AmbientWeatherSensorsPlatform {
                 await this.sleep(60000);
                 return this.discoverDevicesV2();
             }
-            // Apply stationFilter at the station level BEFORE building the
-            // inventory — v1 parity (parseDevices filters stations first).
-            // Without this, a multi-Home child-bridge setup would register
-            // EVERY station's accessories on each instance. The editor's
-            // save pipeline mirrors this exact ordering when it computes
-            // preview consequences (stationMatch.filterStationInventory).
-            const rawStations = this.applyStationFilterV2(fetched);
-            // Station inventory (post-filter). isMultiStation drives the
-            // displayName recipe exactly as the v1.6.0 path does — recomputed
-            // AFTER stationFilter so a one-station-per-instance multi-Home
-            // setup gets bare tile names.
-            const stations = rawStations.map(s => ({
-                macAddress: s.macAddress,
-                name: s.info?.name ?? '',
-            }));
-            const isMultiStation = stations.length > 1;
-            // Initialize persistence + feed the tracker with this snapshot's
-            // post-filter observations, then take the merged (persisted +
-            // live) discovery view. All I/O stays here, OUT of the pure
-            // assembly helper below.
             const { uiState } = await this.initV2Persistence();
+            // Telemetry determines what can be CREATED, not whether an existing
+            // accessory is still configured. Retain a factual station/pair inventory
+            // from discovery and HomeKit cache when AWN temporarily omits data.
+            const rawStations = this.applyStationFilterV2(fetched);
+            const inventory = new Map();
+            for (const s of fetched) {
+                inventory.set(s.macAddress.toUpperCase(), {
+                    macAddress: s.macAddress, name: typeof s.info?.name === 'string' ? s.info.name : '',
+                });
+            }
+            const discoveryNames = latestDiscoveryStationNames(this.v2Tracker.snapshot().entries);
+            for (const entry of this.v2Tracker.snapshot().entries) {
+                const mac = entry.stationMac.toUpperCase();
+                const prior = inventory.get(mac);
+                if (!prior) {
+                    inventory.set(mac, { macAddress: entry.stationMac, name: discoveryNames.get(mac) ?? '' });
+                }
+                else if (!normalizeMatchKey(prior.name) && discoveryNames.has(mac)) {
+                    prior.name = discoveryNames.get(mac);
+                }
+            }
+            const cachedByPair = new Map();
+            const cachedPairs = [];
+            for (const accessory of this.accessories) {
+                const uniqueId = accessory.context?.device?.uniqueId;
+                const pair = cachedPairFromUniqueId(uniqueId);
+                if (!pair) {
+                    continue;
+                }
+                const rawMac = uniqueId.slice(0, 17);
+                const { stationMac: mac, dataPoint } = pair;
+                cachedByPair.set(`${mac}-${dataPoint}`, accessory);
+                cachedPairs.push({ stationMac: mac, dataPoint });
+                if (!inventory.has(mac)) {
+                    inventory.set(mac, { macAddress: rawMac, name: '' });
+                }
+            }
+            // A name filter cannot decide an unnamed cache-only station. Keep its
+            // cache frozen rather than interpreting missing metadata as exclusion.
+            const unknownFilterMacs = new Set(indeterminateFilterStations([...inventory.values()], this.config.stationFilter)
+                .map(s => s.macAddress.toUpperCase()));
+            const stations = filterStationInventory([...inventory.values()], this.config.stationFilter);
+            const includedMacs = new Set(stations.map(s => s.macAddress.toUpperCase()));
+            const resolutionStations = [...stations, ...[...inventory.values()]
+                    .filter(s => unknownFilterMacs.has(s.macAddress.toUpperCase()))];
+            if (unknownFilterMacs.size > 0) {
+                this.log.warn(`Station filter membership is unknown for ${[...unknownFilterMacs].join(', ')}. `
+                    + 'Keeping configured cached accessories unchanged. Restore station discovery or use MAC addresses in stationFilter.');
+            }
+            const isMultiStation = stations.length > 1;
             this.observeV2Stations(rawStations);
             const discovery = this.v2Tracker.snapshot();
             // Assemble the effective map (pure).
             const effectiveMap = buildPlatformEffectiveMap({
                 config: this.config,
                 configMode: this.configMode,
-                stations,
+                stations: resolutionStations,
+                cachedPairs,
                 discovery,
                 uiState,
+                catalogBaseline: this.catalogBaseline,
+                catalogAdopted: this.catalogAdopted,
             });
             this.logEffectiveMapDiagnostics(effectiveMap);
+            const uncertainLegacyPairs = new Set();
+            if (this.configMode === 'legacy') {
+                for (const row of effectiveMap.rows) {
+                    const station = inventory.get(row.stationMac);
+                    if (station && legacyRowFilterState(this.config, row.dataPoint, station, isMultiStation) === 'unknown') {
+                        uncertainLegacyPairs.add(`${row.stationMac}-${row.dataPoint}`);
+                    }
+                }
+            }
+            if (uncertainLegacyPairs.size > 0) {
+                this.log.warn('Legacy includeOnly/excludeSensors cannot be evaluated without station names. '
+                    + 'Affected cached accessories are kept unchanged. Restore station discovery and restart Homebridge.');
+            }
             // Index raw stations by uppercased MAC for value/battery reads and
             // reported-field gating.
             const rawByMac = new Map();
@@ -976,16 +1052,20 @@ export class AmbientWeatherSensorsPlatform {
             }
             const reconciled = [];
             for (const row of effectiveMap.rows) {
-                if (row.kind === 'unrecognized' || !row.enabled) {
+                if (row.kind === 'unrecognized' || !row.enabled || !includedMacs.has(row.stationMac)
+                    || uncertainLegacyPairs.has(`${row.stationMac}-${row.dataPoint}`)) {
                     continue;
                 }
                 const raw = rawByMac.get(row.stationMac);
-                if (!raw || !(row.dataPoint in raw.lastData)) {
-                    // The station didn't report this field this tick — don't
-                    // register it (v1.6.0 parity: it iterates reported fields only).
+                const cached = cachedByPair.get(`${row.stationMac}-${row.dataPoint}`);
+                const reported = raw !== undefined && Object.prototype.hasOwnProperty.call(raw.lastData, row.dataPoint);
+                if (!reported && !cached) {
                     continue;
                 }
-                const uniqueId = `${raw.macAddress}-${row.dataPoint}`;
+                // The cache's original MAC casing owns the existing UUID even if AWN
+                // changes its presentation or the station is absent this boot.
+                const uniqueId = cached?.context.device.uniqueId ?? `${raw.macAddress}-${row.dataPoint}`;
+                const macAddress = uniqueId.slice(0, uniqueId.indexOf('-'));
                 // Initial value (review finding 7 + round 6): an uncoercible
                 // reading must never fabricate a REAL zero observation (false
                 // temperature / air-quality / trigger state). Seed only from a
@@ -1001,8 +1081,8 @@ export class AmbientWeatherSensorsPlatform {
                 // STRING parsed to 0 in v1.7 ("never"). Only that dataPoint and
                 // only the string shape — other timestamp rows (lightning_time,
                 // future customs) had no such special case and stay unset.
-                const rawReading = raw.lastData[row.dataPoint];
-                let value = coerceValue(row, rawReading);
+                const rawReading = reported ? raw.lastData[row.dataPoint] : undefined;
+                let value = reported ? coerceValue(row, rawReading) : undefined;
                 if (value === undefined && row.dataPoint === 'lastRain' && typeof rawReading === 'string') {
                     value = 0;
                 }
@@ -1011,14 +1091,17 @@ export class AmbientWeatherSensorsPlatform {
                 // not orphaned. The routing lookup key uses the row's uppercased
                 // MAC (distributeViaRouting uppercases the payload MAC too).
                 const device = {
-                    macAddress: raw.macAddress,
+                    macAddress,
                     uniqueId,
                     // Row-driven naming (review P1-1): the label comes from
                     // `row.name` — default-map name, or the user's rename override
                     // — composed with the same station-prefix/truncation recipe as
                     // v1.7. Keeps the platform displayName consistent with the
                     // extended wrappers' service labels, which also read row.name.
-                    displayName: composeRowDisplayName({ macAddress: raw.macAddress, name: raw.info?.name ?? '' }, row.name, isMultiStation),
+                    // Use the preview's same factual inventory and MAC fallback when
+                    // discovery names are unavailable. Reusing an old cached name here
+                    // would silently ignore an explicitly saved rename while offline.
+                    displayName: composeRowDisplayName({ macAddress: row.stationMac, name: inventory.get(row.stationMac)?.name ?? '' }, row.name, isMultiStation),
                     type: legacyTypeForWrapperId(row.wrapperId),
                     value,
                     // Bootstrap battery seed resolves through the SAME shared
@@ -1026,7 +1109,7 @@ export class AmbientWeatherSensorsPlatform {
                     // is every runtime battery read, including this first one,
                     // so the initial context/HAP seed can never drift from what
                     // later ticks resolve.
-                    batteryLow: readBatteryLow(raw.lastData, resolveBatteryField(effectiveMap, row.stationMac, row.dataPoint) ?? undefined),
+                    batteryLow: raw ? readBatteryLow(raw.lastData, resolveBatteryField(effectiveMap, row.stationMac, row.dataPoint) ?? undefined, this.decoderAdopted()) : undefined,
                 };
                 reconciled.push({ row, device, routingUid: `${row.stationMac}-${row.dataPoint}` });
             }
@@ -1038,12 +1121,25 @@ export class AmbientWeatherSensorsPlatform {
             // re-enters normal reconciliation once it becomes inferable (e.g.
             // AWN starts reporting its dataPoint again) on a later reconcile.
             const currentUniqueIds = new Set(reconciled.map(r => r.device.uniqueId));
+            const configuredByPair = new Map(effectiveMap.rows.map(row => [`${row.stationMac}-${row.dataPoint}`, row]));
             const orphans = this.accessories.filter((accessory) => {
                 const uniqueId = accessory.context?.device?.uniqueId;
                 return !uniqueId || !currentUniqueIds.has(uniqueId);
             });
             for (const orphan of orphans) {
-                if (inferForCachedAccessory(orphan).status === 'preserve-cached') {
+                const uid = orphan.context?.device?.uniqueId;
+                const pair = cachedPairFromUniqueId(uid);
+                if (pair && (includedMacs.has(pair.stationMac) || unknownFilterMacs.has(pair.stationMac))
+                    && uncertainLegacyPairs.has(`${pair.stationMac}-${pair.dataPoint}`)) {
+                    continue;
+                }
+                if (typeof uid === 'string' && unknownFilterMacs.has(uid.slice(0, uid.indexOf('-')).toUpperCase())) {
+                    const row = configuredByPair.get(`${uid.slice(0, uid.indexOf('-')).toUpperCase()}-${uid.slice(uid.indexOf('-') + 1)}`);
+                    if (row && row.kind !== 'unrecognized' && row.enabled) {
+                        continue;
+                    }
+                }
+                if (inferForCachedAccessory(orphan, { trustV2Cache: this.configMode === 'v2' }).status === 'preserve-cached') {
                     const uid = orphan.context?.device?.uniqueId ?? orphan.displayName;
                     if (!this.loggedPreservedAccessories.has(uid)) {
                         this.loggedPreservedAccessories.add(uid);
@@ -1052,8 +1148,8 @@ export class AmbientWeatherSensorsPlatform {
                     }
                     continue;
                 }
-                this.log.info(`De-registering accessory [${orphan.displayName}]. It was either not found in the API response, `
-                    + 'or the sensor type has been disabled in the plugin configuration');
+                this.log.info(`De-registering accessory [${orphan.displayName}]. Its mapping was removed, disabled, `
+                    + 'or excluded by the station filter.');
                 this.api.unregisterPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [orphan]);
                 const idx = this.accessories.indexOf(orphan);
                 if (idx >= 0) {
@@ -1268,6 +1364,12 @@ export class AmbientWeatherSensorsPlatform {
      * detection deliberately doesn't classify it as a legacy toggle.
      */
     applyStationFilterV2(stations) {
+        // A partial live payload may omit info.name. Last observed station metadata
+        // still settles name filters and naming, without fabricating sensor data.
+        const names = latestDiscoveryStationNames(this.v2Tracker?.snapshot().entries ?? []);
+        stations = stations.map(station => normalizeMatchKey(station.info?.name) ? station : {
+            ...station, info: { ...station.info, name: names.get(station.macAddress.toUpperCase()) ?? '' },
+        });
         for (const station of stations) {
             if (!this.loggedDiscoveredStations.has(station.macAddress)) {
                 const sensorCount = Object.keys(station.lastData ?? {}).length;
@@ -1349,8 +1451,8 @@ export class AmbientWeatherSensorsPlatform {
                 // destroying HomeKit rooms/automations. v1.7's parseDevices
                 // THREW on the same input (Object.entries(undefined)) and
                 // preserved the cache via the retry path; match that outcome.
-                // A genuinely empty array (`[]`) is still authoritative: AWN is
-                // healthy and reports no devices — same as v1.7.
+                // A genuinely empty array is a valid observation, not permission to
+                // remove configured cached accessories; reconciliation retains them.
                 if (!s || typeof s !== 'object') {
                     this.log.warn('AWN response contains a non-object station entry; treating as a failed snapshot (no reconciliation this attempt).');
                     return undefined;
@@ -1567,7 +1669,7 @@ export class AmbientWeatherSensorsPlatform {
             if (!lastData) {
                 continue;
             }
-            const low = readBatteryLow(lastData, field);
+            const low = readBatteryLow(lastData, field, this.decoderAdopted());
             if (low !== undefined) {
                 entry.wrapper.setBatteryLow(low);
             }
@@ -1577,9 +1679,19 @@ export class AmbientWeatherSensorsPlatform {
      * Reshape the realtime source's pre-digested `(uniqueId, value)`
      * updates back into raw per-station payloads so the v2 path routes them
      * through the SAME `distributeViaRouting` boundary the poll path uses.
-     * The realtime source emits every numeric field — including the batt*
-     * fields — as its own update, so the reconstructed `lastData` carries
-     * the battery datapoints the shared battery reader consumes.
+     * The realtime source now forwards every PRESENT field — including the
+     * batt* fields — as its own update, so the reconstructed `lastData`
+     * carries the battery datapoints the shared battery reader consumes.
+     *
+     * The reconstruction uses a NULL-PROTOTYPE record (PR #67 review
+     * R3-F1): a forwarded field literally named `__proto__` (a
+     * prototype-safe own key on the JSON-parsed source) would, on a plain
+     * `{}`, invoke the prototype setter and make an UNRELATED sensor's
+     * value appear as an inherited property — e.g. a crafted
+     * `{"leak1":0,"__proto__":{"batleak1":0}}` could synthesize a healthy
+     * battery reading. A null-prototype record makes every assignment an
+     * own data property with no inheritance, so a battery/state lookup
+     * sees only genuinely reported own fields.
      */
     updatesToStationPayloads(updates) {
         const byMac = new Map();
@@ -1592,7 +1704,7 @@ export class AmbientWeatherSensorsPlatform {
             const dataPoint = norm.slice(18);
             let lastData = byMac.get(mac);
             if (!lastData) {
-                lastData = {};
+                lastData = Object.create(null);
                 byMac.set(mac, lastData);
             }
             lastData[dataPoint] = u.value;
@@ -1898,12 +2010,16 @@ export class AmbientWeatherSensorsPlatform {
             apiKey: this.config.apiKey,
             applicationKey: this.config.applicationKey,
             log: this.log,
+            // Realtime forwards every PRESENT sensor field (not only numeric
+            // ones) so the shared row-aware coercer/decoder handles state
+            // faults and legacy drops uniformly (§19.1, PR #67 review R2-F1).
             onUpdates: (updates) => this.distribute(updates),
             // Shared battery-field reader (lazy: reads the member at each
             // resolution, so a reconcile that rebuilds the effective map is
             // picked up without reconstructing the socket). Flag off →
             // undefined map → the reader IS the legacy static lookup.
             resolveBatteryField: (mac, dp) => resolveBatteryField(this.v2EffectiveMap, mac, dp),
+            catalogAdopted: this.decoderAdopted(),
         });
         this.realtimeSource.start();
     }
@@ -1953,6 +2069,16 @@ export class AmbientWeatherSensorsPlatform {
             return;
         }
         for (const update of updates) {
+            // The v1 (flag-off) path drops the ENTIRE non-numeric sensor
+            // update — both the value AND its bundled battery side effect —
+            // matching published 1.7.3 (PR #67 review R3-F2). Guarding only
+            // setValue would let a non-numeric update still flip the legacy
+            // wrapper's battery state, which 1.7.3 never does. Independent
+            // legacy battery updates would be a deliberate behavior change,
+            // not an incidental effect of the v2 transport widening.
+            if (typeof update.value !== 'number') {
+                continue;
+            }
             const wrapper = this.wrappers.get(update.uniqueId);
             if (wrapper) {
                 wrapper.setValue(update.value);

@@ -215,9 +215,17 @@ export class RealtimeSource {
                 continue;
             }
             for (const [key, value] of Object.entries(lastData)) {
-                if (typeof value !== 'number') {
-                    continue;
-                }
+                // Forward every PRESENT sensor value to the SAME row-aware
+                // boundary polling uses (PR #67 review R2-F1): the v2 route
+                // ends in `coerceValue`, which passes numbers/booleans through,
+                // drops strings/objects for numeric rows (legacy contract), and
+                // faults a present-invalid boolean STATE reading rather than
+                // dropping it. The transport must not pre-filter by type or a
+                // present-invalid state (null/"offline"/object) never reaches
+                // the decoder. `Object.entries` never yields an ABSENT field,
+                // so present-invalid stays distinct from missing. The legacy
+                // (flag-off) distribute path guards `typeof number`, so a
+                // non-number can never reach a legacy numeric wrapper.
                 if (this.opts.isSensorKey && !this.opts.isSensorKey(key)) {
                     continue;
                 }
@@ -231,7 +239,7 @@ export class RealtimeSource {
                 const batteryField = this.opts.resolveBatteryField
                     ? this.opts.resolveBatteryField(macAddress, key) ?? undefined
                     : batteryFieldForSensor(key);
-                const batteryLow = readBatteryLow(lastData, batteryField);
+                const batteryLow = readBatteryLow(lastData, batteryField, this.opts.catalogAdopted ?? 1);
                 updates.push({
                     uniqueId: `${macAddress}-${key}`,
                     value,

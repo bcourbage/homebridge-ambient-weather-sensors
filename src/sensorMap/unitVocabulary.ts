@@ -124,6 +124,29 @@ export const UNIT_VOCABULARY: Readonly<Record<Measurement, ReadonlyArray<UnitOpt
   direction: [
     { unit: 'degrees', label: '°', selectableAsCustomSourceUnit: true, selectableAsExtendedDisplayUnit: true },
   ],
+  'soil-moisture': [
+    { unit: 'percent', label: '%', selectableAsCustomSourceUnit: true, selectableAsExtendedDisplayUnit: true },
+  ],
+  'leaf-wetness': [
+    { unit: 'percent', label: '%', selectableAsCustomSourceUnit: true, selectableAsExtendedDisplayUnit: true },
+  ],
+  'soil-tension': [
+    { unit: 'cb', label: 'cb', selectableAsCustomSourceUnit: true, selectableAsExtendedDisplayUnit: true },
+  ],
+  'evapotranspiration': [
+    { unit: 'in_per_day', label: 'in/day', selectableAsCustomSourceUnit: true, selectableAsExtendedDisplayUnit: true },
+    { unit: 'mm_per_day', label: 'mm/day', selectableAsCustomSourceUnit: true, selectableAsExtendedDisplayUnit: true },
+  ],
+  'aqi': [
+    { unit: 'index', label: 'index', selectableAsCustomSourceUnit: true, selectableAsExtendedDisplayUnit: true },
+  ],
+  // Generic numeric passthrough (§19.9): the opaque `raw` carrier is
+  // never user-selectable — the user picks the `numeric` measurement and
+  // supplies a free-text `unitLabel`. Present here only for bijection
+  // completeness against LEGAL_UNITS_FOR_MEASUREMENT.
+  numeric: [
+    { unit: 'raw', label: 'raw', selectableAsCustomSourceUnit: false, selectableAsExtendedDisplayUnit: false },
+  ],
   timestamp: [
     // sourceUnit is FIXED to 'ms' by contract (§3.4) — present in the
     // vocabulary for bijection completeness, never user-selectable.
@@ -169,6 +192,12 @@ export const MEASUREMENT_LABELS: Readonly<Record<Measurement, string>> = {
   'uv-index': 'UV index',
   'count': 'Count',
   'direction': 'Direction',
+  'soil-moisture': 'Soil moisture',
+  'leaf-wetness': 'Leaf wetness',
+  'soil-tension': 'Soil tension',
+  'evapotranspiration': 'Evapotranspiration',
+  'aqi': 'Air quality index',
+  'numeric': 'Numeric value',
   'timestamp': 'Timestamp',
   'boolean': 'On/off',
 };
@@ -327,6 +356,18 @@ export const DISPLAY_FAMILIES: ReadonlyArray<DisplayFamily> = [
     choices: [
       { id: 'imperial', label: 'in/hr', units: { 'rain-rate': 'in_per_hr', 'rain-accumulation': 'in' }, awn: true },
       { id: 'metric',   label: 'mm/hr', units: { 'rain-rate': 'mm_per_hr', 'rain-accumulation': 'mm' }, awn: true },
+    ],
+  },
+  {
+    // Evapotranspiration (§19.4) — a plugin category beyond the AWN
+    // units page (awn: false on both choices); the labels name the
+    // units.
+    key: 'evapotranspiration',
+    label: 'Evapotranspiration',
+    measurements: ['evapotranspiration'],
+    choices: [
+      { id: 'imperial', label: 'in/day', units: { evapotranspiration: 'in_per_day' }, awn: false },
+      { id: 'metric',   label: 'mm/day', units: { evapotranspiration: 'mm_per_day' }, awn: false },
     ],
   },
   {

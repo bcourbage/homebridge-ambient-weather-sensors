@@ -2,8 +2,9 @@
 
 Opening the plugin's settings in Homebridge Config UI X shows ONE
 page: the sensor-map editor with its Connection section. Since
-2.0.0 the schema-generated settings form is retired — every
-editable setting lives on this page — and the preview-era panels
+2.0.0 the schema-generated settings form is retired. Connection
+settings and supported sensor edits share this page; advanced settings
+such as battery-source overrides remain JSON-only. The preview-era panels
 (status table, discovered-datapoints dump, notices panel) are gone.
 
 ## One save path
@@ -11,8 +12,8 @@ editable setting lives on this page — and the preview-era panels
 The page's **Save** is the only functional save path. It runs the
 guarded two-phase transaction: server-side validation against the
 on-disk configuration, verification that the save matches the
-consequences the preview showed (the preview, with its per-row Skip,
-is the confirmation; there is no separate confirmation step), the
+consequences the preview showed (the preview is the confirmation;
+eligible ordinary edits offer per-row Skip), the
 durable legacy snapshot/journal record, and a verbatim write of the
 composed block.
 The native Homebridge Save button at the bottom of the window is
@@ -28,13 +29,13 @@ application key, the station filter, and the embed-name update
 interval. Edits here count as drafts, appear in previews, and save
 through the same guarded transaction as sensor-map edits.
 
-Credentials are handled as secrets. The key fields are always blank:
-a blank field means the stored value is unchanged; typing a value
-replaces it; clearing requires the explicit checkbox (checking it
-blanks and locks the text field, so conflicting intents cannot be
-entered). Stored values never appear on the page, in previews, in
-logs, or in the snapshot/journal records — the page shows only
-whether a key is set.
+Credentials are handled as secrets. A stored key renders as a fixed
+run of mask dots (never its value): leaving the mask untouched means
+the stored key is unchanged; focusing the pristine mask selects it,
+so typing replaces the key; deleting the mask and leaving the field
+empty requests clearing the stored key. Stored values never appear on
+the page, in previews, in logs, or in the snapshot/journal records —
+the page shows only whether a key is set.
 
 ## Applying a save
 
@@ -59,7 +60,7 @@ grouped by station:
 
 | Column | Meaning |
 | --- | --- |
-| (state icon) | Green check = the row registers an accessory; muted dash = disabled; blank = an unrecognized field |
+| (state icon) | Green check = enabled; muted dash = disabled; blank = unrecognized. Registration also requires a supported interpretation and a reported field. |
 | Data point | The AWN field name (`tempf`, `windspeedmph`, ...); its tooltip names the backing battery field when one exists, and a colored dot marks rows your configuration authors (see layers below) |
 | Name | The accessory name this row produces |
 | Kind | Sensor kind as an icon (thermometer, droplet, sun, motion wave) or a badge (CO₂, PM2.5, PM10, `?` for unrecognized); the tooltip carries the full kind and measurement |
@@ -78,13 +79,14 @@ configuration comes from:
   see "Assigning unrecognized fields" below.
 
 On a **legacy** configuration the table renders the compat
-translation of your current settings — the exact sensor map the
-first save will write. Nothing is converted by viewing it; the
-conversion happens only when you save.
+translation of your current settings. Nothing is converted by viewing
+it. Saving an explicit conversion preview or a full sensor-map edit
+converts the block. A Connection-only save without a station-filter change leaves
+it unconverted; a station-filter change uses the sensor-map preview and can convert it.
 
-Warnings, row-validation errors, and ownership notes (for example a
-disabled sensor that owns a battery field other rows reference)
-appear as banners above the table.
+Row-associated warnings, validation errors, and ownership notes appear
+inline with their sensor row. Notes that do not belong to a row remain
+above the tables.
 
 ## Using the editor
 
@@ -127,8 +129,10 @@ problems surface as banners), but the editor is the recommended path.
 - **Per-station exceptions**: override a setting for one station
   while a global choice keeps applying to the others, matching the
   layer model shown in the table today.
-- **Guided migration**: on a legacy configuration, the first save
-  converts the config to the v2 format. Your original settings are
+- **Guided migration**: on a legacy configuration, an explicit
+  conversion save or the first full sensor-map save converts the
+  config to the v2 format. Connection-only saves without a station-filter change
+  do not. Station-filter changes use the sensor-map preview and can convert it. Original settings are
   written to an immutable snapshot
   (`legacy-config-snapshot.json` in the plugin's data directory)
   **before** `config.json` changes, so a rollback path always
@@ -140,8 +144,11 @@ problems surface as banners), but the editor is the recommended path.
   procedure as the snapshot, sourcing the fields from the chosen
   entry file's `legacy` object — see the README's rollback section
   for the exact steps.
-- **Opting single rows out of a preview**: every modified row in the
-  preview carries a Skip action. It pins that row's changed fields to
+- **Opting eligible rows out of a preview**: a modified row offers
+  Skip only when its complete before-state can be represented by the
+  supported station-scoped fields. Label changes, indirect ownership
+  changes without a representable pin, catalog operations, and Change interpretation previews do not
+  offer Skip. The action pins that row's changed fields to
   their current values as an ordinary station-scoped draft (the
   preview re-runs by itself), so a broad change - a family unit, for
   example - can go ahead while one or two rows stay as they are.
@@ -163,13 +170,105 @@ problems surface as banners), but the editor is the recommended path.
 ## Assigning unrecognized fields
 
 An unrecognized row (a `?` in the Kind column) offers **Assign**
-instead of Edit: choosing a measurement and the unit the station
-reports turns the field into a custom sensor. The measurement
-determines the accessory kind (shown in the form), the choices offered
-are exactly the combinations this plugin can build, and the assignment
-drafts nothing until it is complete — an unfinished form never blocks
-a save of other rows for missing identity fields, only for being open.
+instead of Edit. Choose the sensor type and, where offered, the unit
+the station reports. Each choice identifies a complete accessory-kind
+and measurement pair. Leak, contact, occupancy, smoke, and direct
+motion are separate choices even though all consume on/off readings.
+Types requiring a newer adopted catalog remain visible but disabled;
+**Review new sensor support** leads to the separate update workflow. An
+incomplete assignment creates no partial identity and blocks Preview
+until completed or cancelled. A diagnosed saved identity requires
+repair in the JSON config editor, not an implicit reassignment.
 The new sensor applies to the one station whose row was assigned, is
 enabled by default, and previews as a registration like any other
 structural change. Display unit, threshold, and trigger direction can
 be set in the same form or edited later like any row.
+
+State types accept numbers `0`/`1` or booleans `false`/`true`, with the
+pair's exact meanings shown in the editor. Contact `0` means closed
+and `1` means open. Other present values report a fault and clear the
+alert; missing data retains the preceding state and fault. Reversed
+encodings and text such as `"open"` are not supported. Smoke consumes
+an existing detector state, not a concentration-derived alarm. Native
+carbon monoxide remains unavailable.
+
+### Generic numeric labels
+
+**Numeric value** consumes a finite number unchanged. It uses a motion
+tile in Apple Home; compatible controller apps can show its numeric
+value and optional literal unit label. A label never converts a
+reading. Optional thresholds use inclusive comparisons, at-or-above
+or at-or-below, rather than detecting a crossing.
+
+**Unit label** supports up to 16 Unicode code points after trimming.
+Leaving an inherited label untouched preserves its absence in the
+edited fragment. **Use no label**, or clearing an edited textbox,
+authors an explicit empty label. **Use inherited label** removes only
+the station-level label; **Use default label** does the same for a
+global template. Identity and other settings are preserved. Invalid
+labels are refused by the server, without truncation. The preview
+separates authored-label intent from effective accessory changes.
+
+### Conversion and catalog adoption
+
+The **Sensor support** section offers **Review new sensor support**
+when the installed plugin supports types and fields not yet available
+in this configuration. Catalog version numbers remain available under
+**Technical details**, with separate labels for the configuration's starting
+sensor-support version, the version in use, and the latest version included
+with the installed plugin. These are not plugin release numbers. The starting
+version stays unchanged so later sensor definitions default to off. A
+legacy-shaped block first offers **Preview conversion**.
+This uses the server's legacy translation, preserving disabled
+categories and existing birth stamps. No fake sensor edit is needed.
+After saving and reloading the converted configuration, **Review new
+sensor support** becomes available when a newer catalog exists.
+
+Conversion and adoption require clean row and Connection drafts and
+no invalid open editor. They do not save or discard drafts
+automatically. Each operation locks editing until saved or cancelled.
+Adoption is separate from assigning a sensor because it can affect
+other rows and battery interpretation. The preview lists the actual
+configuration transition, accessory and disabled-row changes, and
+every reported battery-polarity change. No accessory changes does not
+mean no configuration changes.
+
+The **Sensor-support update** preview summarizes the server's consequences.
+Newly available disabled rows are labelled **Available, switched off**;
+these are supported sensor fields, not newly detected physical devices.
+The summary promises unchanged accessories only when the preview reports
+no accessory, setting, or battery-reporting changes. **Enable new sensor
+support** saves through the same guarded pipeline; **Cancel preview** saves
+nothing. After saving and reloading, the section reports when support is
+up to date for the installed plugin.
+
+The Units panel places measurement labels above their selectors so long
+names remain readable on narrow screens. The **?** beside the
+evapotranspiration unit selector uses the same hover/focus tooltip as
+**Kind ?**. Its persistent accessible description supplies the same
+explanation to screen readers. It changes no unit or draft setting.
+
+Saved assignments awaiting a newer catalog are preserved unchanged
+for adoption preview, even if the current catalog diagnoses them as
+unavailable. Withheld or unreconstructable saved content requires JSON
+repair first. Neither operation lowers stamps or bypasses the normal
+preview, validation, commit, and persistence pipeline.
+
+An uncertain persistence result, failed authoritative reload, receipt
+mismatch, or failed save-control restoration locks the page until
+reload and inspection. Successfully saved settings still require the
+plugin restart described above.
+
+## Change interpretation
+
+A recognized, saved custom row offers **Change interpretation** when the
+page has no other drafts and the saved map can be reconstructed faithfully.
+Built-in rows and invalid assignments are not eligible; invalid assignments
+require repair in the JSON editor.
+
+Choose how this field is interpreted. This can replace its Apple Home
+accessory, which may affect rooms and automations. Review the preview before
+saving. The field name and station or all-stations scope stay fixed.
+Changing the sensor type or source unit clears the threshold rather than
+guessing a conversion. Threshold triggering can be enabled again explicitly.
+The same guarded preview and save path applies, without per-row Skip.

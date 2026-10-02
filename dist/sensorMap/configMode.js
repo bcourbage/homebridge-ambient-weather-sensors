@@ -13,6 +13,7 @@
  * editability is preferable to losing every accessory in HomeKit.
  */
 import { recognizeMirror } from './legacyMirror.js';
+import { parseCatalogStamps } from './catalogVersion.js';
 export const CURRENT_CONFIG_VERSION = 2;
 const LEGACY_TOGGLE_KEYS = [
     'temperatureSensors', 'humiditySensors', 'solarRadiationSensors',
@@ -28,9 +29,28 @@ export function detectConfigMode(config) {
         // (v1.6.0 defaults, which means every category off).
         return { mode: 'legacy', warnings };
     }
+    // Catalog stamps validate FIRST, in EVERY mode (§18.3, PR #66 review
+    // F3): a legacy-shaped block carries stamps too — a fresh
+    // settings-only installation is born stamped before its first
+    // conversion, and a newer plugin's skeleton may carry a future pair.
+    // An invalid pair fails closed into the protective posture — the
+    // legacy pipeline RECONCILES, so running it against stamps the
+    // plugin cannot trust was measured to unregister a cached accessory.
+    // Capping or resetting would silently change definition visibility.
+    const stampResult = parseCatalogStamps(config);
+    if (stampResult.status === 'invalid') {
+        const banner = `The catalog adoption stamps are invalid: ${stampResult.problem}. `
+            + 'The plugin cannot tell which sensor definitions this configuration expects, so no '
+            + 'structural changes happen. Existing accessories keep running from cache; the UI is '
+            + 'read-only until the catalogBaseline/catalogAdopted fields are repaired in the JSON '
+            + 'config editor or the plugin is upgraded.';
+        warnings.push(banner);
+        return { mode: 'safe-mode', warnings, safeModeBanner: banner };
+    }
+    const { catalogBaseline, catalogAdopted } = stampResult.stamps;
     const raw = config.configVersion;
     if (raw === undefined) {
-        return { mode: 'legacy', warnings };
+        return { mode: 'legacy', warnings, catalogBaseline, catalogAdopted };
     }
     // Non-integer / non-number → safe mode.
     if (typeof raw !== 'number' || !Number.isInteger(raw) || raw < 1) {
@@ -50,7 +70,7 @@ export function detectConfigMode(config) {
     // At or below current version. Version 1 would be pre-v2 hand-labeled
     // legacy; treat identically to absent for compat purposes.
     if (raw === 1) {
-        return { mode: 'legacy', warnings };
+        return { mode: 'legacy', warnings, catalogBaseline, catalogAdopted };
     }
     // configVersion === 2.
     // Mirror metadata is validated whenever it is PRESENT — regardless of
@@ -91,7 +111,7 @@ export function detectConfigMode(config) {
             + 'configVersion: 2 takes precedence; the legacy toggles are ignored.');
     }
     // 'recognized': the maintained downgrade mirror — intentionally silent.
-    return { mode: 'v2', warnings };
+    return { mode: 'v2', warnings, catalogBaseline, catalogAdopted };
 }
 function describe(v) {
     if (v === null) {

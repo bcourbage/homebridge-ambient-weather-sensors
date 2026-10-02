@@ -36,7 +36,7 @@
  * display modes we can't interpret in safe mode).
  */
 import { CO2_DETECTED_PPM, airQualityReading, co2Reading, fahrenheitToCelsius, solarWm2ToLux, } from './nativeConversions.js';
-import { defaultRowFor } from './sensorMap/defaultMap.js';
+import { staticDefaultRowFor } from './sensorMap/defaultMap.js';
 /**
  * Extract the sensor `dataPoint` from a uniqueId of the form
  * `${macAddress}-${dataPoint}`. Anchored on the first hyphen after
@@ -116,7 +116,13 @@ export function bindSafeMode(platform, accessory) {
         return undefined;
     }
     const dataPoint = extractDataPoint(uniqueId);
-    if (!dataPoint || !defaultRowFor(dataPoint)) {
+    // STATIC table only, deliberately (GA review P1-1 follow-through):
+    // safe mode updates a value only when the source unit is certain
+    // without the config it cannot interpret. A dynamically recognized
+    // dataPoint's unit is a synthesis the frozen config could
+    // contradict, so those accessories stay frozen — the same boundary
+    // this binding always drew.
+    if (!dataPoint || !staticDefaultRowFor(dataPoint)) {
         // Custom / unknown dataPoint — we can't safely infer the
         // source unit, so no value updates. Cached HAP value stays.
         return undefined;

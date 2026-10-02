@@ -19,7 +19,8 @@ import { fileURLToPath } from 'url';
 
 import { buildEffectiveSensorMap, partitionOverrideLayers } from '../dist/sensorMap/buildEffectiveMap.js';
 import { canonicalizeSensorMap } from '../dist/sensorMap/canonicalizeSensorMap.js';
-import { compatToOverrides, type LegacyConfig } from '../dist/sensorMap/compat.js';
+import { compatToOverrides, dynamicDataPointsFrom, legacyRowFilterState, type LegacyConfig } from '../dist/sensorMap/compat.js';
+import { cachedPairsFromUniqueIds, type CachedFieldPair } from '../dist/sensorMap/cachedInventory.js';
 import { detectConfigMode, type ConfigInputShape } from '../dist/sensorMap/configMode.js';
 import {
   composeV2ConfigSave,
@@ -31,7 +32,7 @@ import {
 } from '../dist/sensorMap/legacyMirror.js';
 import { sensorMapShapeError, type EffectiveMapConfig } from '../dist/sensorMap/platformEffectiveMap.js';
 import { NON_TRIGGERING_MEASUREMENTS, STATION_MAC_REGEX } from '../dist/sensorMap/validation.js';
-import { filterStationInventory, indeterminateFilterStations } from '../dist/sensorMap/stationMatch.js';
+import { filterStationInventory, indeterminateFilterStations, latestDiscoveryStationNames } from '../dist/sensorMap/stationMatch.js';
 import { composeRowDisplayName } from '../dist/sensorMap/displayName.js';
 import { v2ConstructionEnabled } from '../dist/sensorMap/v2Flag.js';
 import {
@@ -44,8 +45,10 @@ import {
   loadUiStateStore,
 } from '../dist/sensorMap/persistence/uiStateStore.js';
 import { DISPLAY_FAMILIES, MEASUREMENT_LABELS, UNIT_VOCABULARY, unitOptionsFor } from '../dist/sensorMap/unitVocabulary.js';
-import { WRAPPER_FOR_KIND_AND_MEASUREMENT } from '../dist/sensorMap/wrappers.js';
-import { defaultRowFor } from '../dist/sensorMap/defaultMap.js';
+import { WRAPPER_FOR_KIND_AND_MEASUREMENT, WRAPPER_PAIR_SINCE } from '../dist/sensorMap/wrappers.js';
+import { VENDOR_INVERTED_BATTERY_FIELDS, batteryDecoderPolicy } from '../dist/batteryFields.js';
+import { defaultRowForConfigOverride, defaultRowFor } from '../dist/sensorMap/defaultMap.js';
+import { CURRENT_CATALOG_VERSION, parseCatalogStamps, type CatalogStamps } from '../dist/sensorMap/catalogVersion.js';
 import { PLUGIN_NAME } from '../dist/settings.js';
 import type { Logger, ReadStoreOptions } from '../dist/sensorMap/persistence/atomicWrite.js';
 import type {
@@ -67,10 +70,14 @@ import type {
   EditorRowDto,
   EditorStateDto,
   EditorStationDto,
+  BatteryPolarityChangeDto,
   ConfigOnlyChangeDto,
+  CapabilityOptionDto,
+  LegacyVocabularyDto,
   PreviewChangeDto,
   PreviewResultDto,
   VocabularyDto,
+  VocabularyResponseDto,
 } from './app-src/dto/editor-state.js';
 
 export interface HandlerDeps {
@@ -224,6 +231,8 @@ export type SnapshotOutcome =
 
 export type ComposeSaveError =
   | { code: 'config-unreadable'; message: string }
+  | { code: 'catalog-stamps'; message: string }
+  | { code: 'invalid-adoption'; message: string }
   | { code: 'no-platform-block'; message: string }
   | { code: 'stale-base'; message: string }
   | { code: 'ambiguous-platform-block'; message: string }
@@ -234,6 +243,8 @@ export type ComposeSaveError =
   | { code: 'invalid-proposal'; message: string }
   | { code: 'invalid-rows'; message: string; rows: RowValidationError[] }
   | { code: 'no-station-inventory'; message: string }
+  | { code: 'cache-inventory-unavailable'; message: string }
+  | { code: 'indeterminate-legacy-filter'; message: string }
   | { code: 'canonical-divergence'; message: string; rows: DivergentRow[] }
   | { code: 'confirmation-required'; message: string; structuralChangeCount: number }
   | { code: 'stale-confirmation'; message: string }
@@ -307,6 +318,14 @@ export interface ComposeSavePayload {
    * disk).
    */
   base?: unknown;
+  /**
+   * Explicit catalog adoption (§18.3): advances `catalogAdopted` to
+   * exactly the running plugin's catalog version, through this same
+   * previewed pipeline. Absent on every ordinary save — no other
+   * operation may move the stamp. Refused on legacy blocks (convert
+   * first) and on the fresh-install path (born current).
+   */
+  adoptCatalogVersion?: unknown;
   /**
    * PREFERRED staleness token: the `baseDigest` issued by
    * /editor-state for the block this editor session loaded. The
@@ -403,13 +422,19 @@ interface SavePipelineContext {
   modeResult: ReturnType<typeof detectConfigMode>;
   proposal: SensorMapOverride[];
   stations: StationInventory;
+  cachedPairs?: ReadonlyArray<CachedFieldPair>;
   discovery: DiscoveryStore;
   uiState: UiStateStore;
   effectiveMap: ReturnType<typeof buildEffectiveSensorMap>;
   canonical: SensorMapOverride[];
+  /** The block's stamps as read from disk (§18.3). */
+  stampsCurrent: CatalogStamps;
+  /** The stamps the composed output will carry (adoption applied). */
+  stampsResolved: CatalogStamps;
 }
 
 type SavePipelineResult =
+  | { ok: true; settingsOnly: SettingsOnlyCtx }
   | { ok: true; ctx: SavePipelineContext }
   | { ok: false; error: ComposeSaveError };
 
@@ -544,10 +569,67 @@ function applySettingsPatch(block: Record<string, unknown>, raw: unknown): Setti
   return { block: next, changed };
 }
 
+/**
+ * The base token /editor-state issues when NO platform block exists
+ * (GA review P1-2): a fresh installation has nothing to digest, and
+ * the settings-only save that creates the block must still prove the
+ * session saw that state (a block appearing in the meantime refuses
+ * as stale, exactly like any other base drift).
+ */
+export const FRESH_INSTALL_DIGEST = 'fresh-install:no-platform-block';
+
+/**
+ * A SETTINGS-ONLY save (GA review P1-2/P1-3): the sensor map is
+ * untouched (the proposal canonically equals the on-disk authored
+ * state, or no block exists yet) and only connection settings change.
+ * It runs a guarded path with no station-inventory requirement and
+ * NEVER converts: nothing sensor-map-shaped is written, so a legacy
+ * block stays legacy and a fresh block is created plain. This is how
+ * a new installation enters credentials and how broken credentials
+ * are corrected before the first successful discovery.
+ */
+export interface SettingsOnlyCtx {
+  /** The on-disk block, or null on a fresh installation. */
+  block: Record<string, unknown> | null;
+  effectiveBlock: Record<string, unknown>;
+  settingsChanged: string[];
+  freshInstall: boolean;
+}
+
+/**
+ * Settings whose change has NO accessory consequence: the
+ * settings-only path may carry these and nothing else. stationFilter
+ * is deliberately absent — narrowing or widening it registers and
+ * deregisters accessories, so it always takes the full pipeline with
+ * its inventory-bound preview.
+ */
+const CONSEQUENCE_FREE_SETTINGS: ReadonlySet<string> = new Set([
+  'name', 'apiKey', 'applicationKey', 'dataSource', 'embedNameUpdateMinIntervalMinutes',
+]);
+
+function settingsOnlyDigest({ block, effectiveBlock, settingsChanged }: SettingsOnlyCtx): string {
+  return createHash('sha256').update(canonicalJsonLocal({
+    v: 'settings-only-2',
+    base: block,
+    settingsChanged: [...settingsChanged].sort(),
+    // Bind the stamps actually destined for disk, not the binary version:
+    // fresh blocks are born at that version; existing blocks preserve their
+    // pair (including absence). A package upgrade between preview and compose
+    // must not silently change the birth pair. Proposed credential values
+    // remain outside this public projection; the commit token binds the exact
+    // composed output after validation as before.
+    catalog: {
+      baseline: effectiveBlock.catalogBaseline ?? null,
+      adopted: effectiveBlock.catalogAdopted ?? null,
+    },
+  })).digest('hex');
+}
+
 async function runSavePipeline(
   deps: HandlerDeps,
   p: ComposeSavePayload,
 ): Promise<SavePipelineResult> {
+  const cachedPairs = cachedPairsFromUniqueIds(p.cachedAccessoryUniqueIds);
   // ---- 1. Authoritative on-disk config (never the client's copy).
   if (!deps.configPath) {
     return { ok: false, error: { code: 'config-unreadable', message: 'No config.json path available to the UI server.' } };
@@ -569,7 +651,40 @@ async function runSavePipeline(
     .filter((b): b is Record<string, unknown> =>
       !!b && typeof b === 'object' && (b as { platform?: unknown }).platform === 'AmbientWeatherSensors');
   if (blocks.length === 0) {
-    return { ok: false, error: { code: 'no-platform-block', message: 'No AmbientWeatherSensors platform block found in config.json.' } };
+    // Fresh installation (GA review P1-2): the ONLY save that may
+    // proceed with no block is the settings-only save that creates
+    // one — the session must have loaded the fresh-install state, the
+    // proposal must be empty, and a settings patch must exist. The
+    // created block is PLAIN (no v2 markers): it stays a
+    // never-converted configuration until the first sensor-map save.
+    if (p.baseDigest !== FRESH_INSTALL_DIGEST) {
+      return { ok: false, error: { code: 'no-platform-block', message: 'No AmbientWeatherSensors platform block found in config.json.' } };
+    }
+    if (Array.isArray(p.proposal) && p.proposal.length > 0) {
+      return { ok: false, error: { code: 'no-platform-block', message: 'No platform block exists yet: sensors cannot be configured before the first connection. Save the connection settings first.' } };
+    }
+    if (p.adoptCatalogVersion !== undefined) {
+      return { ok: false, error: { code: 'invalid-adoption', message: 'A fresh installation is already at the current catalog version; there is nothing to adopt. Nothing was written.' } };
+    }
+    // Born stamped (§18.3): a fresh installation's exposure history is
+    // "knew the current catalog from birth", and later saves preserve
+    // the pair verbatim — it is never rewound by the first sensor-map
+    // save.
+    const skeleton: Record<string, unknown> = {
+      platform: 'AmbientWeatherSensors', name: 'AmbientWeather',
+      catalogBaseline: CURRENT_CATALOG_VERSION, catalogAdopted: CURRENT_CATALOG_VERSION,
+    };
+    const outcome = applySettingsPatch(skeleton, p.settings);
+    if ('error' in outcome) {
+      return { ok: false, error: { code: 'invalid-settings', message: `${outcome.error} Nothing was written.` } };
+    }
+    if (outcome.changed.length === 0) {
+      return { ok: false, error: { code: 'invalid-settings', message: 'Nothing to save yet: enter the connection settings first. Nothing was written.' } };
+    }
+    if (!outcome.changed.every(k => CONSEQUENCE_FREE_SETTINGS.has(k))) {
+      return { ok: false, error: { code: 'invalid-settings', message: 'Only connection settings can be saved before the plugin first connects. Nothing was written.' } };
+    }
+    return { ok: true, settingsOnly: { block: null, effectiveBlock: outcome.block, settingsChanged: outcome.changed, freshInstall: true } };
   }
   // ---- 1b. Exactly-one-block invariant (review #47 P1-2). The
   //          session token identifies a block by CONTENT, while the
@@ -637,6 +752,39 @@ async function runSavePipeline(
     return { ok: false, error: { code: 'sensor-map-shape', message: shapeErr } };
   }
 
+  // ---- 3b2. Catalog stamps (§18.3). Mode detection validates the
+  //           pair in EVERY mode and fails invalid stamps closed into
+  //           safe mode before this point; this parse is a defensive
+  //           redundant gate on the same rule. A valid existing pair
+  //           is preserved verbatim through compose; only a config
+  //           with BOTH stamps absent initializes to (1, 1), the
+  //           behavior it already had.
+  const stampResult = parseCatalogStamps(block as Record<string, unknown>);
+  if (stampResult.status === 'invalid') {
+    return {
+      ok: false,
+      error: {
+        code: 'catalog-stamps',
+        message: `The catalog adoption stamps are invalid: ${stampResult.problem}. `
+          + 'Repair the catalogBaseline/catalogAdopted fields in the JSON config editor. Nothing was written.',
+      },
+    };
+  }
+  const stampsCurrent = stampResult.stamps;
+  let stampsResolved = stampsCurrent;
+  if (p.adoptCatalogVersion !== undefined) {
+    if (modeResult.mode === 'legacy') {
+      return { ok: false, error: { code: 'invalid-adoption', message: 'Catalog adoption requires a converted (v2) configuration. Save the sensor map first, then adopt. Nothing was written.' } };
+    }
+    if (p.adoptCatalogVersion !== CURRENT_CATALOG_VERSION) {
+      return { ok: false, error: { code: 'invalid-adoption', message: `adoptCatalogVersion must be exactly ${CURRENT_CATALOG_VERSION} (the catalog version this plugin ships). Nothing was written.` } };
+    }
+    if (p.adoptCatalogVersion < stampsCurrent.catalogAdopted) {
+      return { ok: false, error: { code: 'invalid-adoption', message: 'This configuration has already adopted a newer catalog. Nothing was written.' } };
+    }
+    stampsResolved = { catalogBaseline: stampsCurrent.catalogBaseline, catalogAdopted: p.adoptCatalogVersion };
+  }
+
   // ---- 3c. SETTINGS PATCH (beta.17, GA #56): applied to a copy of
   //          the on-disk block inside this transaction, fail-closed on
   //          any malformed value. Compose consumes the PATCHED block;
@@ -648,6 +796,41 @@ async function runSavePipeline(
   }
   const effectiveBlock = settingsOutcome.block;
   const settingsChanged = settingsOutcome.changed;
+
+  // ---- 3d. SETTINGS-ONLY SHORT-CIRCUIT (GA review P1-3): when the
+  //          proposal canonically equals the on-disk authored state
+  //          and only settings change, the save needs no station
+  //          inventory (broken credentials mean there may BE none)
+  //          and performs no conversion. Any sensor-map difference
+  //          falls through to the full pipeline, fail-closed.
+  if (settingsChanged.length > 0
+    && p.adoptCatalogVersion === undefined
+    && settingsChanged.every(k => CONSEQUENCE_FREE_SETTINGS.has(k))
+    && Array.isArray(p.proposal)) {
+    const authoredNow: unknown = modeResult.mode === 'legacy'
+      ? undefined // computed below only if the cheap v2 check missed
+      : (Array.isArray(block.sensorMap) ? block.sensorMap : []);
+    let untouched = authoredNow !== undefined
+      && canonicalJsonLocal(p.proposal) === canonicalJsonLocal(authoredNow);
+    if (!untouched && modeResult.mode === 'legacy') {
+      // Replicate /editor-state's compat seeding exactly, so the
+      // client's untouched proposal (rebuilt from that authored view)
+      // compares equal.
+      const discoveryEq = await loadDiscoveryStore(path.join(deps.persistDir, 'discovery.json'), deps.log, undefined, READ_ONLY_STORE);
+      const assembleEq = (overridesForMacs: ReadonlyArray<unknown>): StationInventory =>
+        assembleStationInventory({
+          liveStations: p.liveStations,
+          discovery: discoveryEq,
+          cachedAccessoryUniqueIds: p.cachedAccessoryUniqueIds,
+          overrideSources: [Array.isArray(block.sensorMap) ? (block.sensorMap as unknown[]) : [], overridesForMacs],
+        });
+      const seeded = compatToOverrides(block as LegacyConfig, assembleEq([]), dynamicDataPointsFrom(discoveryEq, cachedPairs));
+      untouched = canonicalJsonLocal(p.proposal) === canonicalJsonLocal(seeded);
+    }
+    if (untouched) {
+      return { ok: true, settingsOnly: { block, effectiveBlock, settingsChanged, freshInstall: false } };
+    }
+  }
 
   // ---- 4. Proposal shape. On a LEGACY config with NO proposal, the
   //         save is a pure migration: the proposal is seeded from the
@@ -662,6 +845,21 @@ async function runSavePipeline(
   }
   if (p.proposal === undefined && modeResult.mode !== 'legacy') {
     return { ok: false, error: { code: 'invalid-proposal', message: 'proposal is required for a v2-mode save (only a legacy pure migration may omit it).' } };
+  }
+
+  // Conversion must preserve cached-only legacy fields even if discovery is
+  // partial or gone. An unavailable cache read is not an empty inventory: it
+  // cannot authorize dropping category/exclusion semantics for unseen pairs.
+  // Connection-only repair above remains available without reading the cache.
+  if (modeResult.mode === 'legacy' && !Array.isArray(p.cachedAccessoryUniqueIds)) {
+    return {
+      ok: false,
+      error: {
+        code: 'cache-inventory-unavailable',
+        message: 'The accessory cache could not be read, so conversion cannot safely preserve existing sensors. '
+          + 'Reconnect to Homebridge UI, reload the plugin settings page, and retry. Connection-only changes remain available. Nothing was written.',
+      },
+    };
   }
 
   // ---- 5. Station inventory (§8.7 preference order): live response,
@@ -686,7 +884,7 @@ async function runSavePipeline(
     // Compat seeding is an AUTHORING concern: it translates the
     // legacy config's semantics for every station, unfiltered — the
     // station filter narrows the runtime, never the configuration.
-    proposal = compatToOverrides(block as LegacyConfig, assemble([]));
+    proposal = compatToOverrides(block as LegacyConfig, assemble([]), dynamicDataPointsFrom(discovery, cachedPairs));
     assembled = assemble(proposal);
   } else {
     proposal = p.proposal as SensorMapOverride[];
@@ -761,8 +959,32 @@ async function runSavePipeline(
     discovery,
     uiState,
     stations,
+    cachedPairs,
     configMode: 'v2',
+    catalogBaseline: stampsResolved.catalogBaseline,
+    catalogAdopted: stampsResolved.catalogAdopted,
   });
+  if (modeResult.mode === 'legacy') {
+    const stationByMac = new Map(stations.map(station => [station.macAddress.toUpperCase(), station]));
+    const uncertainMacs = new Set<string>();
+    for (const row of effectiveMap.rows) {
+      const station = stationByMac.get(row.stationMac);
+      if (station && legacyRowFilterState(block as LegacyConfig, row.dataPoint, station, stations.length > 1) === 'unknown') {
+        uncertainMacs.add(row.stationMac);
+      }
+    }
+    if (uncertainMacs.size > 0) {
+      return {
+        ok: false,
+        error: {
+          code: 'indeterminate-legacy-filter',
+          message: `Legacy includeOnly/excludeSensors depend on station names that are not known for ${[...uncertainMacs].join(', ')}. `
+            + 'Run the plugin until discovery records those station names, then reload and retry conversion. '
+            + 'Connection-only changes remain available. Nothing was written.',
+        },
+      };
+    }
+  }
   if (effectiveMap.errors.length > 0) {
     return {
       ok: false,
@@ -776,7 +998,11 @@ async function runSavePipeline(
 
   // ---- 7. The SERVER assembles canonical config (§11.3/§17.4) — the
   //         client is never responsible for canonical serialization.
-  const canonical = canonicalizeSensorMap({ overrides: proposal, stations, discovery, uiState });
+  const canonical = canonicalizeSensorMap({
+    overrides: proposal, stations, discovery, uiState, cachedPairs,
+    catalogBaseline: stampsResolved.catalogBaseline,
+    catalogAdopted: stampsResolved.catalogAdopted,
+  });
 
   // ---- 7b. HARD DIVERGENCE GATE (review #67 P1-1): canonical output
   //          MUST mean exactly what the proposal meant. Reloading the
@@ -802,14 +1028,20 @@ async function runSavePipeline(
     discovery,
     uiState,
     stations: gateStations,
+    cachedPairs,
     configMode: 'v2',
+    catalogBaseline: stampsResolved.catalogBaseline,
+    catalogAdopted: stampsResolved.catalogAdopted,
   });
   const reloaded = buildEffectiveSensorMap({
     userOverrides: canonical,
     discovery,
     uiState,
     stations: gateStations,
+    cachedPairs,
     configMode: 'v2',
+    catalogBaseline: stampsResolved.catalogBaseline,
+    catalogAdopted: stampsResolved.catalogAdopted,
   });
   const divergent = diffEffectiveRows(gateBefore as unknown as EffectiveRowsHolder, reloaded as unknown as EffectiveRowsHolder);
   if (divergent.length > 0) {
@@ -829,7 +1061,7 @@ async function runSavePipeline(
 
   return {
     ok: true,
-    ctx: { block, effectiveBlock, settingsChanged, modeResult, proposal, stations, stationsBefore, stationsAfter, discovery, uiState, effectiveMap, canonical },
+    ctx: { block, effectiveBlock, settingsChanged, modeResult, proposal, stations, stationsBefore, stationsAfter, cachedPairs, discovery, uiState, effectiveMap, canonical, stampsCurrent, stampsResolved },
   };
 }
 
@@ -865,6 +1097,130 @@ export async function handleCommitSave(
   return composeSaveInternal(deps, payload, true);
 }
 
+/**
+ * Compose/commit for a SETTINGS-ONLY save (GA review P1-2/P1-3). The
+ * reviewed gates that still apply, apply unchanged: the base is the
+ * on-disk state (stale refuses in the pipeline), a digest session
+ * must present its configuration copy and any drift refuses, and the
+ * two-phase validation token binds commit to exactly the validated
+ * state. What deliberately does NOT apply: the v2 opt-out gate
+ * (nothing v2-shaped is written — correcting credentials under the
+ * opt-out is precisely the recovery this path exists for), the
+ * station-inventory requirement, conversion, and the snapshot/journal
+ * record (no sensor-map bytes change).
+ */
+function composeSettingsOnly(
+  deps: HandlerDeps,
+  p: ComposeSavePayload,
+  ctx: SettingsOnlyCtx,
+  persist: boolean,
+): ComposeSaveResult {
+  const { block, effectiveBlock, settingsChanged, freshInstall } = ctx;
+
+  if (!freshInstall) {
+    if (typeof p.baseDigest === 'string' && p.formBlock === undefined) {
+      return {
+        ok: false,
+        error: {
+          code: 'unsaved-settings-changes',
+          message: 'The page did not provide its configuration copy, so divergence cannot be ruled out. '
+            + 'Reload the plugin settings and retry; nothing was written.',
+        },
+      };
+    }
+    if (p.formBlock !== undefined) {
+      if (!p.formBlock || typeof p.formBlock !== 'object' || Array.isArray(p.formBlock)) {
+        return {
+          ok: false,
+          error: {
+            code: 'unsaved-settings-changes',
+            message: 'The page configuration copy could not be verified. Reload the plugin settings and retry; nothing was written.',
+          },
+        };
+      }
+      const drifted = settingsFormDrift(p.formBlock as Record<string, unknown>, block!, deps);
+      if (drifted !== undefined) {
+        return {
+          ok: false,
+          error: {
+            code: 'unsaved-settings-changes',
+            message: `The page's configuration copy differs from the saved configuration ('${drifted}'). `
+              + 'Reload the plugin settings page and retry; nothing was written.',
+          },
+        };
+      }
+    }
+  }
+
+  const digest = settingsOnlyDigest(ctx);
+  if (p.confirmDigest !== undefined && p.confirmDigest !== digest) {
+    return {
+      ok: false,
+      error: {
+        code: 'stale-confirmation',
+        message: 'The configuration changed since this save was previewed. Preview again and re-confirm; nothing was written.',
+      },
+    };
+  }
+
+  const nextConfig = effectiveBlock;
+  const nextConfigDigest = blockDigest(nextConfig);
+  const validationToken = createHash('sha256').update(canonicalJsonLocal({
+    v: 'settings-only-1',
+    baseDigest: block === null ? FRESH_INSTALL_DIGEST : blockDigest(block),
+    formBlock: p.formBlock ?? null,
+    nextConfigDigest,
+  })).digest('hex');
+  const canonicalSensorMap = (block !== null && Array.isArray(block.sensorMap)
+    ? block.sensorMap : []) as SensorMapOverride[];
+
+  if (!persist) {
+    return {
+      ok: true,
+      nextConfig,
+      settingsChanged,
+      nextConfigDigest,
+      validationToken,
+      snapshot: 'not-applicable',
+      canonicalSensorMap,
+      warnings: [],
+      notes: [],
+    };
+  }
+  if (typeof p.validationToken !== 'string' || p.validationToken.length === 0) {
+    return {
+      ok: false,
+      error: {
+        code: 'commit-without-validation',
+        message: 'The commit did not present a validation token. Saves must validate first (/compose-save), '
+          + 'then commit. Nothing was written.',
+      },
+    };
+  }
+  if (p.validationToken !== validationToken) {
+    return {
+      ok: false,
+      error: {
+        code: 'stale-confirmation',
+        message: 'The configuration or page state changed between validating and committing this save. '
+          + 'Preview again and retry; nothing was written.',
+      },
+    };
+  }
+  // No snapshot, no journal: nothing sensor-map-shaped changes.
+  return {
+    ok: true,
+    nextConfig,
+    settingsChanged,
+    nextConfigDigest,
+    validationToken,
+    snapshot: 'not-applicable',
+    canonicalSensorMap,
+    warnings: [],
+    notes: [],
+  };
+}
+
 async function composeSaveInternal(
   deps: HandlerDeps,
   payload: unknown,
@@ -875,7 +1231,10 @@ async function composeSaveInternal(
   if (!r.ok) {
     return r;
   }
-  const { block, effectiveBlock, settingsChanged, modeResult, effectiveMap, canonical } = r.ctx;
+  if ('settingsOnly' in r) {
+    return composeSettingsOnly(deps, p, r.settingsOnly, persist);
+  }
+  const { block, effectiveBlock, settingsChanged, modeResult, effectiveMap, canonical, stampsResolved } = r.ctx;
 
   // ---- 7b2. V2 OPT-OUT GATE (review #45 P1-1): saving converts the
   //           configuration to v2, and a v2 config on an installation
@@ -983,10 +1342,25 @@ async function composeSaveInternal(
       },
     };
   }
+  // Adoption ALWAYS requires its own preview digest (PR #66 review
+  // F4), even with zero structural consequences: advancing
+  // catalogAdopted changes what every future resolution sees, and the
+  // digest above binds the stamp transition, so only a preview of THIS
+  // adoption can mint it.
+  if (p.adoptCatalogVersion !== undefined && p.confirmDigest === undefined) {
+    return {
+      ok: false,
+      error: {
+        code: 'confirmation-required',
+        message: 'Adopting the new catalog version must be previewed and confirmed first; nothing was written.',
+        structuralChangeCount: consequences.structuralChangeCount,
+      },
+    };
+  }
 
   // ---- 8. Compose. detectConfigMode's verdict is passed explicitly
   //         (it is the single authority on "legacy").
-  const composed = composeV2ConfigSave(effectiveBlock, canonical as unknown[], effectiveMap, modeResult.mode);
+  const composed = composeV2ConfigSave(effectiveBlock, canonical as unknown[], effectiveMap, modeResult.mode, stampsResolved);
 
   // ---- 9a. Prospective pre-conversion-record outcome, READ-ONLY in
   //          BOTH phases: every refusable record problem (corrupt
@@ -1175,6 +1549,26 @@ export async function handlePreviewSave(
   if (!r.ok) {
     return { ok: false, error: r.error };
   }
+  if ('settingsOnly' in r) {
+    // A settings-only preview (GA review P1-2/P1-3): no accessory
+    // consequences exist and no inventory is required — exactly the
+    // states (fresh install, broken credentials) where none can be.
+    const { block, settingsChanged } = r.settingsOnly;
+    return {
+      ok: true,
+      canonicalSensorMap: (block !== null && Array.isArray(block.sensorMap)
+        ? block.sensorMap : []) as SensorMapOverride[],
+      settingsChanged,
+      rows: [],
+      changes: [],
+      configOnly: [],
+      batteryPolarity: [],
+      structuralChangeCount: 0,
+      digest: settingsOnlyDigest(r.settingsOnly),
+      warnings: [],
+      notes: [],
+    };
+  }
   const { effectiveMap, canonical } = r.ctx;
   const consequences = computeSaveConsequences(r.ctx);
 
@@ -1209,10 +1603,23 @@ export async function handlePreviewSave(
   return {
     ok: true,
     canonicalSensorMap: canonical,
+    configurationTransition: {
+      before: {
+        mode: r.ctx.modeResult.mode === 'legacy' ? 'legacy' : 'v2',
+        baseline: r.ctx.stampsCurrent.catalogBaseline,
+        adopted: r.ctx.stampsCurrent.catalogAdopted,
+        stamped: r.ctx.block.catalogBaseline !== undefined && r.ctx.block.catalogAdopted !== undefined,
+      },
+      after: {
+        mode: 'v2', baseline: r.ctx.stampsResolved.catalogBaseline,
+        adopted: r.ctx.stampsResolved.catalogAdopted, stamped: true,
+      },
+    },
     settingsChanged: r.ctx.settingsChanged,
     rows: consequences.proposedRows,
     changes: consequences.changes.map(attach),
     configOnly: consequences.configOnly.map(attach),
+    batteryPolarity: consequences.batteryPolarity,
     structuralChangeCount: consequences.structuralChangeCount,
     digest: consequences.digest,
     warnings: effectiveMap.warnings.map(w => toDiagnosticDto('warning', w)),
@@ -1224,6 +1631,8 @@ export async function handlePreviewSave(
 export interface SaveConsequences {
   changes: PreviewChangeDto[];
   configOnly: ConfigOnlyChangeDto[];
+  /** Adoption battery-decoder polarity changes (§19.6 / F5). */
+  batteryPolarity: BatteryPolarityChangeDto[];
   structuralChangeCount: number;
   /**
    * The confirmation token (review #43 P1-2): sha256 over canonical
@@ -1254,7 +1663,7 @@ export interface SaveConsequences {
  * digest verification in PR C.
  */
 export function computeSaveConsequences(ctx: SavePipelineContext): SaveConsequences {
-  const { block, modeResult, proposal, stationsBefore, stationsAfter, discovery, uiState, canonical } = ctx;
+  const { block, modeResult, proposal, stationsBefore, stationsAfter, discovery, uiState, canonical, stampsCurrent, stampsResolved, cachedPairs = [] } = ctx;
 
   // The after-side RUNTIME world: the validated proposal evaluated
   // over the PATCHED filter's inventory (round 2 P1: ctx.effectiveMap
@@ -1265,7 +1674,10 @@ export function computeSaveConsequences(ctx: SavePipelineContext): SaveConsequen
     discovery,
     uiState,
     stations: stationsAfter,
+    cachedPairs,
     configMode: 'v2',
+    catalogBaseline: stampsResolved.catalogBaseline,
+    catalogAdopted: stampsResolved.catalogAdopted,
   });
 
   // CURRENT effective state from the on-disk block over the SAME
@@ -1274,7 +1686,7 @@ export function computeSaveConsequences(ctx: SavePipelineContext): SaveConsequen
   // sensorMap. Same-inventory comparison keeps the diff about the
   // PROPOSAL, never about station drift.
   const currentOverrides: ReadonlyArray<unknown> = modeResult.mode === 'legacy'
-    ? compatToOverrides(block as LegacyConfig, stationsBefore)
+    ? compatToOverrides(block as LegacyConfig, stationsBefore, dynamicDataPointsFrom(discovery, cachedPairs))
     : (Array.isArray(block.sensorMap) ? block.sensorMap : []);
   const currentMap = buildEffectiveSensorMap({
     userOverrides: currentOverrides,
@@ -1284,7 +1696,10 @@ export function computeSaveConsequences(ctx: SavePipelineContext): SaveConsequen
     // save that narrows the filter diffs against what the runtime
     // currently exposes, so the exclusions surface as removals.
     stations: stationsBefore,
+    cachedPairs,
     configMode: 'v2',
+    catalogBaseline: stampsCurrent.catalogBaseline,
+    catalogAdopted: stampsCurrent.catalogAdopted,
   });
   // The row universe is a UNION (defaults x stations, discovery pairs,
   // override targets), so filtering the inventory alone does not
@@ -1317,6 +1732,9 @@ export function computeSaveConsequences(ctx: SavePipelineContext): SaveConsequen
     'structuralSignature', 'kind', 'measurement', 'name',
     'sourceUnit', 'displayUnit', 'threshold', 'triggerEnabled',
     'triggerDirection', 'batteryField', 'hasBatterySubService', 'embedName',
+    // Non-structural: a label-only change is a modified-in-place value
+    // change, not a re-registration (§19.9).
+    'unitLabel',
   ] as const;
   // The platform composes HAP display names from the RUNTIME station
   // inventory (station prefix only when multiple stations are
@@ -1339,7 +1757,7 @@ export function computeSaveConsequences(ctx: SavePipelineContext): SaveConsequen
       changes.push({
         stationMac: b.stationMac, dataPoint: b.dataPoint,
         change: 'removed', structural: true,
-        before: toEditorRowDto(b, currentLayers),
+        before: toEditorRowDto(b, currentLayers, stampsCurrent.catalogAdopted),
       });
       continue;
     }
@@ -1352,8 +1770,8 @@ export function computeSaveConsequences(ctx: SavePipelineContext): SaveConsequen
         stationMac: b.stationMac, dataPoint: b.dataPoint,
         change: 'modified',
         structural: b.structuralSignature !== a.structuralSignature,
-        before: toEditorRowDto(b, currentLayers),
-        after: toEditorRowDto(a, proposedLayers),
+        before: toEditorRowDto(b, currentLayers, stampsCurrent.catalogAdopted),
+        after: toEditorRowDto(a, proposedLayers, stampsResolved.catalogAdopted),
         ...(nameBefore !== nameAfter ? { displayName: { before: nameBefore, after: nameAfter } } : {}),
       });
     }
@@ -1363,7 +1781,7 @@ export function computeSaveConsequences(ctx: SavePipelineContext): SaveConsequen
       changes.push({
         stationMac: a.stationMac, dataPoint: a.dataPoint,
         change: 'added', structural: true,
-        after: toEditorRowDto(a, proposedLayers),
+        after: toEditorRowDto(a, proposedLayers, stampsResolved.catalogAdopted),
       });
     }
   }
@@ -1398,8 +1816,8 @@ export function computeSaveConsequences(ctx: SavePipelineContext): SaveConsequen
       if (differs) {
         configOnly.push({
           stationMac: a.stationMac, dataPoint: a.dataPoint, change: 'modified',
-          before: toEditorRowDto(b, currentLayers),
-          after: toEditorRowDto(a, proposedLayers),
+          before: toEditorRowDto(b, currentLayers, stampsCurrent.catalogAdopted),
+          after: toEditorRowDto(a, proposedLayers, stampsResolved.catalogAdopted),
         });
       }
     } else if (b && !after.has(key)) {
@@ -1407,7 +1825,7 @@ export function computeSaveConsequences(ctx: SavePipelineContext): SaveConsequen
       // e.g. Use defaults on a disabled custom row (round 6 F4).
       configOnly.push({
         stationMac: b.stationMac, dataPoint: b.dataPoint, change: 'removed',
-        before: toEditorRowDto(b, currentLayers),
+        before: toEditorRowDto(b, currentLayers, stampsCurrent.catalogAdopted),
       });
     } else if (a && !b && !before.has(key)) {
       // Disabled row appears from nowhere (not an enabled->disabled
@@ -1415,7 +1833,7 @@ export function computeSaveConsequences(ctx: SavePipelineContext): SaveConsequen
       // disabled.
       configOnly.push({
         stationMac: a.stationMac, dataPoint: a.dataPoint, change: 'added',
-        after: toEditorRowDto(a, proposedLayers),
+        after: toEditorRowDto(a, proposedLayers, stampsResolved.catalogAdopted),
       });
     }
   }
@@ -1424,10 +1842,45 @@ export function computeSaveConsequences(ctx: SavePipelineContext): SaveConsequen
     : (x.stationMac < y.stationMac ? -1 : 1));
 
   const proposedRows = proposedRuntimeMap.rows
-    .map(row => toEditorRowDto(row, proposedLayers))
+    .map(row => toEditorRowDto(row, proposedLayers, stampsResolved.catalogAdopted))
     .sort((a, b) => a.stationMac === b.stationMac
       ? (a.dataPoint < b.dataPoint ? -1 : a.dataPoint > b.dataPoint ? 1 : 0)
       : (a.stationMac < b.stationMac ? -1 : 1));
+
+  // Battery-decoder polarity consequences (§19.6 / PR #67 review F5).
+  // The vendor-inverted decode is adoption-gated at catalog 3: an
+  // enabled battery-OWNING row whose field is vendor-inverted flips
+  // its low/normal decode when the save crosses the catalog-3
+  // boundary, with NO structural change. Disclose every affected
+  // existing (enabled, both-sides) row; the reverse transition (a
+  // downgrade save) is disclosed the same way.
+  // The SAME policy function the runtime decoder uses (R2-F2): the
+  // save pipeline always runs v2-driven (saves are refused in safe
+  // mode), so both worlds map their adopted stamp straight to a
+  // policy — matching the runtime's decode exactly, including across a
+  // pure conversion (no stamp change → no polarity change).
+  const fromPolicy = batteryDecoderPolicy(stampsCurrent.catalogAdopted);
+  const toPolicy = batteryDecoderPolicy(stampsResolved.catalogAdopted);
+  const batteryPolarity: BatteryPolarityChangeDto[] = [];
+  if (fromPolicy !== toPolicy) {
+    for (const [key, a] of after) {
+      if (a.hasBatterySubService
+        && a.batteryField !== null
+        && VENDOR_INVERTED_BATTERY_FIELDS.has(a.batteryField)
+        && before.has(key)) {
+        batteryPolarity.push({
+          stationMac: a.stationMac,
+          dataPoint: a.dataPoint,
+          batteryField: a.batteryField,
+          from: fromPolicy,
+          to: toPolicy,
+        });
+      }
+    }
+    batteryPolarity.sort((x, y) => x.stationMac === y.stationMac
+      ? (x.dataPoint < y.dataPoint ? -1 : x.dataPoint > y.dataPoint ? 1 : 0)
+      : (x.stationMac < y.stationMac ? -1 : 1));
+  }
 
   const setSummary = (set: Map<string, ConfiguredRow>): Array<Record<string, string>> =>
     [...set.values()]
@@ -1459,6 +1912,10 @@ export function computeSaveConsequences(ctx: SavePipelineContext): SaveConsequen
     batteryField: r.batteryField,
     hasBatterySubService: r.hasBatterySubService ?? null,
     embedName: r.embedName ?? null,
+    // §19.9: bind the numeric label into the digest so a label-only
+    // change is a real, confirmable consequence. `null` = absent,
+    // '' = a deliberately cleared label (distinct states).
+    unitLabel: r.unitLabel ?? null,
   } : null;
   const changeProjection = changes.map(c => ({
     stationMac: c.stationMac,
@@ -1476,6 +1933,13 @@ export function computeSaveConsequences(ctx: SavePipelineContext): SaveConsequen
     before: rowProjection(c.before),
     after: rowProjection(c.after),
   }));
+  // Bind the disclosed polarity consequences into the digest (F5): a
+  // preview that lists them authorizes exactly that adoption, and a
+  // commit that would list different ones refuses as stale.
+  const batteryPolarityProjection = batteryPolarity.map(c => ({
+    stationMac: c.stationMac, dataPoint: c.dataPoint,
+    batteryField: c.batteryField, from: c.from, to: c.to,
+  }));
   const digest = createHash('sha256')
     .update(canonicalJsonLocal({
       base: block,
@@ -1484,16 +1948,25 @@ export function computeSaveConsequences(ctx: SavePipelineContext): SaveConsequen
       proposed: setSummary(after),
       changes: changeProjection,
       configOnly: configOnlyProjection,
+      batteryPolarity: batteryPolarityProjection,
       // The visible settings banner is a consequence too (round 4 P2):
       // key NAMES only, never values — a consequence-equivalent switch
       // between settings patches must not reuse the old confirmation.
       settingsChanged: [...ctx.settingsChanged].sort(),
+      // The stamp transition is a consequence in its own right (PR #66
+      // review F4): adoption changes which definitions every future
+      // resolution sees, even when today's accessory sets are equal
+      // (all six fields already explicitly assigned). A digest minted
+      // by an ordinary preview must never authorize an adoption save,
+      // so both sides of the transition are bound.
+      stamps: { current: ctx.stampsCurrent, resolved: ctx.stampsResolved },
     }))
     .digest('hex');
 
   return {
     changes,
     configOnly,
+    batteryPolarity,
     structuralChangeCount: changes.filter(c => c.structural).length,
     digest,
     proposedRows,
@@ -1543,6 +2016,7 @@ export async function handleGetEditorState(
   payload: unknown,
 ): Promise<EditorStateDto> {
   const p = (payload ?? {}) as EditorStatePayload;
+  const cachedPairs = cachedPairsFromUniqueIds(p.cachedAccessoryUniqueIds);
 
   if (!deps.configPath) {
     throw new Error('No config.json path available to the UI server.');
@@ -1558,7 +2032,30 @@ export async function handleGetEditorState(
     .filter((b): b is Record<string, unknown> =>
       !!b && typeof b === 'object' && (b as { platform?: unknown }).platform === 'AmbientWeatherSensors');
   if (blocks.length === 0) {
-    throw new Error('No AmbientWeatherSensors platform block found in config.json.');
+    // Fresh installation (GA review P1-2): render a functional page
+    // whose Connection section can enter credentials; the
+    // settings-only save creates the block. baseDigest is the
+    // fresh-install sentinel, so a block appearing before the save
+    // refuses as stale like any other base drift.
+    return {
+      configMode: 'legacy',
+      v2FlagEnabled: detectV2FlagSource({} as ConfigInputShape, deps.env ?? process.env) !== 'opted-out',
+      freshInstall: true,
+      settings: settingsDtoFor({}),
+      editorAvailable: true,
+      baseDigest: FRESH_INSTALL_DIGEST,
+      blockIndex: 0,
+      version: deps.version,
+      stations: [],
+      authored: [],
+      authoredSource: 'sensorMap',
+      mirrorState: recognizeMirror({}).state,
+      catalog: { baseline: CURRENT_CATALOG_VERSION, adopted: CURRENT_CATALOG_VERSION, current: CURRENT_CATALOG_VERSION },
+      rows: [],
+      warnings: [],
+      errors: [],
+      notes: [],
+    };
   }
 
   const warnings: EditorDiagnosticDto[] = [];
@@ -1574,6 +2071,14 @@ export async function handleGetEditorState(
   const block = blocks[0];
 
   const modeResult = detectConfigMode(block as ConfigInputShape);
+  // The block's adoption stamps (§18.3), resolved by mode detection in
+  // EVERY mode: (1, 1) when both fields are absent, and the block's
+  // own pair otherwise — a fresh settings-only install is a
+  // legacy-shaped block born stamped at the current version. An
+  // invalid pair took the safe-mode return above and never reaches
+  // the builds below.
+  const blockCatalogBaseline = modeResult.catalogBaseline ?? 1;
+  const blockCatalogAdopted = modeResult.catalogAdopted ?? 1;
   const v2FlagEnabled = detectV2FlagSource(block as ConfigInputShape, deps.env ?? process.env) !== 'opted-out';
   // detectConfigMode already includes safeModeBanner in warnings —
   // no separate push, or safe mode would show the banner twice.
@@ -1658,7 +2163,7 @@ export async function handleGetEditorState(
   let stations: StationInventory;
   if (modeResult.mode === 'legacy') {
     stations = assemble([]);
-    overrides = compatToOverrides(block as LegacyConfig, stations);
+    overrides = compatToOverrides(block as LegacyConfig, stations, dynamicDataPointsFrom(discovery, cachedPairs));
     stations = assemble(overrides);
   } else {
     overrides = rawSensorMap;
@@ -1674,7 +2179,10 @@ export async function handleGetEditorState(
     discovery,
     uiState,
     stations,
+    cachedPairs,
     configMode: 'v2',
+    catalogBaseline: blockCatalogBaseline,
+    catalogAdopted: blockCatalogAdopted,
   });
 
   const layers = acceptedOverrideLayers(overrides, effectiveMap.errors);
@@ -1689,7 +2197,10 @@ export async function handleGetEditorState(
     discovery,
     uiState,
     stations,
+    cachedPairs,
     configMode: 'v2',
+    catalogBaseline: blockCatalogBaseline,
+    catalogAdopted: blockCatalogAdopted,
   });
   const defaultsByKey = new Map<string, EditorRowDefaultsDto>();
   for (const d of defaultsMap.rows) {
@@ -1727,18 +2238,7 @@ export async function handleGetEditorState(
   // the client sends no key when the cache read failed or timed out,
   // and without a complete read a missing accessory proves nothing.
   const cacheKnown = Array.isArray(p.cachedAccessoryUniqueIds);
-  const cachedKeys = new Set<string>();
-  if (Array.isArray(p.cachedAccessoryUniqueIds)) {
-    for (const id of p.cachedAccessoryUniqueIds) {
-      if (typeof id !== 'string') {
-        continue;
-      }
-      const m = /^([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})-(.+)$/.exec(id);
-      if (m) {
-        cachedKeys.add(`${m[1].toUpperCase()}|${m[2]}`);
-      }
-    }
-  }
+  const cachedKeys = new Set(cachedPairs.map(pair => `${pair.stationMac}|${pair.dataPoint}`));
   const observedStations = new Set<string>();
   for (const entry of discovery.entries) {
     observedStations.add(entry.stationMac.toUpperCase());
@@ -1746,10 +2246,17 @@ export async function handleGetEditorState(
 
   const rows = effectiveMap.rows
     .map(row => {
-      const dto = toEditorRowDto(row, layers);
+      const dto = toEditorRowDto(row, layers, blockCatalogAdopted);
       const key = `${row.stationMac.toUpperCase()}|${row.dataPoint}`;
       const defaults = defaultsByKey.get(key);
-      if (defaults !== undefined && row.kind !== 'unrecognized') {
+      // Only rows whose identity IS the catalog/compat identity carry
+      // defaults (review F2): for an explicit custom assignment on a
+      // fallback-recognized name, the empty-overrides map resolves the
+      // FALLBACK identity, and reseeding those defaults into a form
+      // built for the assigned identity mixes two sensors' facts. The
+      // client's Use defaults closes such editors and lets the preview
+      // state the truth (an identity change is a re-registration).
+      if (defaults !== undefined && row.kind !== 'unrecognized' && dto.identityScope === 'known') {
         dto.defaults = defaults;
       }
       if (dto.firstSeen !== undefined || cachedKeys.has(key)) {
@@ -1792,6 +2299,7 @@ export async function handleGetEditorState(
     authored: overrides.map(toAuthoredFragmentDto),
     authoredSource: modeResult.mode === 'legacy' ? 'compat-seeded' : 'sensorMap',
     mirrorState: recognizeMirror(block).state,
+    catalog: { baseline: blockCatalogBaseline, adopted: blockCatalogAdopted, current: CURRENT_CATALOG_VERSION },
     rows,
     warnings,
     errors: effectiveMap.errors.map(e => toDiagnosticDto('error', e)),
@@ -1805,7 +2313,18 @@ export async function handleGetEditorState(
  * human-facing labels. Pure projection of UNIT_VOCABULARY — the
  * server stays the sole validity authority (§3.7).
  */
-export function handleGetVocabulary(): VocabularyDto {
+export function handleGetVocabulary(): LegacyVocabularyDto;
+export function handleGetVocabulary(payload: unknown): VocabularyResponseDto;
+export function handleGetVocabulary(payload?: unknown): VocabularyResponseDto {
+  const protocol = payload && typeof payload === 'object' && !Array.isArray(payload)
+    ? (payload as { vocabularyProtocol?: unknown }).vocabularyProtocol : undefined;
+  if ((payload !== undefined && payload !== null && (typeof payload !== 'object' || Array.isArray(payload)))
+    || (protocol !== undefined && protocol !== 2)) {
+    return { ok: false, error: {
+      code: 'unsupported-vocabulary-protocol',
+      message: 'The editor and plugin service use incompatible vocabulary versions. Reload the plugin settings page.',
+    } };
+  }
   const measurements: VocabularyDto['measurements'] = {};
   for (const m of Object.keys(UNIT_VOCABULARY) as Measurement[]) {
     measurements[m] = {
@@ -1821,15 +2340,12 @@ export function handleGetVocabulary(): VocabularyDto {
     measurements: [...f.measurements],
     choices: f.choices.map(c => ({ id: c.id, label: c.label, units: { ...c.units } })),
   }));
-  // Assignment targets for unrecognized rows (PR E): exactly the
-  // (kind, measurement) pairs WRAPPER_FOR_KIND_AND_MEASUREMENT can
-  // build, in vocabulary measurement order. Anything else — including
-  // compatible-but-unimplemented pairs like (co, co) — would be
-  // refused by the save pipeline as no-wrapper, so the picker never
-  // offers it (§3.9: the table is the only way custom sensors pick a
-  // wrapper).
+  // An old iframe can outlive an in-place package upgrade. Without
+  // negotiation it must retain the measurement-keyed, since-1 list;
+  // sending multiple boolean kinds could silently choose the wrong one.
   const vocabOrder = Object.keys(UNIT_VOCABULARY) as Measurement[];
-  const assignments: VocabularyDto['assignments'] = Object.keys(WRAPPER_FOR_KIND_AND_MEASUREMENT)
+  const assignments: LegacyVocabularyDto['assignments'] = Object.keys(WRAPPER_FOR_KIND_AND_MEASUREMENT)
+    .filter(key => protocol === 2 || (WRAPPER_PAIR_SINCE[key as keyof typeof WRAPPER_PAIR_SINCE] ?? 1) <= 1)
     .map(key => {
       const sep = key.indexOf('|');
       const kind = key.slice(0, sep);
@@ -1845,7 +2361,44 @@ export function handleGetVocabulary(): VocabularyDto {
       };
     })
     .sort((a, b) => vocabOrder.indexOf(a.measurement as Measurement) - vocabOrder.indexOf(b.measurement as Measurement));
-  return { measurements, families, assignments };
+  if (protocol !== 2) {
+    return { measurements, families, assignments };
+  }
+  const states: Record<string, { label: string; normal: string; active: string }> = {
+    leak: { label: 'Leak', normal: 'No leak', active: 'Leak detected' },
+    contact: { label: 'Contact', normal: 'Closed', active: 'Open' },
+    occupancy: { label: 'Occupancy', normal: 'Unoccupied', active: 'Occupied' },
+    smoke: { label: 'Smoke', normal: 'No smoke detected', active: 'Smoke detected' },
+    motion: { label: 'Motion', normal: 'No motion', active: 'Motion detected' },
+  };
+  const capabilities: CapabilityOptionDto[] = assignments.map(a => {
+    const id = `${a.kind}|${a.measurement}`;
+    const state = a.measurement === 'boolean' ? states[a.kind] : undefined;
+    const output = state ? 'native-state' : a.kind === 'motion' ? 'extended-numeric' : 'native-measurement';
+    return {
+      ...a, id, since: WRAPPER_PAIR_SINCE[id as keyof typeof WRAPPER_PAIR_SINCE] ?? 1,
+      label: state?.label ?? a.label,
+      triggering: a.triggering && !state,
+      source: state ? { type: 'none' }
+        : a.measurement === 'numeric' ? { type: 'fixed-authored', unit: 'raw' }
+          : a.measurement === 'timestamp' ? { type: 'fixed-implicit', unit: 'ms' }
+            : { type: 'selectable' },
+      output,
+      inputHelp: state
+        ? `0/false = ${state.normal}; 1/true = ${state.active}. Other reported values, including 2, indicate a fault and clear the alert. Missing data retains the previous state and fault. Reversed encodings and text are not supported.`
+        : a.measurement === 'timestamp'
+          ? 'Accepts a finite numeric Unix timestamp in milliseconds or a supported date string, including an ISO-8601 date.'
+          : 'Accepts finite numeric readings, not numeric strings or text.',
+      outputHelp: output === 'extended-numeric'
+        ? 'Creates a motion tile in Apple Home. Compatible controller apps can display the value.'
+          + (a.triggering ? ' An optional threshold controls the motion state: above means at or above, below means at or below.' : ' This measurement does not trigger motion.')
+        : output === 'native-state'
+          ? 'Uses the reported detector state for a native Apple Home sensor. The plugin does not derive an alarm from a concentration.'
+          : 'Uses the corresponding native HomeKit measurement service.',
+      ...(state ? { state: { normal: state.normal, active: state.active } } : {}),
+    };
+  });
+  return { vocabularyProtocol: 2, measurements, families, assignments: capabilities };
 }
 
 type OverrideLayers = ReturnType<typeof partitionOverrideLayers>;
@@ -1882,7 +2435,7 @@ function acceptedOverrideLayers(
   return partitionOverrideLayers(accepted);
 }
 
-function toEditorRowDto(row: EffectiveSensorRow, layers: OverrideLayers): EditorRowDto {
+function toEditorRowDto(row: EffectiveSensorRow, layers: OverrideLayers, catalogAdopted: number): EditorRowDto {
   const dto: EditorRowDto = {
     stationMac: row.stationMac,
     dataPoint: row.dataPoint,
@@ -1917,7 +2470,13 @@ function toEditorRowDto(row: EffectiveSensorRow, layers: OverrideLayers): Editor
   // only when its resolved measurement matches the accepted global
   // identity's measurement.
   const globalOverride = layers.global.get(row.dataPoint);
-  dto.identityScope = defaultRowFor(row.dataPoint) !== undefined
+  const stationOverride = layers.station.get(row.stationMac)?.get(row.dataPoint);
+  // Stamp-aware (§18.4 AP-2): an ADOPTED definition with no authored
+  // identity presents as 'known' — the editor shows the inherited
+  // identity and Use defaults attaches (the F2-of-P0 rule) — while any
+  // authored identity keeps presenting as custom, exactly like before
+  // the definition existed.
+  dto.identityScope = defaultRowForConfigOverride(row.dataPoint, catalogAdopted, globalOverride, stationOverride) !== undefined
     ? 'known'
     : globalOverride?.kind !== undefined && globalOverride.measurement !== undefined
       && globalOverride.measurement === row.measurement
@@ -1942,6 +2501,11 @@ function toEditorRowDto(row: EffectiveSensorRow, layers: OverrideLayers): Editor
   if (row.displayUnit !== undefined) {
     dto.displayUnit = row.displayUnit;
   }
+  // §19.9: the generic numeric label. Carried for numeric rows only; an
+  // explicit '' (cleared label) is preserved distinct from absence.
+  if (row.measurement === 'numeric' && row.unitLabel !== undefined) {
+    dto.unitLabel = row.unitLabel;
+  }
   return dto;
 }
 
@@ -1953,7 +2517,7 @@ function toEditorRowDto(row: EffectiveSensorRow, layers: OverrideLayers): Editor
 const AUTHORED_FRAGMENT_FIELDS = new Set([
   'batteryField', 'displayUnit', 'embedName', 'enabled', 'kind',
   'measurement', 'name', 'sourceUnit', 'threshold', 'triggerDirection',
-  'triggerEnabled',
+  'triggerEnabled', 'unitLabel',
 ]);
 
 /**
@@ -1966,6 +2530,7 @@ const AUTHORED_FRAGMENT_FIELDS = new Set([
 function toAuthoredFragmentDto(entry: unknown, index: number): EditorAuthoredFragmentDto {
   const dto: EditorAuthoredFragmentDto = { index, layer: 'global', fields: {} };
   if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+    dto.unreconstructable = true;
     return dto;
   }
   const frag = entry as Record<string, unknown>;
@@ -2080,16 +2645,13 @@ function assembleStationInventory(src: {
     }
   }
   // 2. Discovery registry.
+  const names = latestDiscoveryStationNames(src.discovery.entries);
   for (const e of src.discovery.entries) {
-    add(e.stationMac, e.stationName ?? '', 'discovery');
+    add(e.stationMac, names.get(e.stationMac.toUpperCase()) ?? '', 'discovery');
   }
   // 3. Cached-accessory uniqueId prefixes (MAC-dataPoint).
-  if (Array.isArray(src.cachedAccessoryUniqueIds)) {
-    for (const uid of src.cachedAccessoryUniqueIds) {
-      if (typeof uid === 'string' && uid.length >= 17) {
-        add(uid.slice(0, 17), '', 'cached-accessory');
-      }
-    }
+  for (const pair of cachedPairsFromUniqueIds(src.cachedAccessoryUniqueIds)) {
+    add(pair.stationMac, '', 'cached-accessory');
   }
   // 4. stationMac values in current + proposed overrides.
   for (const list of src.overrideSources) {

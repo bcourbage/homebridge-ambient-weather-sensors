@@ -70,6 +70,24 @@ export const LIGHTNING_STATION: RawStation = {
   },
 };
 
+/**
+ * Gap-class station (GA review P1-1): fields the LEGACY substring
+ * recognizer accepts but the finite v2 default table lacked.
+ * feelsLike/dewPoint 5+ exceed the table's 1..4; soiltemp4f matches
+ * legacy's includes('temp'). soilhum4 is the NEGATIVE control: 'hum'
+ * is not 'humid', so 1.7 ignores it and v2 must keep it unrecognized.
+ */
+export const PROBE_FARM_STATION: RawStation = {
+  macAddress: 'AA:BB:CC:DD:EE:04',
+  info: { name: 'Probe Farm' },
+  lastData: {
+    temp5f: 67, humidity5: 44, feelsLike5: 66, dewPoint5: 48, batt5: 1,
+    feelsLike6: 65, dewPoint6: 47,
+    soiltemp4f: 55,
+    soilhum4: 38,
+  },
+};
+
 // ---- Matrix of legacy configs to test -----------------------------
 
 export const CONFIG_MATRIX: Array<{ label: string; config: LegacyConfig }> = [
@@ -123,6 +141,10 @@ export const CONFIG_MATRIX: Array<{ label: string; config: LegacyConfig }> = [
   { label: 'excludeSensors by sensorKey', config: {
     temperatureSensors: true, humiditySensors: true,
     excludeSensors: ['tempinf'],
+  } },
+  { label: 'excludeSensors on gap fields (raw key + friendly name)', config: {
+    temperatureSensors: true, humiditySensors: true,
+    excludeSensors: ['feelsLike5', 'dew point 6'],
   } },
   { label: 'excludeSensors by friendly name (case-insensitive)', config: {
     temperatureSensors: true, humiditySensors: true,
@@ -197,6 +219,8 @@ export const PAYLOAD_MATRIX: Array<{ label: string; stations: RawStation[] }> = 
   { label: 'AQIN only', stations: [AQIN_STATION] },
   { label: 'lightning only', stations: [LIGHTNING_STATION] },
   { label: 'outdoor + AQIN + lightning', stations: [OUTDOOR_STATION, AQIN_STATION, LIGHTNING_STATION] },
+  { label: 'numbered-probe gap fields', stations: [PROBE_FARM_STATION] },
+  { label: 'outdoor + probe farm', stations: [OUTDOOR_STATION, PROBE_FARM_STATION] },
 ];
 
 

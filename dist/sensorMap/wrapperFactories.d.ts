@@ -155,6 +155,50 @@ export declare const WRAPPER_SPEC: {
         readonly kind: "motion";
         readonly measurement: "timestamp";
     };
+    readonly leak: {
+        readonly kind: "leak";
+        readonly measurement: "boolean";
+    };
+    readonly contact: {
+        readonly kind: "contact";
+        readonly measurement: "boolean";
+    };
+    readonly occupancy: {
+        readonly kind: "occupancy";
+        readonly measurement: "boolean";
+    };
+    readonly smoke: {
+        readonly kind: "smoke";
+        readonly measurement: "boolean";
+    };
+    readonly 'motion-boolean': {
+        readonly kind: "motion";
+        readonly measurement: "boolean";
+    };
+    readonly 'soil-moisture': {
+        readonly kind: "motion";
+        readonly measurement: "soil-moisture";
+    };
+    readonly 'leaf-wetness': {
+        readonly kind: "motion";
+        readonly measurement: "leaf-wetness";
+    };
+    readonly 'soil-tension': {
+        readonly kind: "motion";
+        readonly measurement: "soil-tension";
+    };
+    readonly evapotranspiration: {
+        readonly kind: "motion";
+        readonly measurement: "evapotranspiration";
+    };
+    readonly aqi: {
+        readonly kind: "motion";
+        readonly measurement: "aqi";
+    };
+    readonly numeric: {
+        readonly kind: "motion";
+        readonly measurement: "numeric";
+    };
 };
 /**
  * Compile-time factory-parameter narrowing, derived from

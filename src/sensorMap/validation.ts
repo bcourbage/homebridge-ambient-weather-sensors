@@ -41,12 +41,14 @@ export const STATION_MAC_REGEX = /^([0-9A-F]{2}:){5}[0-9A-F]{2}$/i;
 const KNOWN_KINDS: ReadonlySet<SensorKind> = new Set<SensorKind>([
   'temperature', 'humidity', 'light', 'co2', 'co',
   'air-quality-pm25', 'air-quality-pm10',
-  'motion', 'leak', 'contact', 'occupancy', 'unrecognized',
+  'motion', 'leak', 'contact', 'occupancy', 'smoke', 'unrecognized',
 ]);
 const KNOWN_MEASUREMENTS: ReadonlySet<Measurement> = new Set<Measurement>([
   'temperature', 'humidity', 'illuminance', 'co2', 'co',
   'pm25', 'pm10', 'wind-speed', 'rain-rate', 'rain-accumulation',
   'pressure', 'distance', 'uv-index', 'count', 'direction',
+  'soil-moisture', 'leaf-wetness', 'soil-tension', 'evapotranspiration', 'aqi',
+  'numeric',
   'timestamp', 'boolean',
 ]);
 // Derived from the single validation authority rather than hand-listed:
@@ -95,9 +97,34 @@ const ALLOWED_KEYS: ReadonlySet<string> = new Set([
   'kind', 'measurement',
   'name',
   'threshold', 'triggerEnabled', 'triggerDirection',
-  'displayUnit', 'sourceUnit',
+  'displayUnit', 'sourceUnit', 'unitLabel',
   'batteryField', 'embedName', 'enabled',
 ]);
+
+/**
+ * Maximum length of a `numeric` measurement's literal `unitLabel`
+ * (§19.9), counted in Unicode code points AFTER trimming so multi-byte
+ * symbols like `µg/m³` are preserved. Presentation only; a longer label
+ * is rejected loudly rather than silently truncated.
+ */
+export const MAX_UNIT_LABEL_CODEPOINTS = 16;
+
+/**
+ * Characters a `unitLabel` may never contain (§19.9): all control
+ * characters (`\p{Cc}` = C0, DEL, and C1, which includes line breaks
+ * and tab), the COMPLETE Unicode Bidi_Control set (`\p{Bidi_Control}`,
+ * which includes U+061C ARABIC LETTER MARK as well as the LRM/RLM
+ * marks, embeddings, overrides, and isolates), and the line/paragraph
+ * separators (`\p{Zl}`, `\p{Zp}`). Using the Unicode property escapes
+ * rather than a hand-maintained list keeps the set complete as Unicode
+ * evolves. Normal symbols like `µ`, `³`, `°` and ordinary letters are
+ * unaffected; the label renders as plain HAP text, never markup.
+ */
+const DISALLOWED_UNIT_LABEL_CHAR = /\p{Cc}|\p{Bidi_Control}|\p{Zl}|\p{Zp}/u;
+
+function hasDisallowedUnitLabelChar(label: string): boolean {
+  return DISALLOWED_UNIT_LABEL_CHAR.test(label);
+}
 
 /**
  * Structured warning — code + optional field + message. `code`
@@ -367,7 +394,25 @@ export function validateOverrideBody(
   // SensorMapOverride containing only the fields the user provided
   // (with unrecognized-kind stripped, per above).
 
-  const isCustom = defaultRow === undefined;
+  // Branch selection (§18.4 AP-2): identity AUTHORITY is a separate
+  // axis from override completeness.
+  //   - v1-baseline default row (sinceCatalogVersion absent/1): the
+  //     KNOWN branch — the frozen historical clamp, unchanged.
+  //   - later-catalog definition, override authors NO identity field:
+  //     the row INHERITS the definition's identity; the known branch
+  //     validates it (its clamping warns cannot fire — nothing to
+  //     strip), so rename-only / disable-only / display-unit-only
+  //     edits pass with no custom-missing-* and no clamps.
+  //   - later-catalog definition, override authors ANY identity field
+  //     (raw presence of kind / measurement / sourceUnit, the same
+  //     test P0's hasAuthoredIdentity applies): the CUSTOM branch,
+  //     verbatim — a complete identity is an explicit assignment that
+  //     ignores the catalog; a partial one is diagnosed by the
+  //     custom-missing-* family, never completed from the catalog.
+  //   - no default row at all: the CUSTOM branch, as always.
+  const isAdoptedDefinition = defaultRow !== undefined && (defaultRow.sinceCatalogVersion ?? 1) > 1;
+  const identityAuthored = 'kind' in merged || 'measurement' in merged || 'sourceUnit' in merged;
+  const isCustom = defaultRow === undefined || (isAdoptedDefinition && identityAuthored);
 
   // Effective measurement — what the row's measurement will be after
   // resolving overrides against defaults. Applied BEFORE the
@@ -376,7 +421,33 @@ export function validateOverrideBody(
   // from the built-in default or the user's override.
   const effectiveMeasurement: Measurement | undefined = isCustom
     ? out.measurement
-    : defaultRow.measurement;
+    : defaultRow!.measurement;
+
+  // unitLabel: the generic numeric measurement's literal display label
+  // (§19.9). Valid ONLY when the effective measurement is `numeric`;
+  // authored on any other identity it is an error. Trimmed, bounded to
+  // MAX_UNIT_LABEL_CODEPOINTS code points, single-line, no control or
+  // bidi-control characters. An explicit empty string is a VALID
+  // cleared label and is preserved distinct from omission.
+  if (merged.unitLabel !== undefined) {
+    if (typeof merged.unitLabel !== 'string') {
+      return err('invalid-unitlabel', `unitLabel on ${dp} must be a string.`, warnings, 'unitLabel');
+    }
+    if (effectiveMeasurement !== 'numeric') {
+      return err('invalid-unitlabel',
+        `unitLabel on ${dp} is only valid for the numeric measurement.`, warnings, 'unitLabel');
+    }
+    const trimmed = merged.unitLabel.trim();
+    if (hasDisallowedUnitLabelChar(trimmed)) {
+      return err('invalid-unitlabel',
+        `unitLabel on ${dp} must not contain line breaks or control characters.`, warnings, 'unitLabel');
+    }
+    if ([...trimmed].length > MAX_UNIT_LABEL_CODEPOINTS) {
+      return err('invalid-unitlabel',
+        `unitLabel on ${dp} must be at most ${MAX_UNIT_LABEL_CODEPOINTS} characters.`, warnings, 'unitLabel');
+    }
+    out.unitLabel = trimmed;
+  }
 
   // Measurement-shape normalization. Applies to both known and
   // custom rows — timestamp rows must have sourceUnit === 'ms' or
@@ -486,39 +557,42 @@ export function validateOverrideBody(
       }
     }
   } else {
-    // Known dataPoint: measurement is fixed by the default row.
-    if (out.measurement !== undefined && out.measurement !== defaultRow.measurement) {
+    // Known dataPoint (v1 baseline), or an INHERITED later-catalog
+    // identity (no identity fields authored — the clamping warns below
+    // are unreachable for that case by construction).
+    const knownRow = defaultRow!;
+    if (out.measurement !== undefined && out.measurement !== knownRow.measurement) {
       warnings.push({
         code: 'ignored-measurement-fixed',
         field: 'measurement',
-        message: `measurement override on known dataPoint '${dp}' ignored; measurement is fixed at ${defaultRow.measurement}.`,
+        message: `measurement override on known dataPoint '${dp}' ignored; measurement is fixed at ${knownRow.measurement}.`,
       });
       delete out.measurement;
     }
     if (out.kind !== undefined) {
-      if (!isCompatibleKind(defaultRow.measurement, out.kind as Exclude<SensorKind, 'unrecognized'>)) {
+      if (!isCompatibleKind(knownRow.measurement, out.kind as Exclude<SensorKind, 'unrecognized'>)) {
         return err(
           'incompatible-kind-for-known-measurement',
-          `kind '${out.kind}' is not compatible with the built-in measurement '${defaultRow.measurement}' on ${dp}.`,
+          `kind '${out.kind}' is not compatible with the built-in measurement '${knownRow.measurement}' on ${dp}.`,
           warnings,
           'kind',
         );
       }
     }
-    if (out.sourceUnit !== undefined && out.sourceUnit !== defaultRow.sourceUnit) {
+    if (out.sourceUnit !== undefined && out.sourceUnit !== knownRow.sourceUnit) {
       warnings.push({
         code: 'ignored-sourceunit-fixed',
         field: 'sourceUnit',
-        message: `sourceUnit override on known dataPoint '${dp}' ignored; source unit is fixed at ${defaultRow.sourceUnit}.`,
+        message: `sourceUnit override on known dataPoint '${dp}' ignored; source unit is fixed at ${knownRow.sourceUnit}.`,
       });
       delete out.sourceUnit;
     }
     if (out.displayUnit !== undefined) {
-      const legal = LEGAL_UNITS_FOR_MEASUREMENT[defaultRow.measurement];
+      const legal = LEGAL_UNITS_FOR_MEASUREMENT[knownRow.measurement];
       if (!legal.includes(out.displayUnit)) {
         return err(
           'illegal-displayunit-for-known-measurement',
-          `displayUnit '${out.displayUnit}' is not legal for measurement '${defaultRow.measurement}' on ${dp}.`,
+          `displayUnit '${out.displayUnit}' is not legal for measurement '${knownRow.measurement}' on ${dp}.`,
           warnings,
           'displayUnit',
         );

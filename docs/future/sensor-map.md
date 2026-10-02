@@ -505,7 +505,7 @@ Note the `windspeedmph` entry combines `threshold` and `displayUnit` — canonic
 
 This prevents an older plugin's UI from partially rewriting a newer configuration and corrupting it silently.
 
-**Migration event:** first UI save on a legacy config atomically:
+**Migration event:** explicit conversion or the first full sensor-map save on a legacy config atomically:
 0. Writes the **immutable legacy snapshot** (see below) and awaits success BEFORE any config.json mutation — on a reconversion whose legacy fields differ from the surviving snapshot, appends the **conversion-journal baseline** (§5.1b) instead, under the same await-before-mutation rule
 1. Reads effective sensor map (compat-translated)
 2. Computes minimal-diff canonical serialization against v2 baseline (§11.3)
@@ -662,7 +662,9 @@ zero writes:
   the client's view, the save is refused. Safe mode refuses outright.
 - **Pure-migration seeding.** A legacy config with no proposal composes
   from `compatToOverrides` (the compat-translated state), never from
-  defaults — converting cannot silently re-enable disabled categories.
+  defaults. Disabled sensors represented at conversion remain disabled.
+  Legacy category and sensor-name-matcher rules do not become an active
+  policy for future field names in v2 (§21.4).
 - **Same-machinery validation.** Proposals run through
   `buildEffectiveSensorMap` (identity-first → duplicate merge with
   later-field-wins → body validation with provenance); any row error
@@ -715,6 +717,14 @@ Legacy fields translate to internal sensor-map state. Deterministic, one-shot pe
 | `includeOnly: [...]` | | Non-matching rows → `enabled: false`. After `excludeSensors`. |
 | `stationFilter: [...]` | | Not sensor-map related. Top-level field. |
 | `dataSource` | | Not sensor-map related. Top-level field. |
+
+Conversion evaluates these legacy category and sensor-name matchers into
+overrides for the catalog, observed, and cache-backed identities available
+at conversion. It does not retain those matchers as a v2 exposure policy or
+invent a disabled placeholder solely because an otherwise unknown field
+name appears in `excludeSensors`. After conversion, individual sensor-map
+rows and their global/station overrides govern those settings (§21.4).
+The top-level `stationFilter` remains a separate, active station filter.
 
 ## 7. Effective map construction
 
@@ -1178,13 +1188,16 @@ whose canonical form would change meaning: after serialization the
 canonical array is reloaded and every configured row + structural
 signature is compared against the proposal's effective map — over the
 station inventory PLUS a synthetic never-seen station, so global
-TEMPLATE equivalence is proven, not just current-inventory equivalence.
+TEMPLATE equivalence is proven for the current field universe, not just
+the current station inventory. This does not carry legacy category or
+sensor-name-matcher policy onto hypothetical future fields (§21.4).
 Any divergence returns the structured `canonical-divergence` error
 listing the affected rows and both signatures. Supported remediation
 (the error message says this): make ownership explicit — set
 `batteryField: null` on the non-owning claimant(s), or assign distinct
 battery fields — and retry. The gate doubles as a mechanical trap for
-serializer defects: nothing that changes meaning can be persisted.
+serializer defects: a changed resolved meaning within that checked universe
+cannot be persisted.
 
 **Idempotency:**
 
@@ -1197,6 +1210,9 @@ assertEqual(sparse1, serialize(compat(legacyConfig)))  // determinism
 ```
 
 Repeated UI saves produce byte-identical `sensorMap` arrays for the same input.
+The equivalence assertion uses the identities available at conversion;
+the separately tested future-field behavior is the per-sensor contract in
+§21.4, not continued v1 category/matcher evaluation.
 
 ### 11.4 What DOES change on upgrade
 
@@ -1357,8 +1373,10 @@ Published under `@beta` dist-tag only.
 - CI green throughout
 - Every invariant in §12 has passing tests
 - Zero-migration audit re-verified
-- Both testers running latest beta for at least a week
-- Angular UI validated in supported HB UI X versions
+- Maintainer-accepted beta.19 production bake, followed by the exact GA
+  candidate's real-host package smoke and cached restart (§21.5)
+- Angular UI host validation on Homebridge Config UI X 5.29.0; other
+  host-version support claims require their own evidence
 - CHANGELOG, README, UPGRADING.md finalized
 - `npm test` in `prepublishOnly`
 
@@ -1732,4 +1750,1467 @@ Tests: for every non-motion kind, submit an override with each of these fields; 
   - Explicit validation of inapplicable fields (threshold / triggerEnabled / triggerDirection / embedName) on non-motion kinds
   - Also added: §3.7 validation table entries for `threshold`/`triggerEnabled`/`embedName` on non-motion kinds
 - **2026-09-14**: beta.17 RC smoke (user decision). The separate structural-change confirmation modal is RETIRED: the user has already previewed every consequence (with per-row Skip) and clicked Save; a second confirmation added nothing. The confirmation contract is unchanged underneath — /compose-save still refuses a structural save whose digest does not match its recomputation, and /preview-save remains the only digest source — so the preview + Save gesture IS the confirmation UX the digest forces. Recorded debt from the same smoke round: the preview's consequence model includes enabled rows the station has never reported, so bulk-disabling them previews as structural removals although the runtime never registered them (a conservative overclaim; the preview banner qualifies the claim rather than reopening the cleared consequence engine in this beta).
+- **2026-09-20**: Catalog completion design checkpoint (issue #63,
+  package P1). P0 (authored-identity precedence over the dynamic
+  fallback) merged as #64. This revision adds §18: the three-decision
+  model (input catalog / output capability / exposure policy), the
+  executable catalog artifacts (`src/sensorMap/catalog/` + coverage
+  suite), and the assignment-preservation design (§18.4) that must be
+  reviewed BEFORE any P2 definition lands. Core commitments: the
+  known-dataPoint validation clamp is frozen to the catalog-v1 static
+  set; later definitions are defaults and vocabulary, never clamps; new
+  defaults are inert until an explicit, previewed adoption bumps a
+  config-side catalog stamp; preservation derives only from authored
+  config plus the stamp, never from inventory or cache. No runtime
+  behavior changes in P1.
+
+  Review round 1 (same day) corrected the design in place: §18.2's
+  takeover narrative was replaced with the three MEASURED validator
+  outcomes (equal values pass unstripped; an alternate unit is
+  silently clamped with the signature unchanged — the value-level
+  corruption case; an incompatible kind resolves to the new static
+  default, not a dead row, because P0 gates only the dynamic
+  fallback). AP-2 separated identity AUTHORITY from override
+  completeness — later definitions get a third validation branch
+  (inherit / explicit complete identity / diagnosed partial) so
+  rename-only, disable-only, and display-unit-only edits stop failing
+  `custom-missing-kind`. §18.3 replaced the single scalar stamp with
+  the durable `catalogBaseline` + `catalogAdopted` pair (default
+  exposure derives from the baseline: no global disable fragments, no
+  observed-row bookkeeping, offline/never-seen stations identical by
+  arithmetic), made pure conversion keep `baseline = adopted = 1`
+  (removing the conversion-adopts-newest contradiction), and defined
+  absent/malformed/future stamp handling. AP-3 became per-key
+  decision equality instead of the unsatisfiable whole-map equality.
+  The catalog corrected the reversed `batt_lightning` evidence (the
+  README observation is `0` on a healthy device; the wiki declares
+  1=Low/0=OK for `batt_lightning` and `batleak{n}`, inverted from the
+  other battery fields; the deployed decoder reads 0 as low
+  everywhere) and recorded the declared units it had left unstated.
+  The capability spec gained exact pair-to-wrapper mappings verified
+  against real HAP service instantiation, and the coverage suite
+  gained identity/unit comparisons so the review's three semantic
+  mutations now fail.
+
+  Review round 2 (same day) hardened four contracts: (1) invalid or
+  future stamps FAIL CLOSED into the safe-mode-style protective
+  posture (retain + bind-existing, no reconciliation, read-only
+  editor with a named diagnostic) instead of cap-and-continue, which
+  the reviewer's lifecycle probe proved unregisters a cached
+  accessory riding an adopted definition; both stamps genuinely
+  absent remains the defined legacy `(1, 1)` state. (2) Conversion
+  and the first sensor-map save PRESERVE an existing valid stamp pair
+  (a fresh settings-only install is already stamped at birth);
+  `(1, 1)` initializes only a fully unstamped legacy config. (3) A
+  partial authored identity now BLOCKS the later definition's default
+  row in its applicable scope, matching P0's fallback gate — a
+  declared-but-invalid identity intent is never answered with the
+  catalog's substitute accessory. (4) The catalog records the wiki's
+  documented Meteobridge polarity variant ("1=Low, 0=OK") on battout,
+  battin, batt1..batt10, and batt_25 alongside the standard
+  declaration; no decoder change.
+
+  Review round 3 (same day, documentation-only) tightened the
+  protective-mode promise to what the safe-mode binder actually
+  delivers, verified through the real platform/HAP lifecycle: EVERY
+  accessory is preserved, fresh values flow only to independently
+  understood baseline-native bindings (`tempf` updates), and
+  adopted-definition, custom, and extended accessories stay frozen at
+  cached values — the P2 acceptance tests prove both classes, and the
+  binder is explicitly not broadened. The lightning/leak inversion
+  wording now names the standard (non-Meteobridge) convention as its
+  reference. Round 3 cleared the P1 findings and recommended merging
+  the P1 package.
+
+- **2026-09-20 (P2)**: §18 implemented (issue #63 P2). Implementation
+  decisions within the reviewed design:
+  - The stamps are the public fields `catalogBaseline` /
+    `catalogAdopted`, written ONLY by `composeV2ConfigSave`; parsing
+    and the fail-closed rules live in `catalogVersion.ts`
+    (`CURRENT_CATALOG_VERSION = 2`), and an invalid pair routes
+    through the EXISTING safe-mode machinery with a stamp-specific
+    banner — one protective posture, not a second one.
+  - Catalog-2 definitions live in `CATALOG_V2_ROWS`, never in
+    `DEFAULT_SENSOR_MAP`: the frozen v1 table keeps sole ownership of
+    the validation clamp, the battery reservation set, the legacy
+    mirror's universe, and the unconditional pairs expansion.
+    Anchored rows (feelsLike5-10, dewPoint5-10, soiltemp1f-10f,
+    pm25_in_24h) are built from the same primitives as the fallback
+    synthesizer and are resolution-only (no pair expansion — the
+    fallback never expanded pairs either), so adoption changes no
+    effective row; tests pin identity equality per key. New-exposure
+    rows (windgustdir, windspdmph_avg2m, winddir_avg2m,
+    windspdmph_avg10m, 24hourrainin, totalrainin) use the generic
+    per-pair wrappers from the custom table, so removing an
+    equivalent explicit assignment after adoption keeps the
+    structural signature.
+  - The new rows carry an explicit `defaultEnabled: false` overriding
+    the baseline arithmetic in BOTH directions: they stay
+    non-exposing even on fresh installs, which keeps the §11
+    conversion-equivalence gate satisfiable for every baseline
+    (including a fresh settings-only install born at (2, 2) whose
+    first sensor-map save converts). Exposing them is always a
+    per-row previewed decision.
+  - AP-2's third branch reuses the existing branches: an adopted
+    definition with no authored identity validates through the KNOWN
+    branch (its clamp warns are unreachable — nothing to strip), and
+    ANY authored identity routes to the CUSTOM branch verbatim, so a
+    partial identity gets the existing `custom-missing-*` diagnostics
+    and, via the P0 authorship gate generalized in
+    `defaultRowForConfigOverride`, blocks the definition's default in
+    its scope.
+  - Adoption is the pipeline payload field `adoptCatalogVersion`
+    (exactly `CURRENT_CATALOG_VERSION`, v2 configs only, never on
+    conversion or the fresh path), flowing through
+    preview → compose → commit like any save; the editor DTO reports
+    `catalog { baseline, adopted, current }` and stamp-aware
+    `identityScope`. The UI affordance is P4 scope.
+  - Tests: `catalogAdoption.test.ts` (resolution matrix),
+    `adoptionPipeline.test.ts` (pipeline matrix), the stamp-broken
+    platform lifecycle in `safeMode.test.ts` (tempf keeps its binding,
+    the adopted/custom accessory stays frozen, zero registrations),
+    and the two-world coverage suite (`catalogCoverage.test.ts`,
+    AWN_CATALOG_VERSION = 2 pinned to the runtime constant).
+
+  PR #66 review round 1 completed the implementation on six findings:
+  (F1) the canonical serializer's known/custom classification now uses
+  the SAME stamp-aware lookup as the resolver — an inherited adopted
+  row canonicalizes without materializing identity (a global rename
+  had silently become an explicit assignment; the station-scoped
+  variant diverged). (F2) validation and resolution use ONE identity
+  per key: a station fragment is validated with the global layer's raw
+  identity authorship passed into the lookup (a non-identity station
+  exception under a global explicit assignment is rejected exactly as
+  before adoption), and resolveRow gained a displayUnit legality guard
+  for the reverse direction (a valid global fragment's unit meeting a
+  station-authored identity falls back to the measurement default with
+  an `illegal-cross-scope-displayunit` note — an illegal unit never
+  reaches a wrapper). (F3) stamps are validated FIRST in EVERY mode:
+  legacy-shaped blocks (a fresh settings-only install is born stamped
+  before conversion) carry their real stamps in the detection result,
+  and an invalid pair fails closed to safe mode even without
+  configVersion — the legacy pipeline reconciles, and the probe had
+  unregistered a cached accessory. (F4) the consequences digest binds
+  the stamp transition (current AND resolved pairs), and adoption
+  always requires its own preview's digest even with zero structural
+  consequences — an ordinary preview's digest can no longer authorize
+  an adoption. (F5) the baseline arithmetic FLOORS entry defaults: a
+  later new-exposure definition is disabled on an older baseline no
+  matter what `defaultEnabled` declares. (F6) the AP-4 discriminator
+  test renders for real: the saved/reloaded mps assignment routes a
+  raw payload through the actual wind wrapper ("22 mph") against the
+  definition row's unconverted rendering ("10 mph").
+
+  Round 2 closed the last preservation hole: the canonical
+  serializer's `onlyIdentityRestated` shortcut (and the station
+  entry's global-layer reference) treated ANY row resolving in the
+  global-only effective map as an authored global template — but after
+  adoption that map contains inherited catalog defaults, so an
+  explicit station assignment whose values all equal the definition's
+  defaults was silently dropped from the canonical output
+  (`sensorMap: []`), reclassifying it as catalog-owned: the exact
+  provenance-loss case §18.2 outcome 1 forbids, invisible to the
+  effective-value divergence gate. The fix keys every global-template
+  inference on the AUTHORED global layer (`layers.global` presence
+  plus `hasAuthoredIdentity`), creates identity baselines for
+  station-authored customs whose identity the global layer does not
+  author, and leaves genuinely inherited rows canonicalizing without
+  gaining identity. Pinned end to end: adopt, commit, persisted
+  reload (editor scope stays custom-station), second-save
+  byte-stability, the global non-identity-template variant, the
+  authored-template absorption control, and the inherited-row
+  control.
+
+  Round 3 corrected the round-2 baseline itself: comparing a station
+  custom against the IDENTITY-ONLY resolution dropped valid station
+  exceptions to authored global non-identity settings (a station mph
+  choice under a global fps Units template equals the bare identity's
+  default, so it was minimized away; the divergence gate then refused
+  the valid save). The comparison baseline for station customs is now
+  the CANONICAL global entries applied over the station's minimal
+  identity — built from the minimized global OUTPUT, not the input
+  fragments, because reload sees only the output: a global value the
+  global pass drops (it equaled the built-in default) is not
+  inheritable by a custom row whose own default differs, and the
+  station entry then carries the field itself. Pinned table-driven
+  across displayUnit, name, batteryField (null), embedName,
+  triggerEnabled, triggerDirection, and threshold, plus the
+  global-disable inheritance control, sibling/never-seen-station
+  inheritance, second-save byte-stability, and the exact mph/fps
+  lifecycle through the real pipeline.
+
+- **2026-09-20 (P3)**: §19 added — the P3 design (catalog 3: explicit
+  state decoders, new output kinds, agronomic and AQI measurements,
+  per-field battery polarity). Implemented in the same package; the PR
+  review is the checkpoint. Implementation decisions within the
+  design:
+  - The catalog-3 canonical battery probes (soilhum{n}/battsm{n},
+    leak{n}/batleak{n}) own their sub-service through the CLAIMS
+    adjudication (`canonicalForBattery: false`), not the frozen v1
+    reservation set: reserving statically would block a custom
+    claimant on an un-adopted config, which claims those fields
+    legally today, and an authored claimant deliberately outranks a
+    default one.
+  - The unrecognized-row assignment PICKER withholds the boolean
+    pairs: it resolves choices by measurement alone (PR E round 1 F4)
+    and the boolean measurement now has five kinds. The P4 editor adds
+    the kind selector; boolean assignments meanwhile work through the
+    JSON editor and the catalog-3 default rows, validated like any
+    custom row.
+  - The v1.7.0 graph golden is scoped to its frozen 25 ids; the
+    catalog-3 wrappers pin against their own golden
+    (catalog3-v1.json), generated once from the dist that first
+    shipped them, with the same byte-hash provenance tripwire.
+  - Boolean default rows carry the vocabulary's inert 'count'
+    placeholder units (never consulted; resolution builds unit-less
+    boolean rows).
+  - The new-kind downgrade type strings are deliberately OUTSIDE
+    1.7's vocabulary: 1.7 cannot render these kinds, so their cached
+    accessories strand on downgrade by design (never
+    v1-representable; the mirror excludes them).
+
+  PR #67 review round 1 corrected nine findings and settled two scope
+  questions:
+  - F1: `inferForCachedAccessory` trusts a POSITIVELY v2-written
+    `device.measurement` (gated on `structuralSignature`) so a
+    disabled catalog-2/3 accessory reconciles and unregisters instead
+    of dodging removal via preserve-cached — but only when the runtime
+    is genuinely v2-driven (`configMode === 'v2'`); compat/legacy mode
+    keeps the conservative static/legacy path so a rollback freezes a
+    custom rather than churning it. No legacy recognizer was widened.
+  - F2 / CO: native `co|co` is DEFERRED (maintainer decision) — the
+    unjustified fixed-threshold alarm and the HAP 100 ppm clamp are
+    both removed by returning `co` to reserved-no-wrapper; §19.3/§19.8.
+  - F3: `coerceValue` forwards a present-invalid boolean state as
+    INVALID_BOOLEAN_STATE (not dropped) so the wrapper faults, and the
+    state constructor no longer clobbers a cached fault — it clears
+    only on a valid 0/1.
+  - F4: RealtimeSource forwards boolean readings (numbers and booleans
+    only), reaching the same row-aware coercer as polling.
+  - F5: the adoption preview discloses battery-polarity changes as a
+    non-structural `batteryPolarity` consequence and binds it into the
+    digest.
+  - F6: the battery decoder version comes from the ACTIVE runtime path
+    (`decoderAdopted()` = the stamp only when v2 drives), so flag-off
+    and safe mode keep the frozen legacy decode even with a retained
+    catalog-3 stamp.
+  - F7: the vendor-inverted decoder accepts only its declared 0/1
+    states; an invalid value is unknown (no update), never a
+    fabricated OK.
+  - F8: soil battery associations are limited to the dictionary's
+    declared `battsm1..4`; channels 5-10 carry no battery key.
+  - F9: the static assignment picker withholds every stamp-gated pair
+    (not just booleans) until the P4 capability-aware editor, and the
+    kind help copy carries an adoption caveat.
+  - Scope: the generic numeric/raw-unit path is PENDING as package
+    P3.1 (§19.9), mandatory for GA, its public-config design to be
+    approved before implementation — not invented during bug-fixing.
+
+  PR #67 review round 2 corrected three residuals at the transport,
+  config-mode, and cached-restart boundaries:
+  - R2-F1: the realtime transport forwards EVERY present sensor value
+    to the shared row-aware coercer instead of pre-filtering by type,
+    so a present-invalid boolean state (null/"offline"/object) faults
+    over realtime exactly as over polling; the flag-off distribute
+    path still guards `typeof number`.
+  - R2-F2: `decoderAdopted()` follows the active v2 runtime (flag on,
+    not safe mode) rather than `configMode === 'v2'`, so an opted-in
+    compat run over a legacy-shaped stamped block decodes at its
+    stamp both before and after conversion — a pure conversion no
+    longer silently reverses battery status. Runtime and preview share
+    one `batteryDecoderPolicy(adopted)`.
+  - R2-F3: on a cached restart an unknown/invalid battery reading no
+    longer overwrites a retained low condition — `attachBatteryService`
+    preserves an existing service's characteristics when the reading
+    is unknown and seeds the NORMAL placeholder only on a fresh
+    service; a valid 0/1 still updates. F1's cache-trust gate stays
+    `configMode === 'v2'` (distinct from the decoder gate): it governs
+    reconciliation/removal, which must not fire in a compat rollback.
+
+  PR #67 review round 3 closed two bounded residuals of the round-2
+  transport widening, both scoped to how the widened realtime path
+  hands raw values to battery consumers (no P1, no redesign):
+  - R3-F1: realtime now forwards arbitrary present object values, so
+    `updatesToStationPayloads` reconstructs each station record with a
+    null-prototype dictionary (`Object.create(null)`), and
+    `readBatteryLow` reads only own reported fields. A JSON `__proto__`
+    field can no longer graft an inherited `batleak{n}` onto the record
+    to clear an established LOW; an absent battery stays absent, ordinary
+    object-valued state readings still fault, and valid readings still
+    recover. Present-invalid booleans stay forwarded (no re-broadening
+    of the R2-F1 type filter).
+  - R3-F2: the flag-off legacy distribute branch drops the ENTIRE
+    non-numeric update before either callback, so a bundled battery
+    change no longer flips a legacy wrapper's battery where published
+    1.7.3 discards the whole update. The v2 branch returns above that
+    loop, so state fault handling is untouched. Any future independent
+    legacy battery update would be an explicit behavior change, not an
+    incidental side effect.
+
 - Status: **APPROVED FOR IMPLEMENTATION**. Beta cycle can begin.
+
+### P3.1 — generic numeric passthrough (catalog 4)
+
+- The honest generic finite-numeric path (§19.9), a separate reviewed
+  package after P3. Design approved over two review rounds; the
+  architecture is one closed measurement `numeric` whose only unit is
+  the opaque carrier `raw`, plus a presentation-only `unitLabel` field
+  that carries the arbitrary label without opening the typed vocabulary.
+- Decisions: catalog 4 (explicit adoption, baseline preserved);
+  `numeric`/`raw`/`unitLabel`; an optional INCLUSIVE-level threshold
+  (not a crossing detector); minimal number formatting (ordinary finite
+  string form, no forced decimals, no new precision control).
+- Corrections folded from design review: downgrade to an older binary is
+  protective safe mode that RETAINS accessories (not destructive
+  reconciliation); `unitLabel` is presentation-only for identity and
+  conversion but round-trips through the whole serialization path
+  (resolver, canonical `FIELD_ORDER`/`DIFF_FIELDS`, DTOs, digest);
+  inheritance has three authored states (absent inherits, explicit empty
+  clears, nonempty is literal) and never contaminates a different-identity
+  station; the threshold field is `threshold` and the compare is
+  inclusive (`>=` / `<=`); no `Intensity` characteristic; the
+  finite-only reading contract is unchanged.
+- No default catalog rows (authored-only). CO may use this non-alarm
+  path; native CO stays deferred (§19.3/§19.8).
+- Status: **APPROVED FOR IMPLEMENTATION**. Editor affordance is P4;
+  GA #62 stays held pending P4 and P5.
+
+## 19. P3 — explicit decoders and new output kinds (catalog 3)
+
+Issue #63 package P3, building strictly on §18's machinery:
+`CURRENT_CATALOG_VERSION` becomes 3, every new definition carries
+`sinceCatalogVersion: 3` with `catalogExposure: 'new'` and
+`defaultEnabled: false` (the F5 floor makes anything else inert on
+older baselines anyway), and nothing here changes behavior for a
+configuration that has not adopted catalog 3.
+
+### 19.1 Explicit state decoding — offline never reads active
+
+The generic boolean coercion collapsed every nonzero number to 1,
+which would report an OFFLINE leak detector (declared encoding
+`0 normal, 1 leak, 2 offline`) as a leak. The correction is a single
+decode contract for every boolean STATE kind:
+
+- `coerceValue` for `measurement: 'boolean'` (as built): JSON
+  `true`/`false` map to 1/0, a finite number passes through for the
+  wrapper to decode, and a PRESENT-but-invalid value (null, string,
+  object, NaN, Infinity) becomes the explicit `INVALID_BOOLEAN_STATE`
+  marker — forwarded, never dropped, so it reaches the fault path. An
+  ABSENT field is never coerced (routing/transport iterate present
+  fields only), keeping missing distinct from present-invalid. BOTH
+  transports reach this boundary: realtime forwards every present
+  sensor value rather than pre-filtering by type (PR #67 review
+  R2-F1), and the flag-off legacy distribute path drops the ENTIRE
+  non-numeric update — value AND any bundled battery side effect —
+  before either wrapper callback, matching published 1.7.3 exactly
+  (PR #67 review R3-F2). A non-number never reaches a legacy numeric
+  wrapper, and a non-numeric sensor value never flips a legacy
+  wrapper's battery as an incidental side effect.
+- Realtime forwards arbitrary present values, so the platform
+  reconstructs each station's raw-field record with a NULL-prototype
+  dictionary (`Object.create(null)`), never a plain object literal
+  (PR #67 review R3-F1). A JSON field named `__proto__` is then an
+  ordinary own data property, not a prototype setter, so it cannot
+  graft an inherited `batleak{n}`/`batt*` reading onto the record.
+  Every battery read is additionally taken from an OWN reported field
+  (`Object.prototype.hasOwnProperty` guard in `readBatteryLow`), so an
+  inherited value can never be mistaken for reported data and clear an
+  established LOW. Both defenses hold on the polling path too.
+- The state wrappers decode explicitly: raw `0` = clear, raw `1` =
+  active, anything else (the invalid marker, `>= 2`, negative,
+  non-integer) = FAULT — the wrapper sets `StatusFault:
+  GENERAL_FAULT`, forces the alert characteristic CLEAR, and logs the
+  out-of-contract value. On a CACHED restart the constructor never
+  writes `NO_FAULT` unconditionally: a retained fault survives and
+  clears only on a valid 0/1 (R2-F3's sibling for state). A value
+  outside the declared vocabulary must never read as an alarm.
+- A clean reading (0/1) clears the fault.
+
+One parameterized `BooleanStateAccessory` implements this for leak
+(LeakSensor/LeakDetected), contact (ContactSensor/ContactSensorState,
+raw 1 = open/CONTACT_NOT_DETECTED), occupancy
+(OccupancySensor/OccupancyDetected), smoke (SmokeSensor/SmokeDetected,
+a NEW SensorKind closing the §18 capability gap), and direct boolean
+motion (MotionSensor/MotionDetected — the `motion|boolean` pair,
+distinct from the threshold shell). Genericity per §16: dataPoint,
+name, and battery all come from the row.
+
+### 19.2 Stamp-gated wrapper availability
+
+`WRAPPER_FOR_KIND_AND_MEASUREMENT` entries gain a
+`sinceCatalogVersion`; resolution consults `wrapperFor(kind,
+measurement, catalogAdopted)`. A custom row authored today with
+`kind: leak` fails `no-wrapper` and registers nothing — and it MUST
+keep doing so on upgrade until the config explicitly adopts catalog 3,
+because a dormant authored row silently registering is new exposure.
+Adoption's preview names any such row as `added` (structural, digest
+required), so the exposure is explicit and confirmed. New pairs:
+`leak|boolean`, `contact|boolean`, `occupancy|boolean`,
+`smoke|boolean`, `motion|boolean`. (`co|co` was considered but the
+native CO mapping is deferred, §19.3.)
+
+### 19.3 CO — native mapping DEFERRED past P3
+
+Native CO is deferred (PR #67 review F2, maintainer decision
+2026-09-20). The `co` kind stays RESERVED with no wrapper: an assigned
+`co` row fails `no-wrapper`, exactly as before P3, across the registry,
+vocabulary, help copy, and capability spec. This is recorded as an
+explicit exception to the GA capability matrix (§19.8).
+
+Why: no AWN field reports CO, and an honest alarm cannot be
+manufactured here. The considered fixed-threshold approach (a 400 ppm
+`CarbonMonoxideDetected` boundary) is not a defensible safety
+semantic — UL 2034 alarm points depend on concentration AND exposure
+duration (150 ppm and 70 ppm windows exist, not only 400 ppm) — and
+the stock HAP `CarbonMonoxideLevel` characteristic clamps to 100 ppm,
+silently truncating the reading. A network weather plugin must not be
+presented as a substitute for a certified CO alarm.
+
+Future native CO support (its own reviewed increment) should map an
+actual detector's REPORTED alarm state, with explicit unknown/fault
+handling and an optional correctly-ranged concentration reading — not
+an invented concentration/exposure algorithm. Meanwhile, numeric CO
+readings will be representable through the generic non-alarm numeric
+path (P3.1, §19.9); that path is a measurement, never a CO alarm.
+
+### 19.4 New measurements and units
+
+Five measurements join the vocabulary, each rendered by ONE
+row-parameterized `GenericValueAccessory` on the extended shell
+(canonical value + display-unit formatting + optional motion trigger):
+
+- `soil-moisture` — percent (declared). NOT air humidity; distinct
+  measurement, distinct wrapper identity.
+- `leaf-wetness` — percent (declared).
+- `soil-tension` — `cb` (declared, centibar; new unit, no invented
+  conversions).
+- `evapotranspiration` — `in_per_day` (declared) with `mm_per_day`
+  display conversion (x25.4, the same standard factor as rain).
+- `aqi` — `index` (dimensionless). The honest minimal representation
+  per the catalog: an extended numeric index. A HomeKit AirQuality
+  CATEGORIZATION is deliberately not shipped — mapping AWN's index to
+  EPA buckets assumes which AQI standard the firmware computes, and
+  that is unverified.
+
+### 19.5 Catalog-3 definitions
+
+All `sinceCatalogVersion: 3`, `catalogExposure: 'new'`,
+`defaultEnabled: false`:
+
+- `soilhum1..10` — soil-moisture. Battery `battsm{n}` for channels
+  1-4 ONLY (the range the dictionary declares, "battsm1...battsm4");
+  channels 5-10 are supported measurements with NO declared battery
+  key, so none is fabricated (PR #67 review F8). Ownership via claims
+  adjudication, never the frozen v1 reservation set.
+- `leafwetness1..8` — leaf-wetness, battery null (none declared).
+- `soiltens1..4` — soil-tension, battery null (none declared).
+- `etos` / `etrs` — evapotranspiration, battery null (derived values;
+  no declared relationship — battout is NOT assumed).
+- `leak1..4` — kind leak, boolean, battery `batleak{n}` (declared),
+  canonical owner per channel, vendor-inverted polarity (§19.6).
+- The six AQI index fields — `aqi` measurement; the four `_aqin`
+  fields ride `batt_co2` (non-canonical, the AQIN device family), the
+  two `_in` fields null (matching `pm25_in`).
+
+`gdd` STAYS a catalog gap: its declared unit ("Int, days") is
+dimensionally inconsistent with a degree-day accumulation and no
+device evidence resolves it — no conversion may be invented. Relays
+stay `state-unsupported` (no control contract). `batt_25` stays
+deliberately unbound (unchanged policy).
+
+### 19.6 Per-field battery polarity, adoption-gated
+
+The catalog records three separated facts (P1 round 2/4): the vendor
+declares `batt_lightning` and `batleak{n}` as `1=Low, 0=OK` — inverted
+relative to every other field's standard convention — the deployed
+decoder reads 0 as low uniformly, and the live-device observation
+(payload 0, healthy device, plugin shows low) supports the vendor.
+
+The decoder gains a vendor-polarity table for exactly those inverted
+fields, and the correction is ADOPTION-GATED: `readBatteryLow`
+resolves vendor polarity only when `catalogAdopted >= 3`. Un-adopted
+configs keep today's uniform decode. The policy follows the ACTIVE
+RUNTIME, not the config SHAPE (PR #67 review R2-F2): the platform's
+`decoderAdopted()` returns the stamp only when the v2 runtime is
+driving (flag on, not safe mode) — INCLUDING an opted-in compat run
+over a legacy-shaped block — and 1 for the flag-off path and safe
+mode. This is the SAME `batteryDecoderPolicy(adopted)` the adoption
+preview's consequence model uses, so runtime and preview always agree;
+and because a pure conversion preserves the stamp and the compat run
+was already v2-driven, conversion never silently flips a battery
+reading. The flag-off path and safe mode keep today's uniform decode —
+including the documented spurious lightning low-battery behavior and
+its README workaround — because silently flipping a battery signal on
+upgrade is a behavior change §18 exists to prevent. `batleak{n}` is
+consumed only by catalog-3 leak rows, so it decodes vendor-correct
+wherever it is reachable at all. The Meteobridge variants stay
+RECORDED, not implemented: the plugin cannot detect the reporting
+path, so no polarity switching is invented for the standard fields.
+`readBatteryLow` reads only OWN reported fields (§19.1): a battery
+field absent from the payload returns `undefined` (no observation, no
+change), and an inherited value from a crafted `__proto__` object can
+never be read as a genuine reading (PR #67 review R3-F1).
+
+### 19.7 Required tests (as implemented)
+
+The tri-state decode through the real wrapper for every state kind
+(raw 2 sets the fault and never the alarm; 0/1 decode and clear the
+fault); polarity gating (batt_lightning low/OK at adopted 1, 2, and 3;
+safe mode stays legacy); catalog-3 visibility and disabled-arrival
+arithmetic including adoption from both baseline 1 and 2; the dormant
+authored-kind row (no-wrapper below adopted 3, named as an added
+consequence by the adoption preview at 3); wrapper-pair gating set
+equality per version; the coverage suite's per-key worlds at
+catalog 3; HAP graph pinning for the NEW wrappers in their own golden
+(the v1.7.0 golden stays frozen at its 25); KIND_SUPPORT and editor
+unit-vocabulary updates; and §18.4's preservation invariants re-run
+against catalog 3 (an explicit assignment on a catalog-3 dataPoint
+behaves exactly like the Demeter fixture did for catalog 2).
+
+PR #67 review added consumer-level regressions for each finding: the
+full enable → disable → cached-restart → unregister lifecycle for
+every new wrapper type (F1); present-invalid state input raising a
+fault and a retained fault surviving a restart (F3); realtime
+forwarding boolean readings in parity with polling (F4); the adoption
+preview disclosing the battery-polarity change and binding it into the
+digest (F5); the flag-off/legacy decode staying frozen (F6); the
+vendor decoder rejecting invalid values rather than reporting OK (F7);
+soil channels 5-10 carrying no fabricated battery (F8); and the editor
+withholding stamp-gated assignments (F9).
+
+### 19.8 GA capability-matrix exception: native CO
+
+Native CO (`co|co`) is DEFERRED past P3 and recorded here as an
+explicit exception to the GA capability matrix (§19.3). GA does not
+ship a native CO accessory. This is a bounded, documented exception,
+not a silent omission; it is revisited only as its own reviewed
+increment mapping a real detector alarm state.
+
+### 19.9 Generic numeric passthrough (package P3.1, catalog 4)
+
+The honest generic finite-numeric path from the #63 P3 acceptance list.
+P3 shipped five NAMED measurements; this is the open-ended quantity a
+user assigns to a field the plugin has no named meaning for. It is
+package **P3.1**, catalog version 4, sequenced after P3 and before the
+P4 editor.
+
+**One closed measurement, one opaque unit, one label field.** The
+tension is that the reading needs an arbitrary unit label while the
+typed vocabulary must stay closed. It is resolved by splitting the two:
+
+- The typed system gains exactly one measurement, `numeric`, whose only
+  legal unit is one opaque carrier, `raw`. `raw` is its own canonical
+  unit, so every conversion over it is the identity — "no invented
+  conversions" is structural, not a promise. `raw` is opaque, NOT a
+  claim the quantity is dimensionless; the plugin simply does not
+  interpret it. A label such as `kWh` never selects a converter,
+  wrapper, or native service.
+- The arbitrary label lives in the row field `unitLabel`. It never
+  influences identity, wrapper resolution, or conversion, and it is
+  excluded from the structural signature. It is presentation-only for
+  those purposes, which is NOT serialization-exempt: it round-trips
+  through the resolver, the canonical serializer (`FIELD_ORDER` and
+  `DIFF_FIELDS`), the DTOs, and the preview/digest projection.
+
+**Authoring.** A numeric row is authored (there are NO default catalog
+rows — a generic reading has no default AWN meaning): `kind: motion`,
+`measurement: numeric`, `sourceUnit: raw`, optional `unitLabel`,
+optional `threshold`. The pair `motion|numeric` is stamp-gated at
+catalog 4 (`WRAPPER_PAIR_SINCE`), so it registers nothing until the
+config adopts 4 through the guarded save. `CURRENT_CATALOG_VERSION` is
+4; adoption advances only the adopted version, preserving the baseline.
+
+**unitLabel validation.** Allowed only when the effective measurement is
+`numeric` (authored on any other identity it is an error, which keeps
+the vocabulary closed). Trimmed; bounded to `MAX_UNIT_LABEL_CODEPOINTS`
+(16) code points AFTER trimming, counted by code point so `µg/m³` is
+preserved; single-line; all control characters (`\p{Cc}`), the complete
+Unicode `Bidi_Control` set (including U+061C), and the line/paragraph
+separators are rejected via Unicode property escapes; rendered as plain
+HAP text. An explicit empty string is a VALID cleared
+label, preserved distinct from omission.
+
+**Inheritance.** Three authored states: absent inherits the applicable
+global label; an explicit empty string clears it at that scope; a
+nonempty string is the literal label. The label is carried onto the
+effective row ONLY when the RESOLVED measurement is `numeric`, so a
+label inherited from a global template can never contaminate a station
+whose explicit identity is a different measurement (for example
+wind-speed); that station keeps its own valid identity and no label.
+
+**HAP surface.** The `numeric` measurement rides the extended-sensor
+shell (`GenericValueAccessory` over `ExtendedSensorBase`, a
+`MotionSensor` carrier) with the existing custom `Value` and
+`Last Updated` characteristics only. No `Intensity` — a raw number has
+no qualitative bucket, so `formatIntensity` is not overridden and the
+characteristic is not attached. `Value` renders the finite reading in
+its ordinary string form (no forced decimals, no preserved trailing
+zeros, scientific notation for extremes) followed by the label, or the
+bare number when the resolved label is empty.
+
+**Threshold.** Optional, finite (validated even when triggering is
+disabled; zero and negative preserved), in the same raw unit (no
+transform). The motion state follows the existing INCLUSIVE LEVEL
+condition: `above` is at-or-above (`>=`), `below` is at-or-below (`<=`).
+It is a level condition on each reading, not a crossing, latch, or
+hysteresis; a first reading already at or past the threshold is active.
+No threshold, or `triggerEnabled: false`, means no trigger. The
+comparison uses the unrounded raw value, so formatting never affects it.
+
+**Reading contract.** Only a finite number becomes a reading (the shared
+coercion default branch); numeric strings, booleans, null, objects, and
+non-finite values are dropped. A dropped tick does not refresh the
+timestamp or clear an earlier motion state, and is never a fabricated
+zero.
+
+**Lifecycle and rollback.** A numeric row honors enable/disable across a
+cached restart. A catalog-4-capable binary reading a not-yet-adopted
+config leaves the pair unavailable. An older CATALOG-AWARE binary reading a
+future-stamped config enters the reconciliation-free safe mode: it
+RETAINS the cached accessory, makes zero register/unregister calls, and
+does not delete it as an orphan. Pre-catalog betas, including beta.17, do not
+implement stamp validation and do not offer that protection. Operational
+rollback uses the documented guarded-1.7.3 procedure, not manual stamp lowering.
+The legacy `context.device.type` marker
+is `Numeric`, deliberately outside 1.7's `createSensorWrapper`
+vocabulary, so a numeric assignment is never reconstructable as a legacy
+field on downgrade, and it stays out of the legacy mirror.
+
+**Carbon monoxide.** A numeric CO feed (a third-party ppm reading
+injected as a custom dataPoint) uses this path with `unitLabel: 'ppm'`
+and an optional threshold. It is a measurement with an optional motion
+state, NEVER a `CarbonMonoxideDetected` alarm, and does not restore the
+deferred native CO alarm mapping (§19.3/§19.8).
+
+The capability-aware editor (§20) exposes numeric assignment after
+catalog adoption. The legacy vocabulary response still withholds gated
+pairs for cached pre-P4 pages. The negotiated response supplies every
+implemented pair with its required version and source policy.
+
+## 18. Catalog completion: three decisions and assignment preservation
+
+Issue #63 (revised 2026-09-20) reframes the end state as COMPLETING
+the sensor-map architecture, not rewriting it. This section is the
+design checkpoint for that work. It separates three decisions that the
+implementation historically blended, defines how later catalog growth
+is prevented from disturbing existing assignments, and fixes the
+boundary of what P1 delivers. Written at the P1 design checkpoint, it
+was reviewed and then implemented: packages P2 (adoption stamps and
+anchored/new definitions) and P3 (§19 — state decoders, new kinds,
+agronomic/AQI measurements, battery polarity) are now in the runtime.
+Read §19 and the decision log for the implemented behavior; the
+subsections below remain the governing design.
+
+### 18.1 The three decisions
+
+Whether a HomeKit accessory exists for an AWN field is the product of
+three independent decisions, each with its own authority:
+
+1. **Input catalog — what an AWN field means.** One machine-readable
+   inventory (`src/sensorMap/catalog/awnCatalog.ts`) of every published
+   AWN entry/family plus the plugin's supported extras: meaning, source
+   unit, encoding, indexed bounds, battery relationship, evidence, and
+   an EXPLICIT disposition (`implemented-native` /
+   `implemented-extended` / `compat-fallback` / `catalog-gap` /
+   `auxiliary` / `metadata` / `state-unsupported`). The catalog is
+   design-checkpoint data consumed by nothing at runtime; the coverage
+   suite (`tests/unit/sensorMap/catalogCoverage.test.ts`) expands it
+   key-by-key against the PRODUCTION recognizer
+   (`staticDefaultRowFor` / `defaultRowFor`) and battery rules, so a
+   gap stays a tested gap and a definition added without
+   re-dispositioning the entry (or vice versa) fails CI.
+
+2. **Output capability — which HomeKit representations work.**
+   `src/sensorMap/catalog/capabilities.ts` specifies the native sensor
+   service families and where the extended (threshold-shell)
+   representation stands in. The runtime authority remains
+   `WRAPPER_FOR_KIND_AND_MEASUREMENT`; the coverage suite cross-checks
+   the specification against it and against `KIND_SUPPORT` so the two
+   cannot drift. A catalog meaning without an implemented capability is
+   a `catalog-gap` or `reserved-no-wrapper` fact, never an implicit
+   promise.
+
+3. **Exposure policy — whether THIS installation creates an
+   accessory.** Owned by the config (defaults + authored overrides,
+   resolved by `buildEffectiveSensorMap`) and by §18.3's adoption rule
+   for definitions that arrive after the config was authored. Knowing
+   what a field means (1) and being able to render it (2) never
+   suffices to register an accessory (3).
+
+The dispositions map onto the decisions: `implemented-*` means all
+three decisions have answers today; `compat-fallback` means the
+meaning is inferred by the legacy substring matcher rather than
+anchored; `catalog-gap` means decision 1 is now recorded but 2 and/or
+3 are unanswered; `auxiliary`/`metadata`/`state-unsupported` mean
+decision 3 is answered "never a standalone accessory."
+
+### 18.2 The takeover mechanism, named
+
+Validation treats a dataPoint differently depending on whether a
+default row resolves for it (`validateOverrideBody`, the
+`isCustom = defaultRow === undefined` branch):
+
+- **Custom** (no default row): `kind` + `measurement` + `sourceUnit`
+  are required and freely authored within the vocabulary.
+- **Known** (default row exists): authored `measurement` and
+  `sourceUnit` are stripped with `ignored-measurement-fixed` /
+  `ignored-sourceunit-fixed` warns; an authored `kind` incompatible
+  with the default's measurement REJECTS the row
+  (`incompatible-kind-for-known-measurement`).
+
+Therefore adding a dataPoint to the static table flips every existing
+authored row on that dataPoint from custom to known. The measured
+outcomes (PR #65 review, executed against the committed validator with
+a synthetic later wind definition injected into the static table) for
+the live preservation fixture — a station-scoped row assigning
+`windspdmph_avg10m` an explicit identity, accessory "Wind Speed
+Average" — are three, by authored-value relationship to the new
+definition:
+
+1. **Identical identity** (authored motion / wind-speed / mph, equal
+   to the definition): the row validates unchanged, with no warning.
+   The validator strips an authored field only when its value DIFFERS
+   from the default's; equal values pass through. Effective identity
+   and structural signature are unchanged. Not a takeover, but the
+   authored provenance is now indistinguishable from an inherited one.
+2. **Same-measurement different unit** (authored mps): the authored
+   `sourceUnit` is clamped to the definition's mph with
+   `ignored-sourceunit-fixed`. The structural signature does NOT
+   include the source unit, so nothing re-registers — the accessory
+   silently starts interpreting every mps payload value as mph. This
+   is the worst case: silent value-level semantic corruption with no
+   structural symptom. Any preservation test must therefore include a
+   value-level discriminator (an alternate-unit fixture whose
+   RENDERED value proves which unit interpretation ran), not
+   signature assertions alone.
+3. **Incompatible kind** (authored humidity): the authored row is
+   rejected with `incompatible-kind-for-known-measurement` — and the
+   dataPoint then resolves to the new definition's own static default
+   row, because P0's authored-identity gate blocks the DYNAMIC
+   fallback, not static defaults. The explicit assignment (name,
+   threshold, unit choices) is replaced by the generic default
+   accessory under the default's exposure setting.
+
+All three disturb an assignment the user never asked to change
+(provenance loss, silent reinterpretation, replacement); §18.4 forbids
+each of them.
+
+The same mechanism, run through `compatToOverrides` and the legacy
+mirror, is how a new definition could disturb untouched 1.7-style
+configs and converted-beta configs — the populations the maintainer
+requires upgrades to leave untouched.
+
+### 18.3 Exposure policy for later definitions: explicit adoption
+
+A definition that lands in a plugin update must be INERT for existing
+configs until adopted, and the configuration must durably encode WHICH
+exposure history produced its current state — a single scalar stamp
+cannot distinguish "existing install that adopted catalog 2" from
+"fresh install born at catalog 2" after a restart. The persisted state
+is therefore TWO stamps plus the catalog's own version metadata:
+
+- The catalog gains a per-entry `sinceCatalogVersion`; everything
+  recognized today (static table + fallback behavior as of
+  `AWN_CATALOG_VERSION = 1`) is the **v1 baseline**.
+- The config block gains two P2 public fields (named, validated, and
+  canonicalized there, NOT added in P1):
+  - **`catalogBaseline`** — the catalog version the installation was
+    BORN at: the version current when the config was first created
+    (fresh install, including the fresh-install settings-only path's
+    first block) or when a legacy config was converted. Written once,
+    never advanced.
+  - **`catalogAdopted`** — the newest catalog version whose
+    definitions are VISIBLE to this config. Advanced only by explicit
+    adoption.
+- **Default-enabled derives from the baseline**, which is what makes
+  the state durable without per-row bookkeeping: a definition with
+  `sinceCatalogVersion <= catalogBaseline` uses its entry's own
+  default-enabled value (the install was born knowing it); a
+  definition with `catalogBaseline < sinceCatalogVersion <=
+  catalogAdopted` defaults to **disabled** (it arrived by adoption on
+  an already-existing install) unless a layer explicitly authors
+  `enabled`. No global disable fragment is written (one would inherit
+  into explicitly assigned rows) and no per-observed-row fragments are
+  written (they would miss stations first seen later): the rule is
+  pure config arithmetic, so an offline station, a never-seen station,
+  or a wiped cache all resolve identically.
+- Default resolution is `catalogAdopted`-scoped: an entry with
+  `sinceCatalogVersion > catalogAdopted` contributes NO default row —
+  behavior for that config is identical to today's. (Implementation
+  note for P2: default resolution becomes parameterized by the
+  adopted stamp; the zero-argument form keeps meaning "v1 baseline"
+  so existing call sites stay honest.)
+- **`catalogAdopted` changes ONLY through an explicit adoption save**
+  running the standard `/preview-save` → `/compose-save` pipeline —
+  never as a side effect of a settings-only save, an unrelated editor
+  save, a conversion, or a plugin upgrade. The preview names every
+  accessory the adoption would add or change before the Save gesture,
+  exactly like any structural save. Enabling adopted-disabled rows is
+  a per-row choice, authored as ordinary `enabled` fragments in the
+  same or a later previewed save.
+- **Legacy → v2 conversion is pure, and stamps are
+  never rewound**: conversion (and the first sensor-map save
+  generally) PRESERVES an existing valid stamp pair verbatim — a
+  fresh settings-only installation already carries the pair its birth
+  wrote (say `(2, 2)`), and rewinding it to `(1, 1)` on the first
+  sensor-map save would shrink catalog visibility out from under the
+  config's own defaults. Only a configuration with BOTH stamps absent
+  (an unstamped legacy config, i.e. the entire installed base today)
+  is initialized to `catalogBaseline = catalogAdopted = 1`, the
+  version whose behavior it already had. Conversion never adopts and
+  never advances a stamp. Adoption may be OFFERED alongside
+  conversion, but it is a separate, separately previewed operation
+  the user explicitly requests. The §11 migration-equivalence gate is
+  evaluated against the config's own preserved stamps, so it stays
+  satisfiable as the catalog grows.
+- **Absent stamps keep the legacy interpretation; anything else
+  invalid FAILS CLOSED.** Both fields genuinely absent:
+  `catalogBaseline = catalogAdopted = 1` (every config in the field
+  today) — that is a defined state, not a failure. Every other
+  invalid combination — malformed values (non-integer, < 1, one field
+  present without the other, `baseline > adopted`) or `catalogAdopted`
+  greater than the running plugin's `AWN_CATALOG_VERSION` (config
+  written by a newer plugin, or a plugin downgrade) — enters the
+  PROTECTIVE posture, not cap-and-continue: EVERY cached accessory is
+  retained, the reconciliation-vs-effective-map step is skipped
+  entirely (NO accessory is unregistered), and the editor is
+  read-only with a prominent error naming the stamp problem and the
+  fix (upgrade the plugin, or repair the fields in the JSON editor).
+  Fresh values flow ONLY to accessories the safe-mode bind-existing
+  path (§17.2) can interpret independently of the broken stamp — the
+  baseline-native bindings whose expected characteristic set is fully
+  attached. Everything else — adopted-definition rows, custom
+  assignments, extended sensors whose live-value semantics depend on
+  config-driven thresholds and display modes — stays FROZEN at its
+  last-known HAP values, exactly as safe mode freezes them; the
+  frozen count is logged. Preservation is the promise here, not
+  fresh data: broadening the binder to value-update
+  stamp-dependent accessories is explicitly out of scope.
+  Capping or resetting a stamp was measured to be destructive: it
+  removes the definition supporting an existing accessory, an
+  inherited `{"enabled": true}` fragment then has no identity and
+  fails validation, and the real-lifecycle probe confirmed the cached
+  accessory gets UNREGISTERED (PR #65 review round 2). A broken stamp
+  must therefore never change which definitions are visible — it
+  stops structural activity until a human resolves it.
+
+Serialized example (the F2 acceptance case). Before adoption, catalog
+2 defines `windspdmph_avg10m`; station A (`AA:…`) carries the explicit
+assignment, station B exists with no assignment, station C has never
+been seen:
+
+```json
+{ "catalogBaseline": 1, "catalogAdopted": 1,
+  "sensorMap": [
+    { "dataPoint": "windspdmph_avg10m", "stationMac": "AA:BB:CC:DD:EE:01",
+      "kind": "motion", "measurement": "wind-speed", "sourceUnit": "mph",
+      "name": "Wind Speed Average" } ] }
+```
+
+After the explicit adoption save (one field changes; the sensorMap
+array is byte-identical):
+
+```json
+{ "catalogBaseline": 1, "catalogAdopted": 2,
+  "sensorMap": [ …unchanged… ] }
+```
+
+Resolution afterward: station A's row authors a complete identity, so
+it validates under the custom rules and stays enabled and unchanged
+(AP-1); stations B and C resolve the catalog-2 default row with
+`sinceCatalogVersion (2) > catalogBaseline (1)`, so both are disabled —
+including C, first seen after the save, with no inventory consulted. A
+fresh catalog-2 install instead persists `"catalogBaseline": 2,
+"catalogAdopted": 2` and B/C-equivalent stations get the entry's own
+default-enabled value.
+
+Anchoring a field the fallback already recognizes (`compat-fallback`
+dispositions) is subject to a stricter invariant: the anchored
+definition must resolve the IDENTICAL identity (kind, measurement,
+sourceUnit, battery relationship) that `defaultRowFor` synthesizes
+today, asserted by the coverage suite, so no effective row or
+structural signature that exists today changes whether or not the
+config has adopted it. Whether an anchored entry may then bypass the
+stamp, and whether/when the substring matcher retires behind anchored
+definitions, is the **compatibility-retirement design** — explicitly
+deferred, forbidden until designed and reviewed on its own. The same
+applies to indexed-bounds enforcement: the fallback today accepts
+indexes beyond the published bounds (e.g. `feelsLike11`), the coverage
+suite records that honestly, and tightening it is retirement-design
+scope because a bound could kill a working accessory.
+
+### 18.4 Assignment preservation (binding rules)
+
+These rules bind every P2+ definition. The catalog's preservation
+fixture note on `windspdmph_avg10m` points here.
+
+- **AP-1 — Authored identity is permanent.** An override fragment that
+  authors identity (`kind` / `measurement` / `sourceUnit`, wholly or
+  partly, valid or rejected) is never reinterpreted, stripped,
+  re-clamped, or invalidated by a later catalog definition. This
+  extends P0's invariant (authored identity blocks the dynamic
+  fallback) to the static side: authored identity blocks ANY
+  later-arriving default identity.
+- **AP-2 — The validation clamp is frozen to the v1 baseline, and
+  identity AUTHORITY is a separate axis from override COMPLETENESS.**
+  The known-dataPoint branch of `validateOverrideBody` applies exactly
+  to the dataPoints in today's static table, permanently. Later
+  definitions (`sinceCatalogVersion > 1`) get a THIRD validation
+  branch, because reusing today's custom branch indiscriminately would
+  reject every ordinary edit — a rename-only, disable-only, or
+  display-unit-only override has no `kind` and today's custom branch
+  returns `custom-missing-kind` for it (measured in review). The
+  adopted-definition branch splits on what the merged per-key override
+  AUTHORS (identity fields: `kind`, `measurement`, and `sourceUnit`
+  for numeric measurements — the same fields P0's
+  `hasAuthoredIdentity` reads, with the same layer scoping as
+  `identityAuthoredAt`):
+  - **Authors no identity field** — the row INHERITS the adopted
+    definition's identity, supplied server-side exactly as known-row
+    defaults are today. Non-identity fields (`name`, `enabled`,
+    `displayUnit`, the motion-only family per the effective kind)
+    validate against the inherited measurement (display-unit legality
+    and so on), with no clamping warns because nothing is stripped.
+    The rename/disable/display-unit edits above, and adoption's own
+    disabled default, all live here.
+  - **Authors a complete identity** (`kind` + `measurement`, plus
+    `sourceUnit` when the measurement is numeric) — an EXPLICIT
+    ASSIGNMENT: validated under the custom rules verbatim, the
+    catalog identity ignored. AP-1 applies; the assignment keeps its
+    own units, measurement, and kind forever.
+  - **Authors a partial identity** — diagnosed as a row-scope error
+    (the existing `custom-missing-*` family), never silently
+    completed from the catalog's identity and never clamped to it —
+    AND the partial fragment BLOCKS the later definition's default
+    row in its applicable scope (a station-scoped fragment blocks the
+    `(mac, dataPoint)` key, a global one blocks the dataPoint), with
+    the same scoping P0's `identityAuthoredAt` gives the dynamic
+    fallback. A declared-but-invalid identity intent (say a lone
+    `"sourceUnit": "mps"` meant as an alternate-unit assignment) must
+    not be answered with the catalog's enabled mph accessory — that
+    would substitute a different identity for the one the user tried
+    to author, contradicting AP-1, and the wrong VALUES would render
+    under the intended name. The key produces no accessory and an
+    actionable diagnostic (which fields are missing, and that
+    removing the fragment restores the definition's default) until
+    the user completes or removes the fragment. The historical
+    static-clamp boundary is unchanged: on v1-baseline dataPoints the
+    known-branch rules apply exactly as today. An alternate source
+    unit under an inherited identity is therefore expressed today
+    only by authoring the full identity; relaxing that is a possible
+    later extension, not a P2 default.
+  The client never synthesizes or resolves identity: the editor DTO
+  presents the inherited identity with a server-assigned scope (as
+  `identityScope` distinguishes known/custom today), Use defaults
+  shows the definition's identity and this config's applicable
+  defaults exactly as it does for known rows, removing the authored
+  fragment returns the row to the inherited identity plus §18.3's
+  exposure rule, and canonicalization keeps §11.3's layering
+  preservation — it never moves identity between layers or
+  materializes inherited identity into the config. Promoting a later
+  definition into the CLAMPING set is the **boundary-transition
+  design** — a separate, explicitly reviewed decision, not implied by
+  adding the definition. Until that review, no code change may widen
+  the clamped set.
+- **AP-3 — Preservation decisions are config-derived only.** For any
+  given `(stationMac?, dataPoint)` key, the resolution and exposure
+  decisions — which identity applies, whose layer authored it, whether
+  the row is an explicit assignment or inherits a definition, and its
+  effective enabled state — depend only on the authored config and its
+  stamps, never on live inventory, the discovery store, cached
+  accessories, or whether a station is currently reporting. The ROW
+  UNIVERSE legitimately varies with observations (an unavailable
+  inventory yields no station-expanded default rows, and discovery
+  introduces row keys), so the invariant is per-key decision equality
+  and retention of authored templates/identities across missing
+  observations — NOT whole-effective-map equality with and without
+  inventory, which today's architecture cannot and need not satisfy.
+  Tests separate the two: row-universe differences are asserted on
+  their own, and no key that exists in both resolutions may differ in
+  identity, provenance, or exposure. (This generalizes the P0
+  bootstrap lesson: `inferForCachedAccessory` guesses from the static
+  table only, because a dynamic guess was deleting preserve-cached
+  customs.)
+- **AP-4 — Byte-stability across upgrades, proven at the VALUE
+  level.** For a config that has NOT adopted anything new, a plugin
+  upgrade that grows the catalog produces zero change: identical
+  effective rows, identical structural signatures, and
+  canonicalization as a byte-identical no-op. The Demeter fixture is
+  the canonical regression: authored `windspdmph_avg10m` row +
+  shipped P2 definition + old stamp → effective row and `config.json`
+  byte-identical to pre-definition output. Because §18.2's outcome 2
+  showed a takeover that leaves the structural signature UNCHANGED
+  (an authored alternate unit clamped to the definition's unit),
+  signature and byte assertions alone cannot prove preservation:
+  every preservation suite includes an alternate-unit fixture whose
+  RENDERED characteristic value discriminates which unit
+  interpretation ran.
+- **AP-5 — Fallback-recognized behavior is grandfathered.** Every key
+  the substring fallback resolves today keeps resolving with the same
+  identity until the compatibility-retirement design says otherwise
+  (§18.3). Untouched 1.7-style configs and converted betas therefore
+  see no accessory change from catalog growth.
+
+Required tests when P2 lands (all four config populations: legacy
+untouched, converted beta, global-override, station-override):
+
+- AP-4's byte-stability fixture, plus the alternate-unit value-level
+  discriminator (an mps assignment on a field whose definition says
+  mph: the rendered value proves the authored unit ran).
+- The Demeter preservation fixture, including the variant whose
+  authored kind conflicts with the definition's measurement family:
+  it must validate exactly as it does today (a valid custom row),
+  never be clamped, rejected, or replaced by the definition's default.
+- AP-2's branch matrix after adoption: rename-only, disable-only, and
+  display-unit-only overrides validate and inherit (no
+  `custom-missing-*`, no clamping warns); explicit complete alternate
+  identities validate identically before and after adoption; a partial
+  identity diagnoses the same row-scope error before and after; a
+  station-scoped exception over a global fragment resolves per P0's
+  layer scoping; canonical save → reload → save is byte-stable; Use
+  defaults presents the definition's identity with this config's
+  §18.3-applicable defaults.
+- §18.3's exposure arithmetic: stamp-scoped default resolution (an
+  entry invisible while `sinceCatalogVersion > catalogAdopted`);
+  adopted-later entries disabled when `sinceCatalogVersion >
+  catalogBaseline` (stations B and C in the serialized example,
+  including a station first observed AFTER the adoption save); fresh
+  installs receiving entry defaults; conversion of an unstamped
+  legacy config writing `baseline = adopted = 1` while a fresh
+  settings-only config's existing pair survives its first sensor-map
+  save verbatim.
+- §18.3's fail-closed stamp handling, proven at the LIFECYCLE level
+  for BOTH update classes: with a malformed pair or `catalogAdopted`
+  above the running plugin's version, and a cached accessory riding
+  an inherited adopted definition plus an `{"enabled": true}`
+  fragment, no accessory is registered or unregistered; a
+  baseline-native binding (`tempf`) keeps receiving fresh values
+  through the bind-existing path while the adopted-definition,
+  custom (e.g. Celsius), and extended accessories retain their
+  cached values frozen; the editor refuses saves with the named
+  diagnostic; and repairing the stamp restores normal resolution
+  byte-identically. Both stamps absent resolves as `(1, 1)` and is
+  NOT protective.
+- AP-2's partial-identity blocking: a lone `sourceUnit` (and each
+  other partial combination) on an adopted-definition dataPoint
+  yields the diagnostic, NO accessory from the definition's default
+  in the fragment's scope (station-scoped and global variants), an
+  unaffected sibling station still resolving the default, and the
+  same fragment behaving identically before the definition existed.
+- Conversion equivalence with a grown catalog.
+- AP-3 per-key determinism: with and without
+  discovery/cache/inventory data, every key present in both
+  resolutions has identical identity, provenance, and exposure;
+  row-universe differences are asserted separately.
+
+### 18.5 P1 boundary
+
+P1 delivers: the executable catalog + capability specification, the
+coverage suite, and this design section. P1 changes NO runtime
+behavior: no new accessory exposure, no new wrappers, no public config
+fields (`catalogBaseline` / `catalogAdopted` are designed here, added
+in P2), no automatic conversion, no compatibility retirement, no
+deployment. P2 work starts only after this section is reviewed at the
+checkpoint.
+
+## 20. Capability-aware editor
+
+The editor exposes implemented capabilities without changing runtime
+recognition, row validation, exposure policy, schema, catalog versions,
+configuration stamps, persistence endpoints, or confirmation-digest
+calculations. Effective rows and consequences remain server outputs.
+
+### 20.1 Negotiated pair vocabulary
+
+`/vocabulary` accepts `{ vocabularyProtocol: 2 }` and echoes the
+protocol with every implemented `(kind, measurement)` pair. Each pair
+has a stable `kind|measurement` identifier, label, `since` version,
+source-unit policy, threshold capability, output classification, and
+input/output explanations. State pairs also declare the exact normal
+and active meanings used by the wrapper. Reserved native CO is absent.
+
+Source policies distinguish selectable physical units, numeric's
+fixed-authored `raw`, timestamp's fixed-implicit `ms`, and unitless
+boolean state. Empty option lists do not determine source policy.
+Assignment selection and trigger controls dispatch by complete pair,
+not measurement alone. A new pair choice clears incompatible source,
+display, label, and threshold drafts atomically, including switches
+between two boolean kinds. Saved identity is read-only; non-identity
+editing does not materialize inherited catalog identity.
+
+The page validates the wire shape and the server's catalog metadata.
+Available pairs satisfy `since <= adopted`; newer pairs remain visible
+but disabled with a separate route to catalog options. A version above
+the running catalog or missing negotiation metadata disables mutation
+with reload guidance. The server remains the final assignment gate.
+
+Client assets and handlers ship together. Negotiation protects the
+specific stale-browser-bundle case after an in-place plugin upgrade:
+requests without a protocol marker receive the exact legacy shape and
+single-kind-per-measurement assignment set. Unsupported markers refuse.
+A new page talking to old handlers fails closed instead of treating
+several boolean kinds as the first measurement match.
+
+### 20.2 Numeric authorship and state explanations
+
+`unitLabel` presence is tracked independently of textbox text. Absent
+inherits, explicit empty clears, and nonempty authors a literal label.
+Unrelated form events never materialize an inherited label. Inherit or
+default reset removes only that field across the edited key's fragments
+and cancels any pending replacement; subsequent typing re-authors it.
+Whole-row Use defaults keeps its separate removal behavior. A removed
+custom row cannot be reopened as an identity-less replacement.
+
+The UI counts trimmed Unicode code points without truncation or a
+UTF-16 length limit. Server validation remains authoritative. Numeric
+Units cells show the literal label or `No label`, never `raw` as a
+physical unit. Preview shows effective label changes for enabled and
+disabled rows. Authorship-only edits have a separate local intent note,
+not an invented accessory consequence. Skip is omitted when a label
+also changes, because a partial pin would not preserve the entire row.
+
+Pair help describes native state encoding, invalid-value fault/alert
+behavior, and missing-data retention. Contact's active value means
+open. Smoke consumes a detector state. Extended numeric pairs use a
+motion carrier, not native soil/AQI/CO measurements. Numeric thresholds
+are finite, optional, inclusive level comparisons; saved
+`triggerEnabled: false` is preserved. No new conversion or decoder is
+implemented in the browser.
+
+### 20.3 Explicit clean operations
+
+Fresh installations retain settings-only creation. Existing legacy
+blocks can preview conversion without a sensor edit. Converted blocks
+with an older adopted version can preview adoption to the current
+server-reported version. Invalid stamps, unsafe mode/shape, opt-out,
+multi-Home read-only state, incompatible metadata, and terminal save
+outcomes keep conversion and adoption disabled.
+
+Both actions require no row/Connection drafts and no incomplete or
+invalid open form. An unchanged valid form closes when the action
+starts. The page neither saves nor discards existing drafts implicitly.
+Current-world row errors alone do not disqualify adoption: dormant
+boolean or numeric assignments must reach target-catalog validation.
+The authored DTO must be faithfully reconstructable, including raw
+supported-field values and fragment order. Withheld unknown keys and
+non-object fragments block adoption with JSON-repair guidance.
+
+Conversion sends the session digest and block index, omitting proposal,
+settings, and adoption target. The server alone constructs its compat
+seed; `proposal: []` would not mean conversion. Adoption submits the
+unchanged authored proposal, no settings patch, and
+`adoptCatalogVersion: catalog.current`. Ordinary edits omit adoption.
+All saves use `composeAndPersist`; its typed adoption argument passes
+unchanged through validation and commit. Authoritative reload is
+required before newly adopted pairs become available for assignment.
+
+### 20.4 Preview intent and outcomes
+
+A preview captures its operation, request identifier, row/settings
+versions, session token, target, and complete request arguments before
+any asynchronous work. Only the current request may install success,
+failure, or clear pending state. A new preview retires the old Save
+eligibility even while its earlier effect list remains visible.
+Conversion/adoption lock editing; Cancel preview invalidates the
+operation without touching config or drafts. Save disables cancellation
+and submits exactly the captured preview intent, with a re-entry guard.
+
+Persistence success consumes the preview and reloads the on-disk state.
+Its digest must match the returned-config receipt before further
+editing. Refusal retires the preview and requires a fresh one, without
+automatic retries. Indeterminate persistence, failed reload, receipt
+mismatch, or failed restoration of save controls requires reload and
+inspection while retaining the authoritative outcome message. Recovery
+records can already exist after commit; no later failure claims that
+nothing was written. Native Save stays disabled; restarting remains a
+separate user action.
+
+### 20.5 Server-reported consequences
+
+Successful full-map previews include `configurationTransition`, derived
+from the existing pipeline's on-disk source mode/stamps and composed
+destination. It includes stamp presence for initialization. An unchanged
+projection is explicit. These facts are already covered by the existing
+full-map confirmation contract; the digest's inputs and version do not
+change. Settings-only previews omit this projection and the client does
+not synthesize birth-stamp confirmation.
+
+The page renders accessory changes, disabled/config-only changes,
+Connection changes, battery-polarity changes, warnings, and notes.
+Battery entries name the station, data point, battery field, and both
+interpretations. A catalog-wide decoder policy has no per-row Skip.
+Empty accessory lists never imply that conversion, adoption, authored
+label intent, or canonical serialization would leave config unchanged.
+
+### 20.6 Boundaries and verification
+
+Contract tests retain a stale measurement-only picker across a bridge
+upgrade, verify registry coverage and real source policies, and compare
+full-map transition displays with actual commit results. Component tests
+use the real service, compiled handlers, and temporary files for
+conversion, adoption, and assignment, including dormant identities,
+label presence, stale requests, and terminal save outcomes. State help
+is checked against real coercion/HAP behavior. The plugin and UI builds,
+cold Angular artifacts, deterministic rebuilds, package contents, and
+existing install/upgrade suites remain release gates.
+
+Saved-row interpretation changes are specified in §22. The settings-only
+confirmation contract is specified in §20.7. Final applicable proofs and
+packaged-RC checks run again before release.
+
+### 20.7 Settings-only preview binding
+
+A settings-only preview binds the on-disk block, the sorted names of
+changed connection settings, and the destination `catalogBaseline` and
+`catalogAdopted` pair. The projection is versioned `settings-only-2`.
+Absent destination stamps remain absent; they are represented as null in
+the digest, not initialized on disk. Fresh blocks receive the running
+catalog's birth pair, while existing blocks preserve their own pair.
+An upgrade that changes prospective birth stamps invalidates the preview
+before compose or commit can return a persistable configuration. An old
+`settings-only-1` preview requires a fresh preview, with no fallback.
+
+This closes a real binding omission without a demonstrated harmful
+exposure difference at catalog versions 3 and 4. It does not change the
+full-map digest, SHA-256 primitive, stamp policy, configuration schema,
+or preview UI. Plain settings-only previews still omit
+`configurationTransition`. Proposed credential values remain excluded
+from the public confirmation projection; the two-phase validation token
+continues to bind the exact composed output before commit. Settings-only
+saves create neither a legacy snapshot nor a conversion journal.
+
+## 21. Install, upgrade, and retained-accessory proofs
+
+### 21.1 Artifact and installation boundary
+
+The locked dependency tree is built before integration tests run. Runtime
+artifacts in `dist/` and the UI bridge must match their committed versions;
+unexpected untracked build output fails the gate too. The canonical Angular
+job independently performs two cold builds and checks committed bundle
+fidelity. Dependency auditing is read-only and cannot change the artifact
+after it has passed the tests.
+
+`verify:package` packs the actual release file set and installs that tarball
+into an isolated directory with production dependencies only and installation
+scripts disabled. It loads the installed plugin entry point, checks the
+referenced browser bundle, and starts the installed UI server through its
+real IPC channel. Fresh installation and manual legacy-block credential
+repair use preview, compose, and commit there. Opening the page cannot write
+config or recovery records. Connection-only saves without a station-filter
+change preserve unrelated blocks,
+credential intents, legacy toggles, and birth stamps without conversion.
+
+This check does not claim to emulate the Homebridge browser host or hardware.
+The exact candidate package still requires a real-HB-UI smoke and cached
+restart on the deployment host before release.
+
+### 21.2 Executed journeys
+
+| Boundary | Executed evidence |
+|---|---|
+| Fresh installation and credential recovery | A settings-only birth block reaches the real runtime without unsolicited exposure or conversion. Explicit conversion preserves its birth stamps; explicit enablement then produces a real reading and a churn-free cached restart. A failed HTTP 401 startup retains the cache until guarded credential repair and a successful restart. |
+| Published 1.7.3 upgrade | The exact npm-published binary creates a real HAP cache. The candidate boots with the unchanged legacy configuration, then converts through the compiled save boundary and restarts from the same objects. Categories, broad legacy field names, allowlists, exclusions, and station filters remain effective for the observed and cache-backed field corpus. |
+| Future field after conversion | A legacy category disable or speculative exclusion creates no placeholder for a previously unknown compatibility field. Its first report can register it under normal v2 defaults. A real editor draft then disables only that row, with an exact removal preview, persisted `enabled: false`, and stable repeated save/restart. Known disabled temperature identities remain disabled throughout. |
+| Published beta upgrade | Exact beta.17 produces both legacy-shaped and converted caches. The candidate preserves explicit Celsius, lux, wind-source-unit, threshold, and display-unit assignments through startup, save, and reload. |
+| Documented input, native output | A temperature row moves through editor state, persistence, REST, realtime, polling, and repeated cached restarts with actual temperature characteristic assertions. |
+| Documented input, extended output | A soil-moisture row follows the same journey with a real Value characteristic and inclusive threshold behavior. |
+| Undocumented input, native output | An explicit Celsius assignment proves raw 25 remains 25 degrees Celsius, not a guessed Fahrenheit interpretation. |
+| Undocumented input, extended output | A generic numeric assignment preserves raw values, literal label semantics, threshold state, and graph shape across the complete journey. |
+| State output | Contact open/closed/offline readings exercise the real service, fault retention, recovery, and both transports. |
+| Catalog evolution | An existing wind-average assignment retains its source unit, rendered value, authored ownership, UUID, and cached object across previewed adoption. An explicitly conflicting native identity stays explicit too. |
+| Operational downgrade | Real published 1.7.3 freezes a v2-written cache before rollback. After the documented rollback it removes exactly unsupported custom/state/numeric accessories while restoring representable accessories in place. |
+
+Graph comparisons do not widen their deviation allowance to make a proof
+pass. The existing canonical native Battery-service normalization for a
+signature-less legacy cache is tested separately. Compatibility-only battery
+references outside the frozen canonical-owner table cannot acquire a new
+Battery service implicitly. Explicit claims remain authored configuration,
+including claims on disabled rows or arbitration losers, and must survive
+canonicalization for a later enable or ownership change.
+
+### 21.3 Missing observations are not removal instructions
+
+First creation and retention have different evidence requirements. A
+never-reported row requires a reported field before its first registration.
+An already configured cached accessory does not
+require that field or its station to be present in the latest payload.
+
+The runtime and save boundary resolve cache-backed station/field pairs
+alongside discovery and live inventory without manufacturing `firstSeen`,
+`lastSeen`, or a fresh reading. Legacy category and exclusion rules are
+evaluated for these pairs before conversion. Their translated per-row
+enable/disable settings survive conversion, even if discovery has been deleted.
+When the cache read is unavailable, a full legacy conversion refuses rather
+than treating an unknown cache as empty. Connection-only credential repair
+remains available; retry conversion after the cache can be read.
+Missing readings retain characteristic values and establish routing
+for returning samples. A valid empty AWN response is an empty observation,
+not permission to remove every accessory. Deleting discovery history does
+not change that rule.
+
+Explicit disabling, removal of a custom identity, or a definitively excluding
+station filter still removes the affected accessory. An unnamed cache-only
+station under a name-based filter has indeterminate membership; its cache is
+preserved without pretending that the station matched. A MAC filter can
+settle membership without a name. The latest unambiguous recorded station name
+can settle a name filter when a partial payload omits that metadata; equal-time
+conflicting names leave membership unknown. In a legacy-shaped configuration,
+`includeOnly` and
+`excludeSensors` also accept station and prefixed display names. If missing
+metadata leaves their decision indeterminate, affected cached accessories stay
+frozen and full conversion refuses. A category disable or a positive stable
+exclusion still takes effect; Connection-only repair remains available.
+An explicitly configured
+structural replacement of an existing accessory still uses staged replacement
+while offline, without fabricating an initial reading. That is a consequence
+of the configuration change, not of absent telemetry.
+
+When station-name evidence is unavailable, preview and runtime use the
+normalized MAC prefix for multi-station display names. Losing or recovering
+that metadata may change names in place; it never changes the cached
+`uniqueId` or UUID.
+
+### 21.4 Pure sensor identities and the conversion boundary
+
+V2 controls individual sensor identities, not classes of hypothetical future
+sensors. A catalog definition, an actual report, a cached accessory, or an
+explicit field mapping supplies an identity to resolve. A legacy matcher
+token by itself does not. Conversion translates the legacy settings over the
+catalog, observed, and cache-backed identities available at that time. With
+`temperatureSensors: false`, every known temperature-family row in that
+conversion remains disabled, including reported compatibility fields outside
+the static table.
+
+After conversion, v2 has no category-off setting and no continuing
+`includeOnly`/`excludeSensors` exposure rule. Those fields can remain in
+recovery records and the rollback mirror; they are not runtime authority for
+the converted map. A name such as `feelsLike21` that was neither catalogued,
+observed, cached, nor explicitly mapped is not materialized as a speculative
+disabled row, even if an old `excludeSensors` entry named it.
+
+When that field first reports after conversion, it becomes a real sensor and
+follows normal per-row recognition, defaults, and overrides. A recognized,
+enabled compatibility field can register an accessory; the user can disable
+that individual row through the usual previewed save. The resulting
+`enabled: false` persists across canonicalization, reload, and restart. This
+is the intended per-sensor contract, not v1 parity for future field names.
+
+This distinction does not automatically expose every new field. Unrecognized
+fields still require assignment, and newly introduced catalog capabilities
+retain their adoption and default-enablement rules. Explicit per-row authoring
+remains supported before telemetry arrives; conversion simply does not invent
+that authorship from a speculative legacy exclusion. First registration still
+requires a reported field. Global per-data-point templates and the separate
+top-level station filter keep their existing scope.
+
+### 21.5 Remaining release checks
+
+The complete suite retains the recovery-record, concurrent-writer, stale
+preview/token, credential-redaction, and real-1.7.3 rollback proofs. The
+supported Node floor and maintained Node lines run the same rebuilt-artifact
+and production-package checks. Host smoke verifies the installed package,
+live UI, existing custom mappings, first routed values, absence of unrelated
+registrations or removals, and byte-identical config when no save is requested.
+
+These proofs do not authorize a catalog adoption, production configuration
+change, compatibility retirement, or GA publication. Applicable proofs and
+host smoke run again on the eventual GA candidate.
+
+## 22. Changing a saved custom interpretation
+
+### 22.1 Eligibility and scope
+
+**Change interpretation** edits the complete `(kind, measurement, sourceUnit)`
+identity of a saved custom field. The field name and edit scope stay fixed.
+The server must classify the row as recognized `custom-global` or
+`custom-station`, in a writable v2 configuration with valid negotiated
+vocabulary and catalog stamps. Known rows and unresolved or rejected
+assignments are not remapping targets. Repairing an invalid assignment remains
+a JSON-editor operation.
+
+The page must have no row or Connection drafts, invalid form, or pending
+operation, and the authored map must be faithfully reconstructable. A global
+origin edits the all-stations template; a station origin edits only that
+station key, with a complete explicit identity. A station settings exception
+under a global custom identity therefore stays station-scoped.
+
+### 22.2 Isolated proposal and field handling
+
+The in-flow form uses the negotiated pair picker and its source policies.
+Unadopted pairs remain visible but unavailable. Numeric labels, input and
+output explanations, and boolean encoding help use the existing capability
+contract. Choosing a pair or source unit saves nothing and does not modify
+ordinary drafts. Other mutation controls remain locked for this operation.
+
+The proposal builder starts from the authored fragments and edits their
+presence using the existing DraftStore. It is not an effective-map resolver.
+Identity-dependent fields are removed from every duplicate fragment at the
+target key before the complete selected identity is authored. Untargeted
+keys, fragment order, and authored name, enabled, and battery settings remain
+intact. Motion-to-motion changes retain authored embedding; a non-motion
+target removes that field. Boolean and timestamp targets omit source-unit
+authorship; generic numeric explicitly uses `raw` and the chosen literal
+label, including empty text.
+
+Changing a pair or source unit clears the threshold without conversion.
+A triggering motion target with a blank threshold authors
+`triggerEnabled: false`, so an inherited threshold cannot become active in
+the new units. A finite threshold explicitly enables triggering and authors
+the selected direction. Non-triggering targets author no trigger fields.
+The normal row editor provides a threshold-triggering checkbox for recovery:
+switching it off retains an inactive threshold; intentionally switching it on
+requires a finite number. Unrelated edits never enable it, and opening a
+pristine threshold-less row does not create a draft or invalid form.
+
+### 22.3 Preview, persistence, and accessibility
+
+The server computes every consequence through `/preview-save`. The preview
+shows the old and new sensor types, source units, trigger state, embedding,
+and the existing row consequences. A source-only change is in-place because
+source unit is not part of the structural signature. Kind or measurement
+changes can replace an accessory and affect its rooms or automations.
+Complete station identities beneath a changed global template keep their
+identity, but inherited settings may change and are included in the preview.
+
+This isolated preview has no per-row Skip action. Its exact proposal and
+digest go through the existing two-phase save orchestrator. Form changes
+invalidate both pending and displayed previews, including late transport
+errors. Cancel is safe during a read-only request and restores the unchanged
+page, but is disabled and guarded during persistence. Repeated Save
+activation starts only one transaction. Success reloads the authoritative
+state and checks the receipt; refusal requires a new preview; uncertain
+persistence or failed recovery retains the terminal reload lock.
+
+Controls have associated labels and ordinary keyboard tab stops. Entry
+focuses the form heading, and Cancel returns focus to the target's Edit
+button. A never-reported target stays visible under the no-data filter
+through this return, until another row/filter interaction or successful save.
+No focus trap or keyboard-only action is introduced.
+
+### 22.4 Canonical station baseline
+
+Canonicalization compares custom station settings against the canonical
+global output resolved with that station's own minimal identity. It must not
+borrow defaults from a different global identity. For example, a global
+humidity row resolves triggering to false, but a station motion row without
+an authored value defaults to true. Comparing those two effective rows would
+incorrectly discard the station's explicit false. The identity-aware
+baseline preserves it, and the existing divergence gate remains unchanged.
+
+A station entry can be absorbed as redundant only when its complete identity
+matches an authored global identity and it adds no settings. Equal effective
+settings alone cannot erase a distinct kind, measurement, or source unit.
+The canonical global layer remains the reload reference, preserving sibling
+and never-seen-station inheritance and byte-stable subsequent saves.
+
+### 22.5 Boundaries and proofs
+
+The UI adds no capabilities, schema fields, catalog version, stamp policy,
+persistence endpoint, or digest calculation. The canonical station baseline
+correction is the only engine change. Real-component tests exercise labels,
+focus, locks, invalidation, cancellation, numeric validation, and guarded
+save outcomes against compiled handlers and files. Pair and scope tests
+exercise canonical reload, duplicate fragments, explicit identity retention,
+and subsequent-save stability. Real HAP lifecycle tests distinguish in-place
+source reinterpretation from Contact-to-Leak replacement, and verify that
+disabled triggering remains off until explicitly recovered.

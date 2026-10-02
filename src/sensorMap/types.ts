@@ -19,8 +19,8 @@
  */
 
 /**
- * Twelve values corresponding to HAP-native sensor services the plugin
- * can render. `unrecognized` is a sentinel for auto-discovered
+ * Thirteen values corresponding to HAP-native sensor services the
+ * plugin can render. `unrecognized` is a sentinel for auto-discovered
  * datapoints the plugin doesn't have a default for; those rows do NOT
  * produce a HomeKit accessory until the user assigns a real kind.
  *
@@ -28,7 +28,7 @@
  *   temperature, humidity, light, co2, co, air-quality-pm25, air-quality-pm10
  *
  * State tiles (Apple Home renders a boolean state):
- *   motion, leak, contact, occupancy
+ *   motion, leak, contact, occupancy, smoke (§19, catalog 3)
  */
 export type SensorKind =
   | 'temperature'
@@ -42,6 +42,7 @@ export type SensorKind =
   | 'leak'
   | 'contact'
   | 'occupancy'
+  | 'smoke'
   | 'unrecognized';
 
 /**
@@ -67,6 +68,15 @@ export type Measurement =
   | 'uv-index'
   | 'count'
   | 'direction'
+  // Agronomic + air-quality-index measurements (§19, catalog 3).
+  | 'soil-moisture'
+  | 'leaf-wetness'
+  | 'soil-tension'
+  | 'evapotranspiration'
+  | 'aqi'
+  // Generic finite-numeric passthrough with a literal label (§19.9,
+  // catalog 4). Its only legal unit is the opaque carrier `raw`.
+  | 'numeric'
   | 'timestamp'
   | 'boolean';
 
@@ -113,6 +123,15 @@ export type SensorUnit =
   | 'index'
   | 'count'
   | 'degrees'
+  // Soil tension (centibar, declared by AWN; §19)
+  | 'cb'
+  // Evapotranspiration (§19)
+  | 'in_per_day'
+  | 'mm_per_day'
+  // Generic numeric passthrough (§19.9, catalog 4). Opaque, unconverted
+  // carrier — NOT a claim the quantity is dimensionless. The user-facing
+  // label lives in the row's `unitLabel`, never here.
+  | 'raw'
   // Timestamp
   | 'ms';
 
@@ -190,6 +209,22 @@ export interface SensorMapOverride {
   sourceUnit?: SensorUnit;
 
   /**
+   * Literal display label for the generic `numeric` measurement only
+   * (§19.9, catalog 4). Presentation for identity/conversion purposes:
+   * it never selects a converter, wrapper, or native service, and it is
+   * excluded from the structural signature. It is NOT
+   * serialization-exempt — it round-trips through resolution, canonical
+   * save, DTOs, preview/digest, and committed artifacts.
+   *
+   * Three authored states: absent inherits the applicable global label;
+   * an explicit empty string CLEARS an inherited label at this scope
+   * (the empty presence is preserved, never normalized to omission); a
+   * nonempty string is the validated literal. Rejected on any
+   * measurement other than `numeric`.
+   */
+  unitLabel?: string;
+
+  /**
    * AWN batt* field driving the Battery sub-service. `null` explicitly
    * suppresses a Battery sub-service that the plugin default would
    * attach.
@@ -234,6 +269,38 @@ export interface DefaultSensorRow {
   triggerEnabled?: boolean;
   triggerDirection?: 'above' | 'below';
   embedName?: boolean;
+  /**
+   * The catalog version this definition arrived in (§18.3). Absent
+   * means 1 — the frozen v1 baseline, whose rows alone participate in
+   * the known-dataPoint validation clamp (§18.4 AP-2) and in the
+   * unconditional defaults-times-stations expansion. Later rows are
+   * visible only to configs whose `catalogAdopted` covers them.
+   */
+  sinceCatalogVersion?: number;
+  /**
+   * Explicit default for the row's enabled state where the §18.3
+   * baseline rule permits one: an install born knowing the definition
+   * uses this value, while a definition adopted onto an OLDER
+   * baseline is always disabled — the floor cannot be overridden
+   * (PR #66 review F5). The P2 new-exposure rows ship `false`: they
+   * stay non-exposing even on fresh installs (and conversion
+   * equivalence holds trivially); enabling is always a per-row user
+   * decision.
+   */
+  defaultEnabled?: boolean;
+  /**
+   * How a later (sinceCatalogVersion >= 2) definition relates to the
+   * behavior configs already have (§18.3):
+   *   - 'anchored': the legacy fallback already recognizes the key
+   *     with this IDENTICAL identity. Resolution-only: never expands
+   *     pairs, never changes enabled semantics — adopting it changes
+   *     no effective row.
+   *   - 'new': previously unrecognized. Expands pairs when visible,
+   *     and defaults to DISABLED when it arrived after the config's
+   *     `catalogBaseline`.
+   * Absent on v1 baseline rows.
+   */
+  catalogExposure?: 'anchored' | 'new';
 }
 
 /**
@@ -287,7 +354,21 @@ export type WrapperId =
   | 'lightning-day'
   | 'lightning-hour'
   | 'lightning-distance'
-  | 'lightning-last-strike';
+  | 'lightning-last-strike'
+  // Catalog-3 additions (§19): boolean state kinds, CO, and the
+  // agronomic/AQI extended measurements.
+  | 'leak'
+  | 'contact'
+  | 'occupancy'
+  | 'smoke'
+  | 'motion-boolean'
+  | 'soil-moisture'
+  | 'leaf-wetness'
+  | 'soil-tension'
+  | 'evapotranspiration'
+  | 'aqi'
+  // Catalog-4 addition (§19.9): the generic numeric passthrough.
+  | 'numeric';
 
 export interface WrapperDescriptor {
   /**
@@ -381,6 +462,12 @@ export interface NumericSensorRow extends ConfiguredRowBase {
   measurement: Exclude<Measurement, 'timestamp' | 'boolean'>;
   sourceUnit: SensorUnit;
   displayUnit: SensorUnit;
+  /**
+   * Resolved literal label for the generic `numeric` measurement
+   * (§19.9). Absent for every other measurement. An empty string is a
+   * deliberate cleared label and is preserved distinct from absence.
+   */
+  unitLabel?: string;
 }
 
 export interface TimestampSensorRow extends ConfiguredRowBase {

@@ -35,9 +35,12 @@ import type { AmbientWeatherSensorsPlatform } from './platform.js';
  *
  *   - `attach`: `row.hasBatterySubService` — attach unconditionally
  *     when true; remove any existing sub-service when false.
- *   - `initialLow`: the seed value. `'unknown'` (no cached reading yet)
- *     seeds HAP's NORMAL placeholder; the first real `setBatteryLow`
- *     overrides it.
+ *   - `initialLow`: the seed value. `'unknown'` (no usable reading)
+ *     seeds HAP's NORMAL placeholder ONLY on a FRESH service; on a
+ *     RESTORED service it PRESERVES the retained characteristics, so
+ *     an unknown reading never invents a healthy state (PR #67 review
+ *     R2-F3). A real boolean reading (and the first real
+ *     `setBatteryLow`) seed/override it either way.
  */
 export interface BatteryServiceOptions {
     attach: boolean;

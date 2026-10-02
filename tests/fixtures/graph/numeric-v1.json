@@ -1,0 +1,409 @@
+{
+ "numeric": {
+  "0": [
+   {
+    "uuid": "0000003E-0000-1000-8000-0026BB765291",
+    "subtype": null,
+    "isPrimary": false,
+    "isHidden": false,
+    "linked": [],
+    "optional": [
+     "00000053-0000-1000-8000-0026BB765291",
+     "00000054-0000-1000-8000-0026BB765291",
+     "000000A4-0000-1000-8000-0026BB765291",
+     "000000A6-0000-1000-8000-0026BB765291",
+     "000000E3-0000-1000-8000-0026BB765291",
+     "00000220-0000-1000-8000-0026BB765291",
+     "0000026C-0000-1000-8000-0026BB765291",
+     "0000026D-0000-1000-8000-0026BB765291"
+    ],
+    "characteristics": [
+     {
+      "uuid": "00000014-0000-1000-8000-0026BB765291",
+      "name": "Identify",
+      "props": {
+       "format": "bool",
+       "perms": [
+        "pw"
+       ]
+      },
+      "value": false
+     },
+     {
+      "uuid": "00000020-0000-1000-8000-0026BB765291",
+      "name": "Manufacturer",
+      "props": {
+       "format": "string",
+       "maxLen": 64,
+       "perms": [
+        "pr"
+       ]
+      },
+      "value": "Ambient Weather"
+     },
+     {
+      "uuid": "00000021-0000-1000-8000-0026BB765291",
+      "name": "Model",
+      "props": {
+       "format": "string",
+       "maxLen": 64,
+       "perms": [
+        "pr"
+       ]
+      },
+      "value": "Golden Numeric"
+     },
+     {
+      "uuid": "00000023-0000-1000-8000-0026BB765291",
+      "name": "Name",
+      "props": {
+       "format": "string",
+       "maxLen": 64,
+       "perms": [
+        "pr"
+       ]
+      },
+      "value": "Parity Accessory"
+     },
+     {
+      "uuid": "00000030-0000-1000-8000-0026BB765291",
+      "name": "Serial Number",
+      "props": {
+       "format": "string",
+       "maxLen": 64,
+       "perms": [
+        "pr"
+       ]
+      },
+      "value": "MAC-flow1"
+     },
+     {
+      "uuid": "00000052-0000-1000-8000-0026BB765291",
+      "name": "Firmware Revision",
+      "props": {
+       "format": "string",
+       "perms": [
+        "pr"
+       ]
+      },
+      "value": "0.0.0"
+     }
+    ]
+   },
+   {
+    "uuid": "00000085-0000-1000-8000-0026BB765291",
+    "subtype": null,
+    "isPrimary": false,
+    "isHidden": false,
+    "linked": [],
+    "optional": [
+     "00000023-0000-1000-8000-0026BB765291",
+     "00000075-0000-1000-8000-0026BB765291",
+     "00000077-0000-1000-8000-0026BB765291",
+     "00000079-0000-1000-8000-0026BB765291",
+     "0000007A-0000-1000-8000-0026BB765291"
+    ],
+    "characteristics": [
+     {
+      "uuid": "00000022-0000-1000-8000-0026BB765291",
+      "name": "Motion Detected",
+      "props": {
+       "format": "bool",
+       "perms": [
+        "ev",
+        "pr"
+       ]
+      },
+      "value": false
+     },
+     {
+      "uuid": "00000023-0000-1000-8000-0026BB765291",
+      "name": "Name",
+      "props": {
+       "format": "string",
+       "maxLen": 64,
+       "perms": [
+        "pr"
+       ]
+      },
+      "value": "Golden Numeric"
+     },
+     {
+      "uuid": "000000E3-0000-1000-8000-0026BB765291",
+      "name": "Configured Name",
+      "props": {
+       "format": "string",
+       "perms": [
+        "ev",
+        "pr",
+        "pw"
+       ]
+      },
+      "value": "Golden Numeric"
+     },
+     {
+      "uuid": "0B1001CD-7070-430D-B7AB-C707B5130359",
+      "name": "Value",
+      "props": {
+       "format": "string",
+       "perms": [
+        "pr",
+        "ev"
+       ]
+      },
+      "value": ""
+     },
+     {
+      "uuid": "88D5A140-DF20-4741-AF1B-780045076A8F",
+      "name": "Last Updated",
+      "props": {
+       "format": "string",
+       "perms": [
+        "pr",
+        "ev"
+       ]
+      },
+      "value": "<volatile>"
+     }
+    ]
+   }
+  ],
+  "1": [
+   {
+    "uuid": "0000003E-0000-1000-8000-0026BB765291",
+    "subtype": null,
+    "isPrimary": false,
+    "isHidden": false,
+    "linked": [],
+    "optional": [
+     "00000053-0000-1000-8000-0026BB765291",
+     "00000054-0000-1000-8000-0026BB765291",
+     "000000A4-0000-1000-8000-0026BB765291",
+     "000000A6-0000-1000-8000-0026BB765291",
+     "000000E3-0000-1000-8000-0026BB765291",
+     "00000220-0000-1000-8000-0026BB765291",
+     "0000026C-0000-1000-8000-0026BB765291",
+     "0000026D-0000-1000-8000-0026BB765291"
+    ],
+    "characteristics": [
+     {
+      "uuid": "00000014-0000-1000-8000-0026BB765291",
+      "name": "Identify",
+      "props": {
+       "format": "bool",
+       "perms": [
+        "pw"
+       ]
+      },
+      "value": false
+     },
+     {
+      "uuid": "00000020-0000-1000-8000-0026BB765291",
+      "name": "Manufacturer",
+      "props": {
+       "format": "string",
+       "maxLen": 64,
+       "perms": [
+        "pr"
+       ]
+      },
+      "value": "Ambient Weather"
+     },
+     {
+      "uuid": "00000021-0000-1000-8000-0026BB765291",
+      "name": "Model",
+      "props": {
+       "format": "string",
+       "maxLen": 64,
+       "perms": [
+        "pr"
+       ]
+      },
+      "value": "Golden Numeric"
+     },
+     {
+      "uuid": "00000023-0000-1000-8000-0026BB765291",
+      "name": "Name",
+      "props": {
+       "format": "string",
+       "maxLen": 64,
+       "perms": [
+        "pr"
+       ]
+      },
+      "value": "Parity Accessory"
+     },
+     {
+      "uuid": "00000030-0000-1000-8000-0026BB765291",
+      "name": "Serial Number",
+      "props": {
+       "format": "string",
+       "maxLen": 64,
+       "perms": [
+        "pr"
+       ]
+      },
+      "value": "MAC-flow1"
+     },
+     {
+      "uuid": "00000052-0000-1000-8000-0026BB765291",
+      "name": "Firmware Revision",
+      "props": {
+       "format": "string",
+       "perms": [
+        "pr"
+       ]
+      },
+      "value": "0.0.0"
+     }
+    ]
+   },
+   {
+    "uuid": "00000085-0000-1000-8000-0026BB765291",
+    "subtype": null,
+    "isPrimary": false,
+    "isHidden": false,
+    "linked": [],
+    "optional": [
+     "00000023-0000-1000-8000-0026BB765291",
+     "00000075-0000-1000-8000-0026BB765291",
+     "00000077-0000-1000-8000-0026BB765291",
+     "00000079-0000-1000-8000-0026BB765291",
+     "0000007A-0000-1000-8000-0026BB765291"
+    ],
+    "characteristics": [
+     {
+      "uuid": "00000022-0000-1000-8000-0026BB765291",
+      "name": "Motion Detected",
+      "props": {
+       "format": "bool",
+       "perms": [
+        "ev",
+        "pr"
+       ]
+      },
+      "value": false
+     },
+     {
+      "uuid": "00000023-0000-1000-8000-0026BB765291",
+      "name": "Name",
+      "props": {
+       "format": "string",
+       "maxLen": 64,
+       "perms": [
+        "pr"
+       ]
+      },
+      "value": "Golden Numeric"
+     },
+     {
+      "uuid": "000000E3-0000-1000-8000-0026BB765291",
+      "name": "Configured Name",
+      "props": {
+       "format": "string",
+       "perms": [
+        "ev",
+        "pr",
+        "pw"
+       ]
+      },
+      "value": "Golden Numeric"
+     },
+     {
+      "uuid": "0B1001CD-7070-430D-B7AB-C707B5130359",
+      "name": "Value",
+      "props": {
+       "format": "string",
+       "perms": [
+        "pr",
+        "ev"
+       ]
+      },
+      "value": ""
+     },
+     {
+      "uuid": "88D5A140-DF20-4741-AF1B-780045076A8F",
+      "name": "Last Updated",
+      "props": {
+       "format": "string",
+       "perms": [
+        "pr",
+        "ev"
+       ]
+      },
+      "value": "<volatile>"
+     }
+    ]
+   },
+   {
+    "uuid": "00000096-0000-1000-8000-0026BB765291",
+    "subtype": null,
+    "isPrimary": false,
+    "isHidden": false,
+    "linked": [],
+    "optional": [
+     "00000023-0000-1000-8000-0026BB765291",
+     "00000068-0000-1000-8000-0026BB765291",
+     "0000008F-0000-1000-8000-0026BB765291"
+    ],
+    "characteristics": [
+     {
+      "uuid": "00000068-0000-1000-8000-0026BB765291",
+      "name": "Battery Level",
+      "props": {
+       "format": "uint8",
+       "maxValue": 100,
+       "minStep": 1,
+       "minValue": 0,
+       "perms": [
+        "ev",
+        "pr"
+       ],
+       "unit": "percentage"
+      },
+      "value": 100
+     },
+     {
+      "uuid": "00000079-0000-1000-8000-0026BB765291",
+      "name": "Status Low Battery",
+      "props": {
+       "format": "uint8",
+       "maxValue": 1,
+       "minStep": 1,
+       "minValue": 0,
+       "perms": [
+        "ev",
+        "pr"
+       ],
+       "validValues": [
+        0,
+        1
+       ]
+      },
+      "value": 0
+     },
+     {
+      "uuid": "0000008F-0000-1000-8000-0026BB765291",
+      "name": "Charging State",
+      "props": {
+       "format": "uint8",
+       "maxValue": 2,
+       "minStep": 1,
+       "minValue": 0,
+       "perms": [
+        "ev",
+        "pr"
+       ],
+       "validValues": [
+        0,
+        1,
+        2
+       ]
+      },
+      "value": 2
+     }
+    ]
+   }
+  ]
+ }
+}

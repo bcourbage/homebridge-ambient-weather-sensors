@@ -1,0 +1,274 @@
+/**
+ * Generic numeric measurement (sensor-map.md §19.9, catalog 4): the
+ * closed `numeric`/`raw` pair plus the presentation-only `unitLabel`.
+ * Covers validation (label bounds, numeric-only gate, explicit empty,
+ * threshold-when-disabled), the finite-value coercion contract, the
+ * closed unit vocabulary, and the serialization/inheritance path
+ * (canonical round-trip, explicit-empty inheritance, cross-identity
+ * safety). HAP rendering and lifecycle live in the integration suite.
+ */
+import { describe, expect, it } from 'vitest';
+
+import { coerceValue } from '../../../src/sensorMap/coerceValue';
+import { buildEffectiveSensorMap } from '../../../src/sensorMap/buildEffectiveMap';
+import { canonicalizeSensorMap } from '../../../src/sensorMap/canonicalizeSensorMap';
+import { isLegalUnit, LEGAL_UNITS_FOR_MEASUREMENT } from '../../../src/sensorMap/units';
+import {
+  MAX_UNIT_LABEL_CODEPOINTS,
+  validateOverride,
+} from '../../../src/sensorMap/validation';
+import { defaultRowFor } from '../../../src/sensorMap/defaultMap';
+import { makeNumericRow } from '../../helpers/effectiveRow';
+import type {
+  DiscoveryStore,
+  NumericSensorRow,
+  SensorMapOverride,
+  StationInventory,
+  UiStateStore,
+} from '../../../src/sensorMap/types';
+
+const MAC1 = 'AA:BB:CC:DD:EE:01';
+const MAC2 = 'AA:BB:CC:DD:EE:02';
+const ONE: StationInventory = [{ macAddress: MAC1, name: 'Home' }];
+const TWO: StationInventory = [
+  { macAddress: MAC1, name: 'Home' },
+  { macAddress: MAC2, name: 'Cabin' },
+];
+const discovery = (): DiscoveryStore => ({ schemaVersion: 1, entries: [] });
+const uiState = (): UiStateStore => ({ schemaVersion: 1, dismissedNoticeIds: [], forgottenFields: [] });
+
+/** A valid custom numeric override, optionally with a label. */
+const numericRow = (over: Partial<SensorMapOverride> = {}): SensorMapOverride => ({
+  dataPoint: 'flow1', kind: 'motion', measurement: 'numeric', sourceUnit: 'raw', ...over,
+});
+
+// Numeric is authored-only (no default rows), so validation runs with
+// no defaultRow — exactly the custom branch.
+const validateNumeric = (over: Partial<SensorMapOverride> = {}) =>
+  validateOverride(numericRow(over), undefined);
+
+function effective(overrides: SensorMapOverride[], stations: StationInventory = ONE, catalogAdopted = 4) {
+  return buildEffectiveSensorMap({
+    userOverrides: overrides, discovery: discovery(), uiState: uiState(),
+    stations, configMode: 'v2', catalogBaseline: 1, catalogAdopted,
+  });
+}
+function canon(
+  overrides: SensorMapOverride[], stations: StationInventory = ONE, catalogAdopted = 4,
+): SensorMapOverride[] {
+  return canonicalizeSensorMap({
+    overrides, stations, discovery: discovery(), uiState: uiState(),
+    catalogBaseline: 1, catalogAdopted,
+  });
+}
+const numericRowOf = (map: ReturnType<typeof effective>, dp: string): NumericSensorRow => {
+  const row = map.rows.find(r => r.dataPoint === dp);
+  if (!row || row.kind === 'unrecognized' || row.measurement !== 'numeric') {
+    throw new Error(`no numeric row for ${dp}`);
+  }
+  return row;
+};
+
+describe('numeric measurement: closed unit vocabulary (§19.9)', () => {
+  it('the only legal unit for numeric is the opaque carrier raw', () => {
+    expect(LEGAL_UNITS_FOR_MEASUREMENT.numeric).toEqual(['raw']);
+    expect(isLegalUnit('numeric', 'raw')).toBe(true);
+    expect(isLegalUnit('numeric', 'ppm')).toBe(false);
+    expect(isLegalUnit('numeric', 'percent')).toBe(false);
+  });
+});
+
+describe('numeric measurement: unitLabel validation (§19.9)', () => {
+  it('accepts and trims a literal label', () => {
+    const r = validateNumeric({ unitLabel: '  L/min  ' });
+    expect(r.status).toBe('ok');
+    if (r.status !== 'ok') return;
+    expect(r.validated.unitLabel).toBe('L/min');
+  });
+
+  it('accepts a multi-byte symbol label within the code-point bound', () => {
+    const r = validateNumeric({ unitLabel: 'µg/m³' });
+    expect(r.status).toBe('ok');
+    if (r.status !== 'ok') return;
+    expect(r.validated.unitLabel).toBe('µg/m³');
+  });
+
+  it('preserves an explicit empty string distinct from omission', () => {
+    const cleared = validateNumeric({ unitLabel: '' });
+    expect(cleared.status).toBe('ok');
+    if (cleared.status === 'ok') {
+      expect(cleared.validated).toHaveProperty('unitLabel', '');
+    }
+    const absent = validateNumeric({});
+    expect(absent.status).toBe('ok');
+    if (absent.status === 'ok') {
+      expect('unitLabel' in absent.validated).toBe(false);
+    }
+  });
+
+  it('accepts exactly the bound and rejects one code point over (counted by code point)', () => {
+    const ok = 'x'.repeat(MAX_UNIT_LABEL_CODEPOINTS);
+    const over = 'x'.repeat(MAX_UNIT_LABEL_CODEPOINTS + 1);
+    expect(validateNumeric({ unitLabel: ok }).status).toBe('ok');
+    const r = validateNumeric({ unitLabel: over });
+    expect(r.status).toBe('error');
+    if (r.status === 'error') expect(r.code).toBe('invalid-unitlabel');
+  });
+
+  it('rejects line breaks and the complete control / bidi-control set', () => {
+    // Built from code points so the test source stays reviewable ASCII
+    // (a literal NUL/bidi character would make git treat it as binary).
+    const badCodePoints: Array<[string, number]> = [
+      ['newline', 0x000A],
+      ['tab', 0x0009],
+      ['NUL', 0x0000],
+      ['C1 control', 0x0085],
+      ['RLM', 0x200F],
+      ['RLO', 0x202E],
+      ['LRI', 0x2066],
+      ['line separator', 0x2028],
+      ['paragraph separator', 0x2029],
+      ['ARABIC LETTER MARK (U+061C)', 0x061C], // completes the Bidi_Control set
+    ];
+    for (const [name, cp] of badCodePoints) {
+      const bad = `a${String.fromCodePoint(cp)}b`;
+      const r = validateNumeric({ unitLabel: bad });
+      expect(r.status, name).toBe('error');
+      if (r.status === 'error') expect(r.code).toBe('invalid-unitlabel');
+    }
+  });
+
+  it('rejects a non-string label', () => {
+    const r = validateOverride({ ...numericRow(), unitLabel: 5 } as unknown, undefined);
+    expect(r.status).toBe('error');
+    if (r.status === 'error') expect(r.code).toBe('invalid-unitlabel');
+  });
+
+  it('rejects a label authored on a non-numeric identity (custom)', () => {
+    const r = validateOverride(
+      { dataPoint: 'gust1', kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph', unitLabel: 'kt' },
+      undefined,
+    );
+    expect(r.status).toBe('error');
+    if (r.status === 'error') expect(r.code).toBe('invalid-unitlabel');
+  });
+
+  it('rejects a label authored on a native known dataPoint', () => {
+    const r = validateOverride({ dataPoint: 'tempf', unitLabel: 'K' }, defaultRowFor('tempf'));
+    expect(r.status).toBe('error');
+    if (r.status === 'error') expect(r.code).toBe('invalid-unitlabel');
+  });
+});
+
+describe('numeric measurement: threshold contract (§19.9 / F5)', () => {
+  it('validates a finite threshold even when triggering is disabled, preserving zero and negative', () => {
+    for (const threshold of [0, -12.5, 3.25]) {
+      const r = validateNumeric({ threshold, triggerEnabled: false });
+      expect(r.status, String(threshold)).toBe('ok');
+      if (r.status === 'ok') expect(r.validated.threshold).toBe(threshold);
+    }
+  });
+
+  it('rejects a non-finite threshold', () => {
+    const r = validateOverride({ ...numericRow(), threshold: Infinity } as unknown, undefined);
+    expect(r.status).toBe('error');
+    if (r.status === 'error') expect(r.code).toBe('invalid-threshold');
+  });
+});
+
+describe('numeric measurement: finite-value coercion contract (§19.9)', () => {
+  const row = makeNumericRow({
+    kind: 'motion', measurement: 'numeric', sourceUnit: 'raw', displayUnit: 'raw', wrapperId: 'numeric',
+  });
+
+  it('passes finite numbers through unchanged (no conversion)', () => {
+    for (const v of [0, -3.2, 5, 1e-9, 1e12, 3.14159]) {
+      expect(coerceValue(row, v)).toBe(v);
+    }
+  });
+
+  it('drops non-finite and non-number readings (never a fabricated zero)', () => {
+    for (const bad of [NaN, Infinity, -Infinity, '5', true, false, null, undefined, {}]) {
+      expect(coerceValue(row, bad as never)).toBeUndefined();
+    }
+  });
+});
+
+describe('numeric measurement: serialization round-trip (§19.9 / F2)', () => {
+  it('a global numeric assignment retains its label through canonicalization', () => {
+    const out = canon([numericRow({ unitLabel: 'L/min', name: 'Flow' })]);
+    expect(out).toHaveLength(1);
+    expect(out[0]).toMatchObject({
+      dataPoint: 'flow1', kind: 'motion', measurement: 'numeric', sourceUnit: 'raw', unitLabel: 'L/min',
+    });
+  });
+
+  it('is byte-stable on a second save (idempotent)', () => {
+    const once = canon([numericRow({ unitLabel: 'L/min', name: 'Flow', threshold: 5, triggerEnabled: true })]);
+    const twice = canon(once);
+    expect(JSON.stringify(twice)).toBe(JSON.stringify(once));
+  });
+
+  it('resolves the label onto the numeric row at runtime', () => {
+    const map = effective([numericRow({ unitLabel: 'ppm' })]);
+    expect(numericRowOf(map, 'flow1').unitLabel).toBe('ppm');
+  });
+});
+
+describe('numeric measurement: label inheritance (§19.9 / F4)', () => {
+  it('a station inherits a global label when it authors none', () => {
+    const map = effective(
+      [numericRow({ unitLabel: 'L/min' })], TWO,
+    );
+    expect(numericRowOf(map, 'flow1').unitLabel).toBe('L/min'); // resolves on every station
+    const perStation = map.rows.filter(r => r.dataPoint === 'flow1');
+    for (const r of perStation) {
+      expect((r as NumericSensorRow).unitLabel).toBe('L/min');
+    }
+  });
+
+  it('an explicit empty label at a station clears it while a sibling still inherits', () => {
+    const map = effective(
+      [
+        numericRow({ unitLabel: 'L/min' }),                                   // global template
+        numericRow({ stationMac: MAC1, unitLabel: '' }),                     // station clears
+      ],
+      TWO,
+    );
+    const home = map.rows.find(r => r.dataPoint === 'flow1' && r.stationMac === MAC1) as NumericSensorRow;
+    const cabin = map.rows.find(r => r.dataPoint === 'flow1' && r.stationMac === MAC2) as NumericSensorRow;
+    expect(home.unitLabel).toBe('');       // cleared
+    expect(cabin.unitLabel).toBe('L/min'); // still inherits
+  });
+
+  it('preserves the explicit empty label through canonicalization (not normalized to omission)', () => {
+    const out = canon(
+      [numericRow({ unitLabel: 'L/min' }), numericRow({ stationMac: MAC1, unitLabel: '' })],
+      TWO,
+    );
+    const station = out.find(o => o.stationMac === MAC1);
+    expect(station).toBeDefined();
+    expect(station).toHaveProperty('unitLabel', '');
+  });
+});
+
+describe('numeric measurement: cross-identity safety (§19.9 / F4)', () => {
+  it('a global numeric label does not contaminate a station with a different explicit identity', () => {
+    const map = effective(
+      [
+        numericRow({ unitLabel: 'L/min' }),                                                  // global numeric
+        { dataPoint: 'flow1', stationMac: MAC1, kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph' },
+      ],
+      TWO,
+    );
+    // The station keeps its own valid wind-speed identity and carries NO
+    // inherited numeric label; the sibling remains a numeric row.
+    const home = map.rows.find(r => r.dataPoint === 'flow1' && r.stationMac === MAC1);
+    const cabin = map.rows.find(r => r.dataPoint === 'flow1' && r.stationMac === MAC2);
+    expect(map.errors).toHaveLength(0);
+    expect(home && home.kind !== 'unrecognized' ? home.measurement : null).toBe('wind-speed');
+    expect(home as { unitLabel?: string }).not.toHaveProperty('unitLabel');
+    expect(cabin && cabin.kind !== 'unrecognized' ? cabin.measurement : null).toBe('numeric');
+    expect((cabin as NumericSensorRow).unitLabel).toBe('L/min');
+  });
+});

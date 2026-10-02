@@ -27,7 +27,7 @@
  *                   for completeness/testability.
  */
 import { buildEffectiveSensorMap } from './buildEffectiveMap.js';
-import { compatToOverrides } from './compat.js';
+import { compatToOverrides, dynamicDataPointsFrom } from './compat.js';
 /**
  * Detect a malformed v2 `sensorMap` (review finding 6). In v2 mode an
  * ABSENT sensorMap is legitimate — §5's "start from v2 defaults" — but
@@ -59,7 +59,9 @@ export function sensorMapShapeError(config, configMode) {
  * time this runs, a v2 sensorMap is either absent (default exposure)
  * or a real array.
  */
-export function selectUserOverrides(config, configMode, stations) {
+export function selectUserOverrides(config, configMode, stations, 
+/** Discovery store, for the compat projection's dynamic data points (GA review P1-1). */
+discovery, cachedPairs = []) {
     if (configMode === 'safe-mode') {
         return [];
     }
@@ -67,21 +69,25 @@ export function selectUserOverrides(config, configMode, stations) {
         const raw = config.sensorMap;
         return Array.isArray(raw) ? raw : [];
     }
-    // legacy
-    return compatToOverrides(config, stations);
+    // legacy: the compat projection must gate the discovery-observed
+    // fields the static table lacks exactly like static rows.
+    return compatToOverrides(config, stations, dynamicDataPointsFrom(discovery ?? { entries: [] }, cachedPairs));
 }
 /**
  * Assemble the effective sensor map at the platform boundary. Pure — the
  * caller has already loaded `discovery` / `uiState` from disk.
  */
 export function buildPlatformEffectiveMap(inputs) {
-    const userOverrides = selectUserOverrides(inputs.config, inputs.configMode, inputs.stations);
+    const userOverrides = selectUserOverrides(inputs.config, inputs.configMode, inputs.stations, inputs.discovery, inputs.cachedPairs);
     return buildEffectiveSensorMap({
         userOverrides,
         discovery: inputs.discovery,
         uiState: inputs.uiState,
         stations: inputs.stations,
+        cachedPairs: inputs.cachedPairs,
         configMode: inputs.configMode,
+        catalogBaseline: inputs.catalogBaseline,
+        catalogAdopted: inputs.catalogAdopted,
     });
 }
 //# sourceMappingURL=platformEffectiveMap.js.map

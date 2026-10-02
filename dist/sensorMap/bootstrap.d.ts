@@ -49,11 +49,18 @@ export declare const HAP_CHARACTERISTIC_UUIDS: {
  * conforms; test doubles can be plain objects.
  */
 export interface CachedAccessoryShape {
-    /** Free-form context bag; we read `device.kind`, `.type`, `.uniqueId`. */
+    /**
+     * Free-form context bag; we read `device.kind`, `.measurement`,
+     * `.structuralSignature`, `.type`, `.uniqueId`. The v2 platform
+     * writes kind/measurement/structuralSignature; a v1.x cache has
+     * only type/uniqueId (and the HAP service graph).
+     */
     context?: {
         device?: {
             uniqueId?: string;
             kind?: SensorKind;
+            measurement?: Measurement;
+            structuralSignature?: unknown;
             type?: string;
         };
     };
@@ -76,7 +83,9 @@ export type BootstrapResult = {
  * accessory. Caller is responsible for writing the result back to
  * context (or not, on 'preserve-cached').
  */
-export declare function inferForCachedAccessory(accessory: CachedAccessoryShape): BootstrapResult;
+export declare function inferForCachedAccessory(accessory: CachedAccessoryShape, opts?: {
+    trustV2Cache?: boolean;
+}): BootstrapResult;
 /**
  * `${macAddress}-${sensorKey}` → sensorKey. macAddress format is
  * `AA:BB:CC:DD:EE:FF` (contains colons but no hyphens), so the first

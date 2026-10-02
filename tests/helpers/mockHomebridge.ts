@@ -124,6 +124,13 @@ export const MockCharacteristics = {
   PM10Density: makeCharacteristicClass('PM10Density', '000000C7-0000-1000-8000-0026BB765291'),
   AirQuality: makeCharacteristicClass('AirQuality', '00000095-0000-1000-8000-0026BB765291'),
   MotionDetected: makeCharacteristicClass('MotionDetected', '00000022-0000-1000-8000-0026BB765291'),
+  LeakDetected: makeCharacteristicClass('LeakDetected', '00000070-0000-1000-8000-0026BB765291'),
+  ContactSensorState: makeCharacteristicClass('ContactSensorState', '0000006A-0000-1000-8000-0026BB765291'),
+  OccupancyDetected: makeCharacteristicClass('OccupancyDetected', '00000071-0000-1000-8000-0026BB765291'),
+  SmokeDetected: makeCharacteristicClass('SmokeDetected', '00000076-0000-1000-8000-0026BB765291'),
+  StatusFault: makeCharacteristicClass('StatusFault', '00000077-0000-1000-8000-0026BB765291'),
+  CarbonMonoxideLevel: makeCharacteristicClass('CarbonMonoxideLevel', '00000090-0000-1000-8000-0026BB765291'),
+  CarbonMonoxideDetected: makeCharacteristicClass('CarbonMonoxideDetected', '00000069-0000-1000-8000-0026BB765291'),
   StatusLowBattery: makeCharacteristicClass('StatusLowBattery', '00000079-0000-1000-8000-0026BB765291'),
   BatteryLevel: makeCharacteristicClass('BatteryLevel', '00000068-0000-1000-8000-0026BB765291'),
   ChargingState: makeCharacteristicClass('ChargingState', '0000008F-0000-1000-8000-0026BB765291'),
@@ -142,6 +149,18 @@ Object.assign(MockCharacteristic, MockCharacteristics);
 (MockCharacteristics.ChargingState as unknown as Record<string, number>).NOT_CHARGEABLE = 2;
 (MockCharacteristics.CarbonDioxideDetected as unknown as Record<string, number>).CO2_LEVELS_NORMAL = 0;
 (MockCharacteristics.CarbonDioxideDetected as unknown as Record<string, number>).CO2_LEVELS_ABNORMAL = 1;
+(MockCharacteristics.LeakDetected as unknown as Record<string, number>).LEAK_NOT_DETECTED = 0;
+(MockCharacteristics.LeakDetected as unknown as Record<string, number>).LEAK_DETECTED = 1;
+(MockCharacteristics.ContactSensorState as unknown as Record<string, number>).CONTACT_DETECTED = 0;
+(MockCharacteristics.ContactSensorState as unknown as Record<string, number>).CONTACT_NOT_DETECTED = 1;
+(MockCharacteristics.OccupancyDetected as unknown as Record<string, number>).OCCUPANCY_NOT_DETECTED = 0;
+(MockCharacteristics.OccupancyDetected as unknown as Record<string, number>).OCCUPANCY_DETECTED = 1;
+(MockCharacteristics.SmokeDetected as unknown as Record<string, number>).SMOKE_NOT_DETECTED = 0;
+(MockCharacteristics.SmokeDetected as unknown as Record<string, number>).SMOKE_DETECTED = 1;
+(MockCharacteristics.StatusFault as unknown as Record<string, number>).NO_FAULT = 0;
+(MockCharacteristics.StatusFault as unknown as Record<string, number>).GENERAL_FAULT = 1;
+(MockCharacteristics.CarbonMonoxideDetected as unknown as Record<string, number>).CO_LEVELS_NORMAL = 0;
+(MockCharacteristics.CarbonMonoxideDetected as unknown as Record<string, number>).CO_LEVELS_ABNORMAL = 1;
 (MockCharacteristics.AirQuality as unknown as Record<string, number>).UNKNOWN = 0;
 (MockCharacteristics.AirQuality as unknown as Record<string, number>).EXCELLENT = 1;
 (MockCharacteristics.AirQuality as unknown as Record<string, number>).GOOD = 2;
@@ -271,6 +290,11 @@ export const MockServices = {
   CarbonDioxideSensor: makeServiceClass('CarbonDioxideSensor', '00000097-0000-1000-8000-0026BB765291'),
   AirQualitySensor: makeServiceClass('AirQualitySensor', '0000008D-0000-1000-8000-0026BB765291'),
   MotionSensor: makeServiceClass('MotionSensor', '00000085-0000-1000-8000-0026BB765291'),
+  LeakSensor: makeServiceClass('LeakSensor', '00000083-0000-1000-8000-0026BB765291'),
+  ContactSensor: makeServiceClass('ContactSensor', '00000080-0000-1000-8000-0026BB765291'),
+  OccupancySensor: makeServiceClass('OccupancySensor', '00000086-0000-1000-8000-0026BB765291'),
+  SmokeSensor: makeServiceClass('SmokeSensor', '00000087-0000-1000-8000-0026BB765291'),
+  CarbonMonoxideSensor: makeServiceClass('CarbonMonoxideSensor', '0000007F-0000-1000-8000-0026BB765291'),
   Battery: makeServiceClass('Battery', '00000096-0000-1000-8000-0026BB765291'),
 };
 

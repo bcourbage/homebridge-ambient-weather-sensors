@@ -29,7 +29,7 @@ import { buildEffectiveSensorMap } from '../../../src/sensorMap/buildEffectiveMa
 import { composeV2ConfigSave } from '../../../src/sensorMap/legacyMirror';
 import { MEASUREMENT_LABELS, UNIT_VOCABULARY, unitOptionsFor } from '../../../src/sensorMap/unitVocabulary';
 import { NON_TRIGGERING_MEASUREMENTS } from '../../../src/sensorMap/validation';
-import { WRAPPER_FOR_KIND_AND_MEASUREMENT } from '../../../src/sensorMap/wrappers';
+import { WRAPPER_FOR_KIND_AND_MEASUREMENT, WRAPPER_PAIR_SINCE } from '../../../src/sensorMap/wrappers';
 import type { Measurement } from '../../../src/sensorMap/types';
 
 const MAC = 'AA:BB:CC:DD:EE:01';
@@ -170,6 +170,27 @@ describe('/editor-state — v2 configuration', () => {
     // Custom and unrecognized rows have no default row to return to.
     expect(byDp.get('customtemp1')!.defaults).toBeUndefined();
     expect(byDp.get('weirdfield9')!.defaults).toBeUndefined();
+  });
+
+  it('an explicit assignment on a fallback-recognized name carries NO defaults (review F2)', async () => {
+    // barn_temp assigned as wind speed: the empty-overrides map would
+    // resolve the FALLBACK temperature identity for the same key, and
+    // those defaults must never reach a row whose identity is the
+    // user's assignment — Use defaults closes such editors instead of
+    // reseeding a different sensor's facts into the form.
+    const rig = makeRig([{
+      ...V2_BLOCK,
+      sensorMap: [{
+        dataPoint: 'barn_temp', stationMac: MAC,
+        kind: 'motion', measurement: 'wind-speed', sourceUnit: 'mph', name: 'Barn Wind',
+      }],
+    }]);
+    discoveryStore(rig, [{ mac: MAC, dataPoint: 'barn_temp' }]);
+    const dto = await handleGetEditorState(rig.deps, {});
+    const row = dto.rows.find(r => r.dataPoint === 'barn_temp' && r.stationMac === MAC)!;
+    expect(row.kind).toBe('motion');
+    expect(row.identityScope).toBe('custom-station');
+    expect(row.defaults).toBeUndefined();
   });
 
   it('everReported is tri-state from POSITIVE evidence only (review P1, both rounds)', async () => {
@@ -451,7 +472,7 @@ describe('/editor-state — mirrorState (review #45 round 4)', () => {
       uiState: { schemaVersion: 1, dismissedNoticeIds: [], forgottenFields: [] } as never,
       stations: [{ macAddress: MAC, name: 'Home' }], configMode: 'v2',
     });
-    const { nextConfig } = composeV2ConfigSave(legacyBase, [], map, 'legacy');
+    const { nextConfig } = composeV2ConfigSave(legacyBase, [], map, 'legacy', { catalogBaseline: 1, catalogAdopted: 1 });
     const rig = makeRig([{ platform: 'AmbientWeatherSensors', ...nextConfig }]);
     discoveryStore(rig, [{ mac: MAC, dataPoint: 'tempf' }]);
     const dto = await handleGetEditorState(rig.deps, {});
@@ -561,9 +582,12 @@ describe('/editor-state — legacy and troubled configurations', () => {
     expect(dto.editorAvailable).toBe(false);
   });
 
-  it('throws when no config path is available or no block exists', async () => {
+  it('renders the FRESH-INSTALL state when no block exists; throws only on unreadable config (GA review P1-2)', async () => {
     const rig = makeRig([{ platform: 'SomethingElse' }]);
-    await expect(handleGetEditorState(rig.deps, {})).rejects.toThrow(/No AmbientWeatherSensors platform block/);
+    const dto = await handleGetEditorState(rig.deps, {});
+    expect(dto.freshInstall).toBe(true);
+    expect(dto.editorAvailable).toBe(true);
+    expect(dto.rows).toEqual([]);
     await expect(handleGetEditorState({ ...rig.deps, configPath: undefined }, {}))
       .rejects.toThrow(/No config.json path/);
     await expect(handleGetEditorState({ ...rig.deps, configPath: path.join(rig.root, 'missing.json') }, {}))
@@ -590,7 +614,13 @@ describe('/vocabulary', () => {
     // cannot build would be refused by the pipeline as no-wrapper, so
     // the picker must not offer it), never fewer, each labeled by its
     // measurement. Order follows the vocabulary's measurement order.
-    const tableKeys = Object.keys(WRAPPER_FOR_KIND_AND_MEASUREMENT);
+    // Every STAMP-GATED pair is withheld from the static picker
+    // (PR #67 review F9): the endpoint has no config context, so a
+    // gated pair would offer a dead-end assignment to an unadopted
+    // config. Only the frozen v2.0 pairs (WRAPPER_PAIR_SINCE absent/1)
+    // are offered until the P4 capability-aware editor lands.
+    const tableKeys = Object.keys(WRAPPER_FOR_KIND_AND_MEASUREMENT)
+      .filter(k => (WRAPPER_PAIR_SINCE[k as keyof typeof WRAPPER_PAIR_SINCE] ?? 1) <= 1);
     expect(dto.assignments).toHaveLength(tableKeys.length);
     expect(new Set(dto.assignments.map(a => `${a.kind}|${a.measurement}`))).toEqual(new Set(tableKeys));
     for (const a of dto.assignments) {
@@ -600,9 +630,14 @@ describe('/vocabulary', () => {
     const vocabOrder = Object.keys(UNIT_VOCABULARY);
     const indices = dto.assignments.map(a => vocabOrder.indexOf(a.measurement));
     expect(indices).toEqual([...indices].sort((x, y) => x - y));
-    // The reserved kinds have no wrapper and must never be offered.
-    for (const reserved of ['co', 'leak', 'contact', 'occupancy']) {
-      expect(dto.assignments.some(a => a.kind === reserved)).toBe(false);
+    // Catalog-3 kinds (boolean states) and the catalog-3 numeric
+    // measurements are all stamp-gated, so none are offered by the
+    // static picker; co is deferred entirely (no wrapper).
+    for (const withheld of ['leak', 'contact', 'occupancy', 'smoke', 'co']) {
+      expect(dto.assignments.some(a => a.kind === withheld)).toBe(false);
+    }
+    for (const m of ['soil-moisture', 'leaf-wetness', 'soil-tension', 'evapotranspiration', 'aqi']) {
+      expect(dto.assignments.some(a => a.measurement === m)).toBe(false);
     }
     // Every numeric assignment target has source units to pick from;
     // timestamp deliberately has none (sourceUnit is fixed to 'ms'
@@ -625,6 +660,11 @@ describe('/vocabulary', () => {
     }
     expect(dto.assignments.filter(a => a.kind === 'motion' && !a.triggering).map(a => a.measurement).sort())
       .toEqual(['direction', 'timestamp']);
+    // The catalog-3 numeric motion measurements are stamp-gated and
+    // therefore NOT offered by the static picker (PR #67 review F9).
+    for (const m of ['soil-moisture', 'leaf-wetness', 'soil-tension', 'evapotranspiration', 'aqi']) {
+      expect(dto.assignments.some(a => a.measurement === m), m).toBe(false);
+    }
     // Uniqueness invariant (round 1 F4): the assignment UI tracks and
     // resolves choices BY MEASUREMENT ALONE (one select, kind derived).
     // A second kind for any measurement — e.g. the deferred boolean

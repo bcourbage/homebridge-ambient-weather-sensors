@@ -197,7 +197,7 @@ You can mix names and MACs in the same filter — whichever matches wins.
 
 Expected. The Plugins page shows one card per installed npm package, not one card per platform instance. Look in the **Status** tab — each child bridge shows up there as its own row.
 
-The Plugin Config form (the gear icon on the Plugins page) can only edit the **first** platform instance. The second and subsequent instances have to be edited via JSON Config.
+With more than one platform instance, the plugin settings page is read-only for **all** of them (it refuses to guess which block to write): edit every instance via JSON Config. The page says so when it detects a multi-Home configuration.
 
 ### "Same QR code appears for both child bridges"
 
@@ -211,7 +211,7 @@ Check that the iPhone Home app was on the right Home when you scanned the QR cod
 
 The filter values don't match any station in the AWN response for that instance. Check spelling (the match is case-insensitive but exact otherwise — `Cabin WS-5000` does not match `Cabin WS5000`). Verify the station name in AWN's dashboard or in the unfiltered Homebridge log of the first instance.
 
-Note that zero-match deregisters every accessory previously exposed by that platform instance — Homebridge sees an empty result and treats every cached accessory as orphaned. **This is the intended behavior** and is also useful as an explicit "clean slate" trigger: setting `"stationFilter": ["CLEAR"]` (or any value you know won't match), restarting the child bridge, then removing the filter and restarting again, will re-discover every accessory from scratch without touching the filesystem cache. Just be aware that room assignments, automations, and any custom Apple Home names set on those accessories are lost during the wipe, same as any HomeKit accessory removal.
+An explicit station-filter change can remove every accessory excluded by that filter, losing room assignments and automations. Do not use a deliberately non-matching name as a casual reset procedure. Missing station data is different from a confirmed filter exclusion: v2 preserves cached accessories during discovery gaps, and unknown station-name membership can require discovery or a MAC-address filter before an edit is accepted. Check the station identity and back up the configuration before changing the filter.
 
 ### "After splitting, my old accessories disappeared and new ones appeared in their place"
 
@@ -241,6 +241,6 @@ The Homebridge log usually says exactly which line is the problem.
 
 ## Limitations
 
-- The Homebridge UI form only edits the first platform instance. Multi-instance management is JSON Config only. See [`docs/future/tabbed-config-ui.md`](./docs/future/tabbed-config-ui.md) for the proposed solution.
+- With multiple platform instances, the plugin settings page is read-only for every instance. Multi-instance management is JSON Config only. See [`docs/future/tabbed-config-ui.md`](./docs/future/tabbed-config-ui.md) for the proposed solution.
 - HomeKit charges a one-time per-bridge pairing cost (the QR-code scan). You'll do it once per bridge during setup; it doesn't recur.
 - Automations cannot span Homes. If you want "when wind speed at the cabin is high, turn on a fan in the main house," that's not possible through Apple Home alone — the Homes are independent.

@@ -45,7 +45,7 @@ import {
   fahrenheitToCelsius,
   solarWm2ToLux,
 } from './nativeConversions.js';
-import { defaultRowFor } from './sensorMap/defaultMap.js';
+import { staticDefaultRowFor } from './sensorMap/defaultMap.js';
 
 /**
  * Minimal platform surface `bindSafeMode` needs — matches the real
@@ -171,7 +171,13 @@ export function bindSafeMode(
     return undefined;
   }
   const dataPoint = extractDataPoint(uniqueId);
-  if (!dataPoint || !defaultRowFor(dataPoint)) {
+  // STATIC table only, deliberately (GA review P1-1 follow-through):
+  // safe mode updates a value only when the source unit is certain
+  // without the config it cannot interpret. A dynamically recognized
+  // dataPoint's unit is a synthesis the frozen config could
+  // contradict, so those accessories stay frozen — the same boundary
+  // this binding always drew.
+  if (!dataPoint || !staticDefaultRowFor(dataPoint)) {
     // Custom / unknown dataPoint — we can't safely infer the
     // source unit, so no value updates. Cached HAP value stays.
     return undefined;

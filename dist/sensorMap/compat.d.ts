@@ -19,7 +19,7 @@
  * Tested by the migration-equivalence property tests (§12.7),
  * scheduled for Stage 9.
  */
-import type { SensorMapOverride, SensorUnit, StationInventory } from './types.js';
+import type { SensorMapOverride, SensorUnit, StationInventory, StationRecord } from './types.js';
 /**
  * v1.6.0 config shape — union of every field the compat layer inspects.
  * Fields the compat layer doesn't consume (stationFilter, dataSource,
@@ -89,5 +89,37 @@ export interface LegacyConfig {
  * don't depend on station (threshold, displayUnit, category
  * toggles, embed mode) still flow through as global overrides.
  */
-export declare function compatToOverrides(legacy: LegacyConfig, stations?: StationInventory): SensorMapOverride[];
+/**
+ * The discovery-observed data points that resolve only via the dynamic
+ * legacy-matcher fallback — the fields the compat projection must gate
+ * beyond the static table (GA review P1-1). Lives here, in a module
+ * with a LEAF import graph: the UI bridge imports it, and its previous
+ * home (platformEffectiveMap) transitively reaches the accessory
+ * classes, which the Angular app's typecheck must never include.
+ */
+export declare function dynamicDataPointsFrom(discovery: {
+    entries: ReadonlyArray<{
+        dataPoint: string;
+    }>;
+}, cachedPairs?: ReadonlyArray<{
+    dataPoint: string;
+}>): string[];
+export declare function compatToOverrides(legacy: LegacyConfig, stations?: StationInventory, 
+/**
+ * Data points OUTSIDE the static default table that resolve via the
+ * dynamic legacy-matcher fallback (GA review P1-1) — in practice the
+ * discovery-observed fields the static table lacks. The compat
+ * projection must gate them exactly like static rows (category
+ * toggles, include/exclude, battery suppression), or a legacy
+ * config with a category off would register accessories v1.7 never
+ * created.
+ */
+dynamicDataPoints?: Iterable<string>): SensorMapOverride[];
+/**
+ * Legacy selectors match both stable field identities and station-derived
+ * names. Missing station metadata cannot make the latter a definite non-match.
+ * This is an exposure decision only; it does not synthesize row identity or
+ * infer a station name from a cached HomeKit label.
+ */
+export declare function legacyRowFilterState(legacy: LegacyConfig, dataPoint: string, station: StationRecord, isMultiStation: boolean): 'enabled' | 'disabled' | 'unknown' | undefined;
 //# sourceMappingURL=compat.d.ts.map

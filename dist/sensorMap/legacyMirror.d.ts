@@ -98,7 +98,8 @@
  */
 import type { LegacyConfig } from './compat.js';
 import type { ConfigMode } from './configMode.js';
-import type { EffectiveSensorMap } from './types.js';
+import type { CatalogStamps } from './catalogVersion.js';
+import type { EffectiveSensorMap, EffectiveSensorRow } from './types.js';
 import { type Clock, type Logger } from './persistence/atomicWrite.js';
 /** Metadata key stamped into config.json next to the mirrored fields. */
 export declare const LEGACY_MIRROR_KEY = "_legacyMirror";
@@ -129,10 +130,23 @@ export interface LegacyMirrorMeta {
      */
     hash: string;
 }
+/** Configured (registerable) rows only. */
+type ConfiguredRow = Exclude<EffectiveSensorRow, {
+    kind: 'unrecognized';
+}>;
 /**
  * Reverse projection: effective v2 map → sparse v1.7 legacy fields.
  * PURE. See the module header for the contract.
  */
+/**
+ * Whether v1.7 would interpret this resolved row the way it actually
+ * behaves (#63 P0): 1.7's substring matcher assigns a recognized name
+ * ITS OWN identity, so a row is v1-representable only when its
+ * resolved identity is exactly what 1.7 would assume. An explicitly
+ * assigned Celsius barn_temp is NOT — it mirrors as an exclusion, or
+ * 1.7 would render its readings as Fahrenheit.
+ */
+export declare function v1RepresentableIdentity(row: ConfiguredRow): boolean;
 export declare function projectLegacyMirror(effectiveMap: EffectiveSensorMap): LegacyConfig;
 /**
  * Canonical hash binding the mirror to its SOURCE: SHA-256 over a
@@ -201,7 +215,7 @@ export declare function recognizeMirror(config: Record<string, unknown>): Mirror
  * (UI saves are refused, §5), so composing a save from an
  * uninterpretable config is a caller bug, never a valid operation.
  */
-export declare function composeV2ConfigSave(currentConfig: Record<string, unknown>, sensorMap: unknown[], effectiveMap: EffectiveSensorMap, detectedMode: ConfigMode): {
+export declare function composeV2ConfigSave(currentConfig: Record<string, unknown>, sensorMap: unknown[], effectiveMap: EffectiveSensorMap, detectedMode: ConfigMode, stamps: CatalogStamps): {
     snapshot: Record<string, unknown> | undefined;
     nextConfig: Record<string, unknown>;
 };
@@ -287,4 +301,5 @@ export declare function journalConversionBaseline(persistDir: string, legacyFiel
  * same errors an append would; writes nothing.
  */
 export declare function verifyConversionJournalReadable(persistDir: string): Promise<void>;
+export {};
 //# sourceMappingURL=legacyMirror.d.ts.map

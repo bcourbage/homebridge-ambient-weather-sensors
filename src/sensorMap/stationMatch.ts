@@ -39,6 +39,42 @@ export function toMatcherSet(raw: unknown): Set<string> {
 }
 
 /**
+ * Names are recorded per field. A partial observation after a rename must
+ * outrank older siblings, not whichever entry happens to be iterated last.
+ * Equal-time conflicting names are indeterminate, never a guessed filter
+ * exclusion. Equivalent spellings use a deterministic lexical tie-break.
+ */
+export function latestDiscoveryStationNames(
+  entries: ReadonlyArray<{ stationMac: string; stationName: string; lastSeen: string }>,
+): Map<string, string> {
+  const newest = new Map<string, { seen: number; name?: string }>();
+  for (const entry of entries) {
+    const seen = Date.parse(entry.lastSeen);
+    if (!Number.isFinite(seen) || !normalizeMatchKey(entry.stationName)) {
+      continue;
+    }
+    const mac = entry.stationMac.toUpperCase();
+    const prior = newest.get(mac);
+    if (!prior || seen > prior.seen) {
+      newest.set(mac, { seen, name: entry.stationName });
+    } else if (seen === prior.seen && prior.name !== undefined) {
+      if (normalizeMatchKey(prior.name) !== normalizeMatchKey(entry.stationName)) {
+        prior.name = undefined;
+      } else if (entry.stationName < prior.name) {
+        prior.name = entry.stationName;
+      }
+    }
+  }
+  const names = new Map<string, string>();
+  for (const [mac, entry] of newest) {
+    if (entry.name !== undefined) {
+      names.set(mac, entry.name);
+    }
+  }
+  return names;
+}
+
+/**
  * Apply a stationFilter to a station INVENTORY with the runtime's
  * matching rules (station name OR MAC, case-insensitive,
  * whitespace-trimmed). An empty or absent filter passes everything —

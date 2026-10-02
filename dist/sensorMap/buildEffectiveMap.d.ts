@@ -32,7 +32,20 @@ export interface BuildInput {
     discovery: DiscoveryStore;
     uiState: UiStateStore;
     stations: StationInventory;
+    /** Existing HomeKit pairs are inventory, not fresh telemetry observations. */
+    cachedPairs?: ReadonlyArray<{
+        stationMac: string;
+        dataPoint: string;
+    }>;
     configMode: 'legacy' | 'v2' | 'safe-mode';
+    /**
+     * The config's adoption stamps (§18.3). Absent means the v1
+     * baseline (1, 1) — every unstamped config in the field. Callers
+     * with an INVALID stamp pair never reach this builder: config-mode
+     * detection routes them to the safe-mode protective posture.
+     */
+    catalogBaseline?: number;
+    catalogAdopted?: number;
 }
 export declare function buildEffectiveSensorMap(input: BuildInput): EffectiveSensorMap;
 /**

@@ -19,6 +19,8 @@
  *     scrollHeight → iframe-height resize loop.
  *
  * Usage:  npm run build && node scripts/ui-harness/serve.mjs [port]
+ * Set AWN_HARNESS_PACKAGE_ROOT to an extracted npm pack directory to
+ * exercise the exact packaged handlers, schema, and browser assets.
  * Then open http://localhost:8099/
  */
 import { createRequire } from 'node:module';
@@ -30,9 +32,10 @@ import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repo = path.resolve(here, '../..');
-const publicDir = path.join(repo, 'homebridge-ui', 'public');
+const artifactRoot = process.env.AWN_HARNESS_PACKAGE_ROOT ? path.resolve(process.env.AWN_HARNESS_PACKAGE_ROOT) : repo;
+const publicDir = path.join(artifactRoot, 'homebridge-ui', 'public');
 const require = createRequire(import.meta.url);
-const handlers = require(path.join(repo, 'homebridge-ui', 'handlers.js'));
+const handlers = require(path.join(artifactRoot, 'homebridge-ui', 'handlers.js'));
 
 const port = Number(process.argv[2] ?? 8099);
 
@@ -68,6 +71,7 @@ const FIELDS = [
   'tempf', 'tempinf', 'humidity', 'humidityin', 'windspeedmph', 'windgustmph',
   'winddir', 'hourlyrainin', 'dailyrainin', 'uv', 'baromrelin', 'baromabsin',
   'solarradiation', 'dewPoint', 'dewPointin', 'lastRain', 'battout', 'battin',
+  'p4_flow', 'p4_contact',
 ];
 await fs.writeFile(path.join(persistDir, 'discovery.json'), JSON.stringify({
   schemaVersion: 1,
@@ -98,7 +102,7 @@ const deps = {
 // carries ONLY schema-declared properties — `platform` is gone — and
 // (b) fills every declared default, nested object defaults included.
 const schemaProps = JSON.parse(
-  await fs.readFile(path.join(repo, 'config.schema.json'), 'utf8'),
+  await fs.readFile(path.join(artifactRoot, 'config.schema.json'), 'utf8'),
 ).schema.properties;
 function formValueOf(block) {
   const out = {};
@@ -170,7 +174,7 @@ const ROUTES = {
   '/notices': () => handlers.handleGetNotices(deps),
   '/ui-state': () => handlers.handleGetUiState(deps),
   '/editor-state': p => handlers.handleGetEditorState(deps, p),
-  '/vocabulary': () => handlers.handleGetVocabulary(),
+  '/vocabulary': p => handlers.handleGetVocabulary(p),
   '/preview-save': p => handlers.handlePreviewSave(deps, p),
   '/compose-save': p => handlers.handleComposeSave(deps, p),
   '/commit-save': p => handlers.handleCommitSave(deps, p),
@@ -250,6 +254,6 @@ const server = http.createServer(async (req, res) => {
     send(500, { error: String(e && e.message || e) });
   }
 });
-server.listen(port, () => {
+server.listen(port, '127.0.0.1', () => {
   console.log(`[harness] http://localhost:${port}/  (fixture rig: ${rigRoot})`);
 });

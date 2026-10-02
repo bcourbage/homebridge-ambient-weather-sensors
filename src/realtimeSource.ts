@@ -25,7 +25,16 @@ import { batteryFieldForSensor, readBatteryLow } from './batteryFields.js';
 
 export interface RealtimeUpdate {
   uniqueId: string;
-  value: number;
+  /**
+   * A PRESENT raw sensor value, forwarded verbatim to the shared
+   * row-aware coercion/decoder boundary (PR #67 review R2-F1). Numbers
+   * and booleans decode normally; a present-invalid value on a boolean
+   * STATE row faults there rather than being dropped at the transport;
+   * a present-invalid value on a numeric row is dropped by the coercer
+   * (legacy contract). The legacy flag-off distribute path guards
+   * `typeof number`, so non-numbers never reach a legacy wrapper.
+   */
+  value: unknown;
   /**
    * HomeKit-aligned low/normal flag for the sensor's physical probe.
    * undefined = no battery reported for this probe; true = low;
@@ -57,6 +66,12 @@ export interface RealtimeOptions {
    * absent, so a bare construction keeps legacy behavior.
    */
   resolveBatteryField?: (stationMac: string, dataPoint: string) => string | null;
+  /**
+   * The config's adopted catalog version (§19.6), gating the
+   * vendor-polarity battery decode. Absent = 1, the legacy uniform
+   * decode — a bare construction keeps historical behavior.
+   */
+  catalogAdopted?: number;
 }
 
 const INITIAL_BACKOFF_MS = 1_000;
@@ -275,9 +290,17 @@ export class RealtimeSource {
       }
 
       for (const [key, value] of Object.entries(lastData)) {
-        if (typeof value !== 'number') {
-          continue;
-        }
+        // Forward every PRESENT sensor value to the SAME row-aware
+        // boundary polling uses (PR #67 review R2-F1): the v2 route
+        // ends in `coerceValue`, which passes numbers/booleans through,
+        // drops strings/objects for numeric rows (legacy contract), and
+        // faults a present-invalid boolean STATE reading rather than
+        // dropping it. The transport must not pre-filter by type or a
+        // present-invalid state (null/"offline"/object) never reaches
+        // the decoder. `Object.entries` never yields an ABSENT field,
+        // so present-invalid stays distinct from missing. The legacy
+        // (flag-off) distribute path guards `typeof number`, so a
+        // non-number can never reach a legacy numeric wrapper.
         if (this.opts.isSensorKey && !this.opts.isSensorKey(key)) {
           continue;
         }
@@ -291,7 +314,7 @@ export class RealtimeSource {
         const batteryField = this.opts.resolveBatteryField
           ? this.opts.resolveBatteryField(macAddress, key) ?? undefined
           : batteryFieldForSensor(key);
-        const batteryLow = readBatteryLow(lastData as Record<string, unknown>, batteryField);
+        const batteryLow = readBatteryLow(lastData as Record<string, unknown>, batteryField, this.opts.catalogAdopted ?? 1);
         updates.push({
           uniqueId: `${macAddress}-${key}`,
           value,

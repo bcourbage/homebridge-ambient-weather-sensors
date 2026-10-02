@@ -38,6 +38,13 @@ export declare const STATION_MAC_REGEX: RegExp;
  */
 export declare const NON_TRIGGERING_MEASUREMENTS: ReadonlyArray<Measurement>;
 /**
+ * Maximum length of a `numeric` measurement's literal `unitLabel`
+ * (§19.9), counted in Unicode code points AFTER trimming so multi-byte
+ * symbols like `µg/m³` are preserved. Presentation only; a longer label
+ * is rejected loudly rather than silently truncated.
+ */
+export declare const MAX_UNIT_LABEL_CODEPOINTS = 16;
+/**
  * Structured warning — code + optional field + message. `code`
  * identifies the warning class for machine consumers; `field` names
  * the offending SensorMapOverride field when applicable. Text form
