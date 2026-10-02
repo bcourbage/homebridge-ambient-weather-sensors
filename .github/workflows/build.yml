@@ -39,8 +39,9 @@ jobs:
 
       - name: Audit production and build dependencies
         # Build tools execute while producing the published artifacts too.
-        # Audit the locked tree without changing it; findings fail the gate.
-        run: npm audit --include=dev
+        # Report every severity; high/critical findings block the gate.
+        # Lower-severity triage: docs/dependency-security.md.
+        run: npm audit --include=dev --audit-level=high
 
       - name: Lint the project
         run: npm run lint

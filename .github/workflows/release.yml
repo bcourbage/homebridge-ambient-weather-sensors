@@ -68,7 +68,9 @@ jobs:
       - name: Audit production and build dependencies before publication
         # A clean consumer tree alone cannot certify the artifact producer.
         # No audit fix or ignored failure may change/bypass the locked build.
-        run: npm audit --include=dev
+        # Report every severity; high/critical block publication.
+        # Lower-severity triage: docs/dependency-security.md.
+        run: npm audit --include=dev --audit-level=high
 
       - name: Lint
         run: npm run lint
