@@ -24,7 +24,7 @@ export function coldBuild() {
   const appDir = path.join(uiDir, 'public', 'app');
   fs.rmSync(appDir, { recursive: true, force: true });
   fs.rmSync(path.join(uiDir, '.angular'), { recursive: true, force: true });
-  execFileSync(path.join(root, 'node_modules', '.bin', 'ng'), ['build'], {
+  execFileSync(process.execPath, [path.join(root, 'scripts', 'run-editor-build.mjs')], {
     cwd: uiDir,
     stdio: 'inherit',
   });

@@ -37,6 +37,12 @@ jobs:
         # Locked tree (package-lock.json committed as of PR A).
         run: npm ci
 
+      - name: Audit production and build dependencies
+        # Build tools execute while producing the published artifacts too.
+        # Report every severity; high/critical findings block the gate.
+        # Lower-severity triage: docs/dependency-security.md.
+        run: npm audit --include=dev --audit-level=high
+
       - name: Lint the project
         run: npm run lint
 
@@ -59,11 +65,6 @@ jobs:
 
       - name: Verify a production-only install of the packed artifact
         run: npm run verify:package
-
-      - name: Audit production dependencies (read-only)
-        # Never mutate the locked dependency tree after testing it.
-        run: npm audit --omit=dev
-        continue-on-error: true
 
   # The CANONICAL producer of the committed Angular editor artifacts
   # (homebridge-ui/public/app/, GA task #69 / §10.1): exactly Node

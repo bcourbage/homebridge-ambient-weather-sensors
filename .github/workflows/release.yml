@@ -5,7 +5,7 @@ name: Release to npm
 #   1. Land your changes on main (or whatever branch you release from)
 #   2. Bump the "version" field in package.json + commit + push
 #   3. git tag v$NEW_VERSION
-#   4. git push --tags
+#   4. git push origin v$NEW_VERSION
 #
 # That tag push fires this workflow, which builds the package and runs
 # `npm publish --access public --provenance`. The npm tarball ships
@@ -65,6 +65,13 @@ jobs:
         # same dependency set the determinism gates verified.
         run: npm ci
 
+      - name: Audit production and build dependencies before publication
+        # A clean consumer tree alone cannot certify the artifact producer.
+        # No audit fix or ignored failure may change/bypass the locked build.
+        # Report every severity; high/critical block publication.
+        # Lower-severity triage: docs/dependency-security.md.
+        run: npm audit --include=dev --audit-level=high
+
       - name: Lint
         run: npm run lint
 
@@ -110,28 +117,13 @@ jobs:
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
+      - name: Validate release metadata and prepare release notes before publication
+        # No generic fallback: a wrong tag, stale heading, undated candidate,
+        # empty section, or missing npm README must stop before npm publish.
+        run: node scripts/prepare-release-notes.mjs
+
       - name: Publish to npm
         run: npm publish --access public --provenance --tag "${{ steps.disttag.outputs.tag }}"
-
-      - name: Extract this version's section from CHANGELOG.md
-        # Pulls the body of the FIRST `## [x.y.z] — date` heading in
-        # CHANGELOG.md and writes it to release-notes.md. Stops at the
-        # next `## ` heading or at the link-reference footer (`[1.4.2]:
-        # https://...`). If CHANGELOG.md is missing or has no matching
-        # heading, falls back to a one-line note so the release isn't
-        # empty.
-        run: |
-          set -euo pipefail
-          if [ -f CHANGELOG.md ]; then
-            awk '
-              /^## \[/ { if (found) exit; found = 1; next }
-              found && /^\[[^]]+\]: / { exit }
-              found { print }
-            ' CHANGELOG.md > release-notes.md
-          fi
-          if [ ! -s release-notes.md ]; then
-            echo "See CHANGELOG.md and the commit log for changes in this release." > release-notes.md
-          fi
 
       - name: Create GitHub Release
         env:

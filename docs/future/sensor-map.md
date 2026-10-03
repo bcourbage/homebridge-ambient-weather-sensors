@@ -583,9 +583,11 @@ is recognized (hash-matching, editor-generated — surfaced positively as
 verified" on the plugin page; a mirror-less v2 config raises NO warning,
 so absence-of-warnings is not a check): removing `sensorMap`,
 `configVersion`, and `_legacyMirror` (and disabling `_sensorMapV2` /
-unsetting `SENSOR_MAP_V2`) leaves a working 1.x configuration of the
-current state, because the legacy fields are already synchronized in the
-block. With a missing, invalid, or STALE mirror the same deletions can
+unsetting `SENSOR_MAP_V2`) leaves a working 1.x projection of the
+legacy-compatible settings. Recognition proves synchronization, not behavioral
+equivalence with every v2 setting. Keep a full v2 backup to recover choices
+that the projection cannot represent; reconversion alone cannot restore them.
+With a missing, invalid, or STALE mirror the same deletions can
 expose empty or outdated legacy fields and deregister accessories — the
 documented recovery is then the guard freeze, the snapshot restore, or an
 upgrade + editor re-save to regenerate the mirror; never blind deletion. The shipped 1.7.x guard freezes on ANY v2-marked config BEFORE
@@ -609,6 +611,11 @@ projection property test). Specifics:
   family-mixed display units are omitted (v1.7 default applies); embed mode
   mirrors only when every enabled motion row embeds. Behavioral only —
   registration is unaffected.
+- Threshold direction and the separate `triggerEnabled` setting have no
+  mirror representation. Legacy wrappers apply their fixed directions whenever
+  a mirrored threshold is present, so a previously disabled motion trigger can
+  become active. Rollback instructions must disclose this limitation and require
+  checking readings and automations after restart.
 - The mirrored fields are stamped with `_legacyMirror: { version, hash }`.
   The hash is a canonical SHA-256 over BOTH the canonical `sensorMap` AND the
   mirrored legacy fields — the mirror is a projection of the sensorMap, so a
@@ -973,7 +980,7 @@ homebridge-ambient-weather-sensors/
 │   ├── public/
 │   │   ├── index.html           # Handwritten FRAGMENT (no document tags);
 │   │   │                        #   references built assets by generated name
-│   │   └── app/                 # ng build output (COMMITTED, content-hashed)
+│   │   └── app/                 # Angular builder output (COMMITTED, content-hashed)
 │   ├── server.ts / handlers.ts / saveOrchestrator.ts   # bridge source (committed)
 │   ├── server.js / handlers.js / saveOrchestrator.js   # compiled (COMMITTED)
 │   └── tsconfig.json / angular.json
@@ -1373,8 +1380,10 @@ Published under `@beta` dist-tag only.
 - CI green throughout
 - Every invariant in §12 has passing tests
 - Zero-migration audit re-verified
-- Both testers running latest beta for at least a week
-- Angular UI validated in supported HB UI X versions
+- Maintainer-accepted beta.19 production bake, followed by the exact GA
+  candidate's real-host package smoke and cached restart (§21.5)
+- Angular UI host validation on Homebridge Config UI X 5.29.0; other
+  host-version support claims require their own evidence
 - CHANGELOG, README, UPGRADING.md finalized
 - `npm test` in `prepublishOnly`
 

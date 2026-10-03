@@ -2,8 +2,9 @@
 
 Opening the plugin's settings in Homebridge Config UI X shows ONE
 page: the sensor-map editor with its Connection section. Since
-2.0.0-beta.17 the schema-generated settings form is retired — every
-editable setting lives on this page — and the preview-era panels
+2.0.0 the schema-generated settings form is retired. Connection
+settings and supported sensor edits share this page; advanced settings
+such as battery-source overrides remain JSON-only. The preview-era panels
 (status table, discovered-datapoints dump, notices panel) are gone.
 
 ## One save path
@@ -11,8 +12,8 @@ editable setting lives on this page — and the preview-era panels
 The page's **Save** is the only functional save path. It runs the
 guarded two-phase transaction: server-side validation against the
 on-disk configuration, verification that the save matches the
-consequences the preview showed (the preview, with its per-row Skip,
-is the confirmation; there is no separate confirmation step), the
+consequences the preview showed (the preview is the confirmation;
+eligible ordinary edits offer per-row Skip), the
 durable legacy snapshot/journal record, and a verbatim write of the
 composed block.
 The native Homebridge Save button at the bottom of the window is
@@ -59,7 +60,7 @@ grouped by station:
 
 | Column | Meaning |
 | --- | --- |
-| (state icon) | Green check = the row registers an accessory; muted dash = disabled; blank = an unrecognized field |
+| (state icon) | Green check = enabled; muted dash = disabled; blank = unrecognized. Registration also requires a supported interpretation and a reported field. |
 | Data point | The AWN field name (`tempf`, `windspeedmph`, ...); its tooltip names the backing battery field when one exists, and a colored dot marks rows your configuration authors (see layers below) |
 | Name | The accessory name this row produces |
 | Kind | Sensor kind as an icon (thermometer, droplet, sun, motion wave) or a badge (CO₂, PM2.5, PM10, `?` for unrecognized); the tooltip carries the full kind and measurement |
@@ -83,9 +84,9 @@ it. Saving an explicit conversion preview or a full sensor-map edit
 converts the block. A Connection-only save without a station-filter change leaves
 it unconverted; a station-filter change uses the sensor-map preview and can convert it.
 
-Warnings, row-validation errors, and ownership notes (for example a
-disabled sensor that owns a battery field other rows reference)
-appear as banners above the table.
+Row-associated warnings, validation errors, and ownership notes appear
+inline with their sensor row. Notes that do not belong to a row remain
+above the tables.
 
 ## Using the editor
 
@@ -146,7 +147,7 @@ problems surface as banners), but the editor is the recommended path.
 - **Opting eligible rows out of a preview**: a modified row offers
   Skip only when its complete before-state can be represented by the
   supported station-scoped fields. Label changes, indirect ownership
-  changes without a representable pin, and catalog operations do not
+  changes without a representable pin, catalog operations, and Change interpretation previews do not
   offer Skip. The action pins that row's changed fields to
   their current values as an ordinary station-scoped draft (the
   preview re-runs by itself), so a broad change - a family unit, for
@@ -256,5 +257,18 @@ preview, validation, commit, and persistence pipeline.
 An uncertain persistence result, failed authoritative reload, receipt
 mismatch, or failed save-control restoration locks the page until
 reload and inspection. Successfully saved settings still require the
-plugin restart described above. Changing an already-saved custom
-identity is not offered by this editor.
+plugin restart described above.
+
+## Change interpretation
+
+A recognized, saved custom row offers **Change interpretation** when the
+page has no other drafts and the saved map can be reconstructed faithfully.
+Built-in rows and invalid assignments are not eligible; invalid assignments
+require repair in the JSON editor.
+
+Choose how this field is interpreted. This can replace its Apple Home
+accessory, which may affect rooms and automations. Review the preview before
+saving. The field name and station or all-stations scope stay fixed.
+Changing the sensor type or source unit clears the threshold rather than
+guessing a conversion. Threshold triggering can be enabled again explicitly.
+The same guarded preview and save path applies, without per-row Skip.

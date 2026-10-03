@@ -9,6 +9,53 @@ entries short and user-facing.
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/
 
+## [2.0.0] - 2026-10-02
+
+Version 2.0 brings individual sensor control to the Homebridge settings page, with broader sensor support and a preview of changes before they reach Apple Home.
+
+### Added
+
+- **An editor for individual sensors and Connection settings.** Rename sensors, choose units and thresholds, or disable unwanted readings without editing JSON. The preview explains accessory additions, removals, replacements, and settings changes before saving.
+- **More measurements and sensor types.** New support covers additional wind and rain readings, soil and leaf measurements, evapotranspiration, AQI values, and leak sensors. Custom assignments include contact, occupancy, smoke, and on/off motion, plus a generic numeric option with your own unit label and an optional threshold.
+- **Change interpretation for saved custom sensors.** Revise a sensor's type or source unit without deleting its assignment first. The preview identifies any accessory replacement, which may affect rooms and automations.
+
+### Fixed
+
+Legacy fields beyond the former fixed tables remain recognized, saved custom
+assignments survive sensor-support updates, and temporarily offline accessories
+are retained. Invalid state readings report a fault rather than an alert, while
+unknown battery readings keep the last reported state. Connection settings can
+also be saved before discovery, and setup saves remain tied to their preview
+even if the plugin is updated in between.
+
+### Upgrade notes
+
+Back up your Homebridge configuration before upgrading. Installation does not
+rewrite it or automatically enable newer sensor support. Conversion preserves
+your original sensor settings, and **Review new sensor support** separately
+previews additional capabilities and corrected lightning/leak battery readings.
+New definitions start disabled, although an enabled custom assignment awaiting
+support can become active; the preview lists that addition.
+
+After conversion, known disabled sensors stay disabled, but legacy category-wide
+and sensor-name exclusions no longer govern fields that first report later.
+A newly reporting, recognized sensor may appear; disable its row if unwanted.
+
+Extended numeric readings use motion accessories in Apple Home, with labelled
+values in compatible controller apps. AQI is shown as a number, not a health
+category, and native carbon-monoxide detection is not included.
+
+The minimum Homebridge version is now 1.9, correcting the earlier 1.8 claim.
+Use Node.js 22.13+ within 22.x or 24.x, provided your Homebridge version also
+supports it; Homebridge 1.9.0 requires the Node 22 option. See the
+[upgrade guide](https://github.com/bcourbage/homebridge-ambient-weather-sensors/blob/main/UPGRADING.md)
+for conversion, restart, and rollback instructions. Disabling the v2 flag alone
+is not a safe rollback after conversion.
+
+If you already use beta.19, your sensors will work as before. The editor now
+explains what may change if you return to an older plugin version, and the
+upgrade instructions and release notes have been updated for 2.0.0.
+
 ## [2.0.0-beta.19] - 2026-09-26
 
 Change how saved custom sensors are interpreted, with clearer previews and consistent editor controls.

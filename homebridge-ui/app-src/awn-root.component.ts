@@ -1032,7 +1032,8 @@ interface PreviewIntent {
             }
             @if (mirrorVerified()) {
               <div class="rollback-line">
-                <p>Rollback mirror: verified. To go back to plugin v1.7.3 and keep the settings currently saved here:</p>
+                <p>Rollback mirror: verified.</p>
+                <p>Returning to v1.7.3 can change sensor names, units, and battery indicators. Unsupported sensors will disappear from Apple Home, and motion sensors may trigger again or under different conditions. Back up your full Homebridge configuration before continuing, then check your sensors and automations after restarting.</p>
                 <ol>
                   <li>In the Homebridge UI, open the JSON config editor and find this plugin's block.</li>
                   <li>Delete three entries: <code>sensorMap</code>, <code>configVersion</code>, and <code>_legacyMirror</code>.</li>
@@ -1040,7 +1041,7 @@ interface PreviewIntent {
                   <li>If the <code>SENSOR_MAP_V2</code> environment variable is set for Homebridge, remove it or set it to <code>0</code>: a value of <code>1</code> overrides the config entry.</li>
                   <li>Install plugin version 1.7.3 and restart Homebridge.</li>
                 </ol>
-                <p>Do this only while this line says verified. To return to the settings you had before v2.0.0 instead, see the Rollback section of the <a href="https://github.com/bcourbage/homebridge-ambient-weather-sensors#rollback" target="_blank" rel="noopener">README</a>.</p>
+                <p>Proceed only while this section says verified. You will need your backup to recover lost v2 settings; reinstalling v2 alone will not restore them. To restore the settings you had before v2, follow the separate instructions in the <a href="https://github.com/bcourbage/homebridge-ambient-weather-sensors#rollback" target="_blank" rel="noopener">README</a>.</p>
               </div>
             }
           }

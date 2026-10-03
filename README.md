@@ -1,6 +1,6 @@
 # Ambient Weather for Homebridge
 
-> **Originally a fork** of [homebridge-ambient-weather-sensors](https://github.com/peledies/homebridge-ambient-weather-sensors) by [Deac Karns](https://github.com/peledies), now independently maintained as [@bcourbage/homebridge-ambient-weather-sensors](https://www.npmjs.com/package/@bcourbage/homebridge-ambient-weather-sensors). This plugin adds **Homebridge 2.x / HAP 2.x compatibility**, multi-station naming, opt-in websocket realtime updates, CO2 / PM2.5 / PM10 sensor coverage, password-masked API key fields, and a polling engine that consolidates per-accessory timers into one.
+> **Originally a fork** of [homebridge-ambient-weather-sensors](https://github.com/peledies/homebridge-ambient-weather-sensors) by [Deac Karns](https://github.com/peledies), now independently maintained as [@bcourbage/homebridge-ambient-weather-sensors](https://www.npmjs.com/package/@bcourbage/homebridge-ambient-weather-sensors). Manage individual Ambient Weather sensors in Homebridge, with previewed changes, custom sensor interpretations, multi-station support, and polling or realtime updates.
 >
 > Install via the Homebridge UI plugin search, or:
 >
@@ -13,7 +13,7 @@
 
 <img src="images/icon.png" width='400px'>
 
-## Complete HomeKit support for the Ambient Weather weather station ecosystem using [Homebridge](https://homebridge.io).
+## Ambient Weather sensors in Apple Home using [Homebridge](https://homebridge.io)
 
 ![npm version](https://img.shields.io/npm/v/@bcourbage/homebridge-ambient-weather-sensors?style=for-the-badge&label=npm)
 ![npm downloads](https://img.shields.io/npm/dt/@bcourbage/homebridge-ambient-weather-sensors?style=for-the-badge)
@@ -25,20 +25,52 @@
 </SPAN>
 
 
-## Sensor-map v2.0 (on by default since beta.17)
+## What's new in v2.0.0
 
-The v2.0 line runs the sensor-map architecture that unifies which
-sensors expose, how they're named, and which HomeKit types they use.
-**Since v2.0.0-beta.17 the v2 pipeline is ON by default.** A legacy
-(1.x-style) configuration runs unchanged through the built-in
-compatibility translation — the same accessories, names, units, and
-thresholds, proven by a full HAP-graph equivalence gate — and nothing
-is written to your configuration until you save in the plugin's
-settings page.
+Version 2.0 puts individual sensor control in one editor. Give sensors useful
+names, choose units and thresholds, and switch off readings you do not want.
+Connection settings live on the same page, with a preview showing which Apple
+Home accessories will be added, removed, or replaced before you save.
+
+Support now extends to more wind and rain readings, soil and leaf measurements,
+AQI values, and leak sensors. For an unfamiliar field, choose a supported sensor
+type and source unit, or use the generic numeric option with your own unit label.
+Extended numeric readings appear as motion accessories in Apple Home, while
+compatible controller apps show the labelled value. AQI stays a plain number;
+native carbon-monoxide detection is not included.
+
+Installing the update leaves your configuration in place and does not
+automatically enable newer sensor support. When ready, convert your legacy
+settings and use **Review new sensor support** to see what becomes available,
+including corrected lightning and leak battery readings. Both changes are
+previewed before saving. Conversion preserves known disabled sensors, but
+future recognized fields are managed individually rather than by the old
+category-wide exclusions.
+
+Back up your configuration and follow the
+[upgrade guide](https://github.com/bcourbage/homebridge-ambient-weather-sensors/blob/main/UPGRADING.md)
+for conversion, sensor-support updates, and rollback. If you already use
+beta.19, your sensors will work as before. The editor now explains what may
+change if you return to an older plugin version. The
+[release notes](https://github.com/bcourbage/homebridge-ambient-weather-sensors/blob/main/CHANGELOG.md)
+summarize the full 2.0 release.
+
+## Sensor-map v2.0
+
+The sensor map determines which readings appear in Apple Home, how they are
+named, and which accessory types they use. It is enabled by default in v2.0.0,
+but can read a legacy (1.x-style) configuration without rewriting it. This
+compatibility translation preserves valid sensor settings, accessory
+identities, names, units, and thresholds; invalid legacy unit names use the
+documented default instead. Regression tests compare the resulting HomeKit
+accessories with those produced by the published 1.7.3 plugin. Your
+configuration is written only when you save from the settings page.
 
 Opting OUT: set the environment variable `SENSOR_MAP_V2=0` on the
 Homebridge process, or set `_sensorMapV2: false` in the plugin's
-config block, and restart. Either forces the v1.7.0 pipeline —
+config block, and restart. The environment setting takes precedence: remove
+`SENSOR_MAP_V2` if set, or set it to `0`, when opting out through the config.
+This selects the legacy pipeline,
 **but the opt-out ALONE is safe only for a configuration that was
 never converted** (no `configVersion: 2` / `sensorMap` in the block).
 The v1.7.0 pipeline cannot read a converted configuration and can
@@ -70,17 +102,17 @@ The saved block also carries a synchronized 1.7.x mirror of the
 legacy fields, kept up to date on every save.
 
 <a id="rollback"></a>
-**Rollback before any editor save (legacy config, flag on):** the
+**Rollback before conversion (legacy config, flag on):** the
 plugin never converts your configuration on its own, so turning the
 flag off and restarting cleanly returns you to v1.7 behavior.
 Accessories the v2 path structurally re-registered while it was on
 may need their room assignments redone in Apple Home. Downgrading to
 the 1.7.x line is safe under the same condition.
 
-**Rollback after an editor save (or any v2 config):** do NOT simply
+**Rollback after conversion (or any v2 config):** do NOT simply
 turn the flag off — with the flag off, the v1 path cannot read
-`sensorMap` and can deregister your cached accessories. Three exact
-paths, from fastest to most thorough:
+`sensorMap` and can deregister your cached accessories. Choose the appropriate
+recovery path:
 
 - **Emergency freeze (no config edit):** install the current
   **1.7.x** release (never v1.7.0 or earlier) with the v2 config
@@ -91,30 +123,39 @@ paths, from fastest to most thorough:
   v1.7.1+ releases do not interpret a v2-marked configuration.
   (v1.7.0 and earlier DO attempt to read it, which is exactly why
   the emergency target is the current 1.7.x.)
-- **Operational rollback to your CURRENT settings** — only with a
-  VERIFIED mirror: open the plugin's settings page and confirm it
-  positively shows **"Rollback mirror: verified"**. The absence of
-  warnings is NOT enough — a v2 config with no mirror at all shows no
-  warning either, and deleting its markers would expose an empty
-  legacy configuration and deregister accessories. With the verified
-  indicator shown: in the plugin's config block, delete exactly three
-  things — `sensorMap`, `configVersion`, and `_legacyMirror` — keep
-  everything else, ALSO set `_sensorMapV2: false` in the block (or
-  set `SENSOR_MAP_V2=0` in the environment), then run 1.7.x (or 2.x
+- **Returning to 1.7.x:** first open the plugin's settings page and look
+  for **"Rollback mirror: verified"**. Do not follow these steps unless
+  that message appears; otherwise, sensors you want to keep could be
+  removed from Apple Home.
+
+  **Your sensors may behave differently.** Sensors 1.7.x does not support
+  will disappear from Apple Home. Names, units, values shown in tile names,
+  and battery indicators may change. Motion sensors may trigger again even
+  if you turned triggering off, or trigger under different conditions.
+  If you gave the same type of sensor different trigger levels at different
+  stations, those differences may be lost. Back up your full Homebridge
+  configuration before continuing, then check your sensors and automations
+  after restarting.
+
+  With the verified indicator shown, delete exactly three entries from
+  the plugin's config block: `sensorMap`, `configVersion`, and `_legacyMirror`.
+  Keep
+  everything else, ALSO set or replace `_sensorMapV2` with `false`
+  in the block, and remove `SENSOR_MAP_V2` from the Homebridge environment
+  if set, or set it to `0`. The environment takes precedence
+  over the config entry. Then run 1.7.x (or 2.x
   with the opt-out active) and restart. If the page shows any
   other mirror status (absent, stale, or invalid): do NOT delete the
   markers — freeze on current 1.7.x, restore the snapshot (next
   path), or upgrade back to 2.x and re-save in the editor to
   regenerate the mirror.
 
-  This rollback is a two-way door. The settings it leaves behind are
-  the synchronized mirror form, not your original authored fields, so
-  if you later re-enable the flag and save again, the editor records
-  that rolled-back baseline in an append-only conversion journal (the
-  `legacy-conversion-journal` folder next to the snapshot, one
-  numbered entry file per baseline, same secret-free field set)
-  before converting — your original snapshot is never modified, and
-  the configuration you rolled back to is never lost.
+  You will need your backup to recover lost v2 settings; reinstalling v2
+  or converting your settings again will not restore them. If you later
+  convert back to v2 with legacy sensor settings that differ from your original
+  snapshot, the editor preserves them in the `legacy-conversion-journal` folder.
+  Your original pre-conversion snapshot is kept unchanged. These recovery
+  copies contain only legacy sensor settings, not all your v2 choices.
 - **Rollback to your ORIGINAL (pre-conversion) settings:** open
   `legacy-config-snapshot.json` and use its `legacy` object. In the
   plugin's config block, delete every legacy sensor-configuration
@@ -123,7 +164,8 @@ paths, from fastest to most thorough:
   the snapshot's `legacy` fields as the replacement — the snapshot
   is sparse, so replace rather than overlay — delete `sensorMap`,
   `configVersion`, and `_legacyMirror`, and set
-  `_sensorMapV2: false` (or `SENSOR_MAP_V2=0`). Restart.
+  `_sensorMapV2: false`. Remove `SENSOR_MAP_V2` from the Homebridge
+  environment if set, or set it to `0`. Restart.
 - **Rollback to a JOURNALED (post-rollback) baseline:** if you rolled
   back and later reconverted, the settings you rolled back to are in
   the `legacy-conversion-journal` folder (same directory as the
@@ -135,7 +177,8 @@ paths, from fastest to most thorough:
   sensor-configuration field, copy in the entry's `legacy` fields as
   the replacement (entries are sparse, so replace rather than
   overlay), delete `sensorMap`, `configVersion`, and `_legacyMirror`,
-  set `_sensorMapV2: false` (or `SENSOR_MAP_V2=0`), and restart.
+  set `_sensorMapV2: false`, remove `SENSOR_MAP_V2` from the Homebridge
+  environment if set or set it to `0`, and restart.
 - **Custom v2-only sensors** (added through the editor for fields the
   plugin has no built-in definition for): no 1.x release can operate
   or update them. The 1.7.x freeze preserves their cached tiles at
@@ -163,11 +206,16 @@ Preparatory release for the v2.0.0 sensor-map architecture. **No behavior change
 Release notes for earlier versions live in [CHANGELOG.md](./CHANGELOG.md). Upgrading from v1.4.x? See the [upgrade guide](./UPGRADING.md) for what changes, what to enable, and example automations.
 
 ## Plugin Information
-This plugin allows you to pull sensor data from your Ambient Weather weather station via its REST API and add those accessories to homebridge.
+This plugin reads sensor data from Ambient Weather through REST polling or websocket updates and exposes supported readings through Homebridge.
 
 ## Compatibility
-- Homebridge `1.8+` and Homebridge `2.x`
-- Node.js `22.13+` or `24.x`
+- Homebridge `1.9+` within `1.x`, or Homebridge `2.x`
+- Node.js `22.13+` within `22.x`, or `24.x`
+
+Use a Node version supported by both the plugin and Homebridge. The minimum
+Homebridge 1.9.0 host is verified on Node 22.13.0; it does not support Node 24.
+The editor is verified with Homebridge Config UI X 5.29.0. Older UI versions
+are not part of the GA validation matrix.
 
 ## Features
 - Supports parsing sensors attached to multiple weather stations
@@ -186,21 +234,22 @@ Realtime is currently opt-in. The default will switch to realtime in a future re
 
 ### Natively-supported by Apple Home
 
-These map cleanly to native HomeKit accessory services. They render in Apple's Home app, Eve, and every other HomeKit client without any caveat.
+These readings use native HomeKit sensor services. Available fields depend on the station and the sensor-support version in use.
 
 - **Temperature**: outdoor, indoor, and per-probe (`tempf`, `tempinf`, `temp{1..N}f`). As of v1.5.0 the matcher also covers AWN's pre-calculated **feels-like** (heat index / wind chill) and **dew point** fields (`feelsLike`, `feelsLike{N}`, `feelsLikein`, `dewPoint`, `dewPoint{N}`, `dewPointin`).
 - **Humidity**: outdoor, indoor, and per-probe.
 - **Solar Radiation**: exposed as lux on a `LightSensor`. See the conversion note below.
 - **CO2**: AWN's `co2_in_aqin` (AQIN module) and the standalone `co2` field.
 - **Particulate Matter**: PM2.5 and PM10 (AWN's `pm25_in_aqin`, `pm10_in_aqin`, and the outdoor `pm25` field). Reported with both raw density and an EPA-bucket-derived HomeKit AirQuality rating.
+- **Leak state**: supported leak fields use HomeKit's leak sensor. Custom boolean assignments can also use contact, occupancy, smoke, or motion services. The editor explains each input encoding. Invalid or offline values report a fault rather than an active alert. These integrations are not substitutes for certified safety alarms.
 
 ### Battery status
 
-Every sensor whose physical probe reports a battery in AWN's payload also exposes a HomeKit `Battery` sub-service. Apple Home (and every third-party HomeKit client) will fire its built-in low-battery push notification when AWN reports a probe as low. Use this to build the automation *"When Outdoor Temperature battery is low, remind me to replace it"*: no Eve dependency, no manual checking of the AWN dashboard.
+For supported battery relationships, one representative accessory per physical probe exposes a HomeKit `Battery` sub-service. Battery status is a low/normal indication, not a measured percentage. Notification behavior depends on the HomeKit client and its settings.
 
 Probes covered: outdoor base (powers wind, rain, solar, UV, outdoor temp/humid), indoor display (indoor temp/humid + pressure), WH31 numbered probes (per-channel), AQIN module (PM, CO2), and the WH31L lightning sensor (Ecowitt WH57 equivalent hardware). Each physical probe shows ONE battery sub-service in HomeKit (attached to its most-representative accessory), not one per accessory the probe powers. See the Troubleshooting section in [UPGRADING.md](./UPGRADING.md) for how this maps. Probes that AWN doesn't report a battery for get no Battery sub-service.
 
-**Note on the lightning sensor battery:** AWN's API has been observed to report the lightning sensor as low-battery (`batt_lightning = 0`) even when fresh batteries are installed and the AWN dashboard itself shows the sensor as healthy. The plugin reads what AWN's API returns. If your lightning Battery tile in HomeKit disagrees with the AWN dashboard, the issue is upstream of this plugin. Replacing the batteries doesn't help; consider it cosmetic until AWN fixes their API. To suppress the spurious low-battery notifications: on a legacy (1.x-style) configuration, add `batt_lightning` (or `Lightning Strikes Today-batt`) to the `Exclude Sensors` list; on a converted (v2) configuration that list is no longer read — instead add `"batteryField": null` to the `lightning_day` entry of `sensorMap` in the JSON config editor. See [UPGRADING.md](./UPGRADING.md) for details.
+**Lightning and leak battery interpretation:** the sensor-support update corrects their documented polarity: `0` means normal and `1` means low. Existing configurations retain the historical interpretation until support version 3 or later is adopted through the previewed update. A previously suppressed battery indicator stays suppressed. In a legacy configuration, suppression can come from `excludeSensors`; after conversion it is represented by `batteryField: null` on the relevant sensor-map row. Restoring the indicator requires removing that suppression at its effective scope in the JSON config editor, then restarting. Do not assume a low-battery warning is harmless; inspect the sensor and the configured interpretation.
 
 ### Solar Radiation: W/m² ↔ lux
 
@@ -212,12 +261,12 @@ lux ≈ W/m² ÷ 0.0079        (equivalently, lux ≈ W/m² × 127)
 
 This factor assumes sunlight's spectral distribution, which matches the AWN sensor's design point. If you want the raw W/m² back from a HomeKit reading, just multiply the displayed lux value by `0.0079`.
 
-### Extended Sensors (v1.5.0+)
+### Extended sensors
 
-Apple Home does not natively understand wind, rain, barometric pressure, UV, or lightning: there are no HAP services for those types. v1.5.0 adds them anyway using the same pattern as the verified [homebridge-ecowitt-weather-sensors](https://github.com/rhockenbury/homebridge-ecowitt-weather-sensors) plugin: each datapoint is exposed as a `MotionSensor` accessory with three additional custom characteristics:
+Wind, rain, pressure, UV, lightning, agronomic measurements, AQI numbers, and generic numeric readings use a `MotionSensor` accessory with custom characteristics:
 
 - **Value**: the live numeric reading with units (e.g. `"14 mph"`, `"0.12 in/hr"`, `"315° (NW)"`)
-- **Intensity**: qualitative bucket (Beaufort for wind, EPA scale for UV, NWS descriptors for rain)
+- **Intensity**, where supported: a qualitative description for measurements such as wind, UV, and rain. Generic numeric readings do not invent an intensity category.
 - **Last Updated**: ISO-8601 timestamp of the most recent reading
 
 | Sensor | AWN field(s) |
@@ -235,15 +284,15 @@ Apple Home does not natively understand wind, rain, barometric pressure, UV, or 
 **How this looks in HomeKit:**
 
 - **Apple Home**: each extended sensor appears as a Motion Sensor tile labeled by sensor name (e.g. "Wind Speed"). The motion state toggles on/off based on a configurable threshold, so you can write a stock Home automation like *"When Wind Speed motion detected, close the awning"*. The live numeric value is not directly visible in Apple Home.
-- **Eve / Controller for HomeKit**: each tile shows the live Value, Intensity bucket, and Last Updated timestamp on the same accessory.
+- **Compatible controller apps, such as Eve**: show the live Value and Last Updated timestamp, plus Intensity where that measurement provides it.
 
-**Optional embed-value mode:** if you want the live numeric value visible in Apple Home tiles too, switch the display mode in plugin settings. The tile name updates on every reading (e.g. *"Wind Speed 14 mph"*). Values are rounded to whole numbers to stay compatible with Apple Home's naming rules. Trade-offs are documented next to the setting.
+**Optional embedded values:** a converted sensor-map row can set `embedName: true` in the JSON editor to include its value in the tile name, for example *"Wind Speed 14 mph"*. Legacy configurations retain `extendedDisplayMode`. Name changes are limited by the Connection section's update interval, not guaranteed on every reading. Frequent name updates can increase phone battery use; stable names are the default recommendation.
 
-**All extended sensors are off by default.** Enable the master "Extended Sensors" toggle in the plugin settings, then pick which sub-categories you want. Threshold values and display units are configurable.
+**Choose sensors individually.** In a converted configuration, use the row's Enabled control rather than a category toggle. A legacy configuration retains its category choices until conversion. Newer sensor definitions require the sensor-support update on existing installations and remain disabled until enabled individually. Supported rows offer display units and optional thresholds.
 
-**Why MotionSensor?** It's the only HAP service whose state (`MotionDetected`) is both native to Apple Home AND triggerable by an external value, which makes it work as a universal "this number crossed a threshold" sensor. Picking it puts you in good company: every comparable plugin (homebridge-ecowitt-weather-sensors, homebridge-weather-plus, homebridge-mqttthing's weather station) settled on the same idea.
+**Why MotionSensor?** It provides a familiar on/off state for an optional numeric threshold in Apple Home. The condition is a level comparison: "above" includes equality (`>=`), and "below" includes equality (`<=`). It is not a crossing detector. Informational measurements such as direction and timestamps do not trigger motion. AQI values are shown as plain numbers, without guessing a health category from an unverified AQI standard.
 
-**Hardware-aware (safe to over-enable):** the plugin only creates an accessory for a sensor field that's actually present in your station's AWN payload. If you enable a category whose hardware you don't have (e.g. Lightning without a WH31L, Air Quality without an AQIN, CO2 without an AQIN), the relevant fields are simply absent from AWN's response, no accessory is registered, and nothing appears in HomeKit. Enabling a category is a zero-cost no-op when the underlying hardware isn't installed, so when in doubt, leave it on.
+**Reported fields and retained accessories:** enabling a field that the station has never reported does not create a new accessory. Once registered, an accessory is not removed merely because data is temporarily missing. Disable its row to remove it deliberately, and review the preview first.
 
 ## Setup
 An ambientweather.net account is required (no paid subscription is needed) so that you can generate the two keys this plugin uses.

@@ -101,6 +101,15 @@ try {
   const installed = path.join(install, 'node_modules', '@bcourbage', 'homebridge-ambient-weather-sensors');
   const manifest = JSON.parse(quietRead(path.join(installed, 'package.json')));
   assert.equal(manifest.version, JSON.parse(quietRead(path.join(repo, 'package.json'))).version);
+  // npm's package page, Homebridge changelog, and upgrade links ship distinct
+  // documents. Verify the tarball carries the reviewed source copy verbatim.
+  for (const document of ['README.md', 'CHANGELOG.md', 'UPGRADING.md', 'MultiHome.md']) {
+    const source = quietRead(path.join(repo, document));
+    assert.ok(source.trim(), `${document} must not be empty`);
+    assert.equal(quietRead(path.join(installed, document)), source, `${document} changed or disappeared during packing`);
+  }
+  assert.equal(/^## \[([^\]]+)\]/m.exec(quietRead(path.join(installed, 'CHANGELOG.md')))?.[1], manifest.version,
+    'packaged changelog must lead with this version');
   for (const hook of ['preinstall', 'install', 'postinstall', 'prepare']) {
     assert.equal(manifest.scripts?.[hook], undefined, `runtime install must not need ${hook}`);
   }
