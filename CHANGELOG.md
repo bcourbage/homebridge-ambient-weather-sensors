@@ -9,7 +9,7 @@ entries short and user-facing.
 [kac]: https://keepachangelog.com/en/1.1.0/
 [semver]: https://semver.org/
 
-## [2.0.0] - Unreleased
+## [2.0.0] - 2026-10-02
 
 Version 2.0 brings individual sensor control to the Homebridge settings page, with broader sensor support and a preview of changes before they reach Apple Home.
 
