@@ -50,7 +50,8 @@ category-wide exclusions.
 Back up your configuration and follow the
 [upgrade guide](https://github.com/bcourbage/homebridge-ambient-weather-sensors/blob/main/UPGRADING.md)
 for conversion, sensor-support updates, and rollback. If you already use
-beta.19, the runtime is unchanged apart from the version number. The
+beta.19, your sensors will work as before. The editor now explains what may
+change if you return to an older plugin version. The
 [release notes](https://github.com/bcourbage/homebridge-ambient-weather-sensors/blob/main/CHANGELOG.md)
 summarize the full 2.0 release.
 
@@ -122,13 +123,23 @@ recovery path:
   v1.7.1+ releases do not interpret a v2-marked configuration.
   (v1.7.0 and earlier DO attempt to read it, which is exactly why
   the emergency target is the current 1.7.x.)
-- **Operational rollback to your CURRENT settings** — only with a
-  VERIFIED mirror: open the plugin's settings page and confirm it
-  positively shows **"Rollback mirror: verified"**. The absence of
-  warnings is NOT enough. Deleting markers without a verified mirror
-  can expose an empty legacy configuration and deregister accessories. With the verified
-  indicator shown: in the plugin's config block, delete exactly three
-  things — `sensorMap`, `configVersion`, and `_legacyMirror` — keep
+- **Returning to 1.7.x:** first open the plugin's settings page and look
+  for **"Rollback mirror: verified"**. Do not follow these steps unless
+  that message appears; otherwise, sensors you want to keep could be
+  removed from Apple Home.
+
+  **Your sensors may behave differently.** Sensors 1.7.x does not support
+  will disappear from Apple Home. Names, units, values shown in tile names,
+  and battery indicators may change. Motion sensors may trigger again even
+  if you turned triggering off, or trigger under different conditions.
+  If you gave the same type of sensor different trigger levels at different
+  stations, those differences may be lost. Back up your full Homebridge
+  configuration before continuing, then check your sensors and automations
+  after restarting.
+
+  With the verified indicator shown, delete exactly three entries from
+  the plugin's config block: `sensorMap`, `configVersion`, and `_legacyMirror`.
+  Keep
   everything else, ALSO set or replace `_sensorMapV2` with `false`
   in the block, and remove `SENSOR_MAP_V2` from the Homebridge environment
   if set, or set it to `0`. The environment takes precedence
@@ -139,14 +150,12 @@ recovery path:
   path), or upgrade back to 2.x and re-save in the editor to
   regenerate the mirror.
 
-  This rollback is a two-way door. The settings it leaves behind are
-  the synchronized mirror form, not your original authored fields, so
-  if you later re-enable the flag and save again, the editor records
-  that rolled-back baseline in an append-only conversion journal (the
-  `legacy-conversion-journal` folder next to the snapshot, one
-  numbered entry file per baseline, same secret-free field set)
-  before converting — your original snapshot is never modified, and
-  the configuration you rolled back to is never lost.
+  You will need your backup to recover lost v2 settings; reinstalling v2
+  or converting your settings again will not restore them. If you later
+  convert back to v2 with legacy sensor settings that differ from your original
+  snapshot, the editor preserves them in the `legacy-conversion-journal` folder.
+  Your original pre-conversion snapshot is kept unchanged. These recovery
+  copies contain only legacy sensor settings, not all your v2 choices.
 - **Rollback to your ORIGINAL (pre-conversion) settings:** open
   `legacy-config-snapshot.json` and use its `legacy` object. In the
   plugin's config block, delete every legacy sensor-configuration

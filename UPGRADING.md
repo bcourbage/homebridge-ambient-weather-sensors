@@ -6,6 +6,8 @@ changes in each release, see the [changelog](./CHANGELOG.md).
 
 ---
 
+<a id="upgrading-to-v2"></a>
+
 ## v1.7.x → v2.0.0
 
 Installing 2.0.0 leaves your configuration in place and does not automatically
@@ -48,6 +50,12 @@ however, returning to 1.7.3 requires the
 also linked from the page's Rollback status. Follow it before resuming operation
 on 1.7.3, and do not simply turn off the v2 flag: the legacy path cannot read
 the converted sensor map and may remove accessories.
+
+Returning to 1.7.3 can remove unsupported sensors from Apple Home and change
+the settings of those that remain. Motion sensors may trigger again or under
+different conditions. Back up your full Homebridge configuration first, follow
+the README's rollback instructions, and check your sensors and automations
+after restarting. Reinstalling v2 alone will not restore lost settings.
 
 ### Managing sensors individually
 
@@ -107,9 +115,9 @@ in place, with no reconversion required and no automatic adoption of newer
 support. If you are coming from an earlier beta, use **Review new sensor
 support** on the settings page when ready.
 
-For beta.19 users, the runtime code is unchanged apart from the version number;
-the stable release updates the documentation and release notes for general
-availability.
+If you use beta.19, your sensors will work as before. The editor now explains
+what may change if you return to an older plugin version, and the upgrade
+instructions and release notes have been updated for 2.0.0.
 
 ## First-time installation
 
@@ -129,14 +137,15 @@ using the [Multi-Home guide](https://github.com/bcourbage/homebridge-ambient-wea
 
 ## Earlier upgrades (historical)
 
-The sections below describe the controls and defaults of earlier releases.
-Use the v2.0.0 guidance above for the current editor.
+These instructions are kept for users looking up older releases. Some settings
+have since changed. If you are upgrading now, use the
+[v2.0.0 instructions](#upgrading-to-v2) above.
 
-## v1.5.x → v1.6.0
+### v1.5.x → v1.6.0
 
-v1.6.0 is a small but behavior-changing release. Two related changes around the **Extended Sensors display mode**:
+Version 1.6.0 introduced two behavior changes around the **Extended Sensors display mode**:
 
-### What changed
+#### What changed
 
 1. **Embed mode now forces the polling data source.** If your config has `extendedDisplayMode: "embed"` AND `dataSource: "realtime"`, the plugin will coerce the data source to `polling` at startup with a warning log:
    ```
@@ -149,36 +158,37 @@ v1.6.0 is a small but behavior-changing release. Two related changes around the 
 
 2. **A new `embedNameUpdateMinIntervalMinutes` setting** caps how often each tile's name can be rewritten in embed mode. Default is 2 minutes, matching the polling cadence — so it's effectively a no-op for new installs.
 
-### Why
+#### Why
 
 Late in the 1.5.0 test cycle (after GA), solmssen reported that his iPhone was draining 5-7% per hour while idle while embed mode was active, dropping back to ~1% per hour after switching to the recommended "Show generic names" mode. The mechanism: in embed mode the plugin rewrites the HAP `Name` characteristic on every value change, and each rewrite generates a notification forwarded to every paired iOS device. With realtime + ~15 extended sensors, that's many notifications per minute, each waking the phone's radio briefly.
 
 The constraint cuts the worst case (realtime + embed) out of the available combinations; the throttle further bounds the rate even on polling.
 
-### Who's affected
+#### Who's affected
 
 - **You're on static + anything** (most users, including the default): **nothing changes.** The constraint doesn't fire. The throttle has no effect because static mode never rewrites names.
 - **You're on embed + polling**: **nothing changes.** Polling's natural 2-minute cadence is already below the throttle's default ceiling.
 - **You're on embed + realtime**: **your data source gets coerced to polling.** Tile name updates will appear every 2 minutes instead of every ~30 seconds. To silence the warning, edit your config to set the data source explicitly to `polling`. If you want the realtime data source to feed the underlying value characteristics (visible in Eve / Controller for HomeKit), switch your display mode to "Show generic names" — that combination doesn't trigger the constraint.
 
-### How to upgrade
+#### How to upgrade
 
-Standard path:
+Historical installation example for v1.6.0, not the current release:
 ```sh
 sudo hb-service stop
-sudo npm install -g @bcourbage/homebridge-ambient-weather-sensors
+sudo npm install -g @bcourbage/homebridge-ambient-weather-sensors@1.6.0
 sudo hb-service start
 ```
 
-Or via Homebridge UI's Update button on the Plugins page.
+At that release, Homebridge UI's Update button offered the same upgrade.
 
 ---
 
-## v1.4.x → v1.5.0
+### v1.4.x → v1.5.0
 
-v1.5.0 is the largest release of this plugin. It adds a sizable set of new sensors and a battery-status feature, but **nothing changes for existing users unless you opt in.** If you upgrade and don't touch any settings, your HomeKit experience is identical to v1.4.3 — plus one bonus: low-battery notifications on the sensors you already have.
+Version 1.5.0 added weather readings and battery indicators. It used switches
+for whole groups of sensors; v2 lets you manage each sensor individually.
 
-### TL;DR
+#### TL;DR
 
 | What you get | Action required |
 |---|---|
@@ -186,37 +196,38 @@ v1.5.0 is the largest release of this plugin. It adds a sizable set of new senso
 | **Feels-like + dew-point as new Temperature sensor accessories** | None (if `Temperature Sensors` is already on, these appear automatically). |
 | **Wind, rain, barometric pressure, UV, and lightning sensors** | Opt in via plugin settings — see step 2 below. |
 
-If you have a Homebridge instance you want to update right now, the steps are below. If you're cautious or want to read first, scroll to **What changes mean for you**.
+The steps below describe that historical release only. For a current upgrade,
+use the [v2.0.0 instructions](#upgrading-to-v2).
 
 ---
 
-## Step 1 — Update the plugin
+### Step 1 — Update the plugin
 
-If you previously installed v1.4.x via Homebridge UI:
+**For the old v1.4.x to v1.5.0 upgrade only.** To upgrade today, follow the
+[v2.0.0 instructions](#upgrading-to-v2).
 
-1. Open Homebridge UI → **Plugins**
-2. Find "Ambient Weather" (`@bcourbage/homebridge-ambient-weather-sensors`)
-3. Click **Update** to take the latest stable (currently `1.4.3`)
-
-If you want to test the **beta** (which is where v1.5.0 currently lives):
+For the archived release, the version-specific installation command was:
 
 ```sh
 sudo hb-service stop
-sudo npm install -g @bcourbage/homebridge-ambient-weather-sensors@beta
+sudo npm install -g @bcourbage/homebridge-ambient-weather-sensors@1.5.0
 sudo hb-service start
 ```
 
-Or via Homebridge UI's "Install a specific version" option, pick the latest `1.5.0-beta.x`.
+Homebridge UI's "Install a specific version" option also allowed selecting
+`1.5.0`. Do not use the current `beta` or `latest` tag to reproduce this
+historical installation: those tags now point to later releases.
 
-> **Heads-up about beta releases:** beta versions are released on the `beta` npm tag, not `latest`. The Homebridge UI's "Update" button won't pick them up — that's intentional. You stay on the stable v1.4.x until v1.5.0 ships as GA, at which point the Update button surfaces it.
+> During the v1.5.0 preview, beta builds used the `beta` npm tag and the Update
+> button kept users on the stable v1.4.x line. Version 1.5.0 later shipped as GA.
 
 After the install completes, restart the child bridge (if you're using one): Homebridge UI → **Status** → click your child bridge → **Restart**.
 
-## Step 2 — What appears automatically (no settings needed)
+### Step 2 — What appears automatically (no settings needed)
 
 The moment v1.5.0 starts, two things happen:
 
-### Battery sub-services
+#### Battery sub-services
 
 Every sensor accessory that comes from a probe AWN reports a battery for now exposes a **Battery sub-service**. Apple Home and Eve both surface this:
 
@@ -235,7 +246,7 @@ Apple Home → Automation → ➕ "New Automation"
 
 This works for any sensor that has battery coverage. See **What changes mean for you** below for the full coverage table.
 
-### Feels-like and dew-point temperatures
+#### Feels-like and dew-point temperatures
 
 If you have `Temperature Sensors` enabled (you almost certainly do), AWN's pre-calculated feels-like (heat index / wind chill) and dew-point values appear as additional Temperature accessories per probe. These existed in AWN's API the whole time — v1.5.0 just stopped ignoring them.
 
@@ -245,11 +256,11 @@ If you don't want them, you can hide them via the existing **Exclude Sensors** f
 
 ---
 
-## Step 3 — Opt into Extended Sensors (optional)
+### Step 3 — Opt into Extended Sensors (optional)
 
 Wind, rain, barometric pressure, UV, and lightning are all off by default. Apple Home has no native service for these data types, so they're exposed using a clever workaround documented in the README — the short version is that each datapoint becomes a HomeKit **Motion Sensor** whose state toggles when a threshold is crossed. The live numeric reading is visible in Eve or Controller for HomeKit but not in Apple Home directly (with one exception — see "Display mode" below).
 
-### Enable the master toggle
+#### Enable the master toggle
 
 1. Homebridge UI → **Plugins** → "Ambient Weather" → **Settings** (gear icon)
 2. Scroll past the existing native-sensor checkboxes (Temperature, Humidity, etc.)
@@ -265,7 +276,7 @@ Wind, rain, barometric pressure, UV, and lightning are all off by default. Apple
 
 After the restart, the new accessories appear in Homebridge → **Accessories** and you can drag them into your Home app rooms via "Add Accessory" → look for the existing Homebridge bridge.
 
-### Pick a display mode
+#### Pick a display mode
 
 Below the per-category checkboxes is a dropdown: **How should Apple Home display extended sensors?**
 
@@ -278,7 +289,7 @@ Below the per-category checkboxes is a dropdown: **How should Apple Home display
 
 If you're only ever going to use Eve or Controller for HomeKit, stick with "Show generic names (recommended)". If you want the value in Apple Home tiles, switch to "Show live value in the tile name".
 
-### Adjust thresholds (optional)
+#### Adjust thresholds (optional)
 
 Each extended sensor has a configurable threshold that controls when the Motion sensor triggers. Defaults are sensible:
 
@@ -304,17 +315,17 @@ If you want different values, change them in the **Motion thresholds for extende
 
 Sensors without a configurable threshold (wind direction, rain accumulation totals, time-since sensors, lightning strike counts) have no enable checkbox; they always appear when their category is enabled. To hide one specifically, add its name to the **Exclude Sensors** list at the bottom of the form.
 
-### Pick display units (optional)
+#### Pick display units (optional)
 
 If you're outside the US, change the display units in the **Display units for extended sensors** section: kph or m/s or kts for wind, mm for rain, hPa for pressure, km for lightning distance. Thresholds stay in AWN's native units — only the displayed number is converted.
 
 ---
 
-## Step 4 — Example automations
+### Step 4 — Example automations
 
 Once enabled, these are the practical automations users actually build:
 
-### Close the awning when it gets gusty
+#### Close the awning when it gets gusty
 
 ```
 Home → Automations → ➕
@@ -322,7 +333,7 @@ Home → Automations → ➕
   • Then:  Awning shade scene → Closed
 ```
 
-### Skip the sprinkler if it's raining
+#### Skip the sprinkler if it's raining
 
 ```
 Home → Automations → ➕
@@ -332,7 +343,7 @@ Home → Automations → ➕
 
 (Note: this requires you to have an existing sprinkler switch or shortcut in Home.)
 
-### Push notification when lightning gets close
+#### Push notification when lightning gets close
 
 ```
 Home → Automations → ➕
@@ -340,7 +351,7 @@ Home → Automations → ➕
   • Then:  Send notification "Lightning within 10 miles — bring in the kids"
 ```
 
-### Low-battery reminder
+#### Low-battery reminder
 
 ```
 Home → Automations → ➕
@@ -352,9 +363,9 @@ The battery automation works on any v1.5.0+ sensor; pick whichever tile correspo
 
 ---
 
-## What changes mean for you
+### What changes mean for you
 
-### Battery coverage by probe
+#### Battery coverage by probe
 
 | Probe | AWN battery field | Sensors that get a Battery sub-service |
 |---|---|---|
@@ -366,13 +377,13 @@ The battery automation works on any v1.5.0+ sensor; pick whichever tile correspo
 
 Probes AWN doesn't report a battery for get no Battery sub-service — better than misleading "battery normal" on something we can't actually confirm.
 
-### Why MotionSensor for the extended sensors?
+#### Why MotionSensor for the extended sensors?
 
 Apple Home has no native service for wind, rain, UV, pressure, or lightning. The other Homebridge weather plugins (`homebridge-weather-plus`, `homebridge-ecowitt-weather-sensors`, `homebridge-mqttthing`) all converged on the same workaround: use a MotionSensor service whose `MotionDetected` boolean toggles when a configurable threshold is crossed. That gives Apple Home users a real, automatable handle on the data; Eve / Controller for HomeKit users get the live numeric value via additional custom characteristics.
 
 We deliberately mirror the verified `homebridge-ecowitt-weather-sensors` plugin's pattern so users running both side-by-side see consistent tile shapes.
 
-### Why no native value in Apple Home tiles?
+#### Why no native value in Apple Home tiles?
 
 Apple's HomeKit Accessory Protocol doesn't have a service type for "arbitrary number." Custom characteristics work, but Apple's Home app silently ignores any characteristic it doesn't recognize. Third-party HomeKit apps like Eve and Controller for HomeKit render arbitrary custom characteristics by reading the characteristic's display name — that's why the value shows up there.
 
@@ -380,29 +391,32 @@ The **embed-value display mode** is a workaround that puts the value into the ti
 
 ---
 
-## Troubleshooting / FAQ
+### Troubleshooting / FAQ
 
-### "I enabled Extended Sensors but no new accessories appeared."
+These answers mostly describe older versions of the settings page. For help
+with the current version, start with the [v2.0.0 instructions](#upgrading-to-v2).
+
+#### "I enabled Extended Sensors but no new accessories appeared."
 
 The child bridge needs a restart. Homebridge UI → **Status** → click your child bridge → **Restart**. Wait ~30 seconds, then check **Accessories**.
 
-### "Will tiles appear for sensors my station doesn't have?"
+#### "Will tiles appear for sensors my station doesn't have?"
 
 No new accessory is created for a field that has never appeared in the station payload. In v2, missing data alone does not authorize removal of an existing cached accessory. A disconnected probe's tile is retained; disable that sensor's row explicitly if you want to remove it.
 
-### "I see 'Wind Direction' but the motion indicator is always off."
+#### "I see 'Wind Direction' but the motion indicator is always off."
 
 That's intentional. Wind direction is informational only — there's no meaningful threshold for "direction is high." The Value characteristic carries the direction (e.g. "315° (NW)") for Eve users to see; MotionDetected stays false.
 
-### "My lightning sensors don't appear."
+#### "My lightning sensors don't appear."
 
 Your station needs a WH31L lightning sensor (Ecowitt catalogs the same hardware as a WH57). If the AWN payload for your station doesn't include `lightning_day` / `lightning_distance` / `lightning_time` fields, this plugin has nothing to expose. Check the AWN dashboard — if you don't see lightning data there either, no plugin can fix that.
 
-### "Apple Home shows 'battery 5%' but the batteries are brand new."
+#### "Apple Home shows 'battery 5%' but the batteries are brand new."
 
 AWN reports only "low" or "good" — not an actual percentage. When AWN says "low," the plugin shows 5% as a sentinel value so Apple Home's tile shows an alarming indicator. When AWN says "good," the plugin shows 100%. There's no way to get the real percentage; AWN doesn't expose it.
 
-### "My lightning sensor (WH31L) shows low battery in HomeKit but AWN's dashboard shows it as healthy. Replacing batteries didn't help."
+#### "My lightning sensor (WH31L) shows low battery in HomeKit but AWN's dashboard shows it as healthy. Replacing batteries didn't help."
 
 The older plugin decoder interpreted `batt_lightning = 0` as low. The published field convention is the reverse: `0` is normal and `1` is low. In v2, adopting sensor-support version 3 or later enables the corrected lightning and leak battery interpretation. Existing configurations retain the older interpretation until that explicit update. Inspect the sensor and configured support version rather than dismissing a low-battery warning.
 
@@ -410,21 +424,27 @@ The older plugin decoder interpreted `batt_lightning = 0` as low. The published 
 
 The general mechanism: any `excludeSensors` entry that's either a raw battery field name (`batt_lightning`, `batt_co2`, `battin`, `battout`, `batt1`..`batt10`) OR a sensor name with `-batt` suffix is interpreted as battery-only suppression rather than accessory removal. Useful for any future cases where AWN's API misreports a battery field.
 
-### "I want one sensor from a category but not others (e.g. wind speed but not direction)."
+#### "I want one sensor from a category but not others (e.g. wind speed but not direction)."
 
 Use the existing **Exclude Sensors** field at the bottom of the plugin settings. Add the friendly name of the sensor you want to hide ("Wind Direction", "Wind Direction 10m Avg", etc.). The per-category checkbox stays on, but the specific sensors you list get suppressed.
 
-### "Will my existing automations break?"
+#### "Will my existing automations break?"
 
-No — v1.5.0 is fully additive. Every accessory you have today remains, with the same characteristics and same behavior. The only differences are: (a) some accessories now have a Battery sub-service, (b) new feels-like and dew-point accessories appear if `Temperature Sensors` is enabled, and (c) the Extended Sensors section is off by default so it has zero behavior until you opt in.
+The v1.4.x to v1.5.0 upgrade kept existing sensors working as before. In v2,
+review the preview before saving: removing or replacing a sensor can affect
+its room assignment and automations. Returning to an older plugin version
+can also change when a motion sensor triggers, even if its tile stays in Home.
 
-### "I'm running this plugin AND `homebridge-ecowitt-weather-sensors` side-by-side."
+#### "I'm running this plugin AND `homebridge-ecowitt-weather-sensors` side-by-side."
 
 Both plugins now use the same MotionSensor + custom-characteristic pattern, so the tile shapes match. You can use `Exclude Sensors` (in this plugin) and the Ecowitt plugin's `customHidden` map to make sure neither plugin duplicates what the other exposes.
 
-### "I have stations at multiple locations and want them in different Apple Home Homes."
+#### "I have stations at multiple locations and want them in different Apple Home Homes."
 
-Use the new `stationFilter` config field (added in v1.5.0-beta.18) with multiple platform instances, one per Home. Each instance gets its own Homebridge child bridge that pairs with one Home. Full walkthrough: [MultiHome.md](./MultiHome.md).
+The `stationFilter` field was introduced in v1.5.0-beta.18 for multiple platform
+instances, one per Home, and remains supported in v2. Each instance gets its own
+Homebridge child bridge that pairs with one Home. For the current setup procedure,
+see [MultiHome.md](./MultiHome.md).
 
 Quick version:
 1. Open Homebridge UI → JSON Config

@@ -52,9 +52,9 @@ supports it; Homebridge 1.9.0 requires the Node 22 option. See the
 for conversion, restart, and rollback instructions. Disabling the v2 flag alone
 is not a safe rollback after conversion.
 
-If you already use beta.19, the runtime is unchanged apart from the version
-number; this release prepares the documentation and release notes for general
-availability.
+If you already use beta.19, your sensors will work as before. The editor now
+explains what may change if you return to an older plugin version, and the
+upgrade instructions and release notes have been updated for 2.0.0.
 
 ## [2.0.0-beta.19] - 2026-09-26
 

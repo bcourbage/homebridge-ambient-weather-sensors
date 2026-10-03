@@ -312,6 +312,22 @@ describe('AwnRootComponent (TestBed, jsdom)', () => {
     await fixture.whenStable();
     fixture.detectChanges();
     expect(el.textContent).toContain('Rollback mirror: verified');
+    const recipe = el.querySelector('.rollback-line')!;
+    const text = recipe.textContent!.replace(/\s+/g, ' ');
+    expect(text).toContain('Returning to v1.7.3 can change sensor names, units, and battery indicators');
+    expect(text).toContain('Unsupported sensors will disappear from Apple Home');
+    expect(text).toContain('motion sensors may trigger again or under different conditions');
+    expect(text).toContain('Back up your full Homebridge configuration before continuing');
+    expect(text).toContain('check your sensors and automations after restarting');
+    expect(text).toContain('Proceed only while this section says verified');
+    expect(text).toContain('You will need your backup to recover lost v2 settings; reinstalling v2 alone will not restore them');
+    expect(text).not.toContain('keep the settings currently saved here');
+    const steps = [...recipe.querySelectorAll('li')].map(li => li.textContent!);
+    expect(steps).toHaveLength(5);
+    expect(steps[1]).toContain('sensorMap, configVersion, and _legacyMirror');
+    expect(steps[2]).toContain('"_sensorMapV2": false');
+    expect(steps[3]).toContain('SENSOR_MAP_V2');
+    expect(steps[4]).toContain('restart Homebridge');
   });
 
   it('warns against the marker-deletion rollback for any non-recognized mirror state', async () => {

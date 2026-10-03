@@ -583,9 +583,11 @@ is recognized (hash-matching, editor-generated — surfaced positively as
 verified" on the plugin page; a mirror-less v2 config raises NO warning,
 so absence-of-warnings is not a check): removing `sensorMap`,
 `configVersion`, and `_legacyMirror` (and disabling `_sensorMapV2` /
-unsetting `SENSOR_MAP_V2`) leaves a working 1.x configuration of the
-current state, because the legacy fields are already synchronized in the
-block. With a missing, invalid, or STALE mirror the same deletions can
+unsetting `SENSOR_MAP_V2`) leaves a working 1.x projection of the
+legacy-compatible settings. Recognition proves synchronization, not behavioral
+equivalence with every v2 setting. Keep a full v2 backup to recover choices
+that the projection cannot represent; reconversion alone cannot restore them.
+With a missing, invalid, or STALE mirror the same deletions can
 expose empty or outdated legacy fields and deregister accessories — the
 documented recovery is then the guard freeze, the snapshot restore, or an
 upgrade + editor re-save to regenerate the mirror; never blind deletion. The shipped 1.7.x guard freezes on ANY v2-marked config BEFORE
@@ -609,6 +611,11 @@ projection property test). Specifics:
   family-mixed display units are omitted (v1.7 default applies); embed mode
   mirrors only when every enabled motion row embeds. Behavioral only —
   registration is unaffected.
+- Threshold direction and the separate `triggerEnabled` setting have no
+  mirror representation. Legacy wrappers apply their fixed directions whenever
+  a mirrored threshold is present, so a previously disabled motion trigger can
+  become active. Rollback instructions must disclose this limitation and require
+  checking readings and automations after restart.
 - The mirrored fields are stamped with `_legacyMirror: { version, hash }`.
   The hash is a canonical SHA-256 over BOTH the canonical `sensorMap` AND the
   mirrored legacy fields — the mirror is a projection of the sensorMap, so a
