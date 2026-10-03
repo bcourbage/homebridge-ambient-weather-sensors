@@ -980,7 +980,7 @@ homebridge-ambient-weather-sensors/
 │   ├── public/
 │   │   ├── index.html           # Handwritten FRAGMENT (no document tags);
 │   │   │                        #   references built assets by generated name
-│   │   └── app/                 # ng build output (COMMITTED, content-hashed)
+│   │   └── app/                 # Angular builder output (COMMITTED, content-hashed)
 │   ├── server.ts / handlers.ts / saveOrchestrator.ts   # bridge source (committed)
 │   ├── server.js / handlers.js / saveOrchestrator.js   # compiled (COMMITTED)
 │   └── tsconfig.json / angular.json

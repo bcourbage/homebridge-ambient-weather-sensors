@@ -63,8 +63,9 @@
     "pm2.5"
   ],
   "devDependencies": {
+    "@angular-devkit/architect": "0.2102.24",
+    "@angular-devkit/core": "21.2.24",
     "@angular/build": "21.2.24",
-    "@angular/cli": "21.2.21",
     "@angular/common": "21.2.20",
     "@angular/compiler": "21.2.20",
     "@angular/compiler-cli": "21.2.20",
