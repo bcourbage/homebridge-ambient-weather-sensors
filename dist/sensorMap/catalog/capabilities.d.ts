@@ -64,4 +64,3 @@ export interface NativeServiceSpec {
  * camera, or bridge service.
  */
 export declare const NATIVE_SENSOR_SERVICES: ReadonlyArray<NativeServiceSpec>;
-//# sourceMappingURL=capabilities.d.ts.map

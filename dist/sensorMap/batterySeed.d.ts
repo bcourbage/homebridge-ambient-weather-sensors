@@ -17,4 +17,3 @@ import type { EffectiveSensorRow } from './types.js';
  * wrapper; the guard returns `undefined` (legacy path) defensively.
  */
 export declare function batteryOptionsFor(row: EffectiveSensorRow | undefined, accessory: PlatformAccessory): BatteryServiceOptions | undefined;
-//# sourceMappingURL=batterySeed.d.ts.map

@@ -24,4 +24,3 @@
  */
 import type { EffectiveSensorMap } from './types.js';
 export declare function resolveBatteryField(effectiveMap: EffectiveSensorMap | undefined, stationMac: string, dataPoint: string): string | null;
-//# sourceMappingURL=resolveBatteryField.d.ts.map

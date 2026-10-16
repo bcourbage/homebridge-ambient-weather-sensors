@@ -79,4 +79,3 @@ export declare class WindDirection10mAccessory extends WindDirectionLikeAccessor
     constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory, row?: NumericSensorRow);
 }
 export {};
-//# sourceMappingURL=windAccessory.d.ts.map

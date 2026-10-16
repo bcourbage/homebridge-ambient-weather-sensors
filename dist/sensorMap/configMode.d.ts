@@ -64,4 +64,3 @@ export interface ConfigInputShape {
     includeOnly?: unknown;
 }
 export declare function detectConfigMode(config: ConfigInputShape | undefined): ModeDetectionResult;
-//# sourceMappingURL=configMode.d.ts.map

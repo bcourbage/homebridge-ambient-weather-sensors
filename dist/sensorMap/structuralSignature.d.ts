@@ -12,4 +12,3 @@
 import type { EffectiveSensorRow, WrapperDescriptor } from './types.js';
 export declare const UNRECOGNIZED_SIGNATURE = "unrecognized";
 export declare function computeStructuralSignature(kind: EffectiveSensorRow['kind'], measurement: string, hasBatterySubService: boolean, wrapper: WrapperDescriptor): string;
-//# sourceMappingURL=structuralSignature.d.ts.map

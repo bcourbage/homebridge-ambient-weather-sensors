@@ -81,4 +81,3 @@ export declare function truncateHapName(name: string): string;
  * sanitized — parentheses etc. are Model-legal.
  */
 export declare function hapModelValue(label: string, fallback: string): string;
-//# sourceMappingURL=displayName.d.ts.map

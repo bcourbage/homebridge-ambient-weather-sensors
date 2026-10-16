@@ -76,4 +76,3 @@ discovery?: DiscoveryStore, cachedPairs?: ReadonlyArray<{
  * caller has already loaded `discovery` / `uiState` from disk.
  */
 export declare function buildPlatformEffectiveMap(inputs: EffectiveMapInputs): EffectiveSensorMap;
-//# sourceMappingURL=platformEffectiveMap.d.ts.map

@@ -17,4 +17,3 @@ export declare class UvAccessory extends ExtendedSensorBase {
     protected formatValue(canonicalUv: number): string;
     protected formatIntensity(canonicalUv: number): string | undefined;
 }
-//# sourceMappingURL=uvAccessory.d.ts.map

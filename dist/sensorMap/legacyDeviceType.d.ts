@@ -19,4 +19,3 @@ import type { WrapperId } from './types.js';
 export declare const LEGACY_TYPE_FOR_WRAPPER_ID: Record<WrapperId, string>;
 /** Legacy `context.device.type` for a resolved row's wrapper id. */
 export declare function legacyTypeForWrapperId(wrapperId: WrapperId): string;
-//# sourceMappingURL=legacyDeviceType.d.ts.map

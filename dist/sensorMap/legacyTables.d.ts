@@ -26,4 +26,3 @@ export declare const LEGACY_TYPE_TO_MEASUREMENT: Readonly<Record<string, Measure
  * enforce parity between the two tables above.
  */
 export declare const LEGACY_TYPES: ReadonlyArray<string>;
-//# sourceMappingURL=legacyTables.d.ts.map

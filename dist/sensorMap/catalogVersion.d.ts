@@ -51,4 +51,3 @@ export type CatalogStampResult = {
  * closed instead.
  */
 export declare function parseCatalogStamps(config: Record<string, unknown> | undefined): CatalogStampResult;
-//# sourceMappingURL=catalogVersion.d.ts.map

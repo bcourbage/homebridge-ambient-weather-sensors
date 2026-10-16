@@ -36,4 +36,3 @@ export declare class PressureAbsoluteAccessory extends PressureLikeAccessory {
     constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory, row?: NumericSensorRow);
 }
 export {};
-//# sourceMappingURL=pressureAccessory.d.ts.map

@@ -17,4 +17,3 @@ export declare class Co2Accessory implements SensorAccessory {
      */
     setValue(rawValue: number): void;
 }
-//# sourceMappingURL=co2Accessory.d.ts.map

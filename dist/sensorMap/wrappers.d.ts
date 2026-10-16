@@ -125,4 +125,3 @@ export declare const WRAPPER_FOR_KIND_AND_MEASUREMENT: Readonly<Partial<Record<`
 export declare const WRAPPER_PAIR_SINCE: Readonly<Partial<Record<keyof typeof WRAPPER_FOR_KIND_AND_MEASUREMENT, number>>>;
 export declare function wrapperFor(kind: Exclude<SensorKind, 'unrecognized'>, measurement: Measurement, catalogAdopted?: number): WrapperDescriptor | undefined;
 export declare function wrapperById(id: WrapperDescriptor['id']): WrapperDescriptor;
-//# sourceMappingURL=wrappers.d.ts.map

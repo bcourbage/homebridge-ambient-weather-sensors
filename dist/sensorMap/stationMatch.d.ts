@@ -52,4 +52,3 @@ export declare function filterStationInventory(inventory: StationInventory, stat
  * entries is always determinate.
  */
 export declare function indeterminateFilterStations(inventory: StationInventory, stationFilter: unknown): StationInventory;
-//# sourceMappingURL=stationMatch.d.ts.map

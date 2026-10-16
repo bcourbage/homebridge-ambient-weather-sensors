@@ -54,4 +54,3 @@ export interface StationPayload {
  * push it to the wrapper's `setValue`.
  */
 export declare function distributeViaRouting(platform: AmbientWeatherSensorsPlatform, routing: Map<string, RoutingEntry>, stations: ReadonlyArray<StationPayload>): void;
-//# sourceMappingURL=routing.d.ts.map

@@ -24,4 +24,3 @@ export declare function saveNoticeStore(filePath: string, store: NoticeStore, lo
  * the same millisecond.
  */
 export declare function appendNotice(filePath: string, current: NoticeStore, stationMac: string, dataPoint: string, oldSignature: string | undefined, newSignature: string, log: Logger, clock?: Clock): Promise<NoticeStore>;
-//# sourceMappingURL=noticesStore.d.ts.map

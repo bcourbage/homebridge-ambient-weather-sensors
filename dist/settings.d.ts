@@ -20,4 +20,3 @@ export declare const PLATFORM_NAME = "AmbientWeatherSensors";
  * corrected it to match the scoped npm name.
  */
 export declare const PLUGIN_NAME = "@bcourbage/homebridge-ambient-weather-sensors";
-//# sourceMappingURL=settings.d.ts.map

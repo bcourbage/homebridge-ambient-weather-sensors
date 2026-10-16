@@ -197,4 +197,3 @@ export declare abstract class ExtendedSensorBase implements SensorAccessory {
     private maybeUpdateTileName;
 }
 export {};
-//# sourceMappingURL=extendedSensorBase.d.ts.map

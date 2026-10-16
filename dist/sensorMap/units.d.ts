@@ -52,4 +52,3 @@ export declare function isLegalUnit(measurement: Measurement, unit: SensorUnit):
  */
 export declare const COMPATIBLE_KINDS_FOR_MEASUREMENT: Readonly<Record<Measurement, ReadonlyArray<Exclude<import('./types.js').SensorKind, 'unrecognized'>>>>;
 export declare function isCompatibleKind(measurement: Measurement, kind: Exclude<import('./types.js').SensorKind, 'unrecognized'>): boolean;
-//# sourceMappingURL=units.d.ts.map

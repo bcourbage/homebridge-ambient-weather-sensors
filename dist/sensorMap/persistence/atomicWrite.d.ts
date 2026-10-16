@@ -71,4 +71,3 @@ export declare function writeJsonStore(filePath: string, data: unknown, log: Log
  * are always well under a minute old.
  */
 export declare function cleanupStaleTempFiles(dir: string, log: Logger, clock?: Clock): Promise<void>;
-//# sourceMappingURL=atomicWrite.d.ts.map

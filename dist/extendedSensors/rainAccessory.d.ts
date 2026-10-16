@@ -73,4 +73,3 @@ export declare class LastRainAccessory extends ExtendedSensorBase {
     protected formatValue(rawMs: number): string;
 }
 export {};
-//# sourceMappingURL=rainAccessory.d.ts.map

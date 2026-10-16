@@ -93,4 +93,3 @@ export declare function inferForCachedAccessory(accessory: CachedAccessoryShape,
  * may itself contain underscores).
  */
 export declare function dataPointFromUniqueId(uniqueId: string): string | undefined;
-//# sourceMappingURL=bootstrap.d.ts.map

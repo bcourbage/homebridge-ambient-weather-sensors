@@ -117,4 +117,3 @@ export declare function validateOverrideBody(merged: Record<string, unknown>, id
  * dedup+merge between them; simpler callers use this.
  */
 export declare function validateOverride(input: unknown, defaultRow: DefaultSensorRow | undefined): ValidationResult;
-//# sourceMappingURL=validation.d.ts.map
