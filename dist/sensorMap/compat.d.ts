@@ -2,7 +2,7 @@
  * Compat layer — translate a v1.6.0 (legacy) config into synthetic
  * global SensorMapOverride entries, deterministically and one-shot.
  *
- * See docs/future/sensor-map.md §6. The layer's contract:
+ * See docs/architecture/sensor-map.md §6. The layer's contract:
  *   - Reads a LegacyConfig (whatever fields the user has set)
  *   - Emits a SensorMapOverride[] with `stationMac` absent (all global)
  *   - buildEffectiveSensorMap consumes them like any other override

@@ -3,7 +3,7 @@
  * overrides, and observational data into per-(station, dataPoint)
  * effective rows.
  *
- * See docs/future/sensor-map.md §7 for the design contract and §3.4
+ * See docs/architecture/sensor-map.md §7 for the design contract and §3.4
  * for the discriminated-union output shape.
  *
  * Precedence (later wins):

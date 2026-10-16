@@ -1,7 +1,7 @@
 /**
  * Wrapper descriptors — stable identity for accessory-wrapper classes.
  *
- * See docs/future/sensor-map.md §3.9 and §9. Every distinct
+ * See docs/architecture/sensor-map.md §3.9 and §9. Every distinct
  * `(kind, measurement)` pair the plugin can render maps to exactly one
  * WrapperDescriptor. `id` is baked into the row's
  * `structuralSignature`, so:

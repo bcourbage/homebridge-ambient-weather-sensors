@@ -1,5 +1,5 @@
 /**
- * Bootstrap rule for cached accessories — see docs/future/sensor-map.md §11.2.
+ * Bootstrap rule for cached accessories — see docs/architecture/sensor-map.md §11.2.
  *
  * Existing v1.5.0 / v1.6.0 cached accessories have no `kind`,
  * `measurement`, or `structuralSignature` fields in their

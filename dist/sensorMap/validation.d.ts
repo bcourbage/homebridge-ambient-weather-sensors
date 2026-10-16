@@ -1,7 +1,7 @@
 /**
  * Row-level validation for user-authored SensorMapOverride entries.
  *
- * See docs/future/sensor-map.md §3.7 for the full failure table.
+ * See docs/architecture/sensor-map.md §3.7 for the full failure table.
  *
  * Two-phase validation, split so buildEffectiveMap can dedup+merge
  * duplicate entries BEFORE semantic checks (§3.3.2 later-wins):

@@ -188,7 +188,7 @@ recovery path:
 The plugin's settings page is the sensor-map editor with its
 Connection section: draft, preview, and save with guarded
 confirmation. [docs/plugin-ui.md](./docs/plugin-ui.md) explains the
-page and how saving works. See `docs/future/sensor-map.md` for the full design if
+page and how saving works. See [the sensor-map architecture](https://github.com/bcourbage/homebridge-ambient-weather-sensors/blob/main/docs/architecture/sensor-map.md) if
 you're curious about the shape of the v2 config.
 
 ## What's New in v1.7.2

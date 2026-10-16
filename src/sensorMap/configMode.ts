@@ -1,5 +1,5 @@
 /**
- * Config-mode detection — see docs/future/sensor-map.md §5.
+ * Config-mode detection — see docs/architecture/sensor-map.md §5.
  *
  * The plugin currently knows how to serve two schema shapes:
  *   - v1.6.0 legacy: no `configVersion`, per-category toggles + thresholds

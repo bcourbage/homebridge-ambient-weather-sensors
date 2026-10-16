@@ -32,6 +32,7 @@
     "CHANGELOG.md",
     "NOTICE",
     "UPGRADING.md",
+    "docs/archive/upgrading-v1.md",
     "MultiHome.md",
     "homebridge-ui/server.js",
     "homebridge-ui/handlers.js",

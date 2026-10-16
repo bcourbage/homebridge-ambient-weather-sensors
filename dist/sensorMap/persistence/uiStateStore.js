@@ -1,5 +1,5 @@
 /**
- * UiStateStore reader/writer. See docs/future/sensor-map.md §8.5.
+ * UiStateStore reader/writer. See docs/architecture/sensor-map.md §8.5.
  *
  * **UI-server-only writes.** The plugin reads to know which notices
  * to hide and which (stationMac, dataPoint) pairs to suppress from
