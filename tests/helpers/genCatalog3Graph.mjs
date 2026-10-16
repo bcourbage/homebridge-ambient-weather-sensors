@@ -1,6 +1,7 @@
 /**
  * One-time generator for the catalog-3 wrapper graph golden
- * (tests/fixtures/graph/catalog3-v1.json) — sensor-map.md §19.7.
+ * (tests/fixtures/graph/catalog3-v1.json). See
+ * docs/architecture/wrappers.md#verification.
  *
  * Unlike the v1.7.0 golden (generated from the v1.7.0 tag's dist),
  * this baseline is generated from the CURRENT dist at the moment the

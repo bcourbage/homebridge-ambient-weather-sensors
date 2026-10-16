@@ -67,7 +67,7 @@ jobs:
         run: npm run verify:package
 
   # The CANONICAL producer of the committed Angular editor artifacts
-  # (homebridge-ui/public/app/, GA task #69 / §10.1): exactly Node
+  # (homebridge-ui/public/app/, GA task #69 / sensor-map.md §10): exactly Node
   # 22.13, matching the Volta pin in package.json. (Not 22.12: the
   # engines floor is untestable there — @matter/nodejs, an optional
   # dependency of Homebridge 2.x, excludes >=22.0.0 <22.13.0, so npm

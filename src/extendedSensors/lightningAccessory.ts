@@ -40,7 +40,8 @@ abstract class LightningCountLikeAccessory extends ExtendedSensorBase {
    * strike wording belongs to the KNOWN AWN lightning fields; a custom
    * count row (any other dataPoint routed here by (motion, count))
    * counts something this class knows nothing about, so its Value
-   * stays neutral (§17.1: canonical wrappers are generic).
+   * stays neutral. See
+   * docs/architecture/wrappers.md#construction-and-dispatch.
    */
   private readonly countNoun: string | null;
 

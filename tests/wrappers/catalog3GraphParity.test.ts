@@ -1,5 +1,6 @@
 /**
- * HAP graph parity for the CATALOG-3 wrappers (sensor-map.md §19.7).
+ * HAP graph parity for the CATALOG-3 wrappers. See
+ * docs/architecture/wrappers.md#verification.
  *
  * The v1.7.0 golden stays frozen at its 25 ids; the §19 wrappers pin
  * against their own baseline, generated ONCE from the dist that first
@@ -26,7 +27,7 @@ const CATALOG3_IDS = [
   'soil-moisture', 'leaf-wetness', 'soil-tension', 'evapotranspiration', 'aqi',
 ] as const;
 
-describe('HAP graph parity vs the catalog-3 golden (§19.7)', () => {
+describe('HAP graph parity vs the catalog-3 golden', () => {
   it('golden covers all 10 catalog-3 WrapperIds × 2 battery variants', () => {
     expect(Object.keys(golden).sort()).toEqual([...CATALOG3_IDS].sort());
     for (const id of CATALOG3_IDS) {

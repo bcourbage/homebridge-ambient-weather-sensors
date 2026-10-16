@@ -473,7 +473,7 @@ export interface RowValidationWarning {
  * surfaces them in its own section and attributes only when `source`
  * says it may.
  *
- * See `docs/architecture/wrappers.md` §"InternalInvariantNote".
+ * See docs/architecture/wrappers.md#internal-invariant-checks.
  */
 export interface InternalInvariantNote {
     /** Stable machine-readable identifier for the note class. */

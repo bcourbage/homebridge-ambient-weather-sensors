@@ -5,7 +5,8 @@ import { ExtendedSensorBase, extendedDisplayModeFor, thresholdFor, } from './ext
  * row-parameterized threshold-shell implementation for the catalog-3
  * numeric measurements (soil-moisture, leaf-wetness, soil-tension,
  * evapotranspiration, aqi). Everything comes from the row — dataPoint,
- * name, units, threshold, trigger direction (§16 genericity). These
+ * name, units, threshold, trigger direction. See
+ * docs/architecture/wrappers.md#construction-and-dispatch. These
  * measurements have no legacy (row-less) path: the wrappers are
  * reachable only through catalog-3 definitions or explicit custom
  * assignments, so the row is required.

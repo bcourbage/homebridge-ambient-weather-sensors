@@ -4,7 +4,7 @@ This document describes the shipped sensor-map engine and its save boundary.
 For operating instructions, see [the settings page](../plugin-ui.md),
 [upgrading](../../UPGRADING.md), and [rollback](../../README.md#rollback).
 The implementation is authoritative for field vocabularies and validation
-codes. Section identifiers used by source comments remain stable.
+codes. Wrapper-specific contracts are documented in [wrappers.md](wrappers.md).
 
 ## 1. Responsibilities
 

@@ -1,6 +1,6 @@
 /**
  * Reproducibility gate for the committed Angular editor artifacts
- * (GA task #69, §10.1 packaging invariants):
+ * (GA task #69, sensor-map.md §10):
  *
  *   1. TWO cold builds must be byte-identical (build determinism);
  *   2. the rebuild must be byte-identical to the COMMITTED artifacts
