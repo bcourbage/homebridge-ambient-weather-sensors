@@ -61,4 +61,3 @@ export declare function composeEmbeddedName(sensorLabel: string, valueStr: strin
  * — treat as not-renamed so the first update can proceed.
  */
 export declare function isUserRenamed(currentName: string | undefined, lastSetName: string | undefined): boolean;
-//# sourceMappingURL=nameComposer.d.ts.map

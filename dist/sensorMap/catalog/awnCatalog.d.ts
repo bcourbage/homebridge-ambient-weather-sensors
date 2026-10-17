@@ -142,4 +142,3 @@ export declare const AWN_CATALOG: ReadonlyArray<CatalogEntry>;
 export declare function expandCatalogKeys(entry: CatalogEntry): string[];
 /** The battery field an entry declares for a concrete key, if any. */
 export declare function catalogBatteryFieldFor(entry: CatalogEntry, key: string): string | null | undefined;
-//# sourceMappingURL=awnCatalog.d.ts.map

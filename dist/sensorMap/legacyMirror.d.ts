@@ -302,4 +302,3 @@ export declare function journalConversionBaseline(persistDir: string, legacyFiel
  */
 export declare function verifyConversionJournalReadable(persistDir: string): Promise<void>;
 export {};
-//# sourceMappingURL=legacyMirror.d.ts.map

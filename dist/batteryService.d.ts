@@ -47,4 +47,3 @@ export interface BatteryServiceOptions {
     initialLow: boolean | 'unknown';
 }
 export declare function setupBatteryService(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory, options?: BatteryServiceOptions): ((low: boolean) => void) | undefined;
-//# sourceMappingURL=batteryService.d.ts.map

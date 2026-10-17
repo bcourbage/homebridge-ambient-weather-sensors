@@ -92,4 +92,3 @@ export declare class RealtimeSource {
     private handleDevicePayload;
     private normalizeToDevices;
 }
-//# sourceMappingURL=realtimeSource.d.ts.map

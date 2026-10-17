@@ -19,4 +19,3 @@ export declare class TemperatureAccessory implements SensorAccessory {
      */
     setValue(rawValue: number): void;
 }
-//# sourceMappingURL=temperatureAccessory.d.ts.map

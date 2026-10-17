@@ -420,4 +420,3 @@ export declare class AmbientWeatherSensorsPlatform implements DynamicPlatformPlu
      */
     private distribute;
 }
-//# sourceMappingURL=platform.d.ts.map

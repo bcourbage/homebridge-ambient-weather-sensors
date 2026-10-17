@@ -22,4 +22,3 @@ export declare class SolarRadiationAccessory implements SensorAccessory {
      */
     setValue(rawValue: number): void;
 }
-//# sourceMappingURL=solarRadiationAccessory.d.ts.map

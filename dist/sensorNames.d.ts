@@ -16,4 +16,3 @@ export declare function friendlySensorName(key: string): string;
  * reconstructing the corresponding numbered sensorKey.
  */
 export declare function sensorKeyByFriendlyName(friendly: string): string | undefined;
-//# sourceMappingURL=sensorNames.d.ts.map

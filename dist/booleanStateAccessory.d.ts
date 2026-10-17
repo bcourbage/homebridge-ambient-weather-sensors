@@ -69,4 +69,3 @@ export declare class MotionBooleanAccessory extends BooleanStateAccessory {
     constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory, row: BooleanSensorRow);
 }
 export {};
-//# sourceMappingURL=booleanStateAccessory.d.ts.map

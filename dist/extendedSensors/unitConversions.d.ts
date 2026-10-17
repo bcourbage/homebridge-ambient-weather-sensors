@@ -34,4 +34,3 @@ export declare function convertSpeed(mph: number, target: SpeedUnit): number;
 export declare function convertRain(inches: number, target: RainUnit): number;
 export declare function convertPressure(inHg: number, target: PressureUnit): number;
 export declare function convertDistance(miles: number, target: DistanceUnit): number;
-//# sourceMappingURL=unitConversions.d.ts.map

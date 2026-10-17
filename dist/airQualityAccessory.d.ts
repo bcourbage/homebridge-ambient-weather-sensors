@@ -18,4 +18,3 @@ export declare class AirQualityAccessory implements SensorAccessory {
      */
     setValue(rawValue: number): void;
 }
-//# sourceMappingURL=airQualityAccessory.d.ts.map

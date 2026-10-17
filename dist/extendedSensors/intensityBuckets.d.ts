@@ -28,4 +28,3 @@ export declare function toCardinal(degrees: number): string;
  * hasn't seen a strike since boot).
  */
 export declare function timeSince(timestampMs: number | undefined, nowMs?: number): string;
-//# sourceMappingURL=intensityBuckets.d.ts.map

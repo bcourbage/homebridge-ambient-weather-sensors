@@ -50,4 +50,3 @@ export declare function airQualityReading(rawValue: number, variant: 'PM2.5' | '
     density: number;
     level: number;
 };
-//# sourceMappingURL=nativeConversions.d.ts.map

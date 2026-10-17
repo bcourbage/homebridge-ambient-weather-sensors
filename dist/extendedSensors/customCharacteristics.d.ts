@@ -64,4 +64,3 @@ export interface ExtendedCharacteristics {
     LastUpdated: WithUUID<typeof Characteristic>;
 }
 export declare function register(api: API): ExtendedCharacteristics;
-//# sourceMappingURL=customCharacteristics.d.ts.map

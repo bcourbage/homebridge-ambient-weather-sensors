@@ -14,4 +14,3 @@ export declare class HumidityAccessory implements SensorAccessory {
      */
     setValue(rawValue: number): void;
 }
-//# sourceMappingURL=humidityAccessory.d.ts.map

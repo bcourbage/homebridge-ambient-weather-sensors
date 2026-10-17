@@ -209,4 +209,3 @@ export declare const LEGACY_SCHEMA_UNIT_EXPOSURE: Readonly<Record<string, {
  * display unit: a display-only fallback, never accessory loss.
  */
 export declare const V17_LEGAL_LEGACY_UNITS: Readonly<Record<'windSpeed' | 'rain' | 'pressure' | 'distance', ReadonlyArray<SensorUnit>>>;
-//# sourceMappingURL=unitVocabulary.d.ts.map

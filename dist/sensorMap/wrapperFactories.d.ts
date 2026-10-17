@@ -246,4 +246,3 @@ export declare function assertRowMatchesWrapperId(row: EffectiveSensorRow): void
  */
 export declare function instantiateWrapper(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory, row: EffectiveSensorRow): SensorAccessory;
 export {};
-//# sourceMappingURL=wrapperFactories.d.ts.map

@@ -116,9 +116,12 @@ try {
   for (const devOnly of ['typescript', 'vitest', 'homebridge', 'awn-v1-7-3', 'awn-v2-beta17', '@angular/core']) {
     assert.ok(!existsSync(path.join(install, 'node_modules', devOnly)), `${devOnly} masked a missing production dependency`);
   }
-  for (const excluded of ['src', 'tests', 'scripts', 'homebridge-ui/app-src']) {
+  for (const excluded of ['src', 'tests', 'scripts', 'homebridge-ui/app-src', 'dist/sensorMap/catalog']) {
     assert.ok(!existsSync(path.join(installed, excluded)), `${excluded} was accidentally published`);
   }
+  assert.ok(!packed.files.some(file => file.path.endsWith('.d.ts.map')), 'declaration maps must not be published');
+  assert.ok(packed.files.some(file => file.path.endsWith('.d.ts')), 'public declarations must remain available');
+  assert.ok(packed.files.some(file => file.path.endsWith('.js.map')), 'runtime source maps must remain available');
   const index = quietRead(path.join(installed, 'homebridge-ui/public/index.html'));
   const bundles = [...index.matchAll(/src="(?:\.\/)?(app\/[^"?]+\.js)"/g)].map(m => m[1]);
   assert.equal(bundles.length, 1, 'the fragment must reference exactly one compiled app');

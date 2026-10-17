@@ -65,4 +65,3 @@ export declare function toCanonical(measurement: Measurement, sourceUnit: Sensor
  * helpers so imperial display targets are byte-identical to v1.6.0.
  */
 export declare function toDisplayUnit(measurement: Measurement, canonical: number, displayUnit: SensorUnit): number;
-//# sourceMappingURL=unitConversions.d.ts.map

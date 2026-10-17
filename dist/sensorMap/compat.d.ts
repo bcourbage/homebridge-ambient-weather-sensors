@@ -122,4 +122,3 @@ dynamicDataPoints?: Iterable<string>): SensorMapOverride[];
  * infer a station name from a cached HomeKit label.
  */
 export declare function legacyRowFilterState(legacy: LegacyConfig, dataPoint: string, station: StationRecord, isMultiStation: boolean): 'enabled' | 'disabled' | 'unknown' | undefined;
-//# sourceMappingURL=compat.d.ts.map

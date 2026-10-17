@@ -23,4 +23,3 @@ export type DEVICE = {
      */
     batteryLow?: boolean;
 };
-//# sourceMappingURL=types.d.ts.map

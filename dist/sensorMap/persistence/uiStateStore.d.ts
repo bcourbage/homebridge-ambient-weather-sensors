@@ -27,4 +27,3 @@ export declare function saveUiStateStore(filePath: string, store: UiStateStore, 
 export declare function withForgottenField(store: UiStateStore, stationMac: string, dataPoint: string, clock?: Clock): UiStateStore;
 /** Helper: mark a notice as dismissed. Idempotent. */
 export declare function withDismissedNotice(store: UiStateStore, noticeId: string): UiStateStore;
-//# sourceMappingURL=uiStateStore.d.ts.map

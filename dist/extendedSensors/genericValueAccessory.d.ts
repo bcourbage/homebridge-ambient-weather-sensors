@@ -34,4 +34,3 @@ export declare class AqiAccessory extends GenericValueAccessory {
 export declare class NumericAccessory extends GenericValueAccessory {
     constructor(platform: AmbientWeatherSensorsPlatform, accessory: PlatformAccessory, row: NumericSensorRow);
 }
-//# sourceMappingURL=genericValueAccessory.d.ts.map

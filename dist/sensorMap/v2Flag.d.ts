@@ -25,4 +25,3 @@ export declare function v2ConstructionEnabled(opts: {
     env?: NodeJS.ProcessEnv;
     config?: Record<string, unknown>;
 }): boolean;
-//# sourceMappingURL=v2Flag.d.ts.map

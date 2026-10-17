@@ -89,4 +89,3 @@ export declare function batteryDecoderPolicy(catalogAdopted: number): 'standard'
  * into a healthy "OK" reading (PR #67 review F7).
  */
 export declare function readBatteryLow(lastData: Record<string, unknown>, batteryField: string | undefined, catalogAdopted?: number): boolean | undefined;
-//# sourceMappingURL=batteryFields.d.ts.map

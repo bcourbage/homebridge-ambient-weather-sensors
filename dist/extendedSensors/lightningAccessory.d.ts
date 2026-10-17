@@ -79,4 +79,3 @@ export declare class LightningLastStrikeAccessory extends ExtendedSensorBase {
     protected formatValue(rawMs: number): string;
 }
 export {};
-//# sourceMappingURL=lightningAccessory.d.ts.map

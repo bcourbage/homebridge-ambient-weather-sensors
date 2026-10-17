@@ -76,4 +76,3 @@ export interface SafeModeBinding {
  * leaving them at their cached HAP values.
  */
 export declare function bindSafeMode(platform: SafeModeBindingPlatform, accessory: PlatformAccessory): SafeModeBinding | undefined;
-//# sourceMappingURL=safeModeBinding.d.ts.map

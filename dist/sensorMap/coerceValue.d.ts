@@ -34,4 +34,3 @@ import type { EffectiveSensorRow } from './types.js';
  */
 export declare const INVALID_BOOLEAN_STATE = -1;
 export declare function coerceValue(row: EffectiveSensorRow, raw: unknown): number | undefined;
-//# sourceMappingURL=coerceValue.d.ts.map

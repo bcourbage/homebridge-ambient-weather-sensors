@@ -57,4 +57,3 @@ export interface CanonicalizeInput {
     catalogAdopted?: number;
 }
 export declare function canonicalizeSensorMap(input: CanonicalizeInput): SensorMapOverride[];
-//# sourceMappingURL=canonicalizeSensorMap.d.ts.map
