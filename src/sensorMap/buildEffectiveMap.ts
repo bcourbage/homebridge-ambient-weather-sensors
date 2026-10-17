@@ -3,7 +3,7 @@
  * overrides, and observational data into per-(station, dataPoint)
  * effective rows.
  *
- * See docs/future/sensor-map.md §7 for the design contract and §3.4
+ * See docs/architecture/sensor-map.md §7 for the design contract and §3.4
  * for the discriminated-union output shape.
  *
  * Precedence (later wins):
@@ -420,8 +420,8 @@ export function buildEffectiveSensorMap(input: BuildInput): EffectiveSensorMap {
   // produces no row and no error until discovery happens. Per
   // review finding #8, we emit a row for the (station, dataPoint)
   // pair on every station in inventory so the user gets immediate
-  // feedback ("waiting for station" rows, per §3.3.4 of
-  // sensor-map.md), instead of a silent nothing.
+  // feedback before data arrives (see docs/architecture/sensor-map.md
+  // §4, Defaults and inventory), instead of a silent nothing.
   for (const dp of globalOverrides.keys()) {
     if (identityAuthoredGlobal.has(dp) ? staticDefaultRowFor(dp) : defaultRowForConfigOverride(dp, catalogAdopted, globalOverrides.get(dp))) {
       // Global row for a known dataPoint — the defaults × stations
@@ -870,8 +870,8 @@ interface ResolveInput {
 
 /**
  * resolveRow's result: the row (or null) plus an optional battery-claim
- * marker. The Stage-4 ownership rules (docs/future/
- * wrapper-parameterization.md §"Custom-row battery attachment"):
+ * marker. The ownership rules are documented in
+ * docs/architecture/wrappers.md#custom-row-battery-attachment:
  *
  *   1. Default-map canonical rows keep their reservation. Every AWN
  *      battery field is contractually owned by the row with

@@ -103,7 +103,7 @@ try {
   assert.equal(manifest.version, JSON.parse(quietRead(path.join(repo, 'package.json'))).version);
   // npm's package page, Homebridge changelog, and upgrade links ship distinct
   // documents. Verify the tarball carries the reviewed source copy verbatim.
-  for (const document of ['README.md', 'CHANGELOG.md', 'UPGRADING.md', 'MultiHome.md']) {
+  for (const document of ['README.md', 'CHANGELOG.md', 'UPGRADING.md', 'MultiHome.md', 'docs/archive/upgrading-v1.md']) {
     const source = quietRead(path.join(repo, document));
     assert.ok(source.trim(), `${document} must not be empty`);
     assert.equal(quietRead(path.join(installed, document)), source, `${document} changed or disappeared during packing`);

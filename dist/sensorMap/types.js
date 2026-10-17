@@ -1,7 +1,7 @@
 /**
  * Sensor map — public and internal type definitions.
  *
- * See docs/future/sensor-map.md §3 for the design reasoning behind
+ * See docs/architecture/sensor-map.md §3 for the design reasoning behind
  * the shapes below. Summary:
  *
  * - `SensorKind` selects the HAP wrapper family (TemperatureSensor,

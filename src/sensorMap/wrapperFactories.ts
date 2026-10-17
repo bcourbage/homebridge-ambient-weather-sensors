@@ -19,20 +19,9 @@
  *     the dispatch boundary where the `<K, RowForWrapperId[K]>`
  *     correlation has been erased down to a bare `EffectiveSensorRow`.
  *
- * ── Staged rollout ────────────────────────────────────────────────
- * See `docs/future/wrapper-parameterization.md`. As of Stage 2 every
- * `FACTORIES` entry is the row-consuming `(p, a, r) => new X(p, a, r)`
- * form — the wrapper reads its runtime knobs (threshold, units,
- * battery, trigger direction) from the row (Stage 1's adapter form,
- * which discarded the row and called the legacy two-argument
- * constructor, is gone). `instantiateWrapper` is exercised by its own
- * unit tests here, by the routing mechanism, and by the LIVE flag-gated
- * v2 construction path (`platform.ts`'s `discoverDevicesV2`, wired in
- * Stage 4). With the resolution table restored (Stage 4's
- * table-restoration commit), CUSTOM rows reach this registry too —
- * their `wrapperId` comes from `WRAPPER_FOR_KIND_AND_MEASUREMENT`,
- * known-dataPoint rows' from the default map; both are spec-checked at
- * map construction and re-asserted here at dispatch.
+ * See `docs/architecture/wrappers.md`. Every factory consumes the
+ * effective row. Known and custom rows are checked against the same
+ * specification at resolution and dispatch; the platform owns routing.
  */
 
 import type { PlatformAccessory } from 'homebridge';
@@ -180,9 +169,7 @@ type Factory<R> = (
  * v1 path still constructs wrappers without one — with `row`
  * undefined, each constructor falls back to the legacy
  * `platform.config.*` reads, which is what keeps flag-off behavior
- * identical to v1.7.0. (The interim "Stage 1 adapter" form, which
- * discarded the row entirely, was retired when the constructors were
- * migrated in Stage 2.)
+ * identical to v1.7.0.
  */
 export const FACTORIES: { [K in WrapperId]: Factory<RowForWrapperId[K]> } = {
   'temperature':           (p, a, r) => new TemperatureAccessory(p, a, r),

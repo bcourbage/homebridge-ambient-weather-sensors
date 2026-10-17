@@ -1,5 +1,5 @@
 /**
- * npm package-content gate (GA task #69, §10.1 packaging invariants).
+ * npm package-content gate (GA task #69, sensor-map.md §10).
  *
  * The editor app ships as COMMITTED build artifacts — no install-time
  * builds — so the published tarball must contain the fragment page,

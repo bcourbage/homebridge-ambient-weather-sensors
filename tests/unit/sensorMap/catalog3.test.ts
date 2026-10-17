@@ -1,5 +1,5 @@
 /**
- * Catalog-3 behavior proofs (issue #63 P3 — sensor-map.md §19.7):
+ * Catalog-3 behavior proofs (issue #63 P3 — sensor-map.md §12):
  * the explicit tri-state decode through the REAL wrappers, the
  * adoption-gated battery polarity, catalog-3 exposure arithmetic, and
  * the §18.4 preservation invariants re-run against catalog 3.

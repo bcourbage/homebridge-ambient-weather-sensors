@@ -1,5 +1,5 @@
 /**
- * NoticesStore reader/appender. See docs/future/sensor-map.md §8.4.
+ * NoticesStore reader/appender. See docs/architecture/sensor-map.md §8.4.
  *
  * Plugin-only writes. Size-capped to prevent unbounded growth — the
  * newest `MAX_NOTICES` entries are retained; older entries are

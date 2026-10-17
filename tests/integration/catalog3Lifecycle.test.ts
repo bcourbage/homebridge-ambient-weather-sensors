@@ -1,5 +1,5 @@
 /**
- * Catalog-3 platform lifecycle (issue #63 P3 — sensor-map.md §19.7,
+ * Catalog-3 platform lifecycle (issue #63 P3 — sensor-map.md §12,
  * PR #67 review F1). The reviewer's headline scenario asserted at the
  * CORRECTED outcome: with catalog 3 adopted, every new wrapper type
  * registers when enabled and UNREGISTERS when explicitly disabled and
@@ -92,7 +92,7 @@ afterEach(() => {
   }
 });
 
-describe('catalog-3 accessories honor an explicit disable across a cached restart (§19.7 / review F1)', () => {
+describe('catalog-3 accessories honor an explicit disable across a cached restart (§12 / review F1)', () => {
   it('all ten new wrapper types register when enabled and unregister when disabled', async () => {
     const first = await boot(block(ENABLED));
     expect(first.api.registered).toHaveLength(ENABLED.length);

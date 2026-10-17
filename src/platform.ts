@@ -392,7 +392,7 @@ export class AmbientWeatherSensorsPlatform implements DynamicPlatformPlugin {
       }
 
       if (this.configMode === 'safe-mode') {
-        // Per docs/future/sensor-map.md §17.2, safe mode is not a
+        // Per docs/architecture/sensor-map.md §17.2, safe mode is not a
         // hard freeze — it's "reconciliation skipped, updates
         // continue." Cached accessories keep running, polling /
         // realtime keeps pushing fresh values to their wrappers,

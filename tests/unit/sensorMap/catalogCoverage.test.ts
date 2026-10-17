@@ -314,8 +314,8 @@ describe('implemented pairs instantiate the DECLARED HAP service (real hap-nodej
   /**
    * Pairs with no default row anywhere (contact/occupancy/smoke/
    * motion-boolean/co exist for custom assignments only): build a
-   * synthetic row straight from the pair, per §16's genericity
-   * requirement.
+   * synthetic row straight from the pair, per the row-driven contract
+   * in docs/architecture/wrappers.md#construction-and-dispatch.
    */
   function syntheticRowFor(pair: string, wrapperId: WrapperId): EffectiveSensorRow {
     const [kind, measurement] = pair.split('|') as [DefaultSensorRow['kind'], DefaultSensorRow['measurement']];

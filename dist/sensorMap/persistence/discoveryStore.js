@@ -1,7 +1,7 @@
 /**
  * DiscoveryStore reader/writer + in-memory tracker.
  *
- * See docs/future/sensor-map.md §8.3. Plugin-only writes.
+ * See docs/architecture/sensor-map.md §8.3. Plugin-only writes.
  *
  * The tracker holds the current snapshot in memory and writes to
  * disk under two conditions:

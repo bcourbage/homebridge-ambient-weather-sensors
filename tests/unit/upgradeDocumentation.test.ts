@@ -3,16 +3,20 @@ import { describe, expect, it } from 'vitest';
 
 const upgrade = readFileSync(new URL('../../UPGRADING.md', import.meta.url), 'utf8');
 const readme = readFileSync(new URL('../../README.md', import.meta.url), 'utf8');
-const historical = upgrade.split('## Earlier upgrades (historical)\n')[1].split('## Where to get help\n')[0];
+const historical = readFileSync(new URL('../../docs/archive/upgrading-v1.md', import.meta.url), 'utf8');
 
 describe('shipping upgrade and rollback guidance', () => {
-  it('nests the archived guides, steps and FAQ below the historical umbrella', () => {
+  it('links the archived guides from current guidance and keeps their historical context', () => {
+    expect(upgrade).toContain('[archived upgrade guides](./docs/archive/upgrading-v1.md)');
+    expect(upgrade).not.toContain('### Step 1');
+    expect(historical).toMatch(/^# Earlier upgrades \(historical\)/);
     expect(historical).not.toMatch(/^## /m);
     for (const heading of ['v1.5.x', 'v1.4.x', 'Step 1', 'Step 2', 'Step 3', 'Step 4', 'Troubleshooting / FAQ']) {
       expect(historical).toContain(`### ${heading}`);
     }
     expect(historical).toContain('#### "Will my existing automations break?"');
-    expect(historical).toContain('[v2.0.0 instructions](#upgrading-to-v2)');
+    expect(historical).toContain('[v2.0.0 instructions](../../UPGRADING.md#upgrading-to-v2)');
+    expect(historical).toContain('[MultiHome.md](../../MultiHome.md)');
     expect(upgrade).toContain('<a id="upgrading-to-v2"></a>');
   });
 

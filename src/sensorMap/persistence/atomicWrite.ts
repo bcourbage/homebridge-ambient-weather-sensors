@@ -1,5 +1,5 @@
 /**
- * Atomic file persistence helper — see docs/future/sensor-map.md §8.6.
+ * Atomic file persistence helper — see docs/architecture/sensor-map.md §8.6.
  *
  * Contract:
  *   - `readJsonStore` reads and parses; on any failure (missing file,

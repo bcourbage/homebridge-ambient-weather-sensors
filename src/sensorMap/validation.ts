@@ -1,7 +1,7 @@
 /**
  * Row-level validation for user-authored SensorMapOverride entries.
  *
- * See docs/future/sensor-map.md §3.7 for the full failure table.
+ * See docs/architecture/sensor-map.md §3.7 for the full failure table.
  *
  * Two-phase validation, split so buildEffectiveMap can dedup+merge
  * duplicate entries BEFORE semantic checks (§3.3.2 later-wins):
@@ -499,7 +499,7 @@ export function validateOverrideBody(
   // schema doesn't silently accept an ineffective field (matching how
   // motion-only fields are handled on non-motion rows). Done before the
   // legality checks so a native row never errors on displayUnit.
-  // See docs/future/wrapper-parameterization.md §"Unit conversion chain".
+  // See docs/architecture/wrappers.md §"Unit conversion chain".
   if (
     out.displayUnit !== undefined
     && effectiveMeasurement !== undefined

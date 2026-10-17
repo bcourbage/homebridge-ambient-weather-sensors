@@ -4,7 +4,7 @@ This guide explains how to expose Ambient Weather stations in **different HomeKi
 
 If you have a single station, or multiple stations all belonging to one Home, **you don't need this guide** — the plugin's defaults handle that out of the box.
 
-> **Heads-up.** The Homebridge UI plugin configuration form was built around the "one plugin = one configuration" assumption. Multi-Home setups require a one-time edit to `config.json` to add a second platform instance. After that initial edit, you can manage each instance separately. A friendlier UI for this is in our [future-design backlog](./docs/future/tabbed-config-ui.md).
+> Multi-Home setups use separate platform entries in `config.json`. When more than one entry exists, the plugin settings page is read-only; manage those entries through Homebridge UI’s JSON Config editor. A [tabbed editor](https://github.com/bcourbage/homebridge-ambient-weather-sensors/blob/main/docs/future/tabbed-config-ui.md) remains a future proposal.
 
 ## Concepts
 
@@ -241,6 +241,6 @@ The Homebridge log usually says exactly which line is the problem.
 
 ## Limitations
 
-- With multiple platform instances, the plugin settings page is read-only for every instance. Multi-instance management is JSON Config only. See [`docs/future/tabbed-config-ui.md`](./docs/future/tabbed-config-ui.md) for the proposed solution.
+- With multiple platform instances, the plugin settings page is read-only for every instance. Multi-instance management is JSON Config only. See [the tabbed-editor proposal](https://github.com/bcourbage/homebridge-ambient-weather-sensors/blob/main/docs/future/tabbed-config-ui.md).
 - HomeKit charges a one-time per-bridge pairing cost (the QR-code scan). You'll do it once per bridge during setup; it doesn't recur.
 - Automations cannot span Homes. If you want "when wind speed at the cabin is high, turn on a fan in the main house," that's not possible through Apple Home alone — the Homes are independent.

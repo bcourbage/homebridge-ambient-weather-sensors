@@ -1,7 +1,7 @@
 /**
  * Sensor map — public and internal type definitions.
  *
- * See docs/future/sensor-map.md §3 for the design reasoning behind
+ * See docs/architecture/sensor-map.md §3 for the design reasoning behind
  * the shapes below. Summary:
  *
  * - `SensorKind` selects the HAP wrapper family (TemperatureSensor,
@@ -473,7 +473,7 @@ export interface RowValidationWarning {
  * surfaces them in its own section and attributes only when `source`
  * says it may.
  *
- * See `docs/future/wrapper-parameterization.md` §"InternalInvariantNote".
+ * See docs/architecture/wrappers.md#internal-invariant-checks.
  */
 export interface InternalInvariantNote {
     /** Stable machine-readable identifier for the note class. */

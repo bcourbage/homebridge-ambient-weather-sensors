@@ -2,7 +2,7 @@
  * Structural signature — a human-readable string that captures the
  * HAP-service-graph identity of an effective row.
  *
- * See docs/future/sensor-map.md §9. Rows whose signature differs
+ * See docs/architecture/sensor-map.md §9. Rows whose signature differs
  * between runs must be re-registered (unregister-and-add); rows
  * whose signature matches can be updated in place.
  *

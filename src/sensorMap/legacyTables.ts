@@ -2,7 +2,7 @@
  * Legacy-type tables — bootstrap support for v1.5.0 / v1.6.0 cached
  * accessories that pre-date the sensor-map model.
  *
- * See docs/future/sensor-map.md §11.2 (bootstrap rule).
+ * See docs/architecture/sensor-map.md §11.2 (bootstrap rule).
  *
  * Cached accessories from v1.5.x / v1.6.x carry a `context.device.type`
  * string like "Temperature", "WindSpeed", "LightningDistance", etc.

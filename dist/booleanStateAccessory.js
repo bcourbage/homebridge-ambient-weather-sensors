@@ -1,9 +1,10 @@
 import { setupBatteryService } from './batteryService.js';
 import { batteryOptionsFor } from './sensorMap/batterySeed.js';
 /**
- * One row-parameterized implementation for every boolean state kind
- * (§16 genericity: dataPoint, name, and battery ownership all come
- * from the row; nothing is hardcoded to an AWN field).
+ * One row-parameterized implementation for every boolean state kind.
+ * Data point, name, and battery ownership all come from the row;
+ * nothing is hardcoded to an AWN field. See
+ * docs/architecture/wrappers.md#construction-and-dispatch.
  */
 class BooleanStateAccessory {
     constructor(platform, accessory, spec, row) {
